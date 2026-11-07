@@ -132,6 +132,8 @@ def main():
         "key_tools": http("GET", "/mcp-rest/tools/list?server_id=legacy-server", None, key)[1][:160],
         "key_info": http("GET", "/key/info?key=" + key)[1][:0] or json.loads(http("GET", "/key/info?key=" + key)[1]).get("info", {}).get("object_permission"),
     }
+    diag["discovery_events"] = psql(database, "SELECT left(payload::text, 600) FROM mint.events WHERE kind='discovery_evaluated' ORDER BY inserted_at DESC LIMIT 2")
+    diag["server_row"] = psql(database, "SELECT status||'/'||contract_status||'/'||coalesce(last_observed_at::text,'-') FROM mint.servers WHERE server_id='legacy-server'")
     allow_status, allow_up, allow_text = call(key, "stable")      # 1단계 승인이 허용하는 도구
     deny_status, deny_up, _ = call(key, "mutable")       # 승인에 없는 도구
     again_status, _, _ = call(key, "stable")[0], 0, 0     # 전면 차단 여부: 같은 허용 도구를 한 번 더
