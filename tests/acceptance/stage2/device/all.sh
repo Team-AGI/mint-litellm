@@ -16,8 +16,8 @@ export DOCKER_CONFIG=$HOME/.docker-acc COMPOSE_PROJECT_NAME=mints2 ACC_CERT_DIR=
 C=(docker compose --env-file deploy/.env -f deploy/compose.yaml -f tests/acceptance/stage2/device/acc.yaml)
 "${C[@]}" --profile worker --profile console up -d worker console
 "$PY" "$HERE/bootstrap.py" operators
-pkill -f counter_service.py || true
-setsid nohup "$PY" "$HERE/counter_service.py" http://127.0.0.1:4320/__log 4350 0.0.0.0 > "$ACC_HOME/counter.log" 2>&1 < /dev/null &
+docker rm -f mints2-counter >/dev/null 2>&1 || true
+docker run -d --name mints2-counter --network mints2_default -p 4350:4350 -v "$HERE/counter_service.py:/c.py:ro" python:3.13-slim python /c.py http://cnt:8080/__log 4350 0.0.0.0 >/dev/null
 source "$HERE/env.sh"
 mkdir -p tests/acceptance/stage2/.runtime
 "$PY" "$HERE/make_site.py" > tests/acceptance/stage2/.runtime/site.json
