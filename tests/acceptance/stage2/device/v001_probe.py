@@ -98,6 +98,13 @@ def main():
     time.sleep(15)
     for who in (MASTER, key):  # LiteLLM의 도구 해석표를 채운다
         http("GET", "/mcp-rest/tools/list?server_id=legacy-server", None, who)
+    diag = {
+        "registry": [s.get("server_id") for s in json.loads(http("GET", "/v1/mcp/server")[1])] if http("GET", "/v1/mcp/server")[0] == 200 else http("GET", "/v1/mcp/server")[:2],
+        "test_connection": http("POST", "/mcp-rest/test/connection", {"server_id": "legacy-server", "url": "https://cnt:8443/synthetic/mcp", "transport": "http", "auth_type": "none"})[1][:120],
+        "master_tools": http("GET", "/mcp-rest/tools/list?server_id=legacy-server")[1][:160],
+        "key_tools": http("GET", "/mcp-rest/tools/list?server_id=legacy-server", None, key)[1][:160],
+        "key_info": http("GET", "/key/info?key=" + key)[1][:0] or json.loads(http("GET", "/key/info?key=" + key)[1]).get("info", {}).get("object_permission"),
+    }
     allow_status, allow_up, allow_text = call(key, "stable")      # 1단계 승인이 허용하는 도구
     deny_status, deny_up, _ = call(key, "mutable")       # 승인에 없는 도구
     again_status, _, _ = call(key, "stable")[0], 0, 0     # 전면 차단 여부: 같은 허용 도구를 한 번 더
@@ -112,6 +119,7 @@ def main():
                                         "stage1_call_approval_consumed": int(ca)},
     }[name]
     out["operator_setup_reproduced"] = "1단계 운영자 설정 재현: 시험 키 object_permission.mcp_servers에 legacy_server를 직접 부여, allow_all_keys=false"
+    out["diag"] = diag
     out["probe_statuses"] = {"allow": allow_status, "deny": deny_status, "register": reg[0], "detail": (reg[1] if reg[0] >= 400 else allow_text)[:200]}
     print(json.dumps(out))
 
