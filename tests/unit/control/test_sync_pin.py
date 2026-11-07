@@ -57,10 +57,16 @@ def add_contract(
     return str(cid)
 
 
+def make_managed(admin) -> None:
+    """계약을 관리하는 서버. 도구 고정은 제어 평면 키 토큰이 저장돼 있어야 한다."""
+    admin.execute("UPDATE mint.servers SET contract_status = 'managed'")
+    admin.execute("UPDATE mint.settings SET control_key_token = repeat('c', 64)")
+
+
 def managed_world(admin, fake, *, tools=None, approval_scope="user", status="pending"):
     """계약을 관리하는 서버(승인 계약 도구 하나)와 대기 승인 하나."""
     add_server(admin)
-    admin.execute("UPDATE mint.servers SET contract_status = 'managed'")
+    make_managed(admin)
     fake.add_server("srv-1", tools={"read": TOOL} if tools is None else tools)
     add_contract(admin)
     if approval_scope == "key":
@@ -361,7 +367,7 @@ def reapproval_world(admin, fake, tools):
         " VALUES (%s, 'reviewer', 'approver', repeat('c', 64), 'reviewer')"
         " ON CONFLICT DO NOTHING", (INSTANCE,))
     add_server(admin, status="approved")
-    admin.execute("UPDATE mint.servers SET contract_status = 'managed'")
+    make_managed(admin)
     fake.add_server("srv-1", tools=tools)
     old = add_contract(admin)
     deployment = {"url": "https://mcp.test/api", "transport": "http", "auth_type": "none"}
@@ -454,7 +460,7 @@ def test_a_reapproval_whose_pin_differs_fails_for_good_keeps_the_block_and_alert
 
 def test_the_deployment_candidate_is_recorded_through_the_worker_login(url, admin, fake):
     add_server(admin, status="approved")
-    admin.execute("UPDATE mint.servers SET contract_status = 'managed'")
+    make_managed(admin)
     old = {"url": "https://mcp.test/api", "transport": "http", "auth_type": "none"}
     new = {**old, "url": "https://changed.test/api"}
     ids = []
@@ -510,3 +516,23 @@ def test_the_requester_recheck_holds_a_share_lock_until_the_transaction_ends(url
     finally:
         holder.close()
         other.close()
+
+
+def test_a_missing_control_key_token_alerts_with_the_cause_and_the_next_run_pins(
+    admin, fake, worker
+):
+    approval = managed_world(admin, fake)
+    admin.execute("UPDATE mint.settings SET control_key_token = NULL")
+    enqueue(admin, "sync_server", "srv-1")
+    drain(worker)
+    assert not pin_calls(fake)
+    [row] = [a for a in alerts(admin) if a["kind"] == "sync_divergence"]
+    assert row["subject"]["reason"] == "control_key_not_set"
+    assert row["subject"]["action"] == "settings control-key"
+    assert approval_status(admin, approval) == "pending"
+    admin.execute("UPDATE mint.settings SET control_key_token = repeat('c', 64)")
+    admin.execute("UPDATE mint.jobs SET run_after = now() WHERE status = 'pending'")
+    drain(worker)
+    assert pin_calls(fake)
+    assert not [a for a in alerts(admin)
+                if a["kind"] == "sync_divergence" and a["status"] != "resolved"]

@@ -135,7 +135,9 @@ def _init(run: Run) -> None:
         if run.environ.get(var)
     }
     configured_roles = ensure_login_roles(run.conn, passwords)
-    settings_service.initialize(run.context(), args.org_id, args.org_name)
+    control_key = settings_service.initialize(
+        run.context(), args.org_id, args.org_name, run.cfg.litellm_key
+    )
     text = litellm_config.snippet(servers_arg, no_spend_logs=args.no_spend_logs)
     secrets_path = Path(args.secrets_file or run.environ.get("MINT_SECRETS_FILE")
                         or secrets_file.DEFAULT_PATH).expanduser()
@@ -178,9 +180,28 @@ def _init(run: Run) -> None:
         "제어 평면 LiteLLM 키는 proxy_admin 사용자 키로 발급하고 allowed_routes를 다음으로 "
         "제한하십시오:\n  "
         + ", ".join(CONTROL_PLANE_ALLOWED_ROUTES)
-        + "\n그 값을 MINT_LITELLM_KEY로 설정합니다.",
+        + "\n그 값을 MINT_LITELLM_KEY로 설정한 뒤 init을 다시 실행하면 이 키가 도구 목록 면제 "
+        "키로 저장됩니다(바꿀 때는 settings control-key).",
         file=log,
     )
+    notes = {
+        "set": "제어 평면 키 저장됨: 서버 승인 때 도구 고정이 이 키로 동작합니다.",
+        "differs": "저장된 제어 평면 키와 MINT_LITELLM_KEY가 다릅니다. 바꾸려면 settings "
+        "control-key를 실행하십시오.",
+    }
+    if control_key in notes:
+        print(notes[control_key], file=log)
+
+
+def _control_key(run: Run) -> None:
+    if run.args.clear:
+        key = None
+    elif run.cfg.litellm_key:
+        key = run.cfg.litellm_key
+    else:
+        raise ControlError("MINT_LITELLM_KEY가 설정되어 있지 않습니다(해제는 --clear).")
+    run.data["control_key"] = settings_service.set_control_key(run.context(), key)
+    run.say("제어 평면 키 " + ("해제됨" if key is None else "저장됨"))
 
 
 def _gather_env(run: Run) -> dict[str, str]:
@@ -660,6 +681,7 @@ HANDLERS: dict[str, Handler] = {
     "settings mode": lambda r: settings_service.set_mode(
         r.context(), Mode(r.args.mode), r.cfg.mode_ceiling
     ),
+    "settings control-key": _control_key,
     "settings observable": lambda r: settings_service.set_observable(
         r.context(), r.args.reasons, r.args.policy_ids
     ),
@@ -841,6 +863,7 @@ ARGUMENTS: dict[str, list[Any]] = {
     "org unbind": ["SUBJECT"],
     "settings default-org": ["ORG_OR_CLEAR"],
     "settings mode": [_a("mode", choices=[m.value for m in Mode])],
+    "settings control-key": [_a("--clear", action="store_true", help="저장된 키를 해제한다")],
     "settings observable": [
         _a("--reasons", type=_csv, help="관측으로 전환할 수 있는 사유 계열(쉼표 구분)"),
         _a("--policy-ids", type=_csv, help="관측에 쓸 정책 식별자(쉼표 구분)"),
