@@ -121,7 +121,7 @@ required_scripts:
   test_04_sync.py: 8
   test_05_exports.py: 1
   test_06_restore.py: 8
-  test_07_intake_negative.py: 7
+  test_07_intake_negative.py: 8
   test_08_confirmation.py: 16
   test_09_auth_ui.py: 10
   test_10_performance.py: 1
@@ -198,7 +198,8 @@ observations:
     reject_calls: 1
     resubmissions: 0
     failed_checks: 1
-  intake_private_literal: {<<: *negative}
+  intake_private_literal: {litellm_rejected: true, mint_intakes: 0}
+  intake_private_ip_guard: {url_guard_reason: IP_FORBIDDEN, test_route_calls: 0}
   intake_allow_all_keys: {<<: *negative, submitted_allow_all_keys: true}
   intake_definitions_limit: {result: indeterminate, distinct_approvers: 2,
                             exception_days: {max: 90}, day_91_rejected: true}

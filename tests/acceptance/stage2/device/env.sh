@@ -25,3 +25,4 @@ export ACC_PLUGIN_SERVICES="litellm litellm2 worker" ACC_BUFFER_SERVICE=litellm 
 export MINT_POLICY_ROOT="$REPO" ACC_SITE="$REPO/tests/acceptance/stage2/.runtime/site.json"
 mkdir -p "$ACC_STATE_DIR"
 [ -f "$STATE/local.env" ] && . "$STATE/local.env"
+export ACC_V001_PROBE='["python","tests/acceptance/stage2/device/v001_probe.py"]'

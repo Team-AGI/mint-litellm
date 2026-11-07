@@ -664,7 +664,35 @@ def intake_provider_denied(ctx):
 
 @scenario("intake_private_literal", undo=cleanup)
 def intake_private_literal(ctx):
-    negative_submission(ctx, "https://10.20.30.40/mcp")
+    """DS-174: 사설 리터럴 IP 제출은 LiteLLM이 거절하고 MINT 신청은 생기지 않는다."""
+    before = n(f"SELECT count(*) FROM mint.intakes WHERE instance_id={lit(iid())}")
+    alias = "acc-" + uuid.uuid4().hex[:8]
+    status, _ = lite_raw("POST", "/v1/mcp/server/register", {
+        "alias": alias, "server_name": alias, "url": "https://10.20.30.40/mcp",
+        "transport": "http", "description": "acceptance", "allow_all_keys": False},
+        key=A.env("ACC_SUBMIT_KEY"))
+    time.sleep(70)  # 제출 수신 작업(submission_poll) 주기보다 길게 기다려 신청이 없는지 본다
+    observe(ctx, litellm_rejected=status in (400, 403, 422), litellm_status=status,
+            mint_intakes=n(f"SELECT count(*) FROM mint.intakes WHERE instance_id={lit(iid())}")
+            - before)
+
+
+@scenario("intake_private_ip_guard", undo=cleanup)
+def intake_private_ip_guard(ctx):
+    """DS-174: 운영자 출처 신청에서 MINT url_guard가 사설 IP를 거부한다."""
+    alias = "acc-" + uuid.uuid4().hex[:8]
+    created = lite("POST", "/v1/mcp/server", {
+        "alias": alias, "server_name": alias, "url": "https://10.20.30.40/mcp",
+        "transport": "http", "allow_all_keys": False})
+    track("server", created["server_id"])
+    intake_id = create_intake(created["server_id"], "https://10.20.30.40/mcp")
+    wait(lambda: A.psql(f"SELECT coalesce(decision,'') FROM mint.intakes WHERE id={lit(intake_id)}",
+                        "mint") == "rejected", 180, "자동 거절")
+    observe(ctx, intake_id=intake_id,
+            url_guard_reason=A.psql("SELECT reason_code FROM mint.intake_checks WHERE "
+                                    f"intake_id={lit(intake_id)} AND \"check\"='url_guard'", "mint"),
+            test_route_calls=log_count(
+                r"/mcp-rest/test/", datetime.now(UTC) - timedelta(minutes=3)))
 
 
 @scenario("intake_allow_all_keys", undo=cleanup)
@@ -1662,7 +1690,8 @@ def auth_screens_13(ctx):
     """화면 13개를 실제 세션으로 열고, 스크린샷·대비·키보드·문구 검수는 장비 도구가 맡는다."""
     spec = os.environ.get("ACC_UI_AUDIT_CMD")
     if not spec or not os.environ.get("ACC_UI_REVIEWER"):
-        raise A.Skip("화면 검수 장비(ACC_UI_AUDIT_CMD, 검수자 ACC_UI_REVIEWER) 미구성")
+        # DS-174: 화면 검수는 도구 없이 sol 화면 검수와 메인 캡처로 하므로 「수동 검수」로 표시한다.
+        raise A.Skip("수동 검수: sol 화면 검수·메인 캡처로 대신함(자동 도구 없음)")
     _, admin_key, _ = console_user("admin")
     _, staff_key, _ = console_user(None)
     admin, admin_reply, admin_session = http_login("/login", SESSION_COOKIE, admin_key)
@@ -1758,13 +1787,13 @@ def migration_v001(ctx):
         "INSERT INTO mint.approvals (id, instance_id, org_id, relation_id, class, server_id, "
         "tools, scope_type, scope_id, valid_from, valid_until, basis, granted_by, requested_by, "
         f"status) SELECT gen_random_uuid(), {lit(instance)}, 'legacy', id, 'standard', "
-        "'legacy-server', ARRAY['echo'], 'user', 'legacy-user', now(), now() + interval '1 day', "
+        "'legacy-server', ARRAY['stable'], 'user', 'legacy-user', now(), now() + interval '1 day', "
         "'{\"text\":\"legacy\"}'::jsonb, 'legacy', 'legacy-user', 'active' FROM "
         "mint.usage_relations WHERE server_id='legacy-server';"
         "INSERT INTO mint.call_approvals (id, instance_id, org_id, principal_type, principal_id, "
         "server_id, tool, args_fp, fp_key_version, policy_version_id, status, requested_by, "
         f"expires_at) VALUES (gen_random_uuid(), {lit(instance)}, 'legacy', 'user', "
-        f"'legacy-user', 'legacy-server', 'echo', {lit(sha('legacy'))}, 1, 'legacy-policy', "
+        f"'legacy-user', 'legacy-server', 'stable', {lit(sha('legacy'))}, 1, 'legacy-policy', "
         "'pending', 'legacy-user', now() + interval '1 day');"
         "UPDATE mint.call_approvals SET status='approved', approved_by='legacy' "
         "WHERE principal_id='legacy-user';"))

@@ -5,14 +5,16 @@ import pytest
 
 @pytest.mark.parametrize("case", ["provider_denied", "private_literal", "allow_all_keys",
                                      "definitions_limit", "same_requester", "stale_evidence",
-                                     "credentials_required"])
+                                     "credentials_required", "private_ip_guard"])
 def test_negative_intake(rig, case):
     rig.require("intake create", "intake approve", "intake except", handlers=("intake_run",))
     rig.fault("intake_" + case)
     observation = rig.read_observation("intake_" + case)
     rig.check_observation("intake_" + case, observation)
+    if case == "private_literal":  # 신청이 없다: LiteLLM 거절만 본다
+        return
     intake = rig.rows("intakes", "id=%s", [observation["intake_id"]])[0]
-    if case in ("provider_denied", "private_literal", "allow_all_keys"):
+    if case in ("provider_denied", "allow_all_keys", "private_ip_guard"):
         assert intake["decision"] == "rejected"
         assert rig.rows("intake_checks", "intake_id=%s AND result='fail'", [intake["id"]])
     if case == "credentials_required":
