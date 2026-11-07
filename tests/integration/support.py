@@ -35,9 +35,17 @@ TOOL_PREFIX = {"a": "mcp_a", "b": "mcp_b", "c": "mcp_c", "d": "mcp_d"}
 # 서버 c·d는 업스트림 b·a를 다른 경로로 가리키는 별도 설정 서버이다.
 UPSTREAM_OF = {"a": "a", "b": "b", "c": "b", "d": "a"}
 
-LITELLM_PORTS = (4101, 4102)
-PLAIN_PORT = 4103
-DB_PROXY_PORT = 4176
+# 같은 기계에서 다른 스택과 겹치지 않도록 compose의 MINT_E_PORT_PREFIX와 같은 접두를 붙인다.
+PORT_PREFIX = os.environ.get("MINT_E_PORT_PREFIX", "")
+
+
+def _port(base: int) -> int:
+    return int(f"{PORT_PREFIX}{base}")
+
+
+LITELLM_PORTS = (_port(4101), _port(4102))
+PLAIN_PORT = _port(4103)
+DB_PROXY_PORT = _port(4176)
 CONTROL_ROUTES = [
     "/v1/mcp/server",
     "/key/info",
@@ -47,12 +55,12 @@ CONTROL_ROUTES = [
     "/team/list",
     "/guardrails/list",
 ]
-PROXY_PORT = 4180
-UPSTREAM_CONTROL_PORT = {"a": 4191, "b": 4192}
-TOXIPROXY_PORT = 4174
-TOXIPROXY_DB_PORT = 4175
-OPA_PORT = 4181
-POSTGRES_PORT = 4132
+PROXY_PORT = _port(4180)
+UPSTREAM_CONTROL_PORT = {"a": _port(4191), "b": _port(4192)}
+TOXIPROXY_PORT = _port(4174)
+TOXIPROXY_DB_PORT = _port(4175)
+OPA_PORT = _port(4181)
+POSTGRES_PORT = _port(4132)
 
 COMPOSE = os.environ.get(
     "MINT_E_COMPOSE", f"docker compose -p mint-e -f {shlex.quote(str(HERE / 'compose.yaml'))}"

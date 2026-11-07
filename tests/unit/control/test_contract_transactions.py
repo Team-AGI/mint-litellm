@@ -429,7 +429,8 @@ def test_contract_observe_reads_tools_through_the_g2_client(contract_db):
 
     job = {"target_ref": "contract_observe"}
     handle(JobContext(conn, "i", job, litellm=Client()))
-    assert seen == [{"server_id": "s"}]
+    assert seen == [{"server_id": "s", "url": "https://mcp.test/api", "transport": "http",
+                     "auth_type": "none"}]
     assert fetchone(conn, "SELECT drift FROM mint.tool_contracts WHERE status='approved'")[
         "drift"
     ] == "input_schema"
