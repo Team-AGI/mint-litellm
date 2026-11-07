@@ -91,7 +91,7 @@ def main():
     database = (STATE / "migration-db").read_text().strip()
     start(database)
     # 레지스트리에 legacy-server를 합성 서버로 두고, 승인 주체 legacy-user의 키를 만든다.
-    reg = http("POST", "/v1/mcp/server", {"server_id": "legacy-server", "alias": "legacy-server", "server_name": "legacy-server",
+    reg = http("POST", "/v1/mcp/server", {"server_id": "legacy-server", "alias": "legacy_server", "server_name": "legacy_server",
                                     "url": "https://cnt:8443/synthetic/mcp", "transport": "http", "auth_type": "none", "allow_all_keys": False})
     http("POST", "/user/new", {"user_id": "legacy-user", "user_role": "internal_user", "auto_create_key": False})
     key = json.loads(http("POST", "/key/generate", {"user_id": "legacy-user", "object_permission": {"mcp_servers": ["legacy-server"]}})[1])["key"]
