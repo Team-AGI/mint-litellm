@@ -57,6 +57,7 @@ services:
       MINT_EXPORT_DIR: /var/lib/mint/export
       MINT_EXPORT_HMAC_KEY: ${MINT_EXPORT_HMAC_KEY:?MINT_EXPORT_HMAC_KEY를 .env에 설정하십시오}
       MINT_EXPORT_HMAC_KEY_PREVIOUS: ${MINT_EXPORT_HMAC_KEY_PREVIOUS:-}
+      MINT_OBSERVE_SECONDS: ${MINT_OBSERVE_SECONDS:-3600}
     ports:
       - "${MINT_LITELLM_PORT:-4000}:4000"
     volumes:
@@ -121,13 +122,17 @@ services:
       MINT_EXPORT_HMAC_KEY: ${MINT_EXPORT_HMAC_KEY:?MINT_EXPORT_HMAC_KEY를 .env에 설정하십시오}
       MINT_EXPORT_HMAC_KEY_PREVIOUS: ${MINT_EXPORT_HMAC_KEY_PREVIOUS:-}
       MINT_WORKER_LEASE_SECONDS: ${MINT_WORKER_LEASE_SECONDS:-60}
+      MINT_OBSERVE_SECONDS: ${MINT_OBSERVE_SECONDS:-3600}
       MINT_LITELLM_URL: http://litellm:4000
       MINT_LITELLM_KEY: ${MINT_LITELLM_KEY:-}
+      MINT_OPA_URL: http://opa:8181
     volumes:
       - export:/var/lib/mint/export
     depends_on:
       postgres:
         condition: service_healthy
+      opa:
+        condition: service_started
     stop_grace_period: 30s
     restart: unless-stopped
 

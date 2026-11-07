@@ -121,6 +121,15 @@ def test_compose_refuses_to_start_litellm_without_an_export_key():
     assert "export:/var/lib/mint/export:ro" in litellm
 
 
+def test_compose_gives_the_worker_the_policy_engine_and_the_observe_period():
+    text = (SCRIPT.parent / "compose.yaml").read_text(encoding="utf-8")
+    worker = text.split("\n  worker:\n", 1)[1].split("\n  console:\n", 1)[0]
+    assert "MINT_OPA_URL: http://opa:8181" in worker
+    assert "MINT_OBSERVE_SECONDS: ${MINT_OBSERVE_SECONDS:-3600}" in worker
+    litellm = text.split("\n  litellm:\n", 1)[1].split("\n  control:\n", 1)[0]
+    assert "MINT_OBSERVE_SECONDS: ${MINT_OBSERVE_SECONDS:-3600}" in litellm
+
+
 def test_values_are_appended_on_their_own_line_when_env_lacks_a_trailing_newline(tmp_path):
     result, env_file, _ = run(tmp_path, "POSTGRES_PASSWORD=x", "cli", "status")
     assert result.returncode == 0, result.stderr
