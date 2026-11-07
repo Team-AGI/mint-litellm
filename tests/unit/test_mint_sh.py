@@ -112,6 +112,8 @@ def test_up_hands_worker_and_staff_passwords_to_init_and_starts_the_worker(tmp_p
     values = dict(ln.split("=", 1) for ln in env_file.read_text(encoding="utf-8").splitlines())
     assert values["MINT_WORKER_DB_PASSWORD"] not in log  # 값은 인자가 아니라 환경으로 간다
     assert "--profile worker up -d worker" in log
+    assert "--user 0 --entrypoint chown control -R 65532:65532 /var/lib/mint/export /bundles" in log
+    assert "--user 0 --entrypoint chown litellm -R 65532:65532 /var/lib/mint/buffer" in log
 
 
 def test_compose_refuses_to_start_litellm_without_an_export_key():

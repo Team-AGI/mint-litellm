@@ -87,12 +87,21 @@ if not target.exists():
 "
 }
 
+# 서비스는 비루트 사용자(65532)로 돈다. 이전 판본이 루트로 만든 볼륨은 소유자를 맞춰야 쓸 수 있다.
+fix_volume_owners() {
+    "${COMPOSE[@]}" run --rm --no-deps -T --user 0 --entrypoint chown control \
+        -R 65532:65532 /var/lib/mint/export /bundles
+    "${COMPOSE[@]}" run --rm --no-deps -T --user 0 --entrypoint chown litellm \
+        -R 65532:65532 /var/lib/mint/buffer
+}
+
 cmd_up() {
     require_env
     mkdir -p config
     [ -f config/litellm.config.yaml ] || cp litellm.config.example.yaml config/litellm.config.yaml
     "${COMPOSE[@]}" build litellm
     "${COMPOSE[@]}" up -d --wait postgres
+    fix_volume_owners
     admin_cli init --out /app/config/litellm.mint.yaml >/dev/null
     ensure_bundle
     "${COMPOSE[@]}" up -d opa litellm
@@ -127,6 +136,7 @@ cmd_upgrade() {
     require_env
     "${COMPOSE[@]}" build litellm
     "${COMPOSE[@]}" up -d --wait postgres
+    fix_volume_owners
     admin_cli init --out /app/config/litellm.mint.yaml >/dev/null
     "${COMPOSE[@]}" up -d litellm
     "${COMPOSE[@]}" --profile worker up -d worker

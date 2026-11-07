@@ -78,8 +78,10 @@ services:
     restart: unless-stopped
 
   # 운영자 명령줄 도구. 예: docker compose run --rm control status
+  # 호스트의 비밀 디렉터리(소유자는 설치한 사용자)에 쓰므로 이 도구만 루트로 실행한다. 장기 실행 서비스는 비루트이다.
   control:
     image: mint-litellm:local
+    user: "0"
     profiles: ["tools"]
     entrypoint: ["mint-litellm"]
     env_file:
