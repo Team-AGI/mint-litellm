@@ -96,6 +96,8 @@ def main():
     http("POST", "/user/new", {"user_id": "legacy-user", "user_role": "internal_user", "auto_create_key": False})
     key = json.loads(http("POST", "/key/generate", {"user_id": "legacy-user", "object_permission": {"mcp_servers": ["legacy-server"]}})[1])["key"]
     time.sleep(15)
+    for who in (MASTER, key):  # LiteLLM의 도구 해석표를 채운다
+        http("GET", "/mcp-rest/tools/list?server_id=legacy-server", None, who)
     allow_status, allow_up, allow_text = call(key, "stable")      # 1단계 승인이 허용하는 도구
     deny_status, deny_up, _ = call(key, "mutable")       # 승인에 없는 도구
     again_status, _, _ = call(key, "stable")[0], 0, 0     # 전면 차단 여부: 같은 허용 도구를 한 번 더
