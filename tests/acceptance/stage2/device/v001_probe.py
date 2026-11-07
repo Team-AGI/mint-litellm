@@ -62,7 +62,8 @@ def call(key, tool):
 
 def start(database):
     sh("docker", "rm", "-f", PROJECT + "-litellm", check=False)
-    psql("postgres", "SELECT 1")
+    sh("docker", "volume", "rm", "-f", PROJECT + "-export", check=False)
+    sh("docker", "volume", "create", PROJECT + "-export")
     psql("postgres", "DROP DATABASE IF EXISTS litellm_v001 WITH (FORCE)")
     psql("postgres", "CREATE DATABASE litellm_v001")
     cfg = STATE / "v001.config.yaml"
@@ -75,7 +76,7 @@ def start(database):
        "-e", "MINT_BUFFER_DIR=/tmp/buf", "-e", "MINT_READINESS_URL=http://localhost:4000/health/readiness",
        "-e", "MINT_SELFCHECK_GRACE_SECONDS=30", "-e", "MINT_EXPORT_DIR=/var/lib/mint/export", "-e", f"MINT_EXPORT_HMAC_KEY={ENV['MINT_EXPORT_HMAC_KEY']}",
        "-e", "SSL_CERT_FILE=/certs/ca.pem", "-v", f"{cfg}:/app/config/litellm.config.yaml:ro",
-       "-v", f"{os.environ['ACC_CERT_DIR']}:/certs:ro", IMAGE, "--config", "/app/config/litellm.config.yaml", "--port", "4000")
+       "-v", f"{os.environ['ACC_CERT_DIR']}:/certs:ro", "-v", f"{PROJECT}-export:/var/lib/mint/export:ro", IMAGE, "--config", "/app/config/litellm.config.yaml", "--port", "4000")
     for _ in range(90):
         try:
             if http("GET", "/health/readiness")[0] == 200:
@@ -116,6 +117,12 @@ def main():
     database = (STATE / "migration-db").read_text().strip()
     start(database)
     prep = prepare(database)
+    sh("docker", "rm", "-f", PROJECT + "-worker", check=False)
+    sh("docker", "run", "-d", "--name", PROJECT + "-worker", "--network", NET, "-v", f"{PROJECT}-export:/var/lib/mint/export",
+       "-e", f"MINT_DATABASE_URL=postgresql://mint_worker_app:{ENV['MINT_WORKER_DB_PASSWORD']}@postgres:5432/{database}",
+       "-e", "MINT_INSTANCE_ID=acceptance", "-e", "MINT_EXPORT_DIR=/var/lib/mint/export", "-e", f"MINT_EXPORT_HMAC_KEY={ENV['MINT_EXPORT_HMAC_KEY']}",
+       "-e", f"MINT_LITELLM_URL=http://{PROJECT}-litellm:4000", "-e", f"MINT_LITELLM_KEY={MASTER}", "--entrypoint", "mint-litellm", IMAGE, "worker")
+    time.sleep(40)
     # 레지스트리에 legacy-server를 합성 서버로 두고, 승인 주체 legacy-user의 키를 만든다.
     reg = http("POST", "/v1/mcp/server", {"server_id": "legacy-server", "alias": "legacy_server", "server_name": "legacy_server",
                                     "url": "https://cnt:8443/synthetic/mcp", "transport": "http", "auth_type": "none", "allow_all_keys": False})
@@ -140,7 +147,7 @@ def main():
     seen = psql(database, "SELECT count(*) FROM mint.self_confirmations")
     consumed = psql(database, "SELECT count(*) FROM mint.self_confirmations WHERE status='consumed'")
     ca = psql(database, "SELECT count(*) FROM mint.call_approvals WHERE status='consumed'")
-    sh("docker", "rm", "-f", PROJECT + "-litellm", check=False)
+    sh("docker", "rm", "-f", PROJECT + "-litellm", PROJECT + "-worker", check=False)
     out = {
         "migration_v001": {"legacy_allow_calls": allow_up, "legacy_deny_calls": deny_up,
                            "blanket_blocks": int(again_status != 200) + int(allow_status != 200)},
