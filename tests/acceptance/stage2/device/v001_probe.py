@@ -86,10 +86,36 @@ def start(database):
     sys.exit("v001 LiteLLM 준비 안 됨")
 
 
+def cli_container(database, *args, token=None):
+    """이행 DB에 대한 mint-litellm 명령(시험 스택 네트워크 안, 마스터 키는 이 스택에서만)."""
+    pw = ENV["POSTGRES_PASSWORD"]
+    env = ["-e", f"MINT_DATABASE_URL=postgresql://postgres:{pw}@postgres:5432/{database}", "-e", "MINT_INSTANCE_ID=acceptance",
+           "-e", f"MINT_LITELLM_URL=http://{PROJECT}-litellm:4000", "-e", f"MINT_LITELLM_KEY={MASTER}", "-e", "MINT_OPA_URL=http://opa:8181",
+           "-e", "MINT_POLICY_ROOT=/opt/mint", "-e", "MINT_OPA_BUNDLE_PATH=/bundles/mint.tar.gz",
+           "-e", f"MINT_EXPORT_HMAC_KEY={ENV['MINT_EXPORT_HMAC_KEY']}", "-e", "MINT_EXPORT_DIR=/tmp/export"]
+    if token:
+        env += ["-e", f"MINT_OPERATOR_TOKEN={token}"]
+    return sh("docker", "run", "--rm", "--network", NET, "-v", "mints2_bundles:/bundles", *env, "--entrypoint", "mint-litellm", IMAGE, *args, "--json", check=False)
+
+
+def prepare(database):
+    """1단계 init이 만드는 것(설정 행·기본 조직)과 정책 판본 활성화를 이행 DB에 둔다."""
+    http("POST", "/user/new", {"user_id": "acc-admin-v001", "user_role": "internal_user", "auto_create_key": False})
+    init = cli_container(database, "init", "--out", "/tmp/m.yaml", "--secrets-file", "/tmp/s.env")
+    boot = cli_container(database, "operator", "bootstrap", "--name", "v001admin", "--user-id", "acc-admin-v001")
+    try:
+        token = json.loads(boot)["token"]
+    except (ValueError, KeyError):
+        return {"init": init[-200:], "bootstrap": boot[-200:]}
+    act = cli_container(database, "policy", "activate", "initial", token=token)
+    return {"init": init[-120:], "policy_activate": act[-160:]}
+
+
 def main():
     name = sys.argv[1]
     database = (STATE / "migration-db").read_text().strip()
     start(database)
+    prep = prepare(database)
     # 레지스트리에 legacy-server를 합성 서버로 두고, 승인 주체 legacy-user의 키를 만든다.
     reg = http("POST", "/v1/mcp/server", {"server_id": "legacy-server", "alias": "legacy_server", "server_name": "legacy_server",
                                     "url": "https://cnt:8443/synthetic/mcp", "transport": "http", "auth_type": "none", "allow_all_keys": False})
@@ -99,6 +125,7 @@ def main():
     for who in (MASTER, key):  # LiteLLM의 도구 해석표를 채운다
         http("GET", "/mcp-rest/tools/list?server_id=legacy-server", None, who)
     diag = {
+        "prep": prep,
         "registry": [s.get("server_id") for s in json.loads(http("GET", "/v1/mcp/server")[1])] if http("GET", "/v1/mcp/server")[0] == 200 else http("GET", "/v1/mcp/server")[:2],
         "test_connection": http("POST", "/mcp-rest/test/connection", {"server_id": "legacy-server", "url": "https://cnt:8443/synthetic/mcp", "transport": "http", "auth_type": "none"})[1][:120],
         "master_tools": http("GET", "/mcp-rest/tools/list?server_id=legacy-server")[1][:160],
