@@ -689,8 +689,9 @@ def intake_private_ip_guard(ctx):
     wait(lambda: A.psql(f"SELECT coalesce(decision,'') FROM mint.intakes WHERE id={lit(intake_id)}",
                         "mint") == "rejected", 180, "자동 거절")
     observe(ctx, intake_id=intake_id,
-            url_guard_reason=A.psql("SELECT reason_code FROM mint.intake_checks WHERE "
-                                    f"intake_id={lit(intake_id)} AND \"check\"='url_guard'", "mint"),
+            url_guard_reason=A.psql(
+                "SELECT reason_code FROM mint.intake_checks WHERE "
+                f"intake_id={lit(intake_id)} AND \"check\"='url_guard'", "mint"),
             test_route_calls=log_count(
                 r"/mcp-rest/test/", datetime.now(UTC) - timedelta(minutes=3)))
 

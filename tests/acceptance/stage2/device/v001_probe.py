@@ -94,7 +94,7 @@ def main():
     reg = http("POST", "/v1/mcp/server", {"server_id": "legacy-server", "alias": "legacy_server", "server_name": "legacy_server",
                                     "url": "https://cnt:8443/synthetic/mcp", "transport": "http", "auth_type": "none", "allow_all_keys": False})
     http("POST", "/user/new", {"user_id": "legacy-user", "user_role": "internal_user", "auto_create_key": False})
-    key = json.loads(http("POST", "/key/generate", {"user_id": "legacy-user", "object_permission": {"mcp_servers": ["legacy-server"]}})[1])["key"]
+    key = json.loads(http("POST", "/key/generate", {"user_id": "legacy-user", "object_permission": {"mcp_servers": ["legacy-server", "legacy_server"]}})[1])["key"]
     time.sleep(15)
     for who in (MASTER, key):  # LiteLLM의 도구 해석표를 채운다
         http("GET", "/mcp-rest/tools/list?server_id=legacy-server", None, who)
@@ -111,6 +111,7 @@ def main():
         "confirmation_v001_isolation": {"confirmation_rows_seen": int(seen), "confirmation_rows_consumed": int(consumed),
                                         "stage1_call_approval_consumed": int(ca)},
     }[name]
+    out["operator_setup_reproduced"] = "1단계 운영자 설정 재현: 시험 키 object_permission.mcp_servers에 legacy_server를 직접 부여, allow_all_keys=false"
     out["probe_statuses"] = {"allow": allow_status, "deny": deny_status, "register": reg[0], "detail": (reg[1] if reg[0] >= 400 else allow_text)[:200]}
     print(json.dumps(out))
 
