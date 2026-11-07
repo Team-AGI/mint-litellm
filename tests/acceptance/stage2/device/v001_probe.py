@@ -63,8 +63,8 @@ def call(key, tool):
 def start(database):
     sh("docker", "rm", "-f", PROJECT + "-litellm", check=False)
     psql("postgres", "SELECT 1")
-    if not psql("postgres", "SELECT 1 FROM pg_database WHERE datname='litellm_v001'"):
-        psql("postgres", "CREATE DATABASE litellm_v001")
+    psql("postgres", "DROP DATABASE IF EXISTS litellm_v001 WITH (FORCE)")
+    psql("postgres", "CREATE DATABASE litellm_v001")
     cfg = STATE / "v001.config.yaml"
     cfg.write_text(Path(__file__).with_name("litellm.config.yaml").read_text())
     pw = ENV["POSTGRES_PASSWORD"]
