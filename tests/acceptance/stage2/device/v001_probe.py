@@ -91,12 +91,12 @@ def main():
     database = (STATE / "migration-db").read_text().strip()
     start(database)
     # 레지스트리에 legacy-server를 합성 서버로 두고, 승인 주체 legacy-user의 키를 만든다.
-    http("POST", "/v1/mcp/server", {"server_id": "legacy-server", "alias": "legacy-server", "server_name": "legacy-server",
+    reg = http("POST", "/v1/mcp/server", {"server_id": "legacy-server", "alias": "legacy-server", "server_name": "legacy-server",
                                     "url": "https://cnt:8443/synthetic/mcp", "transport": "http", "auth_type": "none", "allow_all_keys": False})
     http("POST", "/user/new", {"user_id": "legacy-user", "user_role": "internal_user", "auto_create_key": False})
     key = json.loads(http("POST", "/key/generate", {"user_id": "legacy-user", "object_permission": {"mcp_servers": ["legacy-server"]}})[1])["key"]
     time.sleep(15)
-    allow_status, allow_up, _ = call(key, "stable")      # 1단계 승인이 허용하는 도구
+    allow_status, allow_up, allow_text = call(key, "stable")      # 1단계 승인이 허용하는 도구
     deny_status, deny_up, _ = call(key, "mutable")       # 승인에 없는 도구
     again_status, _, _ = call(key, "stable")[0], 0, 0     # 전면 차단 여부: 같은 허용 도구를 한 번 더
     seen = psql(database, "SELECT count(*) FROM mint.self_confirmations")
@@ -109,7 +109,7 @@ def main():
         "confirmation_v001_isolation": {"confirmation_rows_seen": int(seen), "confirmation_rows_consumed": int(consumed),
                                         "stage1_call_approval_consumed": int(ca)},
     }[name]
-    out["probe_statuses"] = {"allow": allow_status, "deny": deny_status}
+    out["probe_statuses"] = {"allow": allow_status, "deny": deny_status, "register": reg[0], "detail": (reg[1] if reg[0] >= 400 else allow_text)[:200]}
     print(json.dumps(out))
 
 
