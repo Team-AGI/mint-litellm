@@ -32,6 +32,7 @@ site["intake"].update(org_id="default", owner_user_id="acc-owner")
 for name, entry in site["servers"].items():
     entry["server_id"] = name
     entry["url"] = f"https://cnt:8443/{name}/mcp"
+    entry["client_tool_prefix"] = f"mcp__acceptance__{name}-"  # LiteLLM 게이트웨이가 서버 이름을 도구 앞에 붙인다
     site["counters"][name] = f"http://{os.environ.get('ACC_COUNTER_HOST', '127.0.0.1')}:4350/{name}"
 # 실제 클라이언트(pj1·pj3): 기기에서 ssh로 고정 명령을 실행한다(환경 파일은 각 장비에 둔다).
 for device, target in (("pj1", os.environ.get("ACC_PJ1")), ("pj3", os.environ.get("ACC_PJ3"))):
