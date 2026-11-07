@@ -791,3 +791,23 @@ def test_the_external_write_boundary_blocks_at_the_write_even_mid_job(
     row = job(admin, job_id)
     assert row["status"] == "pending" and row["last_error_code"] == "restore_blocked"
     assert row["attempts"] == 0
+
+
+def test_a_shortened_interval_brings_the_next_run_forward(make_worker, admin):
+    """주기를 줄여 다시 기동하면 이미 예약된 먼 다음 시각이 아니라 새 주기를 따른다."""
+    long_settings = Stage2Settings.from_env({**ENV, "MINT_OBSERVE_SECONDS": "3600"})
+    short_settings = Stage2Settings.from_env({**ENV, "MINT_OBSERVE_SECONDS": "60"})
+    first = make_worker(schedules="all", settings=long_settings)
+    admin.execute("DELETE FROM mint.schedules WHERE kind <> 'contract_observe'")
+    assert jobs.register_due_schedules(first.conn, INSTANCE) == 1  # 최초 1회
+    later = fetchone(admin, "SELECT next_run_at - now() AS wait FROM mint.schedules")["wait"]
+    assert later > timedelta(minutes=59)
+    second = make_worker(schedules="all", settings=short_settings)
+    admin.execute("DELETE FROM mint.schedules WHERE kind <> 'contract_observe'")
+    soon = fetchone(admin, "SELECT next_run_at - now() AS wait FROM mint.schedules")["wait"]
+    assert soon <= timedelta(seconds=60)
+    admin.execute("UPDATE mint.schedules SET next_run_at = now() - interval '1 second'")
+    admin.execute("UPDATE mint.jobs SET status = 'running', lease_owner = 'x',"
+                  " lease_until = now() + interval '1 h'")
+    admin.execute("UPDATE mint.jobs SET status = 'done', lease_owner = NULL, lease_until = NULL")
+    assert jobs.register_due_schedules(second.conn, INSTANCE) == 1
