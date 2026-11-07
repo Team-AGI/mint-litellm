@@ -316,7 +316,7 @@ ADAPTERS["export_unwritable"] = (export_unwritable, export_unwritable_undo)
 def trigger_negative_state(ctx):
     """활성 승인 하나를 철회해 부정 상태 세대를 올린다. 되돌리지 않는다(case_setup이 복구)."""
     token = {**os.environ, "MINT_OPERATOR_TOKEN": env("ACC_ADMIN_TOKEN")}
-    approval = psql("SELECT id FROM mint.approvals WHERE status='active' ORDER BY created_at "
+    approval = psql("SELECT id FROM mint.approvals WHERE status='active' ORDER BY id "
                     "DESC LIMIT 1", "mint")
     if not approval:
         raise SystemExit("철회할 활성 승인이 없음")
@@ -512,7 +512,9 @@ def case_setup(case):
     for server, (new, old) in SWAPS.items():
         if state_file(server + "-swapped").exists():
             swap(server, new, old)[1](None)
-    compose("start", *[s for s in restore_services() if s in present])
+    # 키 교체 시험(hmac_changed 등)이 남긴 환경이 기준과 다를 수 있으므로 기준 환경으로 다시 만든다.
+    compose("up", "-d", "--no-deps", "--force-recreate",
+            *[s for s in restore_services() if s in present])
     wait_ready()
     if os.environ.get("ACC_EXPORT_HOST_DIR"):  # 작업 실행기의 첫 체크포인트까지
         deadline = time.monotonic() + 120

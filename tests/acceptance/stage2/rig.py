@@ -241,7 +241,7 @@ class Rig:
         assert len({row["source_key"] for row in rows}) == len(rows)
 
     def call(self, server, tool, arguments=None, *, role="caller", base=None, allowed=True,
-             code=None, cause=None):
+             code=None, cause=None, litellm_rejects=False):
         mark = "acc-" + uuid.uuid4().hex
         url = base or self.site["litellm"][0]
         before = self.counter(server)
@@ -272,6 +272,10 @@ class Rig:
         })
         assert elapsed <= self.expected["limits"]["call_ms"]
         assert delta == (1 if allowed else 0), (delta, allowed)
+        if litellm_rejects and not decisions and response.status_code in (400, 403, 404, 500):
+            # DS-173: 승인 전 서버는 LiteLLM의 사전 거절(업스트림 0)도 합격이다.
+            self.result["steps"][-1]["litellm_rejected"] = True
+            return {}
         assert len(decisions) == self.expected["flows"]["call"]["decision_evaluated"]
         rule = self.expected["flows"]["allowed_call" if allowed else "blocked_call"]
         counts = Counter(row["kind"] for row in events)

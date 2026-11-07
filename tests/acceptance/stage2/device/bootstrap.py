@@ -44,7 +44,7 @@ def key(base, **body):
 
 def main():
     out = {}
-    for u in ("acc-admin", "acc-approver", "acc-admin2", "acc-owner", "acc-caller", "acc-submitter"):
+    for u in ("acc-admin", "acc-approver", "acc-admin2", "acc-owner", "acc-caller", "acc-submitter", "acc-consent"):
         user(u)
     user("acc-control", "proxy_admin")
     out["ACC_CONTROL_KEY"] = key("mint", user_id="acc-control", key_alias="acc-control", allowed_routes=ROUTES)

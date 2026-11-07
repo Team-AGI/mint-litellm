@@ -658,7 +658,8 @@ def negative_submission(ctx, url, allow_all_keys=False):
 
 @scenario("intake_provider_denied", undo=cleanup)
 def intake_provider_denied(ctx):
-    negative_submission(ctx, f"https://denied-{uuid.uuid4().hex[:8]}.example.org/mcp")
+    # LiteLLM은 해석되지 않는 호스트의 제출을 400으로 거절하므로 해석되는 공개 호스트를 쓴다.
+    negative_submission(ctx, f"https://example.org/mcp-{uuid.uuid4().hex[:8]}")
 
 
 @scenario("intake_private_literal", undo=cleanup)
@@ -668,7 +669,7 @@ def intake_private_literal(ctx):
 
 @scenario("intake_allow_all_keys", undo=cleanup)
 def intake_allow_all_keys(ctx):
-    negative_submission(ctx, f"https://denied-{uuid.uuid4().hex[:8]}.example.org/mcp",
+    negative_submission(ctx, f"https://example.org/mcp-{uuid.uuid4().hex[:8]}",
                         allow_all_keys=True)
 
 
