@@ -31,7 +31,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.litellm
-    image: mint-litellm:local
+    image: mint-litellm:${COMPOSE_PROJECT_NAME:-local}
     command: ["--config", "/app/config/litellm.config.yaml", "--port", "4000"]
     # 인자 지문 키(MINT_FINGERPRINT_KEY, MINT_FINGERPRINT_KEY_VERSION)는 저장소 밖 비밀 파일에서 읽는다.
     env_file:
@@ -80,7 +80,7 @@ services:
   # 운영자 명령줄 도구. 예: docker compose run --rm control status
   # 호스트의 비밀 디렉터리(소유자는 설치한 사용자)에 쓰므로 이 도구만 루트로 실행한다. 장기 실행 서비스는 비루트이다.
   control:
-    image: mint-litellm:local
+    image: mint-litellm:${COMPOSE_PROJECT_NAME:-local}
     user: "0"
     profiles: ["tools"]
     entrypoint: ["mint-litellm"]
@@ -113,7 +113,7 @@ services:
   # 내보내기 볼륨(export)은 LiteLLM 컨테이너에 읽기 전용으로, 작업 실행기·제어 도구에 읽기·쓰기로 연결한다.
   # 서명 키가 있어야 기동하며, 로그인 역할 mint_worker_app은 init에 MINT_WORKER_DB_PASSWORD를 주어 만든다.
   worker:
-    image: mint-litellm:local
+    image: mint-litellm:${COMPOSE_PROJECT_NAME:-local}
     profiles: ["worker"]
     command: ["worker"]
     entrypoint: ["mint-litellm"]
@@ -138,10 +138,10 @@ services:
     stop_grace_period: 30s
     restart: unless-stopped
 
-  # 관리자 콘솔(2단계). 기본으로는 뜨지 않는다: docker compose --profile console up -d console
+  # 관리자 콘솔. ./mint.sh up·upgrade가 함께 띄운다.
   # 제어 평면 키(MINT_LITELLM_KEY)는 읽기 경로 전용으로만 쓰며 설치 기본은 설정이다. 쿠키가 Secure이므로 TLS는 앞단에서 끝내고 이 포트로 전달한다.
   console:
-    image: mint-litellm:local
+    image: mint-litellm:${COMPOSE_PROJECT_NAME:-local}
     profiles: ["console"]
     command: ["console", "--host", "*", "--port", "8080"]
     entrypoint: ["mint-litellm"]
