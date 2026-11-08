@@ -678,7 +678,8 @@ def intake_private_literal(ctx):
             "description": "acceptance", "allow_all_keys": False}, key=A.env("ACC_SUBMIT_KEY"))
 
     status, text = submit("https://10.20.30.40/mcp")
-    control_status, control_text = submit(f"https://example.org/mcp-{uuid.uuid4().hex[:8]}")
+    control_url = site()["servers"]["synthetic"]["url"] + "?c=" + uuid.uuid4().hex[:6]
+    control_status, control_text = submit(control_url)
     if control_status in (200, 201):
         track("server", json.loads(control_text)["server_id"])
     time.sleep(70)  # 제출 수신 작업 주기보다 길게 기다린다

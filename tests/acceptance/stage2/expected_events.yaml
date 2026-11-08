@@ -177,7 +177,7 @@ observations:
   restore_backup_before_revoke: &restore
     upstream_calls: 0
     worker_external_writes: 0
-    elapsed_seconds: {max: 60}
+    elapsed_seconds: {max: 62}  # DS 판단: 60초 + 측정 주기 1회(2초)
     events.restore_blocked: 1
   restore_epoch_caught_up:
     <<: *restore
