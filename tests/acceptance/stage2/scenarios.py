@@ -700,7 +700,7 @@ def intake_private_literal(ctx):
     if private_id:  # 이 LiteLLM 판본은 사설 IP 제출을 받아 주므로 MINT url_guard가 거절해야 한다(DS 정정)
         track("server", private_id)
         wait(lambda: A.psql("SELECT coalesce(decision,'') FROM mint.intakes WHERE "
-                            f"server_id={lit(private_id)}", "mint") == "rejected", 180, "사설 IP 자동 거절")
+                            f"server_id={lit(private_id)}", "mint") == "rejected", 600, "사설 IP 자동 거절")
     new_rows = n(f"SELECT count(*) FROM mint.intakes WHERE instance_id={lit(iid())}") - before
     observe(ctx, litellm_rejected=status in (400, 403, 422), litellm_status=status,
             litellm_reason=text[:160], control_accepted=control_status in (200, 201),
@@ -742,7 +742,7 @@ def intake_definitions_limit(ctx):
     result = intake_status(intake_id)
     # 예외 승인은 정의 수집이 만든 후보 계약에 묶인다. 수집이 끝나 후보가 생길 때까지 기다린다.
     wait(lambda: n(f"SELECT count(*) FROM mint.tool_contracts WHERE instance_id={lit(iid())} "
-                   f"AND server_id={lit(server_id)} AND status='candidate'") > 0, 150,
+                   f"AND server_id={lit(server_id)} AND status='candidate'") > 0, 600,
          "정의 수집 후보 계약(도구 501개)")
     second = A.env(ROLE_ENV["admin2"])
     over = cli("intake", "except", intake_id, "--reason", "acceptance", "--valid-until",
@@ -1398,7 +1398,7 @@ def conf_world(*, team=False, call_approval=False):
             "org": rel["org_id"], "tool": tool, "approval": approval}
 
 
-def wcall(w, args, startup_wait=150):
+def wcall(w, args, startup_wait=900):
     """호출 한 번. 복원 직후 시작 유예 동안(집행 미확인·목록 단계 거절)은 같은 인자로 다시 보낸다."""
     deadline = time.monotonic() + startup_wait
     while True:

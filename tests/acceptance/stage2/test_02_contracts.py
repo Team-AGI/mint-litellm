@@ -62,7 +62,13 @@ def test_synthetic_contract_changes(rig, mutation):
         rig.wait(lambda: rig.rows("alerts", "kind='contract_drift' AND subject->>'server_id'=%s",
                                   [server]), 120, "배포 변경 경보")
         rig.check_events(window, worker_count=2)
-        rig.reapprove(server)
+        # DS-185 ①: 제한된 제어 키는 새 URL을 돌려주지 않으므로 운영자가 등록된 새 주소를 입력해 후보를 만든다.
+        url = rig.request("GET", f"/v1/mcp/server/{server}", role="litellm_admin",
+                          base="litellm_admin")["url"]
+        intake = max(rig.rows("intakes", "server_id=%s AND decision='approved'", [server]),
+                     key=lambda row: row["decided_at"])
+        rig.cli("intake", "recheck", str(intake["id"]), "--url", url, role="admin")
+        rig.reapprove(server, need_deployment=True)
         try:
             rig.wait(lambda: not rig.rows("servers", "server_id=%s AND deployment_drift", [server]),
                      120, "배포 재승인")

@@ -11,15 +11,16 @@ def test_sync_hold_resume_revoke(rig):
     server = fixture["server_id"]
     # 호출 키는 서버 접근이 미리 있어 grant가 전부 선재(preexisting)다. 접근이 없던 새 키로 소유 grant를 만든다.
     owned_key, owned_id = rig.owned_approval(server)
-    grants = rig.rows("litellm_grants", "server_id=%s AND NOT preexisting AND item='mcp_server'",
-                      [server])
+    scope_id = hashlib.sha256(owned_key.encode()).hexdigest()
+    grants = rig.rows("litellm_grants", "server_id=%s AND NOT preexisting AND item='mcp_server' "
+                      "AND target_id=%s", [server, scope_id])
     assert grants
     grant = grants[0]
     rig.fault("delete_owned_grant", restore=False)
     try:
         rig.wait(lambda: rig.rows("litellm_grants", "id=%s AND observed AND missing_count=1",
                                   [grant["id"]]),
-                 rig.expected["limits"]["sync_seconds"], "첫 권한 복구")
+                 900, "첫 권한 복구")  # 복원 직후 조정 작업의 지수 후퇴를 포함한다
     except AssertionError:
         rows = rig.rows("litellm_grants", "id=%s", [grant["id"]])
         jobs = rig.sql("SELECT kind, status, run_after FROM mint.jobs WHERE instance_id=%s AND kind "

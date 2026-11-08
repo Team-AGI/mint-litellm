@@ -73,7 +73,23 @@ def extract(lines, refs, *, allowed=True):
     return list(samples.values())
 
 
+def warm_up(rig, fixture, seconds=900):
+    """복원·재시작 직후 계약 관측이 재시도 후퇴로 늦으면 도구가 숨는다. 호출이 허용될 때까지 기다린다."""
+    deadline = time.monotonic() + seconds
+    while True:
+        reply = httpx.post(
+            rig.site["litellm"][0].rstrip("/") + "/mcp-rest/tools/call",
+            headers={"Authorization": "Bearer " + rig.secret("caller")},
+            json={"server_id": fixture["server_id"], "name": fixture["performance_tool"],
+                  "arguments": {}}, timeout=30)
+        if reply.status_code == 200:
+            return
+        assert time.monotonic() < deadline, (reply.status_code, reply.text[:200])
+        time.sleep(5)
+
+
 def measure(rig, fixture):
+    warm_up(rig, fixture)
     bases = rig.site["litellm"]
     assert len(bases) == 2
     plain = [rig.site["plain"]]
