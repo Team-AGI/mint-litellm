@@ -24,7 +24,7 @@ def test_restore(rig, case):
                  reapplied_consents=rig.rows("consents", "revoked_at IS NOT NULL"))
     elif case in ("latest_missing", "hmac_changed"):
         rig.call(fixture["server_id"], fixture["tool"], fixture["arguments"], allowed=False,
-                 code="MINT-ENFORCEMENT-UNVERIFIED",
+                 code="MINT-ENFORCEMENT-UNVERIFIED", litellm_rejects=True,  # 재시작 뒤엔 목록 단계에서 막힌다
                  cause="export_missing" if case == "latest_missing" else "export_unverified")
     elif case == "operator_revert":
         # 시나리오가 attest까지 마쳤다. 되돌린 뒤 호출이 다시 허용되고 운영자 상태가 유지된다.
