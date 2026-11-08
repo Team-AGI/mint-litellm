@@ -55,7 +55,7 @@ def test_export_seal(rig):
     rig.wait(lambda: rig.rows("exports", "status='failed'"), 90, "내보내기 실패")
     rig.restore_fault("export_unwritable")
     rig.wait(lambda: not rig.rows("exports", "status='failed'"), 120, "파일 쓰기 수렴")
-    assert rig.cli("seal", "verify")["valid"] is True
+    assert rig.cli("seal", "verify")["ok"] is True
     rig.fault("seal_tamper")
     result = rig.cli("seal", "verify", check=False)
     assert result.returncode != 0
