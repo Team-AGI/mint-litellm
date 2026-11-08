@@ -788,7 +788,9 @@ def keep_file(path):
 def put_back(name, target):
     saved = file_backup_path(name)
     if saved.exists():
-        target.write_bytes(saved.read_bytes())
+        rel = target.relative_to(A.export_dir().parent)
+        A.export_root(f"cp /b /x/{rel.as_posix()}; chown 65532:65532 /x/{rel.as_posix()}",
+                      f"{saved}:/b:ro")
         saved.unlink()
 
 
@@ -832,10 +834,24 @@ def writes_since(since):
              f"AND last_applied_at >= {lit(since.isoformat())}")
 
 
+LAST_MARK = [None]
+
+
+def cause_from_event(mark):
+    """DS-175 ②: 차단 원인은 응답 본문이 아니라 판정 사건(snapshot의 cause)에서 읽는다."""
+    for _ in range(10):
+        body = A.psql("SELECT payload::text FROM mint.events WHERE kind='decision_evaluated' AND "
+                      f"payload->>'litellm_call_id'={lit(mark)} LIMIT 1", "mint")
+        if body:
+            return next((c for c in CAUSES if c in body), None)
+        time.sleep(1)
+    return None
+
+
 def probe_once():
     fx = synthetic()
     try:
-        status, text, _ = rest_call(sec("caller"), fx["tool"], fx["arguments"])
+        status, text, LAST_MARK[0] = rest_call(sec("caller"), fx["tool"], fx["arguments"])
     except OSError:
         return 0, ""
     return status, text
@@ -860,7 +876,7 @@ def probe_blocked(seconds, expect=True):
         time.sleep(2)
     elapsed = time.monotonic() - started
     first = upstream() - before
-    cause = cause_of(text)
+    cause = cause_from_event(LAST_MARK[0]) if LAST_MARK[0] else cause_of(text)
     for _ in range(5):
         probe_once()
     return elapsed, cause, upstream() - before - first, first
@@ -980,7 +996,7 @@ def restore_latest_missing(ctx):
     latest = export_root() / "latest.json"
     keep_file(latest)
     since = datetime.now(UTC)
-    latest.unlink()
+    A.export_unlink(latest)
     elapsed, cause, upstream_calls, _ = probe_blocked(180)
     observe(ctx, upstream_calls=upstream_calls, cause=cause, elapsed_seconds=elapsed,
             events={"restore_blocked": event_count("restore_blocked", since.isoformat())})
@@ -1011,7 +1027,7 @@ def restore_accept_stale(ctx):
     latest = export_root() / "latest.json"
     keep_file(latest)
     since = datetime.now(UTC)
-    latest.unlink()
+    A.export_unlink(latest)
     probe_blocked(180)
     first = cli("restore", "accept-stale", "--reason", "acceptance", role="admin", check=False)
     time.sleep(70)  # 한 사람의 요청만으로 새 파일이 게시되어 풀리지 않는지 기다려 본다

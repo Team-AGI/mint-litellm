@@ -26,13 +26,9 @@ services:
     environment:
       <<: *acc-env
       MINT_LOG_LEVEL: DEBUG
-  # 이미지는 루트로 동작한다. 어댑터(export_unwritable)와 호스트 쪽 파일 정리가 맞도록 시험에서만 비루트로 둔다.
   worker:
-    user: "1000:1000"
     environment:
       <<: *acc-env
-      # deploy/compose.yaml의 worker에는 MINT_OPA_URL이 없어 설명 검사·위험 등급이 판별 불가가 된다(제품 결함 후보).
-      MINT_OPA_URL: http://opa:8181
   console:
     environment:
       <<: *acc-env

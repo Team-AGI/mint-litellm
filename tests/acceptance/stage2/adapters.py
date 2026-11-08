@@ -216,6 +216,23 @@ def restore_services():
     return (os.environ.get("ACC_RESTORE_SERVICES") or "litellm litellm2 worker console").split()
 
 
+def export_root(script, *mounts):
+    """내보내기 볼륨은 비루트(65532) 소유라 호스트 사용자는 쓸 수 없다. 루트 컨테이너로 처리한다."""
+    vol = env("COMPOSE_PROJECT_NAME", "mints2") + "_export"
+    args = [a for m in mounts for a in ("-v", m)]
+    run(["docker", "run", "--rm", "--user", "0", "-v", f"{vol}:/x", *args,
+         "--entrypoint", "sh", "mint-litellm:local", "-c", script])
+
+
+def export_unlink(path):
+    """내보내기 안의 파일 하나를 지운다(호스트 권한이 모자라면 루트 컨테이너로)."""
+    try:
+        Path(path).unlink()
+    except PermissionError:
+        rel = Path(path).relative_to(export_dir().parent)
+        export_root(f"rm -f /x/{rel.as_posix()}")
+
+
 def wait_ready(seconds=300):
     """복제본이 요청을 받을 때까지 기다린다. 주소는 ACC_READY_URLS(쉼표), 없으면 관리 주소."""
     raw = os.environ.get("ACC_READY_URLS") or env("ACC_LITELLM_ADMIN_URL", "")
@@ -503,12 +520,10 @@ def case_setup(case):
     if fixture:
         http("POST", fixture.rstrip("/") + "/control", {"mode": "base"})
     if os.environ.get("ACC_EXPORT_HOST_DIR"):
-        for path in export_dir().rglob("*"):
-            if path.is_file():
-                path.unlink()
         saved = state_file("baseline-export")
-        if saved.is_dir():  # 기준 DB와 같은 세대의 파일로 되돌린다
-            shutil.copytree(saved, export_dir(), dirs_exist_ok=True)
+        # 기준 DB와 같은 세대의 파일로 되돌린다(비우고 기준 사본을 덮고 소유자를 65532로)
+        script = "find /x -mindepth 1 -delete; cp -a /b/. /x/ 2>/dev/null; chown -R 65532:65532 /x"
+        export_root(script, f"{saved}:/b:ro" if saved.is_dir() else "/tmp:/b:ro")
     for server, (new, old) in SWAPS.items():
         if state_file(server + "-swapped").exists():
             swap(server, new, old)[1](None)
