@@ -304,9 +304,11 @@ def handle(job) -> None:
     consume_deployment_events(ctx)
     servers = fetchall(
         job.conn,
-        "SELECT server_id,auth_type,state_version FROM mint.servers"
-        " WHERE instance_id=%s AND contract_status='managed' AND status='approved'"
-        " AND (%s='contract_observe' OR server_id=%s) ORDER BY server_id",
+        "SELECT s.server_id,d.auth_type,s.state_version,d.url,d.transport"
+        " FROM mint.servers s LEFT JOIN mint.deployment_contracts d"
+        " ON d.instance_id=s.instance_id AND d.server_id=s.server_id AND d.status='approved'"
+        " WHERE s.instance_id=%s AND s.contract_status='managed' AND s.status='approved'"
+        " AND (%s='contract_observe' OR s.server_id=%s) ORDER BY s.server_id",
         (job.instance_id, job.job["target_ref"], job.job["target_ref"]),
     )
     if not servers:
@@ -318,8 +320,19 @@ def handle(job) -> None:
     for server in servers:
         job.checkpoint()
         # 시험 목록 API는 수용검증 클라이언트와 공유한다. served 목록을 대신 읽지 않는다.
+        # LiteLLM은 서버 식별자만으로는 접속 대상을 알지 못해 승인된 배포 값(URL·전송·인증)을 함께
+        # 보낸다. 식별자는 레지스트리에 저장된 자격을 쓰게 한다.
         try:
-            body = test_tools_list({"server_id": server["server_id"]})
+            if not server["url"]:
+                raise ValueError("no approved deployment contract")
+            body = test_tools_list(
+                {
+                    "server_id": server["server_id"],
+                    "url": server["url"],
+                    "transport": server["transport"],
+                    "auth_type": server["auth_type"],
+                }
+            )
             tools = normalize_tools(body)
             job.checkpoint()
             record_tools(

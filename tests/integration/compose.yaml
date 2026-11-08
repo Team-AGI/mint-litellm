@@ -32,7 +32,7 @@ x-litellm-env: &litellm-env
   LITELLM_LOG: INFO
 
 x-litellm: &litellm
-  image: mint-litellm-it:local
+  image: ${MINT_E_IMAGE:-mint-litellm-it:local}
   environment: *litellm-env
   command: ["--config", "/app/config/litellm.config.yaml", "--port", "4000"]
   healthcheck:
@@ -75,7 +75,7 @@ services:
 
   # 마이그레이션·로그인 역할·기본 조직·첫 정책 번들을 만들고 끝난다.
   mint-init:
-    image: mint-litellm-it:local
+    image: ${MINT_E_IMAGE:-mint-litellm-it:local}
     build:
       context: ../..
       dockerfile: deploy/Dockerfile.litellm
@@ -116,7 +116,7 @@ services:
 
   # 운영자 명령줄 도구를 실행하는 컨테이너. 시험은 docker compose exec로 명령을 보낸다.
   control:
-    image: mint-litellm-it:local
+    image: ${MINT_E_IMAGE:-mint-litellm-it:local}
     entrypoint: ["sleep", "infinity"]
     environment:
       <<: *mint-env
@@ -137,7 +137,7 @@ services:
 
   # 작업 실행기. 기동 직후 첫 체크포인트(latest.json)를 쓴다. LiteLLM은 같은 볼륨을 읽기 전용으로 본다.
   worker:
-    image: mint-litellm-it:local
+    image: ${MINT_E_IMAGE:-mint-litellm-it:local}
     entrypoint: ["mint-litellm"]
     command: ["worker"]
     environment:

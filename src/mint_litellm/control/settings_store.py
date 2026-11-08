@@ -1,5 +1,7 @@
 """저장된 설정(모드, 관측 가능 사유, 기본 조직)."""
 
+import hashlib
+
 import psycopg
 
 from mint_litellm.control import orgs
@@ -88,3 +90,31 @@ def set_observable(
         (new_reasons, new_ids, ctx.instance_id),
     )
     _changed(ctx, row, {"observable_reasons": new_reasons, "observable_policy_ids": new_ids})
+
+
+def control_key_token(key: str) -> str:
+    """LiteLLM이 키 객체에 쓰는 토큰(키의 SHA-256 16진수)."""
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+
+def set_control_key(ctx: Context, key: str | None, *, keep_existing: bool = False) -> str:
+    """제어 평면 키의 토큰을 정한다(``None``이면 해제). 결과는 ``set``·``cleared``·``differs``이다.
+
+    ``keep_existing``이면 이미 값이 있을 때 바꾸지 않는다. 같은 키면 ``set``, 다른 키면
+    ``differs``를 돌려준다(``init`` 재실행이 운영자가 바꾼 값을 덮지 않는다).
+    """
+    current = load(ctx.conn, ctx.instance_id, lock=True)["control_key_token"]
+    token = None if key is None else control_key_token(key)
+    if keep_existing and current is not None:
+        return "set" if current == token else "differs"
+    state = "set" if token else "cleared"
+    if token == current:
+        return state
+    row = fetchone(
+        ctx.conn,
+        "UPDATE mint.settings SET control_key_token = %s WHERE instance_id = %s"
+        " RETURNING settings_version",
+        (token, ctx.instance_id),
+    )
+    _changed(ctx, row, {"control_key": state})
+    return state

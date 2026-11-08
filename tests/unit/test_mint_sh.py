@@ -112,6 +112,9 @@ def test_up_hands_worker_and_staff_passwords_to_init_and_starts_the_worker(tmp_p
     values = dict(ln.split("=", 1) for ln in env_file.read_text(encoding="utf-8").splitlines())
     assert values["MINT_WORKER_DB_PASSWORD"] not in log  # 값은 인자가 아니라 환경으로 간다
     assert "--profile worker up -d worker" in log
+    assert "--user 0 --entrypoint chown control -R 65532:65532 /var/lib/mint/export /bundles" in log
+    assert "--user 0 --entrypoint chown litellm -R 65532:65532 /var/lib/mint/buffer" in log
+    assert "chgrp -R 65532 /app/config && chmod -R g+rX /app/config" in log
 
 
 def test_compose_refuses_to_start_litellm_without_an_export_key():
@@ -119,6 +122,15 @@ def test_compose_refuses_to_start_litellm_without_an_export_key():
     litellm = text.split("\n  litellm:\n", 1)[1].split("\n  control:\n", 1)[0]
     assert "MINT_EXPORT_HMAC_KEY: ${MINT_EXPORT_HMAC_KEY:?" in litellm
     assert "export:/var/lib/mint/export:ro" in litellm
+
+
+def test_compose_gives_the_worker_the_policy_engine_and_the_observe_period():
+    text = (SCRIPT.parent / "compose.yaml").read_text(encoding="utf-8")
+    worker = text.split("\n  worker:\n", 1)[1].split("\n  console:\n", 1)[0]
+    assert "MINT_OPA_URL: http://opa:8181" in worker
+    assert "MINT_OBSERVE_SECONDS: ${MINT_OBSERVE_SECONDS:-3600}" in worker
+    litellm = text.split("\n  litellm:\n", 1)[1].split("\n  control:\n", 1)[0]
+    assert "MINT_OBSERVE_SECONDS: ${MINT_OBSERVE_SECONDS:-3600}" in litellm
 
 
 def test_values_are_appended_on_their_own_line_when_env_lacks_a_trailing_newline(tmp_path):

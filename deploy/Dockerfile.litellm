@@ -15,8 +15,15 @@ COPY --from=build /wheels /tmp/wheels
 COPY deploy/constraints.txt deploy/merge-constraints.py /tmp/
 RUN python -m ensurepip     && python -m pip freeze > /tmp/base-freeze.txt     && python /tmp/merge-constraints.py /tmp/base-freeze.txt /tmp/constraints.txt > /tmp/merged.txt     && python -m pip install -c /tmp/merged.txt "$(ls /tmp/wheels/*.whl)[litellm]"     && python -m pip check     && python -m pip uninstall -y pip     && rm -rf /tmp/wheels /tmp/constraints.txt /tmp/merge-constraints.py /tmp/base-freeze.txt /tmp/merged.txt
 
+# 비루트 사용자(기반 이미지의 nonroot)로 실행한다. 판정 버퍼·내보내기·정책 번들은 이 사용자가 쓰는 디렉터리이며,
+# 이 경로에 처음 만들어지는 명명 볼륨은 이 소유자를 물려받는다(기존 볼륨은 mint.sh up이 소유자를 맞춘다).
+RUN mkdir -p /var/lib/mint/buffer /var/lib/mint/export /bundles \
+    && chown -R 65532:65532 /var/lib/mint /bundles
+ENV HOME=/tmp
+
 # LiteLLM을 시작하기 전에 설정 파일을 검사하는 진입점. 검사에 실패하면 컨테이너가 시작되지 않는다.
 COPY deploy/mint-entrypoint.sh /usr/local/bin/mint-entrypoint
 RUN chmod +x /usr/local/bin/mint-entrypoint
+USER 65532:65532
 ENTRYPOINT ["mint-entrypoint"]
 CMD ["--port", "4000"]
