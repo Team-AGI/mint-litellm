@@ -27,7 +27,8 @@ A = None  # adapters 모듈(순환 import를 피하려고 bind로 받는다)
 BODIES = {}
 TIMEOUTS = {"restore_steady_24h": 86460, "confirmation_expiry_10m": 1500, "sync_race_30": 1200,
             "auth_blocked_key": 900, "auth_deleted_key": 900, "restore_backup_before_revoke": 900,
-            "restore_epoch_caught_up": 900, "restore_consent": 900, "sync_revoke_race": 900}
+            "restore_epoch_caught_up": 900, "restore_consent": 900, "sync_revoke_race": 900,
+            "intake_private_literal": 1500, "intake_definitions_limit": 1500}
 ROLE_ENV = {"admin": "ACC_ADMIN_TOKEN", "approver": "ACC_APPROVER_TOKEN",
             "admin2": "ACC_ADMIN2_TOKEN"}
 CAUSES = ("restore_pending", "export_missing", "export_unverified")

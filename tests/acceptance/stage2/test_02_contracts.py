@@ -67,7 +67,17 @@ def test_synthetic_contract_changes(rig, mutation):
                           base="litellm_admin")["url"]
         intake = max(rig.rows("intakes", "server_id=%s AND decision='approved'", [server]),
                      key=lambda row: row["decided_at"])
-        rig.cli("intake", "recheck", str(intake["id"]), "--url", url, role="admin")
+        try:
+            rig.cli("intake", "recheck", str(intake["id"]), "--url", url, role="admin")
+        except AssertionError as error:
+            from mint_litellm.types.decision import url_sha256
+            seen = rig.sql("SELECT canonical_text FROM mint.contract_observations WHERE "
+                           "instance_id=%s AND server_id=%s AND kind='deployment' AND "
+                           "scope='server' AND name='identity'", [rig.iid, server])
+            variants = {v: url_sha256(v)[:12] for v in (
+                url, url.split("?")[0], url + "/", url.rstrip("/"))}
+            raise AssertionError(f"{str(error)[:200]} observed={seen[0]['canonical_text'][:120]} "
+                                 f"variants={variants}") from error
         rig.reapprove(server, need_deployment=True)
         try:
             rig.wait(lambda: not rig.rows("servers", "server_id=%s AND deployment_drift", [server]),
