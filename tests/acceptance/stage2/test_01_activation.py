@@ -122,14 +122,18 @@ def test_control_key_wait(rig):
     rig.call(server, fixture["tool"], fixture["arguments"], slow_ok=True)
 
 
-def test_control_key_wait_revoked(rig):
-    """대기 중에 서버를 중지하면 키를 저장해도 실행 시점의 상태로 판정되어 핀이 적용되지 않는다."""
+def test_control_key_wait_denied(rig):
+    """대기 중에 거부를 만들면 키를 저장한 뒤 핀이 맞춰져도 실행 시점 상태(거부)로 호출이 막힌다.
+
+    대기(보류) 승인은 철회 명령의 대상이 아니라서(활성만 철회) 거부로 거둔다.
+    """
     fixture, server = control_key_waiting(rig, "context7")
-    # 대기 중인 승인은 철회 대상(활성)이 아니므로 서버 중지로 거둔다. 키를 저장해도 실행 시점 상태가 판정한다.
-    rig.cli("server", "suspend", server)
+    scope = rig.approval_scope()
+    rig.cli("deny", "--scope", scope["type"], "--scope-id", scope["id"], "--server", server,
+            "--reason", "acceptance")
     rig.cli("settings", "control-key")
     rig.wait(lambda: not rig.rows("jobs", "last_error_code='control_key_not_set' "
                                   "AND status IN ('pending','running')"), 420, "대기 작업 처리")
-    assert not rig.rows("litellm_grants", "server_id=%s AND item='pin' AND observed", [server])
+    assert not rig.rows("jobs", "status='failed'")
     rig.call(server, fixture["tool"], fixture["arguments"], allowed=False, code="MINT-",
              litellm_rejects=True)
