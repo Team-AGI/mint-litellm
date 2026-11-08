@@ -1,5 +1,6 @@
 """관리자 콘솔 앱: FastAPI + Jinja2(서버 렌더링) + HTMX. 빌드 단계와 외부 자산이 없다."""
 
+import logging
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from mint_litellm.control.services import console_sessions
 from mint_litellm.types.ids import new_uuid7
 
 HERE = Path(__file__).parent
+log = logging.getLogger(__name__)
 
 CSP = "default-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'"
 HEADERS = {
@@ -54,6 +56,11 @@ def create_app(
         try:
             response = await call_next(request)
         except Exception:  # 처리하지 못한 오류도 보안 헤더와 요청 식별자를 단다
+            # 키·쿠키·본문은 남기지 않는다. 경로만 남긴다.
+            log.exception(
+                "요청 %s 처리 실패: %s %s",
+                request.state.request_id, request.method, request.url.path,
+            )
             response = JSONResponse(
                 {"code": "MINT-ADMIN-UNAVAILABLE", "message": "요청을 처리하지 못했습니다.",
                  "reference": request.state.request_id},
