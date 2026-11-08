@@ -207,10 +207,13 @@ SETTINGS_TABLE: tuple[SettingRow, ...] = (
     SettingRow(
         key="guardrails[MINT]",
         location=SettingLocation.GUARDRAILS,
-        value="mode: [pre_mcp_call, post_mcp_call], default_on: true",
+        value="mode: [pre_call, pre_mcp_call, post_mcp_call], default_on: true",
         grade=SettingGrade.REQUIRED,
         self_checks=(SelfCheckItem.GUARDRAIL_MODES, SelfCheckItem.GUARDRAIL_ORDER),
-        reason="가드레일이 없으면 도구 호출 판정과 도구 목록 필터가 사라진다.",
+        reason=(
+            "가드레일이 없으면 도구 호출 판정과 도구 목록 필터가 사라지고, pre_call이 없으면 "
+            "공급자가 외부 MCP 서버를 직접 부르는 모델 요청을 막지 못한다."
+        ),
     ),
     SettingRow(
         key="callbacks",

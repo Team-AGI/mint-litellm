@@ -168,7 +168,9 @@ def context_result(
     if not verified:
         detail = None if cause is None else f"cause={cause}"
         return StageResult.stop(Reason.ENFORCEMENT_UNVERIFIED, detail=detail)
-    if req.principal.principal_type is PrincipalType.MASTER_KEY:
+    # 모델 요청은 마스터 키로도 보낼 수 있으므로, 공급자 쪽 MCP 차단 사유를 그대로 돌려준다.
+    master = req.principal.principal_type is PrincipalType.MASTER_KEY
+    if master and req.operation is not OperationType.LLM_REQUEST:
         return StageResult.stop(Reason.MASTER_KEY_FORBIDDEN)
     if req.resolution_failure is not None:
         return req.resolution_failure

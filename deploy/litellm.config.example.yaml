@@ -11,7 +11,7 @@ guardrails:
   - guardrail_name: mint
     litellm_params:
       guardrail: mint_litellm.plugin.guardrail.MintGuardrail
-      mode: [pre_mcp_call, post_mcp_call]
+      mode: [pre_call, pre_mcp_call, post_mcp_call]
       default_on: true
 
 litellm_settings:

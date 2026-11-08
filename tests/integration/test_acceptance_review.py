@@ -236,3 +236,25 @@ def test_plain_image_config_fails_the_external_check(world):
     report = json.loads(done.stdout)
     assert done.returncode == 1
     assert any(f["level"] == "FAIL" for f in report["findings"])
+
+
+def test_an_old_two_mode_config_is_refused_then_fixed_by_upgrade_and_starts(world, variant):
+    from mint_litellm.control import litellm_config as config_tools
+
+    path = variant(
+        "oldmodes",
+        lambda text: text.replace(
+            "mode: [pre_call, pre_mcp_call, post_mcp_call]", "mode: [pre_mcp_call, post_mcp_call]"
+        ),
+    )
+    refused = run_start(path, "--config", "/app/config/litellm.config.yaml", "--port", "4000")
+    assert refused.returncode != 0 and "Uvicorn running" not in refused.stdout + refused.stderr
+    local = CONFIG_DIR / Path(path).name
+    try:
+        assert config_tools.ensure_guardrail_modes(local) == ["pre_call"]
+        assert config_tools.ensure_guardrail_modes(local) == []
+        with litellm_config(path) as started:
+            assert started.returncode == 0, started.stderr
+    finally:
+        for backup in CONFIG_DIR.glob(f"{local.name}.bak-*"):
+            backup.unlink()

@@ -65,6 +65,7 @@ class Severity(StrEnum):
 class OperationType(StrEnum):
     TOOL_CALL = "tool_call"
     RUNTIME_DISCOVERY = "runtime_discovery"
+    LLM_REQUEST = "llm_request"
 
 
 class Action(StrEnum):
