@@ -293,7 +293,10 @@ class Rig:
             "call": mark, "status": response.status_code, "upstream_calls": delta,
             "elapsed_ms": elapsed, "events": events, "expected_code": code,
         })
-        assert slow_ok or elapsed <= self.expected["limits"]["call_ms"]
+        # 공개 MCP 서버의 허용 호출은 업스트림 처리 시간이 섞여 있어(성능은 항목 10의 decision_ms로 판정, DL-016)
+        # 응답 시간 상한은 차단 호출과 합성 서버 호출에만 건다.
+        public_allowed = allowed and server != "synthetic"
+        assert slow_ok or public_allowed or elapsed <= self.expected["limits"]["call_ms"]
         assert delta == (1 if allowed else 0), (delta, allowed)
         if litellm_rejects and not decisions and response.status_code in (400, 403, 404, 500):
             # DS-173: 승인 전 서버는 LiteLLM의 사전 거절(업스트림 0)도 합격이다.
