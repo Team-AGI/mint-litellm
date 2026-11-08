@@ -5,7 +5,7 @@ import pytest
 
 def test_sync_hold_resume_revoke(rig):
     rig.require("sync status", "sync resume", handlers=("sync_target", "sync_reconcile",))
-    fixture = rig.active()
+    fixture = rig.active("synthetic")  # 어댑터(ACC_SERVER_ID)가 쓰는 서버
     server = fixture["server_id"]
     # 호출 키는 서버 접근이 미리 있어 grant가 전부 선재(preexisting)다. 접근이 없던 새 키로 소유 grant를 만든다.
     owned_key, owned_id = rig.owned_approval(server)
