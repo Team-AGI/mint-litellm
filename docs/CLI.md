@@ -19,7 +19,7 @@
 | `mint-litellm contract show` | 모든 역할 | 서버의 승인본·후보 계약을 조회한다. | - | - |
 | `mint-litellm contract diff` | 모든 역할 | 승인 계약과 관측 원본·해시·변경 순번을 비교한다. | - | - |
 | `mint-litellm contract reapprove` | `admin`, `approver` | 직무 분리·재검사 증거를 확인하고 후보 id·판본을 고정한 계획과 동기화 작업을 등록한다. | - | `reapproval_requested` |
-| `mint-litellm init` | 토큰 불필요 | LiteLLM 설정 조각(권장 설정 포함)을 만들고 기본 조직을 준비한다. `--no-spend-logs`를 주면 `disable_spend_logs: true`를 포함한다. | - | - |
+| `mint-litellm init` | 토큰 불필요 | LiteLLM 설정 조각(권장 설정 포함)을 만들고 기본 조직을 준비한다. `--no-spend-logs`를 주면 `disable_spend_logs: true`를 포함한다. `--fix-config <파일>`은 운영자 LiteLLM 설정의 MINT 가드레일 `mode`에 빠진 모드를 한 줄 수정으로 더한다(바꾸기 전 `<파일>.bak-<시각>` 사본을 남기고, 다른 항목과 주석은 그대로이며 이미 있으면 아무것도 하지 않는다). 안전하게 고칠 수 없는 모양이면 고칠 줄을 알리고 오류로 끝난다. `./mint.sh up`·`upgrade`가 `config/litellm.config.yaml`에 이 옵션을 쓴다. | - | - |
 | `mint-litellm check` | 모든 역할 | 필수 설정 위반이 있으면 종료 코드 0이 아닌 값으로 끝나고, 권장 설정은 경고하며, 관측 항목 4가지를 출력한다. | `/v1/mcp/server`, `/key/list`, `/team/list`, `/guardrails/list` | - |
 | `mint-litellm status` | 모든 역할 | 모드, 정책 판본, 경보, 관측 항목을 표시한다. | `/v1/mcp/server`, `/key/list`, `/team/list` | - |
 | `mint-litellm operator add` | `admin` | 운영자를 등록하고 토큰을 발급한다. `admin`·`approver`는 LiteLLM 사용자 식별자 (`--user-id`) 결속이 필수이다. | `/user/info` | `operator_added` |

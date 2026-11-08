@@ -93,7 +93,7 @@ def build_runtime(tmp_path, snap=None, *, evaluate="allow", verified=True):
     MintGuardrail(
         runtime=runtime,
         guardrail_name="mint",
-        event_hook=["pre_mcp_call", "post_mcp_call"],
+        event_hook=["pre_call", "pre_mcp_call", "post_mcp_call"],
         default_on=True,
     )
     return runtime, store, snapshots
@@ -202,11 +202,14 @@ class TestGuardrailJudgment:
                 "user_api_key_team_metadata": {"disable_global_guardrails": True},
             }
         }
-        for event in (GuardrailEventHooks.pre_mcp_call, GuardrailEventHooks.post_mcp_call):
+        for event in (
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.pre_mcp_call,
+            GuardrailEventHooks.post_mcp_call,
+        ):
             assert guardrail.should_run_guardrail(data=opted_out, event_type=event) is True
             assert guardrail.should_run_guardrail(data={}, event_type=event) is True
         for event in (
-            GuardrailEventHooks.pre_call,
             GuardrailEventHooks.during_call,
             GuardrailEventHooks.post_call,
             GuardrailEventHooks.during_mcp_call,
@@ -574,7 +577,7 @@ class TestGuardrail:
         return MintGuardrail(
             runtime=runtime,
             guardrail_name="mint",
-            event_hook=["pre_mcp_call", "post_mcp_call"],
+            event_hook=["pre_call", "pre_mcp_call", "post_mcp_call"],
             default_on=True,
             unreachable_fallback="fail_closed",
             version=None,
@@ -585,6 +588,7 @@ class TestGuardrail:
         guardrail = self.make(runtime)
         assert isinstance(guardrail, CustomGuardrail)
         assert guardrail.get_supported_event_hooks() == [
+            GuardrailEventHooks.pre_call,
             GuardrailEventHooks.pre_mcp_call,
             GuardrailEventHooks.post_mcp_call,
         ]
@@ -728,7 +732,7 @@ class ChainRunner:
         guardrail = MintGuardrail(
             runtime=runtime,
             guardrail_name="mint",
-            event_hook=["pre_mcp_call", "post_mcp_call"],
+            event_hook=["pre_call", "pre_mcp_call", "post_mcp_call"],
             default_on=True,
         )
         litellm.callbacks.append(guardrail)
@@ -1099,7 +1103,7 @@ class TestLoggerRegistration:
             MintGuardrail(
                 runtime=runtime,
                 guardrail_name="mint",
-                event_hook=["pre_mcp_call", "post_mcp_call"],
+                event_hook=["pre_call", "pre_mcp_call", "post_mcp_call"],
                 default_on=True,
             )
 
@@ -1113,7 +1117,7 @@ class TestLoggerRegistration:
         again = MintGuardrail(
             runtime=rig.runtime,
             guardrail_name="mint",
-            event_hook=["pre_mcp_call", "post_mcp_call"],
+            event_hook=["pre_call", "pre_mcp_call", "post_mcp_call"],
             default_on=True,
         )
         litellm.callbacks.append(again)

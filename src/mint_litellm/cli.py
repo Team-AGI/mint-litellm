@@ -122,6 +122,10 @@ def _csv(text: str) -> list[str]:
 
 def _init(run: Run) -> None:
     args = run.args
+    # 고칠 수 없는 설정이면 아무것도 바꾸기 전에 멈춘다.
+    added_modes = (
+        litellm_config.ensure_guardrail_modes(Path(args.fix_config)) if args.fix_config else []
+    )
     servers_arg: dict[str, tuple[str, str]] = {}
     for item in args.mcp_server or []:
         name, sep, url = item.partition("=")
@@ -163,6 +167,12 @@ def _init(run: Run) -> None:
     print(f"마이그레이션 적용: {', '.join(applied) or '없음(이미 최신)'}", file=log)
     if args.out != "-":
         print(f"LiteLLM 설정 조각: {args.out}", file=log)
+    if added_modes:
+        print(
+            f"{args.fix_config}의 MINT 가드레일 mode에 {', '.join(added_modes)}을(를) 더했습니다"
+            "(바꾸기 전 사본: 같은 폴더의 .bak-* 파일).",
+            file=log,
+        )
     print(
         f"인자 지문 키: {secrets_path}" + (" (새로 생성)" if key_created else " (기존 키 유지)"),
         file=log,
@@ -754,6 +764,8 @@ ARGUMENTS: dict[str, list[Any]] = {
                 "(기본: MINT_SECRETS_FILE 또는 ~/.config/mint/secrets.env)"),
         _a("--no-spend-logs", action="store_true",
            help="disable_spend_logs: true를 설정 조각에 포함"),
+        _a("--fix-config",
+           help="이 LiteLLM 설정 파일의 MINT 가드레일 mode에 빠진 모드를 더한다(사본을 남긴다)"),
     ],
     "check": [_CONFIG, _ENV_FILE],
     "status": [_CONFIG, _ENV_FILE],
