@@ -31,10 +31,15 @@ def test_sync_hold_resume_revoke(rig):
     window = rig.begin("revocation", entities=[approval["id"]])
     rig.cli("revoke", str(approval["id"]), "--reason", "acceptance")
     scope = hashlib.sha256(owned_key.encode()).hexdigest()
-    rig.wait(lambda: all(row["observed"] is False for row in rig.rows(
-        "litellm_grants", "server_id=%s AND NOT preexisting AND item='mcp_server' "
-        "AND target_id=%s", [server, scope],
-    )), 120, "철회 read-back")
+    try:
+        rig.wait(lambda: all(row["observed"] is False for row in rig.rows(
+            "litellm_grants", "server_id=%s AND NOT preexisting AND item='mcp_server' "
+            "AND target_id=%s", [server, scope],
+        )), 120, "철회 read-back")
+    except AssertionError:
+        rig.note(grants=rig.rows("litellm_grants", "target_id=%s", [scope]),
+                 jobs=rig.rows("jobs", "target_ref=%s", ["key:" + scope]))
+        raise
     # 소유 권한이 지워졌으므로 LiteLLM이 먼저 거절하거나 MINT가 철회로 막는다(DS-173).
     rig.call(server, fixture["tool"], fixture["arguments"], key=owned_key, allowed=False,
              code="MINT-APPROVAL-REVOKED", litellm_rejects=True)
