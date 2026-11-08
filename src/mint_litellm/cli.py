@@ -983,7 +983,8 @@ def build_parser() -> argparse.ArgumentParser:
         process="worker")
     serve = tree[()].add_parser("console", help="관리자 콘솔을 기동한다")
     serve.set_defaults(process="console")
-    serve.add_argument("--host", default="localhost", help="수신 주소(기본 localhost)")
+    serve.add_argument(
+        "--host", default="localhost", help="수신 주소(기본 localhost, *는 모든 주소)")
     serve.add_argument("--port", type=int, default=8080, help="수신 포트(기본 8080)")
     serve.add_argument("--ssl-certfile", help="TLS 인증서 파일(앞단에서 TLS를 끝내면 생략)")
     serve.add_argument("--ssl-keyfile", help="TLS 개인 키 파일")
