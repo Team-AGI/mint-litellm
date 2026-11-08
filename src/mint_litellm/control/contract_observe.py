@@ -336,12 +336,16 @@ def record_oauth2_flow(
             return False
         row = fetchone(
             ctx.conn,
-            "SELECT canonical_text FROM mint.contract_observations WHERE instance_id=%s"
+            "SELECT canonical_text, entity_id FROM mint.contract_observations WHERE instance_id=%s"
             " AND server_id=%s AND kind='deployment' AND scope='server'"
             " AND name='oauth2_flow_read'",
             (ctx.instance_id, server_id),
         )
-        failures = json.loads(row["canonical_text"])["failures"] if row else 0
+        # 실패 횟수는 지금 승인된 계약에 대해서만 센다(재승인하면 새로 센다).
+        failures = (
+            json.loads(row["canonical_text"])["failures"]
+            if row and row["entity_id"] == contract["id"] else 0
+        )
         if readable and flow == SERVER_CREDENTIAL_FLOW:
             if failures:
                 _observe(ctx, server_id, "deployment", "server", "oauth2_flow_read",

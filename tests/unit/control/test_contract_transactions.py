@@ -593,3 +593,14 @@ def test_the_oauth2_events_do_not_collide_with_identity_events(oauth_db):
     keys = [e["source_key"] for e in events(conn, "deployment_drift_detected")]
     assert len(keys) == 2 and len(set(keys)) == 2
     assert sorted(server(conn)["deployment_drift_fields"]) == ["issuer", "oauth2_flow"]
+
+
+def test_failures_counted_for_an_earlier_contract_start_over(oauth_db):
+    conn, _ = oauth_db
+    for _ in range(2):
+        run_observe(conn, FlowClient("client_credentials", listing=False))
+    # 재승인으로 승인 계약이 바뀐 것과 같다: 옛 계약의 실패는 이어 세지 않는다
+    conn.execute("UPDATE mint.contract_observations SET entity_id = gen_random_uuid()"
+                 " WHERE name = 'oauth2_flow_read'")
+    run_observe(conn, FlowClient("client_credentials", listing=False))
+    assert not server(conn)["deployment_drift"]

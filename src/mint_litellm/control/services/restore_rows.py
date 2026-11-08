@@ -120,9 +120,12 @@ def _restore_operator(conn: psycopg.Connection, instance_id: str, item: dict[str
         row = {k: v for k, v in snap.items() if k != "token_fp"}
         # 원문을 아는 사람이 없는 해시
         row["token_hash"] = hashlib.sha256(uuid.uuid4().bytes).hexdigest()
+        # 만료 예정 행도 지금 만료시켜 활성 운영자(마지막 admin 집계 포함)로 세지 않는다.
         conn.execute(
             "INSERT INTO mint.operators SELECT * FROM jsonb_populate_record("
-            "NULL::mint.operators, %s)", (Jsonb(row),))
+            "NULL::mint.operators, %(r)s || jsonb_build_object('expires_at',"
+            " LEAST((%(r)s->>'expires_at')::timestamptz, now())))",
+            {"r": Jsonb(row)})
         return True
     role, expires = snap["role"], snap.get("expires_at")
     moved = conn.execute(

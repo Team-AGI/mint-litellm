@@ -1,5 +1,7 @@
 """운영자 부정 상태의 보강: 지문·동시성·부정 방향만 복원·업그레이드 예약. 실 Postgres."""
 
+from datetime import UTC, datetime
+
 import pytest
 
 from control import test_restore_acceptance as base
@@ -202,3 +204,18 @@ def test_the_upgrade_schedules_the_first_export_for_existing_operator_history(fr
         conn.execute(statement)  # 다시 실행해도 같은 키가 아니라 새 세대지만 한 건씩이다
         assert fetchone(conn, jobs)["n"] == before + 2
         assert fetchone(conn, "SELECT epoch FROM mint.state_epoch")["epoch"] == epoch + 2
+
+
+def test_an_operator_due_to_expire_is_put_back_already_expired(seeded):
+    world = seeded
+    with psycopg.connect(world["live"], autocommit=True) as conn:
+        add_zed(conn, "admin")
+        conn.execute("UPDATE mint.operators SET expires_at = now() + interval '30 days'"
+                     " WHERE name = 'zed'")
+    file_epoch = export_all(world)
+    overtake_epoch(world["restored"], file_epoch)
+    attest_restored(world)
+    row = operator_row(world["restored"], "zed")
+    assert row["expires_at"] <= datetime.now(UTC)
+    with pytest.raises(AuthError):
+        authenticate(world["restored"], "mint_zed")
