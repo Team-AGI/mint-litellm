@@ -137,7 +137,6 @@ flows:
     intake_decided: 1
     contract_approved: tool_count
     deployment_contract_approved: 1
-    approval_granted: 1
     server_approved: 1
     approval_revoked: 0
     reapproval_requested: 0
@@ -159,7 +158,7 @@ flows:
     reapproval_requested: 1
     alert_opened: 1
 auxiliary_events:
-  activation: [server_registered, relation_created, sync_applied, export_written,
+  activation: [approval_granted, server_registered, relation_created, sync_applied, export_written,
                decision_evaluated, call_response_received, discovery_evaluated]
   reapproval: [intake_checked, sync_applied, alert_resolved,
                decision_evaluated, call_response_received, discovery_evaluated]

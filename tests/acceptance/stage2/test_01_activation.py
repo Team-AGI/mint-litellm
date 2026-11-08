@@ -67,7 +67,7 @@ def test_pending_key_blocked(rig):
     server = fixture["server_id"]
     before = rig.counter(server)
     snapshot = rig.call(server, fixture["tool"], fixture["arguments"], allowed=False,
-                        code="MINT-", litellm_rejects=False)
+                        code="MINT-", litellm_rejects=True)
     assert rig.counter(server) == before, "미승인 호출이 업스트림에 닿음"
     rig.note(pending_blocked_event=bool(snapshot))
     rig.activate(fixture)
