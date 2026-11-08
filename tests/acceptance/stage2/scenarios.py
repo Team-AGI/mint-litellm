@@ -414,6 +414,7 @@ def sync_pin_mismatch(ctx):
     lite_raw("DELETE", f"/v1/mcp/server/{server}/pin")
     A.psql("UPDATE mint.litellm_grants SET observed=false, applied_sha256=NULL WHERE "
            f"instance_id={lit(iid())} AND item='pin' AND server_id={lit(server)}", "mint")
+    time.sleep(2)  # 로그의 --since는 초 단위라 내 해제 호출이 세어지지 않게 한다
     start = datetime.now(UTC)
     since = db_now()
     team, user = new_team(), new_user()
