@@ -205,7 +205,7 @@ def snapshot(ctx):
             if time.monotonic() > deadline:
                 raise SystemExit("기준 내보내기 체크포인트(latest.json)가 없습니다")
             time.sleep(2)
-    # 덤프와 파일 사이에 작업 실행기가 체크포인트를 더 쓰면 파일이 DB보다 새로워 되돌림으로 판정된다.
+    # 덤프와 파일 사이에 체크포인트가 더 쓰이면 파일이 DB보다 새로워 되돌림으로 판정된다.
     compose("stop", "worker")
     try:
         db_backup(ctx)
