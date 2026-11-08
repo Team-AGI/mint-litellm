@@ -857,6 +857,7 @@ def writes_since(since):
 
 
 LAST_MARK = [None]
+LAST_SINCE = [None]
 
 
 def cause_from_event(mark):
@@ -867,7 +868,8 @@ def cause_from_event(mark):
         if body:
             return next((c for c in CAUSES if c in body), None)
         time.sleep(1)
-    return None
+    # 재시작한 LiteLLM은 목록 단계에서 막혀 호출 표식의 판정 사건이 없다. 그 시각 이후 MINT 로그의 원인으로 읽는다.
+    return next((c for c in CAUSES if LAST_SINCE[0] and log_count(c, LAST_SINCE[0]) > 0), None)
 
 
 def probe_once():
@@ -900,6 +902,7 @@ def probe_blocked(seconds, expect=True):
     (걸린 시간, 원인, 그 뒤 추가 호출 5번의 업스트림 증가분, 처음 성립 순간까지의 증가분)."""
     started = time.monotonic()
     since = datetime.now(UTC)
+    LAST_SINCE[0] = since
     before = upstream()
     while True:
         status, text = probe_once()

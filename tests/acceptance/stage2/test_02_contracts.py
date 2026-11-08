@@ -47,7 +47,8 @@ def test_synthetic_contract_changes(rig, mutation):
             "SELECT 1 FROM mint.events WHERE instance_id=%s AND kind='contract_drift_detected' "
             "AND inserted_at >= %s AND payload->>'server_id'=%s",
             [rig.iid, window["since"], server]), 120, "추가 도구 관측")
-        rig.call(server, fixture["added_tool"], {}, allowed=False,
+        # LiteLLM의 도구 목록에 없는 도구라 사전 거절도 합격이다(업스트림 0, DS-173). MINT 판정이 있으면 코드도 본다.
+        rig.call(server, fixture["added_tool"], {}, allowed=False, litellm_rejects=True,
                  code="MINT-CONTRACT-DRIFT-unapproved-tool")
     elif mutation == "removed":
         rig.wait(lambda: rig.rows("tool_contracts", "server_id=%s AND tool=%s "
