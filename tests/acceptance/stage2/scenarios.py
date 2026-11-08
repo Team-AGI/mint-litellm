@@ -900,7 +900,13 @@ def blocked_response(status, text, since):
     upper = text.upper()
     if "ENFORCEMENT" in upper:
         return True
-    return "NOT FOUND" in upper and log_count(r"MINT-ENFORCEMENT-UNVERIFIED", since) > 0
+    if "NOT FOUND" not in upper:
+        return False
+    # 목록 단계 거절은 호출 표식의 판정 사건이 없으므로 발견 판정 사건(discovery_evaluated)의 정지 사유로도 본다.
+    return (log_count(r"MINT-ENFORCEMENT-UNVERIFIED", since) > 0 or n(
+        f"SELECT count(*) FROM mint.events WHERE instance_id={lit(iid())} "
+        f"AND kind='discovery_evaluated' AND inserted_at >= {lit(since.isoformat())} "
+        "AND payload->'stop'->>'reason_code'='ENFORCEMENT_UNVERIFIED'") > 0)
 
 
 def is_blocked():

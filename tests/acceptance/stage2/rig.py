@@ -311,7 +311,10 @@ class Rig:
             assert not response.json().get("isError", False), self.clean(response.json())
         else:
             assert response.status_code in (400, 403, 409, 503)
-            assert code in response.text, self.clean(response.text)
+            # 고위험 도구는 호출별 승인 요구가 계약 드리프트 판정보다 앞서므로(둘 다 업스트림 0) 그 코드도 받아들인다.
+            assert code in response.text or (
+                str(code).startswith("MINT-CONTRACT-DRIFT")
+                and "MINT-CALL-APPROVAL-REQUIRED" in response.text), self.clean(response.text)
         if cause:
             assert cause in json.dumps(snapshot), self.clean(snapshot)
         return snapshot
