@@ -525,12 +525,14 @@ def sync_lease_reclaim(ctx):
                "lease_until=now() + interval '2 seconds', attempts=1 WHERE "
                f"instance_id={lit(iid())} AND kind='sync_target' AND target_ref={lit(ref)} "
                "AND status='pending'", "mint")
+    seeded = permission("key", kid)
     wait(lambda: converged("key", kid), limit("sync_seconds"), "임대 회수 뒤 수렴")
     job = q1(f"SELECT status, attempts FROM mint.jobs WHERE instance_id={lit(iid())} "
              f"AND kind='sync_target' AND target_ref={lit(ref)} ORDER BY created_at DESC LIMIT 1")
     writes = log_count(r"POST /key/update", start) - 1  # 장애를 만든 내 쓰기 1건 제외
     observe(ctx, server_id=server, reexecutions=int(job["attempts"]) - 1,  # 심은 죽은 실행의 시도 1을 뺀다
-            duplicate_writes=max(0, writes),
+            duplicate_writes=max(0, writes), permission_seeded=seeded,
+            permission_final=permission("key", kid),
             converged=converged("key", kid) and has_server("key", kid),
             approval=approval)
 
