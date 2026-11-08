@@ -27,6 +27,7 @@ def test_activation(rig, name):
              code="MINT-SERVER-NOT-APPROVED", litellm_rejects=True)
     # 제어 키의 pin은 호출 권한을 갖지 않는다. 목록 면제는 최초 pin에서도 필요하다.
     pin = rig.request("POST", f"/v1/mcp/server/{server}/pin", role="control", base="litellm_admin")
+    pin = {"pinned_tools": pin.get("pinned_tools", pin)}  # 응답이 도구 이름 맵 그대로인 판본이 있다
     assert len(pin["pinned_tools"]) == fixture["tool_count"]
     candidates = rig.rows("tool_contracts", "server_id=%s AND status='candidate'", [server])
     assert {row["tool"] for row in candidates} == set(pin["pinned_tools"])
