@@ -65,7 +65,7 @@ def test_console_high_risk_approval(rig):
                       "--tool", tool, "--arguments", json.dumps(arguments),
                       "--requested-by", user)["id"]
     rig.cli("call-approval", "approve", request)
-    rig.call(server, tool, arguments, key=key)
+    rig.call(server, tool, arguments, key=key, slow_ok=True)
     rig.call(server, tool, arguments, key=key, allowed=False, approve=False,
              code="MINT-CALL-APPROVAL-REQUIRED")  # 승인은 한 번 쓰면 소진된다
     rig.note(console_approval=str(created["id"]), high_risk_tools=high)

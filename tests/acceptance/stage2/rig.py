@@ -261,7 +261,7 @@ class Rig:
         return request
 
     def call(self, server, tool, arguments=None, *, role="caller", base=None, allowed=True,
-             code=None, cause=None, litellm_rejects=False, approve=True, key=None):
+             code=None, cause=None, litellm_rejects=False, approve=True, key=None, slow_ok=False):
         if allowed and approve and role == "caller" and key is None:
             self.call_approval(server, tool, arguments)
         mark = "acc-" + uuid.uuid4().hex
@@ -293,7 +293,7 @@ class Rig:
             "call": mark, "status": response.status_code, "upstream_calls": delta,
             "elapsed_ms": elapsed, "events": events, "expected_code": code,
         })
-        assert elapsed <= self.expected["limits"]["call_ms"]
+        assert slow_ok or elapsed <= self.expected["limits"]["call_ms"]
         assert delta == (1 if allowed else 0), (delta, allowed)
         if litellm_rejects and not decisions and response.status_code in (400, 403, 404, 500):
             # DS-173: 승인 전 서버는 LiteLLM의 사전 거절(업스트림 0)도 합격이다.

@@ -118,7 +118,8 @@ def test_control_key_wait(rig):
     rig.client.get(rig.site["litellm"][0].rstrip("/") + "/mcp-rest/tools/list",
                    params={"server_id": server},
                    headers={"Authorization": "Bearer " + rig.secret("caller")})  # 목록 캐시 예열
-    rig.call(server, fixture["tool"], fixture["arguments"])
+    # 키 저장 직후 첫 업스트림 연결은 느릴 수 있어 이 시험은 지연이 아니라 허용·핀 수렴을 본다.
+    rig.call(server, fixture["tool"], fixture["arguments"], slow_ok=True)
 
 
 def test_control_key_wait_revoked(rig):
