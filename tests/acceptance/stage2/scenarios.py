@@ -851,8 +851,13 @@ def new_hmac_key():
     return base64.urlsafe_b64encode(os.urandom(48)).rstrip(b"=").decode()
 
 
+RESTORED_AT = [None]
+
+
 def writes_since(since):
     """작업 실행기의 외부 쓰기(LiteLLM 쓰기 경로) 수. 로그가 없으면 소유 항목 갱신 시각으로 센다."""
+    if RESTORED_AT[0] and RESTORED_AT[0] > since:
+        since = RESTORED_AT[0]
     if site().get("decision_logs"):
         return log_count(r"(POST /(key|team)/update|PUT /v1/mcp/server|"
                          r"(POST|DELETE) /v1/mcp/server/\S+/pin)", since)
@@ -923,7 +928,8 @@ def probe_blocked(seconds, expect=True):
     before = upstream()
     while True:
         status, text = probe_once()
-        if status and blocked_response(status, text, since) == expect:
+        # 허용을 기다릴 때는 200만 허용이다(재시작 중 LiteLLM의 「Tool not found」는 아직 막힘).
+        if status and ((blocked_response(status, text, since)) if expect else status == 200):
             break
         if time.monotonic() - started > seconds:
             raise SystemExit(f"시간 상한 초과: 호출 {'차단' if expect else '허용'} ({seconds}s) "
@@ -955,6 +961,8 @@ def restore_after_backup(ctx, tag, mutate):
     mutate()
     started = datetime.now(UTC)
     A.db_restore(tagged(tag))
+    # 철회가 일으킨 마지막 동기화 쓰기는 복원 전에 끝나므로 외부 쓰기는 복원이 끝난 뒤부터 센다.
+    RESTORED_AT[0] = datetime.now(UTC)
     return started
 
 

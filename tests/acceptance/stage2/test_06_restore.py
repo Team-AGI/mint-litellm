@@ -15,7 +15,8 @@ def test_restore(rig, case):
     rig.check_observation("restore_" + case, observation)
     if case in ("backup_before_revoke", "epoch_caught_up", "consent"):
         rig.call(fixture["server_id"], fixture["tool"], fixture["arguments"], allowed=False,
-                 code="MINT-ENFORCEMENT-UNVERIFIED", cause="restore_pending")
+                 code="MINT-ENFORCEMENT-UNVERIFIED", cause="restore_pending",
+                 litellm_rejects=True)  # 재시작 뒤엔 목록 단계에서 막힌다(원인은 관측값 cause로 본다)
         epoch = observation["file_epoch"]
         window = rig.begin("restore_attest", entities=[epoch])
         rig.cli("restore", "attest", "--reason", "acceptance")
