@@ -5,6 +5,11 @@ import hmac
 import json
 
 
+def export_base(rig):
+    base = rig.artifact("export_dir")
+    return base / rig.iid if (base / rig.iid).is_dir() else base
+
+
 def verify_export(rig, path):
     doc = json.loads(path.read_text(encoding="utf-8"))
     signature = doc.pop("hmac")
@@ -29,7 +34,7 @@ def test_export_seal(rig):
     epoch = rig.sql("SELECT epoch FROM mint.state_epoch WHERE instance_id=%s", [rig.iid])[0][
         "epoch"
     ]
-    path = rig.artifact("export_dir") / rig.iid / "negative" / f"{epoch}.json"
+    path = export_base(rig) / "negative" / f"{epoch}.json"
     rig.wait(path.exists, 60, "부정 상태 파일")
     doc = verify_export(rig, path)
     assert doc["state_epoch"] == epoch
@@ -41,7 +46,7 @@ def test_export_seal(rig):
         "approvals", "id=%s", [approval["id"]],
     )[0]["revoked_at"]
     rig.check_events(window)
-    checkpoint = rig.artifact("export_dir") / rig.iid / "latest.json"
+    checkpoint = export_base(rig) / "latest.json"
     previous = checkpoint.read_bytes()
     rig.wait(lambda: checkpoint.read_bytes() != previous, 660, "10분 체크포인트")
     verify_export(rig, checkpoint)

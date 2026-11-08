@@ -97,7 +97,9 @@ def instance():
 
 
 def export_dir():
-    return Path(env("ACC_EXPORT_HOST_DIR")) / instance()
+    """내보내기 디렉터리. 판본에 따라 인스턴스 하위 폴더가 있거나(구) 루트에 바로 쓴다(75ffea7)."""
+    base = Path(env("ACC_EXPORT_HOST_DIR"))
+    return base / instance() if (base / instance()).is_dir() else base
 
 
 def state_file(name):
@@ -216,6 +218,13 @@ def restore_services():
     return (os.environ.get("ACC_RESTORE_SERVICES") or "litellm litellm2 worker console").split()
 
 
+def export_inside():
+    """컨테이너 안의 내보내기 디렉터리(호스트의 export_dir()에 대응)."""
+    rel = export_dir().relative_to(Path(env("ACC_EXPORT_HOST_DIR"))).as_posix()
+    base = env("ACC_EXPORT_CONTAINER_DIR", "/var/lib/mint/export")
+    return base if rel == "." else base + "/" + rel
+
+
 def export_root(script, *mounts):
     """내보내기 볼륨은 비루트(65532) 소유라 호스트 사용자는 쓸 수 없다. 루트 컨테이너로 처리한다."""
     vol = env("COMPOSE_PROJECT_NAME", "mints2") + "_export"
@@ -229,7 +238,7 @@ def export_unlink(path):
     try:
         Path(path).unlink()
     except PermissionError:
-        rel = Path(path).relative_to(export_dir().parent)
+        rel = Path(path).relative_to(Path(env("ACC_EXPORT_HOST_DIR")))
         export_root(f"rm -f /x/{rel.as_posix()}")
 
 
@@ -317,12 +326,12 @@ ADAPTERS["delete_owned_grant"] = (delete_owned_grant, delete_owned_grant_undo)
 @adapter("export_unwritable")
 def export_unwritable(ctx):
     """작업 실행기가 쓰는 내보내기 디렉터리를 읽기 전용으로 만든다(작업 실행기는 비루트)."""
-    inside = env("ACC_EXPORT_CONTAINER_DIR", "/var/lib/mint/export") + "/" + instance()
+    inside = export_inside()
     compose("exec", "-T", "-u", "root", "worker", "chmod", "-R", "a-w", inside)
 
 
 def export_unwritable_undo(ctx):
-    inside = env("ACC_EXPORT_CONTAINER_DIR", "/var/lib/mint/export") + "/" + instance()
+    inside = export_inside()
     compose("exec", "-T", "-u", "root", "worker", "chmod", "-R", "u+w", inside)
 
 

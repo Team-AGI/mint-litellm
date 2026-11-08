@@ -788,7 +788,7 @@ def keep_file(path):
 def put_back(name, target):
     saved = file_backup_path(name)
     if saved.exists():
-        rel = target.relative_to(A.export_dir().parent)
+        rel = target.relative_to(Path(A.env("ACC_EXPORT_HOST_DIR")))
         A.export_root(f"cp /b /x/{rel.as_posix()}; chown 65532:65532 /x/{rel.as_posix()}",
                       f"{saved}:/b:ro")
         saved.unlink()
