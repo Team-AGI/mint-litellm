@@ -32,7 +32,7 @@ def test_sync_hold_resume_revoke(rig):
     rig.cli("revoke", str(approval["id"]), "--reason", "acceptance")
     scope = hashlib.sha256(owned_key.encode()).hexdigest()
     try:
-        rig.wait(lambda: all(row["observed"] is False for row in rig.rows(
+        rig.wait(lambda: all(not row["observed"] for row in rig.rows(
             "litellm_grants", "server_id=%s AND NOT preexisting AND item='mcp_server' "
             "AND target_id=%s", [server, scope],
         )), 120, "철회 read-back")
