@@ -24,9 +24,8 @@ mkdir -p tests/acceptance/stage2/.runtime
 "$PY" "$HERE/bootstrap.py" servers
 # 첫 정책 판본 활성화(설명 검사·위험 등급이 활성 번들의 데이터를 읽는다)
 (cd deploy && MINT_OPERATOR_TOKEN=$ACC_ADMIN_TOKEN ./mint.sh cli policy activate initial --json < /dev/null > /dev/null)
-# 제어 평면 키의 목록 면제(pin이 전 도구를 보려면 필요). 설정하는 운영자 명령이 없어 SQL로 넣는다(제품 공백으로 보고).
-CT=$(printf '%s' "$ACC_CONTROL_KEY" | sha256sum | cut -d' ' -f1)
-"${C[@]}" exec -T postgres psql -U postgres -d mint -c "UPDATE mint.settings SET control_key_token='$CT' WHERE instance_id='acceptance'" < /dev/null
+# 제어 평면 키 토큰 저장(pin이 전 도구를 보려면 필요, DS-175)
+(cd deploy && MINT_OPERATOR_TOKEN=$ACC_ADMIN_TOKEN ./mint.sh cli settings control-key --json < /dev/null > /dev/null)
 # 수용검증의 URL 검사가 요구하는 제공자 허용 목록(계수 역프록시 호스트). 기준 스냅숏에 들어가도록 스냅숏 전에 등록한다.
 MINT_OPERATOR_TOKEN=$ACC_ADMIN_TOKEN "$PY" -m mint_litellm.cli allowlist add --kind provider --value cnt   --valid-until "$(date -u -d '+300 days' +%Y-%m-%dT%H:%M:%SZ)" --note acceptance --json > /dev/null
 sleep 20
