@@ -125,7 +125,7 @@ def test_an_operator_added_after_the_backup_is_put_back_already_removed(seeded):
     overtake_epoch(world["restored"], file_epoch)
     out = attest_restored(world)
     assert out["reapplied"] == [{"kind": "operator", "id": "zed", "was": "missing_row"}]
-    with pytest.raises(AuthError, match="만료"):
+    with pytest.raises(AuthError):  # 쓸 수 없는 토큰이다
         authenticate(world["restored"], "mint_zed")
 
 

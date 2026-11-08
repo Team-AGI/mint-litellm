@@ -23,7 +23,8 @@ from mint_litellm.types.events import EventKind
 # 목록, 철회된 동의, 삭제·강등된 운영자). 운영자는 강등을 행만 봐서는 알 수 없으므로 한 번이라도
 # 바뀐 행(``state_version`` > 1)을 모두 담는다. ``id``는 서버만 server_id, 운영자는 이름이고
 # 나머지는 행 식별자다. 항목마다 행 전체 스냅숏(``row``, 모든 열)을 담아 복원 때 같은 id로
-# 되돌릴 수 있게 한다.
+# 되돌릴 수 있게 한다. 운영자 행은 토큰 해시 원문 대신 그 해시의 SHA-256 지문(``token_fp``, 활성
+# 운영자만)을 담는다. 파일은 내보내기 키로 서명되고, 지문은 DB가 같은 식으로 계산해 대조한다.
 # ponytail: 항목을 전부 한 파일에 담는다(철회가 수만 건이 되면 증분 파일로 나눈다).
 SNAPSHOT_SQL = """
 WITH items AS (
@@ -45,7 +46,9 @@ WITH items AS (
   UNION ALL SELECT 'consent', t.id::text, t.state_version, 'revoked', to_jsonb(t)
     FROM mint.consents t WHERE t.instance_id = %(i)s AND t.revoked_at IS NOT NULL
   UNION ALL SELECT 'operator', t.name, t.state_version,
-      CASE WHEN t.expires_at IS NULL THEN t.role ELSE 'removed' END, to_jsonb(t)
+      CASE WHEN t.expires_at IS NULL THEN t.role ELSE 'removed' END,
+      (to_jsonb(t) - 'token_hash') || jsonb_build_object('token_fp', CASE WHEN t.expires_at IS NULL
+        THEN encode(sha256(convert_to(t.token_hash, 'UTF8')), 'hex') END)
     FROM mint.operators t WHERE t.instance_id = %(i)s AND t.state_version > 1
 ), last AS (
   SELECT to_seal_seq, encode(tail_hash, 'hex') AS tail FROM mint.seal_batches

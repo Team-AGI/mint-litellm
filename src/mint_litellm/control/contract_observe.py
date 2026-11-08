@@ -2,15 +2,17 @@
 
 import json
 import re
+import uuid
 from typing import Any
 
 from psycopg.types.json import Jsonb
 
+from mint_litellm.control import alerts
 from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import ControlError, conflict
 from mint_litellm.control.intake_checks import SERVER_CREDENTIAL_FLOW
-from mint_litellm.control.intake_jobs import _oauth2_flow
+from mint_litellm.control.intake_jobs import _oauth2_flow_read
 from mint_litellm.control.services.base import transact
 from mint_litellm.types.canonical import canonical_text, sha256
 from mint_litellm.types.events import EventKind
@@ -272,11 +274,17 @@ def consume_deployment_events(ctx: Context) -> None:
             _deployment_drift(ctx, server, contract, "identity", hashes, sorted(hashes))
 
 
+# 연속으로 이만큼 읽지 못해야 차단한다(일시적 장애는 경보만)
+OAUTH2_READ_FAILURES = 3
+
+
 def _deployment_drift(
-    ctx: Context, server: dict, contract: dict, name: str, value: Any, fields: list[str]
+    ctx: Context, server: dict, contract: dict, name: str, value: Any, fields: list[str],
+    entity: Any = None,
 ) -> None:
     """배포 드리프트 표지를 켜고(호출 차단), 값이 바뀐 때마다 사건·재승인 요청·경보를 낸다."""
     server_id = server["server_id"]
+    entity = entity or contract["id"]  # 사건·경보 키의 개체(관측 이름마다 순번이 따로 올라간다)
     observation, changed = _observe(ctx, server_id, "deployment", "server", name,
                                     contract["id"], value)
     merged = sorted(set(server["deployment_drift_fields"] or ()) | set(fields))
@@ -294,20 +302,21 @@ def _deployment_drift(
             "version": contract["version"],
             "kind": "deployment",
         }
-        ctx.emit(EventKind.DEPLOYMENT_DRIFT_DETECTED, contract["id"],
-                 observation["change_seq"], body)
-        ctx.emit(EventKind.REAPPROVAL_REQUESTED, contract["id"], observation["change_seq"], body)
-        _alert(ctx, contract["id"], observation["observed_sha256"], "critical", body)
+        ctx.emit(EventKind.DEPLOYMENT_DRIFT_DETECTED, entity, observation["change_seq"], body)
+        ctx.emit(EventKind.REAPPROVAL_REQUESTED, entity, observation["change_seq"], body)
+        _alert(ctx, entity, observation["observed_sha256"], "critical", body)
 
 
-def record_oauth2_flow(ctx: Context, server_id: str, flow: str | None) -> bool:
+def record_oauth2_flow(
+    ctx: Context, server_id: str, flow: str | None, readable: bool = True
+) -> bool:
     """승인된 배포 계약이 oauth2인 서버의 관측된 ``oauth2_flow``를 판정한다.
 
-    서버 자격 흐름이 아니거나 읽지 못했으면(None) 배포 드리프트를 켠다. 서버 자격 흐름이면 아무것도
-    바꾸지 않는다(이미 켜진 표지는 재승인으로만 꺼진다). 드리프트를 켰으면 참이다.
+    읽은 값이 서버 자격 흐름이 아니면(없는 값 포함) 바로 배포 드리프트를 켠다. 읽지 못했으면
+    경보만 내고, 연속 ``OAUTH2_READ_FAILURES``번째 실패부터 드리프트를 켠다. 서버 자격 흐름이면
+    실패 횟수만 지우고 아무것도 바꾸지 않는다(이미 켜진 표지는 재승인으로만 꺼진다).
+    드리프트를 켰으면 참이다.
     """
-    if flow == SERVER_CREDENTIAL_FLOW:
-        return False
     with transact(ctx):
         server = fetchone(
             ctx.conn,
@@ -325,8 +334,34 @@ def record_oauth2_flow(ctx: Context, server_id: str, flow: str | None) -> bool:
             or contract["auth_type"] != "oauth2"
         ):
             return False
-        value = {"oauth2_flow": flow} if flow else {"oauth2_flow_unreadable": True}
-        _deployment_drift(ctx, server, contract, "oauth2_flow", value, ["oauth2_flow"])
+        row = fetchone(
+            ctx.conn,
+            "SELECT canonical_text FROM mint.contract_observations WHERE instance_id=%s"
+            " AND server_id=%s AND kind='deployment' AND scope='server'"
+            " AND name='oauth2_flow_read'",
+            (ctx.instance_id, server_id),
+        )
+        failures = json.loads(row["canonical_text"])["failures"] if row else 0
+        if readable and flow == SERVER_CREDENTIAL_FLOW:
+            if failures:
+                _observe(ctx, server_id, "deployment", "server", "oauth2_flow_read",
+                         contract["id"], {"failures": 0}, is_drift=False)
+            return False
+        if readable:
+            value = {"oauth2_flow": flow} if flow else {"oauth2_flow_missing": True}
+        else:
+            failures += 1
+            _observe(ctx, server_id, "deployment", "server", "oauth2_flow_read",
+                     contract["id"], {"failures": failures}, is_drift=False)
+            if failures < OAUTH2_READ_FAILURES:
+                alerts.raise_alert(
+                    ctx.conn, ctx.instance_id, kind="oauth_flow_unreadable", severity="medium",
+                    dedup_key=f"oauth_flow_unreadable:{server_id}",
+                    subject={"server_id": server_id, "failures": failures})
+                return False
+            value = {"oauth_flow_unreadable": True}
+        _deployment_drift(ctx, server, contract, "oauth2_flow", value, ["oauth2_flow"],
+                          entity=uuid.uuid5(contract["id"], "oauth2_flow"))
     return True
 
 
@@ -381,7 +416,8 @@ def handle(job) -> None:
             # 서버 자격 흐름이 아니거나 읽지 못하면 차단한다(30일 증거 재검사를 기다리지 않는다).
             # 표지가 서버 판본을 올리므로 도구 관측이 끝난 뒤에 한다.
             job.checkpoint()
-            flow = _oauth2_flow(job.litellm, server["server_id"])
-            record_oauth2_flow(ctx, server["server_id"], flow)
+            flow, readable = _oauth2_flow_read(
+                job.litellm, server["server_id"], frozenset({"approved"}))
+            record_oauth2_flow(ctx, server["server_id"], flow, readable)
     if failed:
         raise ControlError("일부 서버의 계약 관측이 실패했습니다.")

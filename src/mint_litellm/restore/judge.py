@@ -35,9 +35,13 @@ EXPORT_CONFIG_MISSING = "export_config_missing"
 #   해제 전이가 있는 것은 거부 해제와 서버 재개뿐이다(나머지 종류의 상태 기계는 종결 상태로만
 #   가며 해제 사건이 없다). 판본이 더 높고 아직 부정 상태인 행은 신원 열(범위·서버·도구·조직 등)이
 #   파일과 같아야 한다(다르면 ``content``).
-# - 운영자(``operator``)는 판본이 더 높아도 권한이 파일보다 낮거나 같으면 정상이다. 파일보다
-#   만료가 늦어졌거나 사라졌다면 되돌림이고, 역할이 올랐다면 원장에 그 판본 구간의 역할 변경 사건이
-#   있어야 한다(정당한 승격). 비교하는 행에는 토큰 해시가 없다(``operator_state``).
+# - 운영자(``operator``)는 판본이 같아도 행 전체가 아니라 권한만 비교한다(사용자 결속이 다르면
+#   내용 불일치, 역할이 높거나 만료가 늦거나 활성 토큰 지문이 다르면 되돌림). 판본이 더 높아도
+#   권한이 파일보다 낮거나 같으면 정상이다. 파일보다 만료가 늦어졌거나 사라졌다면 되돌림이고,
+#   역할이 올랐다면 원장에 그 판본 구간의 역할 변경 사건이 있고 그 구간의 마지막 사건이 현재
+#   역할로 바꾼 것이어야 한다(정당한 승격). 비교하는 행에는 토큰 해시 대신
+#   지문(``token_fp``)이 있어 판본이 같을 때 교체된 토큰이 잡힌다. 지문이 없는(만료된)
+#   운영자가 DB에 없으면 문제이고, 활성 운영자가 DB에 없는 것은 문제가 아니다(권한이 없는 쪽이다).
 # 값이 안 바뀐 UPDATE도 판본을 올리므로 판본만으로는 되돌림을 가릴 수 있다. 정상 해제·변경은 새
 # 부정 상태 파일을 내므로 파일이 따라온다.
 ITEM_CHECK_CTE = """
@@ -82,8 +86,18 @@ f AS (
     WHERE t.instance_id = %(i)s AND t.name IN (SELECT id FROM f WHERE kind = 'operator')
 ), checked AS (
   SELECT f.kind, f.id, r.state AS db_state, CASE
-    WHEN r.id IS NULL THEN 'missing_row'
+    WHEN r.id IS NULL AND (f.kind <> 'operator' OR f.row ->> 'expires_at' IS NOT NULL)
+      THEN 'missing_row'
     WHEN r.state_version < f.state_version THEN 'reapply'
+    WHEN f.kind = 'operator' AND r.state_version = f.state_version AND f.row IS NOT NULL THEN
+      CASE
+        WHEN r.row -> 'user_id' IS DISTINCT FROM f.row -> 'user_id' THEN 'content'
+        WHEN mint.operator_rank(r.row ->> 'role') > mint.operator_rank(f.row ->> 'role')
+          OR (f.row ->> 'expires_at' IS NOT NULL AND (r.row ->> 'expires_at' IS NULL
+              OR (r.row ->> 'expires_at')::timestamptz > (f.row ->> 'expires_at')::timestamptz))
+          OR (r.row ->> 'expires_at' IS NULL
+              AND r.row -> 'token_fp' IS DISTINCT FROM f.row -> 'token_fp') THEN 'reapply'
+      END
     WHEN r.state_version = f.state_version AND f.row IS NOT NULL AND
          (r.row - ARRAY(SELECT jsonb_object_keys(r.row) EXCEPT SELECT jsonb_object_keys(f.row)))
          <> (f.row - ARRAY(SELECT jsonb_object_keys(f.row) EXCEPT SELECT jsonb_object_keys(r.row)))
@@ -94,13 +108,16 @@ f AS (
             OR (r.row ->> 'expires_at')::timestamptz > (f.row ->> 'expires_at')::timestamptz))
          OR (mint.operator_rank(r.row ->> 'role') > mint.operator_rank(f.row ->> 'role')
              AND NOT EXISTS (
-               SELECT 1 FROM mint.events e
-               WHERE e.instance_id = %(i)s AND e.kind = 'operator_role_changed'
-                 AND split_part(e.source_key, ':', 1) = 'operator'
-                 AND split_part(e.source_key, ':', 2) = r.ev
-                 AND (CASE WHEN split_part(e.source_key, ':', 3) ~ '^[0-9]{1,18}$'
-                           THEN split_part(e.source_key, ':', 3)::bigint END)
-                     BETWEEN f.state_version + 1 AND r.state_version)))
+               SELECT 1 FROM (
+                 SELECT e.payload ->> 'to' AS to_role FROM mint.events e
+                 WHERE e.instance_id = %(i)s AND e.kind = 'operator_role_changed'
+                   AND split_part(e.source_key, ':', 1) = 'operator'
+                   AND split_part(e.source_key, ':', 2) = r.ev
+                   AND split_part(e.source_key, ':', 3) ~ '^[0-9]{1,18}$'
+                   AND split_part(e.source_key, ':', 3)::bigint
+                       BETWEEN f.state_version + 1 AND r.state_version
+                 ORDER BY split_part(e.source_key, ':', 3)::bigint DESC LIMIT 1) last
+               WHERE last.to_role = r.row ->> 'role')))
       THEN 'reapply'
     WHEN r.state_version > f.state_version AND NOT r.neg AND NOT EXISTS (
          SELECT 1 FROM mint.events e

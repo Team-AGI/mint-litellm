@@ -11,9 +11,17 @@ from mint_litellm.console import server
 
 
 def test_star_and_empty_mean_every_address_and_names_pass_through():
-    assert server.bind_host("*") is None and server.bind_host("") is None
+    assert server.bind_host("*") is None
     assert server.bind_host("localhost") == "localhost"
     assert server.bind_host("::") == "::"
+
+
+@pytest.mark.parametrize("empty", ["", " "])
+def test_an_empty_host_is_refused_instead_of_opening_every_address(empty):
+    from mint_litellm.control.errors import ControlError
+
+    with pytest.raises(ControlError):
+        server.bind_host(empty)
 
 
 def test_serve_hands_every_address_to_uvicorn_as_no_host(monkeypatch):

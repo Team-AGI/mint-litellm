@@ -6,6 +6,8 @@
 건드리지 않으므로 반복해도 같은 결과다(멱등).
 """
 
+import hashlib
+import uuid
 from collections import deque
 from typing import Any
 
@@ -37,10 +39,6 @@ _ONCE = {  # 상태 전이와 함께 채우는 한 번 쓰기 열
     "approval": ("revoked_at", "revoke_reason"),
 }
 MAX_VERSION_STEPS = 1000
-
-
-def _rank(role: str) -> int:
-    return {"admin": 3, "approver": 2}.get(role, 1)
 
 
 def _path(graph: dict[str, list[str]], start: str, goal: str) -> list[str] | None:
@@ -102,16 +100,73 @@ def _move(conn, instance_id: str, kind: str, ident: str, current: str, goal: str
         )
 
 
+def _restore_operator(conn: psycopg.Connection, instance_id: str, item: dict[str, Any]) -> bool:
+    """운영자는 부정 방향으로만 되돌린다(권한을 늘리는 값은 파일에서 가져오지 않는다).
+
+    행을 잠근 뒤 역할은 파일·DB 중 낮은 쪽, 만료는 이른 쪽으로만 바꾼다(순위는 UPDATE 안에서
+    잠근 행의 값으로 다시 판단하므로 동시 강등을 되돌리지 않는다). 토큰이 파일의 지문과 다르면
+    새 토큰을 알 수 없으므로 만료시킨다. DB에 없는 운영자는 파일에서 삭제된 경우에만 만료된 상태와
+    쓸 수 없는 토큰으로 넣고, 활성 운영자는 만들지 않는다.
+    """
+    snap, name = item["row"], item["id"]
+    current = fetchone(
+        conn,
+        "SELECT * FROM mint.operators WHERE instance_id = %s AND name = %s FOR UPDATE",
+        (instance_id, name),
+    )
+    if current is None:
+        if snap.get("expires_at") is None:
+            return False
+        row = {k: v for k, v in snap.items() if k != "token_fp"}
+        # 원문을 아는 사람이 없는 해시
+        row["token_hash"] = hashlib.sha256(uuid.uuid4().bytes).hexdigest()
+        conn.execute(
+            "INSERT INTO mint.operators SELECT * FROM jsonb_populate_record("
+            "NULL::mint.operators, %s)", (Jsonb(row),))
+        return True
+    role, expires = snap["role"], snap.get("expires_at")
+    moved = conn.execute(
+        "UPDATE mint.operators SET"
+        " role = CASE WHEN mint.operator_rank(%(role)s) < mint.operator_rank(role)"
+        "             THEN %(role)s ELSE role END,"
+        " expires_at = CASE WHEN %(exp)s::timestamptz IS NOT NULL AND (expires_at IS NULL"
+        "                        OR expires_at > %(exp)s::timestamptz)"
+        "                   THEN %(exp)s::timestamptz ELSE expires_at END"
+        " WHERE instance_id = %(i)s AND name = %(name)s"
+        " AND (mint.operator_rank(%(role)s) < mint.operator_rank(role)"
+        "      OR (%(exp)s::timestamptz IS NOT NULL AND (expires_at IS NULL"
+        "          OR expires_at > %(exp)s::timestamptz)))",
+        {"role": role, "exp": expires, "i": instance_id, "name": name},
+    ).rowcount > 0
+    fingerprint = snap.get("token_fp")
+    if (
+        fingerprint is not None and current["expires_at"] is None
+        and hashlib.sha256(current["token_hash"].encode()).hexdigest() != fingerprint
+    ):
+        moved = conn.execute(
+            "UPDATE mint.operators SET expires_at = now()"
+            " WHERE instance_id = %s AND name = %s AND expires_at IS NULL", (instance_id, name),
+        ).rowcount > 0 or moved
+    return moved
+
+
 def restore_item(conn: psycopg.Connection, instance_id: str, item: dict[str, Any]) -> bool:
     """항목 하나를 되돌린다. 바꾼 것이 있으면 참이다. 되돌릴 수 없으면 예외를 낸다."""
     kind, ident, snap = item["kind"], item["id"], item["row"]
     table, column, status, _initial, _graph = _META[kind]
-    current = _current(conn, instance_id, kind, ident)
-    changed = False
-    if current is None:
-        _insert(conn, kind, snap)
+    if kind == "operator":
+        changed = _restore_operator(conn, instance_id, item)
         current = _current(conn, instance_id, kind, ident)
-        changed = True
+        if current is None:
+            return changed
+        status = None
+    else:
+        current = _current(conn, instance_id, kind, ident)
+        changed = False
+        if current is None:
+            _insert(conn, kind, snap)
+            current = _current(conn, instance_id, kind, ident)
+            changed = True
     if status is not None:
         if current[status] != snap[status]:
             _move(conn, instance_id, kind, ident, current[status], snap[status], snap)
@@ -123,23 +178,6 @@ def restore_item(conn: psycopg.Connection, instance_id: str, item: dict[str, Any
                 (snap["revoked_at"], instance_id, ident),
             )
             changed = True
-    elif kind == "operator":
-        # 파일보다 권한이 높은 열만 파일 값으로 낮춘다(역할은 낮출 때만, 만료는 앞당길 때만).
-        # 이미 낮거나 같은 쪽은 그대로 둔다.
-        if _rank(current["role"]) > _rank(snap["role"]):
-            conn.execute(
-                "UPDATE mint.operators SET role = %s WHERE instance_id = %s AND name = %s",
-                (snap["role"], instance_id, ident),
-            )
-            changed = True
-        if snap["expires_at"] is not None:
-            moved = conn.execute(
-                "UPDATE mint.operators SET expires_at = %s::timestamptz"
-                " WHERE instance_id = %s AND name = %s AND (expires_at IS NULL"
-                " OR expires_at > %s::timestamptz)",
-                (snap["expires_at"], instance_id, ident, snap["expires_at"]),
-            )
-            changed = changed or moved.rowcount > 0
     elif kind == "denial" and current["lifted_at"] is not None:
         raise ValueError(f"denial {ident}: 이미 해제된 거부는 다시 걸 수 없습니다.")
     # 상태 버전이 파일보다 뒤처지면 값 변경 없는 갱신으로 올린다(트리거가 한 칸씩 올린다).

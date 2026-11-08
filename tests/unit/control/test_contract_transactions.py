@@ -443,11 +443,16 @@ def test_contract_observe_reads_tools_through_the_g2_client(contract_db):
         handle(JobContext(conn, "i", job))
 
 
-class FlowClient:
-    """승인된 배포 계약이 oauth2인 서버에 대한 LiteLLM 읽기 응답(흐름을 바꿔 가며 쓴다)."""
 
-    def __init__(self, flow, listing=True):
-        self.flow, self.listing, self.tool_calls = flow, listing, 0
+class FlowClient:
+    """승인된 배포 계약이 oauth2인 서버에 대한 LiteLLM 읽기 응답(바꿔 가며 쓴다).
+
+    ``flow``는 현재 서버 설정(``get_server``)의 값, ``submissions``는 제출 목록이다.
+    """
+
+    def __init__(self, flow, listing=True, submissions=()):
+        self.flow, self.listing, self.submissions = flow, listing, list(submissions)
+        self.tool_calls = 0
 
     def test_tools_list(self, spec):
         self.tool_calls += 1
@@ -458,14 +463,18 @@ class FlowClient:
 
         if not self.listing:
             raise LiteLLMError("down")
-        return [] if self.flow is None else [{"server_id": "s", "oauth2_flow": self.flow}]
+        return self.submissions
 
     def get_server(self, server_id):
         from mint_litellm.control.litellm_admin import LiteLLMError
 
         if not self.listing:
             raise LiteLLMError("down")
-        return None
+        return None if self.flow is None else {"server_id": server_id, "oauth2_flow": self.flow}
+
+
+def submitted(flow, status="approved"):
+    return {"server_id": "s", "oauth2_flow": flow, "approval_status": status}
 
 
 @pytest.fixture
@@ -510,25 +519,77 @@ def test_a_changed_oauth2_flow_blocks_at_the_next_observation_and_asks_for_reapp
     assert server(conn)["deployment_drift"]
 
 
-def test_an_unreadable_oauth2_flow_blocks(oauth_db):
+def test_a_missing_oauth2_flow_blocks_at_once(oauth_db):
     conn, _ = oauth_db
+    run_observe(conn, FlowClient(None))
+    assert server(conn)["deployment_drift"]
+
+
+def test_the_current_server_config_wins_over_the_submission_list(oauth_db):
+    conn, _ = oauth_db
+    run_observe(conn, FlowClient("authorization_code",
+                                 submissions=[submitted("client_credentials")]))
+    assert server(conn)["deployment_drift"]
+
+
+def test_only_approved_submissions_count_when_the_server_is_not_configured(oauth_db):
+    conn, _ = oauth_db
+    mixed = [submitted("authorization_code", "pending_review"),
+             submitted("authorization_code", "rejected")]
+    run_observe(conn, FlowClient(None, submissions=mixed))  # 승인 제출이 없다: 값 없음
+    assert server(conn)["deployment_drift"]
+    conn.execute("UPDATE mint.servers SET deployment_drift=false, deployment_drift_fields=NULL")
+    conn.execute("DELETE FROM mint.contract_observations WHERE kind='deployment'")
+    run_observe(conn, FlowClient(None, submissions=[*mixed, submitted("client_credentials")]))
+    assert not server(conn)["deployment_drift"]
+
+
+def test_an_unreadable_flow_only_alerts_twice_and_blocks_from_the_third_failure(oauth_db):
+    conn, _ = oauth_db
+    for failures in (1, 2):
+        run_observe(conn, FlowClient("client_credentials", listing=False))
+        assert not server(conn)["deployment_drift"]
+        alert = fetchone(conn, "SELECT kind, count FROM mint.alerts"
+                         " WHERE kind='oauth_flow_unreadable'")
+        assert alert["count"] == failures
     run_observe(conn, FlowClient("client_credentials", listing=False))
     assert server(conn)["deployment_drift"]
     assert fetchone(conn, "SELECT 1 AS x FROM mint.events WHERE kind='reapproval_requested'")
 
 
-def test_a_missing_oauth2_flow_blocks(oauth_db):
+def test_a_successful_read_resets_the_failure_count(oauth_db):
     conn, _ = oauth_db
-    run_observe(conn, FlowClient(None))
-    assert server(conn)["deployment_drift"]
+    for _ in range(2):
+        run_observe(conn, FlowClient("client_credentials", listing=False))
+    run_observe(conn, FlowClient("client_credentials"))
+    for _ in range(2):  # 연속이 아니므로 다시 두 번까지는 막지 않는다
+        run_observe(conn, FlowClient("client_credentials", listing=False))
+    assert not server(conn)["deployment_drift"]
 
 
 def test_other_auth_types_are_not_asked_for_a_flow(contract_db):
     conn, _, _ = contract_db
 
     class Strict(FlowClient):
-        def list_submissions(self):
+        def get_server(self, server_id):
             raise AssertionError("oauth2가 아닌 서버의 흐름은 읽지 않는다")
 
     run_observe(conn, Strict("authorization_code"))
     assert not server(conn)["deployment_drift"]
+
+
+def test_the_oauth2_events_do_not_collide_with_identity_events(oauth_db):
+    """같은 계약의 oauth2 관측 사건과 identity 사건은 서로 다른 개체 키를 쓴다."""
+    conn, ctx = oauth_db
+    run_observe(conn, FlowClient("authorization_code"))
+    conn.execute(
+        "INSERT INTO mint.events(event_id,instance_id,kind,source_key,payload)"
+        " VALUES (%s,'i','server_identity_mismatch_observed',%s,%s)",
+        (uuid4(), "selfcheck:run:1:server_identity_mismatch_observed",
+         Jsonb({"server_id": "s", "fields": ["issuer"], "observed_hashes": {"issuer": "a" * 64}})),
+    )
+    consume_deployment_events(ctx)
+    run_observe(conn, FlowClient("client_credentials"))  # 다음 관측도 멈추지 않는다
+    keys = [e["source_key"] for e in events(conn, "deployment_drift_detected")]
+    assert len(keys) == 2 and len(set(keys)) == 2
+    assert sorted(server(conn)["deployment_drift_fields"]) == ["issuer", "oauth2_flow"]
