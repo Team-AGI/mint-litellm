@@ -11,7 +11,7 @@ from mint_litellm.control.errors import ControlError
 GUARDRAIL_CLASS = "mint_litellm.plugin.guardrail.MintGuardrail"
 # 가드레일이 로거를 등록하므로 설정의 callbacks에는 적지 않는다. 적혀 있으면 거부한다.
 LOGGER_SUFFIXES = (".MintLogger", ".mint_logger")
-GUARDRAIL_MODES = ("pre_mcp_call", "post_mcp_call")
+GUARDRAIL_MODES = ("pre_call", "pre_mcp_call", "post_mcp_call")
 
 _HEADER = "# MINT 통제에 필요한 LiteLLM 설정 조각. 기존 config.yaml의 같은 키에 합친다.\n"
 

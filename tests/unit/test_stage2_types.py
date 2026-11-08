@@ -127,12 +127,13 @@ def test_server_identity_mismatch_keeps_the_selfcheck_key():
     assert key == "selfcheck:run1:2:server_identity_mismatch_observed"
 
 
-def test_reasons_are_the_stage_one_set_plus_the_confirmation_pair():
+def test_reasons_are_the_stage_one_set_plus_the_later_additions():
     assert {r.value for r in Reason} == STAGE_ONE_REASONS | {
         "CONFIRMATION_REQUIRED",
         "CONFIRMATION_STALE",
+        "EXTERNAL_MCP_FORBIDDEN",
     }
-    for code in ("CONFIRMATION_REQUIRED", "CONFIRMATION_STALE"):
+    for code in ("CONFIRMATION_REQUIRED", "CONFIRMATION_STALE", "EXTERNAL_MCP_FORBIDDEN"):
         assert Reason(code) in NON_CONVERTIBLE_REASONS
         assert not is_observation_candidate(code)
         error = error_for_reason(code, "ref-1")

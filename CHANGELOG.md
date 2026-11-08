@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- 모델 요청과 패스스루 경로에 담긴 공급자 쪽 MCP(게이트웨이 주소가 아닌 `tools[]`의 `type: "mcp"`, `mcp_servers`)를 `pre_call` 가드레일 모드에서 `MINT-EXTERNAL-MCP-FORBIDDEN`(403)으로 막고 판정 사건을 남긴다. MINT 가드레일의 모드에 `pre_call`이 필요해졌으므로, 기존 설정은 `mode`를 `[pre_call, pre_mcp_call, post_mcp_call]`로 고쳐야 자가 점검을 통과한다(`init`이 만드는 설정 조각은 이미 그렇다).
 - 운영자 삭제(만료 설정)와 역할 강등을 부정 상태로 내보낸다(마이그레이션 `014_operator_negative`). DB를 되돌려 권한을 잃었던 운영자가 되살아나면 되돌림 판정이 잡고, `restore attest`가 삭제·강등 상태로 되돌린다. 판정이 읽는 운영자 상태에는 토큰 해시가 없다.
 - 승인된 배포 계약이 `oauth2`인 서버는 정기 관측에서 LiteLLM 서버 설정의 `oauth2_flow`를 읽는다. 서버 자격 흐름이 아니거나 읽지 못하면 배포 드리프트로 호출을 막고 재승인을 요청한다.
 - 콘솔 `--host *`는 이 호스트가 가진 모든 주소(IPv4·IPv6)에 연다. 배포 compose의 콘솔은 이를 써서 IPv4만 있는 컨테이너에서도 닿는다.

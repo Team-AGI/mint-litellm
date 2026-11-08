@@ -28,6 +28,7 @@ from mint_litellm.plugin.buffer import EvidenceRecorder, LocalBuffer, SystemEven
 from mint_litellm.plugin.config import PluginConfig, configure_logging
 from mint_litellm.plugin.discovery import DiscoveryResult, evaluate_listed_tool
 from mint_litellm.plugin.pipeline import (
+    CallRequest,
     Outcome,
     PipelineDeps,
     PolicyEvaluate,
@@ -39,13 +40,14 @@ from mint_litellm.plugin.restore_watch import RestoreWatch
 from mint_litellm.plugin.result import ResultDeps
 from mint_litellm.plugin.snapshot import PluginDatabase, RegisteredServer
 from mint_litellm.types.canonical import sha256
-from mint_litellm.types.decision import OperationType
+from mint_litellm.types.decision import OperationType, StageResult
 from mint_litellm.types.events import Event, EventKind
+from mint_litellm.types.reason_codes import Reason
 from mint_litellm.types.settings import SELF_CHECK_DESCRIPTIONS, SelfCheckItem
 
 log = logging.getLogger("mint_litellm.selfcheck")
 
-REQUIRED_MODES = ("pre_mcp_call", "post_mcp_call")
+REQUIRED_MODES = ("pre_call", "pre_mcp_call", "post_mcp_call")
 # 통제 대상 서버 상태. 그 밖의 상태 서버는 LiteLLM에 없어도 기동을 막지 않는다.
 CONTROLLED_SERVER_STATUSES = frozenset({"approved", "suspended"})
 CONTRACT_FIELDS = ("url_sha256", "transport", "auth_type")
@@ -355,6 +357,17 @@ class PluginRuntime:
             hook_parser=compat.parse_hook_data,
             resolver=compat.resolve_server,
             principal_factory=compat.principal_from_auth,
+        )
+        return await evaluate_request(request, self.deps)
+
+    async def judge_external_mcp(self, data: Mapping[str, Any], auth: Any, kind: str) -> Outcome:
+        """공급자 쪽 MCP가 담긴 모델 요청. 판정 사건을 남기고 항상 차단한다."""
+        request = CallRequest(
+            operation=OperationType.LLM_REQUEST,
+            principal=compat.principal_from_auth(auth, instance_id=self.config.instance_id),
+            hook=compat.parse_hook_data(data),
+            resolved=None,
+            resolution_failure=StageResult.stop(Reason.EXTERNAL_MCP_FORBIDDEN, detail=kind),
         )
         return await evaluate_request(request, self.deps)
 

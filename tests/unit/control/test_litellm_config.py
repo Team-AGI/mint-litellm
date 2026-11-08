@@ -12,7 +12,8 @@ def test_snippet_has_the_required_guardrail_callback_and_server_entries():
         litellm_config.snippet({"docs": ("docs-id", "http://u.test/mcp")}, no_spend_logs=False)
     )
     guardrail = data["guardrails"][0]["litellm_params"]
-    assert guardrail["mode"] == ["pre_mcp_call", "post_mcp_call"] and guardrail["default_on"]
+    assert guardrail["mode"] == ["pre_call", "pre_mcp_call", "post_mcp_call"]
+    assert guardrail["default_on"]
     assert "callbacks" not in data["litellm_settings"]  # 로거는 가드레일이 등록한다
     assert data["guardrails"][-1]["litellm_params"]["guardrail"].endswith(".MintGuardrail")
     assert data["general_settings"]["require_key_mcp_access_defined"] is True

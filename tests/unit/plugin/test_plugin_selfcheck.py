@@ -65,7 +65,7 @@ class OtherGuardrail(FakeGuardrail):
 def guardrail(**override):
     args = {
         "guardrail_name": "mint",
-        "event_hook": ["pre_mcp_call", "post_mcp_call"],
+        "event_hook": ["pre_call", "pre_mcp_call", "post_mcp_call"],
         "default_on": True,
         "run_in_parallel": True,
         "scan_raw_request": False,
@@ -135,12 +135,18 @@ def test_item_1_logger_must_be_registered_exactly_once():
 
 
 def test_item_2_guardrail_modes_and_default_on():
-    other = SimpleNamespace(value="pre_mcp_call"), SimpleNamespace(value="post_mcp_call")
+    other = (
+        SimpleNamespace(value="pre_call"),
+        SimpleNamespace(value="pre_mcp_call"),
+        SimpleNamespace(value="post_mcp_call"),
+    )
     enum_style = guardrail(event_hook=list(other))
     assert failed(run_checks(view(callbacks=[LOGGER, enum_style]), guard=enum_style)) == set()
     for bad in (
         guardrail(event_hook=["pre_mcp_call"]),
         guardrail(event_hook=["post_mcp_call"]),
+        guardrail(event_hook=["pre_mcp_call", "post_mcp_call"]),
+        guardrail(event_hook=["pre_call"]),
         guardrail(event_hook="pre_mcp_call"),
         guardrail(event_hook=None),
         guardrail(default_on=False),
