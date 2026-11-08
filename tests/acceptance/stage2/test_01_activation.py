@@ -51,3 +51,23 @@ def test_activation(rig, name):
              canonical_contracts_sha256=hashlib.sha256(json.dumps(
                  [row["pin_sha256"] for row in contracts], sort_keys=True,
              ).encode()).hexdigest())
+
+
+def test_pending_key_blocked(rig):
+    """DS-176 ③: 키 권한은 있으나 MINT 승인·pin이 없는 호출은 MINT가 막고 업스트림은 0이다.
+
+    활성화 뒤 같은 호출은 허용 1회로 대조한다.
+    """
+    rig.require("intake create", "intake approve", handlers=(
+        "submission_poll", "intake_run", "sync_server", "sync_target", "activation_finalize",
+    ))
+    name = "context7"
+    fixture = rig.fixture(name)
+    server = fixture["server_id"]
+    before = rig.counter(server)
+    snapshot = rig.call(server, fixture["tool"], fixture["arguments"], allowed=False,
+                        code="MINT-", litellm_rejects=False)
+    assert rig.counter(server) == before, "미승인 호출이 업스트림에 닿음"
+    rig.note(pending_blocked_event=bool(snapshot))
+    rig.activate(fixture)
+    rig.call(server, fixture["tool"], fixture["arguments"])

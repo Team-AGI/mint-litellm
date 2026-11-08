@@ -664,17 +664,29 @@ def intake_provider_denied(ctx):
 
 @scenario("intake_private_literal", undo=cleanup)
 def intake_private_literal(ctx):
-    """DS-174: 사설 리터럴 IP 제출은 LiteLLM이 거절하고 MINT 신청은 생기지 않는다."""
+    """DS-174·176: 사설 리터럴 IP 제출은 LiteLLM이 거절(사유 문자열 기록)하고 MINT 신청은 없다.
+
+    같은 제출에서 URL만 해석되는 주소로 바꾼 대조군은 접수된다.
+    """
     before = n(f"SELECT count(*) FROM mint.intakes WHERE instance_id={lit(iid())}")
-    alias = "acc-" + uuid.uuid4().hex[:8]
-    status, _ = lite_raw("POST", "/v1/mcp/server/register", {
-        "alias": alias, "server_name": alias, "url": "https://10.20.30.40/mcp",
-        "transport": "http", "description": "acceptance", "allow_all_keys": False},
-        key=A.env("ACC_SUBMIT_KEY"))
-    time.sleep(70)  # 제출 수신 작업(submission_poll) 주기보다 길게 기다려 신청이 없는지 본다
+    upstream_before = upstream()
+
+    def submit(url):
+        alias = "acc-" + uuid.uuid4().hex[:8]
+        return lite_raw("POST", "/v1/mcp/server/register", {
+            "alias": alias, "server_name": alias, "url": url, "transport": "http",
+            "description": "acceptance", "allow_all_keys": False}, key=A.env("ACC_SUBMIT_KEY"))
+
+    status, text = submit("https://10.20.30.40/mcp")
+    control_status, control_text = submit(f"https://example.org/mcp-{uuid.uuid4().hex[:8]}")
+    if control_status in (200, 201):
+        track("server", json.loads(control_text)["server_id"])
+    time.sleep(70)  # 제출 수신 작업 주기보다 길게 기다린다
+    new_rows = n(f"SELECT count(*) FROM mint.intakes WHERE instance_id={lit(iid())}") - before
     observe(ctx, litellm_rejected=status in (400, 403, 422), litellm_status=status,
-            mint_intakes=n(f"SELECT count(*) FROM mint.intakes WHERE instance_id={lit(iid())}")
-            - before)
+            litellm_reason=text[:160], control_accepted=control_status in (200, 201),
+            mint_intakes=new_rows - (1 if control_status in (200, 201) else 0),
+            upstream_calls=upstream() - upstream_before)
 
 
 @scenario("intake_private_ip_guard", undo=cleanup)
@@ -1707,8 +1719,8 @@ def auth_screens_13(ctx):
     """화면 13개를 실제 세션으로 열고, 스크린샷·대비·키보드·문구 검수는 장비 도구가 맡는다."""
     spec = os.environ.get("ACC_UI_AUDIT_CMD")
     if not spec or not os.environ.get("ACC_UI_REVIEWER"):
-        # DS-174: 화면 검수는 도구 없이 sol 화면 검수와 메인 캡처로 하므로 「수동 검수」로 표시한다.
-        raise A.Skip("수동 검수: sol 화면 검수·메인 캡처로 대신함(자동 도구 없음)")
+        # DS-174·176: 도구가 없으면 합격으로 세지 않고 「미실행」(수동 검수 대기)으로 적는다.
+        raise A.Skip("미실행: 화면별 대비 수치·키보드 초점 이동은 sol 검수·메인 캡처로 받음")
     _, admin_key, _ = console_user("admin")
     _, staff_key, _ = console_user(None)
     admin, admin_reply, admin_session = http_login("/login", SESSION_COOKIE, admin_key)

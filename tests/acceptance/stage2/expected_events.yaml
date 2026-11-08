@@ -115,7 +115,7 @@ capabilities:
   test_11_availability.py: {commands: [console, worker], handlers: [contract_observe, sync_target]}
   test_12_migration.py: {commands: [intake create], handlers: [intake_run]}
 required_scripts:
-  test_01_activation.py: 3
+  test_01_activation.py: 4
   test_02_contracts.py: 7
   test_03_unobserved.py: 1
   test_04_sync.py: 8
@@ -198,7 +198,8 @@ observations:
     reject_calls: 1
     resubmissions: 0
     failed_checks: 1
-  intake_private_literal: {litellm_rejected: true, mint_intakes: 0}
+  intake_private_literal: {litellm_rejected: true, mint_intakes: 0, control_accepted: true,
+                           upstream_calls: 0}
   intake_private_ip_guard: {url_guard_reason: IP_FORBIDDEN, test_route_calls: 0}
   intake_allow_all_keys: {<<: *negative, submitted_allow_all_keys: true}
   intake_definitions_limit: {result: indeterminate, distinct_approvers: 2,
