@@ -908,3 +908,17 @@ class TestTerminateProcess:
         calls = self.stubbed(monkeypatch)
         terminate_process()
         assert calls["exited"] == [3] and len(calls["killed"]) == 1
+
+
+@pytest.mark.parametrize("value", [True, "true", "True"])
+def test_the_openai_websocket_passthrough_needs_the_explicit_realtime_allowance(value):
+    on = view(general_settings={"require_key_mcp_access_defined": True,
+                                "enable_openai_websocket_passthrough": value})
+    assert SelfCheckItem.REQUIRED_SETTINGS in failed(run_checks(on))
+    allowed = check_items(
+        on, logger=LOGGER, guardrail=GUARDRAIL, controlled=[registered()], allow_realtime=True
+    )
+    assert failed(allowed) == set()
+    off = view(general_settings={"require_key_mcp_access_defined": True,
+                                 "enable_openai_websocket_passthrough": False})
+    assert failed(run_checks(off)) == set()

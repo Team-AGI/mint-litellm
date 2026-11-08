@@ -64,7 +64,6 @@ class TestExternalMcp:
             {},
             {"messages": [{"role": "user", "content": "hi"}]},
             {"tools": None},
-            {"tools": "mcp"},
             {"tools": [{"type": "function", "function": {"name": "f"}}]},
             {"tools": ["mcp", 3, None]},
             {"mcp_servers": []},
@@ -109,8 +108,32 @@ class TestExternalMcp:
         assert external_mcp({"extra_body": {"tools": [mcp_tool(EXTERNAL)]}}) == "tools"
         assert external_mcp({"input": [{"content": [mcp_tool(EXTERNAL)]}]}) == "tools"
         stringified = json.dumps({"mcp_servers": [{"url": EXTERNAL}]})
-        assert external_mcp({"x": stringified}) == "mcp_servers"
-        assert external_mcp({"x": json.dumps([json.dumps({"type": "mcp"})])}) == "tools"
+        assert external_mcp({"extra_body": stringified}) == "mcp_servers"
+        assert external_mcp({"extra_body": json.dumps({"tools": [mcp_tool(EXTERNAL)]})}) == "tools"
+        assert external_mcp({"session": {"tools": [mcp_tool(EXTERNAL)]}}) == "tools"
+
+    def test_text_and_other_strings_are_never_decoded(self):
+        import json
+
+        text = json.dumps(mcp_tool("https://x"))
+        for data in (
+            {"messages": [{"role": "user", "content": text}]},
+            {"input": text},
+            {"input": [{"role": "user", "content": [{"type": "input_text", "text": text}]}]},
+            {"metadata": {"note": text, "tools": "free text"}},
+            {"x": text},
+            {"extra_body": "not json"},
+        ):
+            assert external_mcp(data, "aresponses") is None
+
+    def test_strings_where_tools_mcp_servers_or_session_belong_are_unsupported(self):
+        for data in (
+            {"tools": "[]"},
+            {"session": '{"tools": []}'},
+            {"extra_body": {"tools": "[]"}},
+            {"extra_body": '{"tools": "[]"}'},
+        ):
+            assert external_mcp(data, "aresponses") == "unsupported"
 
     def test_limits_make_the_body_unjudgeable(self):
         deep: dict = {}
@@ -120,7 +143,7 @@ class TestExternalMcp:
             node = node["a"]
         assert external_mcp({"x": deep}) == "limit"
         assert external_mcp({"x": [0] * 200_000}) == "limit"
-        assert external_mcp({"x": "[" + "0," * 600_000 + "0]"}) == "limit"
+        assert external_mcp({"extra_body": "[" + "0," * 600_000 + "0]"}) == "limit"
 
     def test_passthrough_has_no_gateway_exception(self):
         data = {"tools": [mcp_tool("litellm_proxy")]}
@@ -266,13 +289,14 @@ class TestBypassesFoundInReview:
         data = {"model": "m", "extra_body": {"tools": [mcp_tool("litellm_proxy/mcp/mslearn")]}}
         self.refused(rig, data, "aresponses")
 
-    def test_mcp_objects_in_input_session_and_stringified_json_are_refused(self, rig):
+    def test_mcp_objects_in_input_session_and_string_extra_body_are_refused(self, rig):
         import json
 
         for data in (
             {"input": [{"role": "user", "content": [mcp_tool(EXTERNAL)]}]},
             {"session": {"type": "realtime", "tools": [mcp_tool(EXTERNAL)]}},
-            {"metadata": {"x": json.dumps({"tools": [mcp_tool(EXTERNAL)]})}},
+            {"extra_body": json.dumps({"tools": [mcp_tool(EXTERNAL)]})},
+            {"tools": "[]"},
             {"extra_body": json.dumps({"mcp_servers": [{"url": EXTERNAL}]})},
         ):
             self.refused(rig, data, "aresponses")
@@ -313,3 +337,18 @@ class TestBypassesFoundInReview:
         assert self.send(rig, {"model": "m"}, call_type)["model"] == "m"
         # 허용해도 본문의 외부 MCP는 막힌다.
         self.refused(rig, {"session": {"tools": [mcp_tool(EXTERNAL)]}}, call_type)
+
+    @pytest.mark.parametrize("call_type", ["acompletion", "aresponses"])
+    def test_pasted_mcp_text_in_messages_input_and_metadata_is_not_refused(self, rig, call_type):
+        import json
+
+        _, store, _ = rig
+        text = json.dumps({"type": "mcp", "server_url": "https://x"})
+        for body in (
+            {"messages": [{"role": "user", "content": text}]},
+            {"input": text},
+            {"input": [{"role": "user", "content": [{"type": "input_text", "text": text}]}]},
+            {"metadata": {"note": text}},
+        ):
+            assert self.send(rig, {"model": "m", **body}, call_type)["model"] == "m"
+        assert store.events == {}

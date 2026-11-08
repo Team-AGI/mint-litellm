@@ -185,3 +185,30 @@ def test_realtime_requests_are_refused_before_a_session_exists(world, model, pat
     assert code_of(reply) == "MINT-REALTIME-FORBIDDEN", reply.text
     (event,) = decisions(world, subject, since)
     assert event["payload"]["stop"]["reason_code"] == "REALTIME_FORBIDDEN"
+
+
+@pytest.mark.parametrize("path", ["/v1/chat/completions", "/v1/responses"])
+def test_pasted_mcp_text_in_messages_input_and_metadata_is_not_refused(world, model, path):
+    subject = world.subject(("a",))
+    since = world.now()
+    text = json.dumps({"type": "mcp", "server_url": "https://x"})
+    prompt = (
+        [{"role": "user", "content": text}] if "chat" in path else text
+    )
+    key = "messages" if "chat" in path else "input"
+    with_metadata = {**plain_body(model, path), "metadata": {"n": text}}
+    for body in ({key: prompt, "model": model}, with_metadata):
+        reply = send(subject, path, body)
+        assert reply.status_code == 200, reply.text
+    assert decisions(world, subject, since) == []
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [{"extra_body": json.dumps({"tools": [external_tool()]})}, {"tools": "[]"}],
+    ids=["string-extra_body", "string-tools"],
+)
+def test_string_forms_that_could_carry_mcp_are_refused(world, model, extra):
+    subject = world.subject(("a",))
+    reply = send(subject, "/v1/responses", plain_body(model, "/v1/responses", **extra))
+    assert reply.status_code == 403 and code_of(reply) == CODE, reply.text

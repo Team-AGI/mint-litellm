@@ -122,6 +122,13 @@ def guardrail_definition_check(callbacks: Sequence[Any], guardrail: Any) -> tupl
     return True, ""
 
 
+def _ws_passthrough_on(general_settings: Mapping[str, Any]) -> bool:
+    setting = general_settings.get("enable_openai_websocket_passthrough")
+    if isinstance(setting, str):
+        return setting.strip().lower() in ("1", "true", "yes", "on")
+    return setting is True
+
+
 def check_items(
     view: LiteLLMView,
     *,
@@ -129,6 +136,7 @@ def check_items(
     guardrail: Any,
     controlled: Sequence[RegisteredServer] | None,
     fingerprint_key_set: bool = True,
+    allow_realtime: bool = False,
 ) -> list[CheckResult]:
     """8개 항목을 확인한다. ``controlled``가 ``None``이면 MINT DB를 읽지 못한 것이다."""
     results: list[CheckResult] = []
@@ -215,6 +223,9 @@ def check_items(
     supported = view.general_settings.get("supported_db_objects")
     if isinstance(supported, list) and "mcp" not in [str(s) for s in supported]:
         problems.append("supported_db_objects lacks mcp")
+    # LiteLLM의 OpenAI WebSocket 패스스루는 사전 훅을 거치지 않으므로 실시간 허용을 명시해야 한다.
+    if _ws_passthrough_on(view.general_settings) and not allow_realtime:
+        problems.append("enable_openai_websocket_passthrough needs MINT_ALLOW_REALTIME=true")
     add(SelfCheckItem.REQUIRED_SETTINGS, not problems, "; ".join(problems))
     return results
 
@@ -418,6 +429,7 @@ class PluginRuntime:
             guardrail=self.guardrail,
             controlled=controlled,
             fingerprint_key_set=self.config.fingerprint_key is not None,
+            allow_realtime=self.config.allow_realtime,
         )
         self.last_results = results
         self.last_mismatches = contract_mismatches(view, controlled or [])
