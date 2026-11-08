@@ -7,6 +7,7 @@ REPO="$(cd "$HERE/../../../.." && pwd)"
 export ACC_HOME=${ACC_HOME:-$HOME/mint-s2}
 source "$HERE/env.sh"
 cd "$REPO"
+export ACC_DS183=${ACC_DS183:-1}
 export ACC_STEADY_SECONDS=${ACC_STEADY_SECONDS:-1800}
 python -m pytest tests/acceptance/stage2 --stage2-live --stage2-site "$ACC_SITE" \
   --stage2-evidence "tests/acceptance/stage2/evidence/$NAME" --stage2-required \

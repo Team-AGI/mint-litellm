@@ -156,7 +156,7 @@ flows:
   drift_deployment:
     server_identity_mismatch_observed: worker_count
     deployment_drift_detected: 1
-    reapproval_requested: 0
+    reapproval_requested: 1
     alert_opened: 1
 auxiliary_events:
   activation: [server_registered, relation_created, sync_applied, export_written,
