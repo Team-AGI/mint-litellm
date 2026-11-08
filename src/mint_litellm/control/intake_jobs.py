@@ -12,7 +12,7 @@ from typing import Any
 from mint_litellm.control import alerts
 from mint_litellm.control import intake_checks as checks
 from mint_litellm.control.context import Context, Operator
-from mint_litellm.control.db.connection import fetchall
+from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import ControlError
 from mint_litellm.control.jobs import JobContext
 from mint_litellm.control.litellm_admin import LiteLLMError
@@ -193,6 +193,8 @@ def _run_checks(
     client = _client(job)
     server_id = row["server_id"]
     contract = intakes.deployment_candidate(job.conn, job.instance_id, server_id)
+    if contract is None and mode == "evidence":  # 승인된 신청은 승인된 배포 계약으로 검사한다
+        contract = intakes.approved_deployment(job.conn, job.instance_id, server_id)
     allowlists = _allowlists(job, row["org_id"])
     data = job.policy_data.get(job.conn, job.instance_id) if job.policy_data else None
     ports = tuple(getattr(job.settings, "intake_allowed_ports", checks.DEFAULT_PORTS))
@@ -289,6 +291,28 @@ def _reject_at_litellm(job: JobContext, row: dict) -> None:
                           intake_id=str(row["id"]))
 
 
+def _evidence_run(job: JobContext, ctx: Context, row: dict, attempt: int) -> None:
+    """승인된 신청의 검사를 다시 한다. 서버에 드리프트가 있으면 후보 계약과 결속 증거를 저장한다.
+
+    신청 상태는 ``decided``로 둔다. 드리프트가 없으면 증거만 새로 쌓고 후보는 만들지 않는다
+    (증거 만료 재검사). 배포 드리프트면 레지스트리의 현재 값으로 배포 후보를 먼저 만든다.
+    """
+    persist = intakes.drift_pending(job.conn, job.instance_id, row["server_id"])
+    if persist:
+        server = fetchone(
+            job.conn,
+            "SELECT deployment_drift FROM mint.servers WHERE instance_id = %s AND server_id = %s",
+            (job.instance_id, row["server_id"]),
+        )
+        approved = intakes.approved_deployment(job.conn, job.instance_id, row["server_id"])
+        if server["deployment_drift"] and approved is not None:
+            job.checkpoint()
+            entry = _client(job).get_server(row["server_id"])
+            if entry:
+                intakes.store_deployment_candidate(ctx, row["server_id"], entry, approved)
+    _run_checks(job, ctx, row, attempt, "evidence", persist=persist)
+
+
 def intake_run(job: JobContext) -> None:
     target, _, mode = job.job["target_ref"].partition("/")
     attempt = int(job.job["idempotency_key"].rsplit(":", 1)[1])
@@ -298,7 +322,7 @@ def intake_run(job: JobContext) -> None:
         _reject_at_litellm(job, row)
         return
     if mode == "evidence":
-        _run_checks(job, ctx, row, attempt, mode, persist=False)
+        _evidence_run(job, ctx, row, attempt)
         return
     if row["status"] == "decided":
         _reject_at_litellm(job, row)  # 자동 거절 뒤 LiteLLM 거절이 끊긴 경우 이어서 한다

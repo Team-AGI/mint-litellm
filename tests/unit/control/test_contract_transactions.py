@@ -624,3 +624,51 @@ def test_intake_evidence_binding_matches_what_reapproval_demands(contract_db):
     bound = intakes.contract_binding(conn, "i", "s")
     assert bound == sha256({"tools": {"read": sha256(NEW)}, "deployment": sha256(deployment)})
     assert new
+
+
+@pytest.mark.parametrize(
+    ("tools", "severity"),
+    [
+        ({"read": NEW}, "high"),  # 입력 스키마
+        ({"read": {**TOOL, "description": "changed"}}, "medium"),  # 설명
+        ({"read": TOOL, "extra": TOOL}, "low"),  # 도구 추가
+        ({}, "low"),  # 도구 삭제
+    ],
+)
+def test_every_contract_alert_opens_with_an_alert_opened_event(contract_db, tools, severity):
+    conn, ctx, _ = contract_db
+    observe(conn, ctx, tools)
+    alert = fetchone(conn, "SELECT id, severity, kind FROM mint.alerts")
+    assert (alert["severity"], alert["kind"]) == (severity, "contract_drift")
+    opened = events(conn, "alert_opened")
+    assert [e["source_key"] for e in opened] == [f"alert:{alert['id']}:0:alert_opened"]
+    observe(conn, ctx, tools)  # 같은 관측은 경보도 사건도 늘리지 않는다
+    assert len(events(conn, "alert_opened")) == 1
+
+
+def test_a_contract_alert_resolved_then_a_new_drift_opens_a_new_alert_event(contract_db):
+    from mint_litellm.control import alerts
+
+    conn, ctx, _ = contract_db
+    observe(conn, ctx, {"read": NEW})
+    key = fetchone(conn, "SELECT dedup_key FROM mint.alerts")["dedup_key"]
+    assert alerts.resolve(conn, "i", key) == 1
+    observe(conn, ctx, {"read": {**TOOL, "description": "again"}})
+    assert len(events(conn, "alert_opened")) == 2
+    assert len(events(conn, "alert_resolved")) == 1
+
+
+def test_a_deployment_drift_alert_also_has_its_opening_event(contract_db):
+    conn, ctx, _ = contract_db
+    conn.execute(
+        "INSERT INTO mint.events(event_id,instance_id,kind,source_key,payload)"
+        " VALUES (%s,'i','server_identity_mismatch_observed','selfcheck:run:1:x',%s)",
+        (uuid4(),
+         Jsonb({"server_id": "s", "fields": ["issuer"], "observed_hashes": {"issuer": "a" * 64}})),
+    )
+    consume_deployment_events(ctx)
+    alert = fetchone(conn, "SELECT id, severity FROM mint.alerts")
+    assert alert["severity"] == "critical"
+    assert [e["source_key"] for e in events(conn, "alert_opened")] == [
+        f"alert:{alert['id']}:0:alert_opened"
+    ]

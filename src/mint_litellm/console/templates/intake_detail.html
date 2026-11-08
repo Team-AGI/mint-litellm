@@ -43,7 +43,7 @@
 {% else %}<p class="muted">이 콘솔에는 제어 평면 키가 없어 지정할 수 없습니다. 명령줄에서 지정하십시오.</p>{% endif %}
 {% endif %}
 
-{% if actor.role == 'admin' and i.status in ('received', 'passed', 'indeterminate') and i.requested_by %}
+{% if actor.role == 'admin' and i.requested_by and (i.status in ('received', 'passed', 'indeterminate') or (i.status == 'decided' and i.decision in ('approved', 'exception'))) %}
 <form method="post" action="/intakes/{{ i.id }}/recheck" class="filters">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ i.state_version }}">
   <button type="submit" class="{{ 'primary' if stale else '' }}">재검사</button>

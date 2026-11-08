@@ -5,14 +5,13 @@ import re
 import uuid
 from typing import Any
 
-from psycopg.types.json import Jsonb
-
 from mint_litellm.control import alerts
 from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import ControlError, conflict
 from mint_litellm.control.intake_checks import SERVER_CREDENTIAL_FLOW
 from mint_litellm.control.intake_jobs import _oauth2_flow_read
+from mint_litellm.control.services import intakes
 from mint_litellm.control.services.base import transact
 from mint_litellm.types.canonical import canonical_text, sha256
 from mint_litellm.types.events import EventKind
@@ -116,18 +115,10 @@ def _observe(
 
 
 def _alert(ctx: Context, entity_id: Any, digest: str, severity: str, payload: dict) -> None:
-    ctx.conn.execute(
-        "INSERT INTO mint.alerts (id,instance_id,kind,severity,dedup_key,subject)"
-        " VALUES (%s,%s,'contract_drift',%s,%s,%s)"
-        " ON CONFLICT (instance_id,dedup_key) WHERE status <> 'resolved' DO NOTHING",
-        (
-            new_uuid7(),
-            ctx.instance_id,
-            severity,
-            f"contract_drift:{entity_id}:{digest}",
-            Jsonb(payload),
-        ),
-    )
+    """계약 드리프트 경보. 단일 경로 ``raise_alert``라 새 경보마다 ``alert_opened``가 남는다."""
+    alerts.raise_alert(
+        ctx.conn, ctx.instance_id, kind="contract_drift", severity=severity,
+        dedup_key=f"contract_drift:{entity_id}:{digest}", subject=payload)
 
 
 def record_tools(
@@ -153,6 +144,7 @@ def record_tools(
                 (ctx.instance_id, server_id, scope),
             )
         }
+        recheck = False
         for name in sorted(approved.keys() | tools.keys()):
             contract, value = approved.get(name), tools.get(name)
             entity = contract["id"] if contract else new_uuid7()
@@ -205,6 +197,7 @@ def record_tools(
                     {"input_schema": "high", "added": "low", "removed": "low"}.get(drift, "medium"),
                     payload,
                 )
+                recheck = recheck or drift != "removed"
             if contract and drift == "removed":
                 row = fetchone(
                     ctx.conn,
@@ -222,6 +215,8 @@ def record_tools(
             "UPDATE mint.servers SET last_observed_at=now() WHERE instance_id=%s AND server_id=%s",
             (ctx.instance_id, server_id),
         )
+        if recheck:  # 새 드리프트마다 승인한 신청의 재검사(후보 계약 생산)를 등록한다
+            intakes.enqueue_drift_recheck(ctx, server_id)
 
 
 def consume_deployment_events(ctx: Context) -> None:
@@ -305,6 +300,8 @@ def _deployment_drift(
         ctx.emit(EventKind.DEPLOYMENT_DRIFT_DETECTED, entity, observation["change_seq"], body)
         ctx.emit(EventKind.REAPPROVAL_REQUESTED, entity, observation["change_seq"], body)
         _alert(ctx, entity, observation["observed_sha256"], "critical", body)
+        if name != "oauth2_flow":  # 서버 자격 흐름은 새 배포 후보로 고칠 수 없다(LiteLLM 설정 문제)
+            intakes.enqueue_drift_recheck(ctx, server_id)
 
 
 def record_oauth2_flow(

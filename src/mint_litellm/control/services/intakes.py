@@ -415,24 +415,114 @@ def recheck(
     ctx: Context, intake_id: str, *, registry_first: bool = False,
     expected_version: int | None = None,
 ) -> str:
-    """재검사 작업을 등록한다. ``registry_first``는 제출 서버를 레지스트리에 올린 뒤 검사한다."""
+    """재검사 작업을 등록한다. ``registry_first``는 제출 서버를 레지스트리에 올린 뒤 검사한다.
+
+    승인된 신청(``decided``, 승인·예외)은 ``evidence`` 모드로 받는다. 이 재검사는 서버에
+    드리프트가 있으면 후보 계약과 결속된 증거를 저장하고, 신청 상태는 ``decided``로 둔다.
+    """
     require_role(ctx, "intake recheck")
     with transact(ctx):
         row = get(ctx, intake_id, lock=True)
         if expected_version is not None and row["state_version"] != expected_version:
             raise conflict(f"신청의 상태 버전이 요청({expected_version})과 다릅니다"
                            f"(현재 {row['state_version']}).")
-        if row["status"] not in ("received", "passed", "indeterminate"):
+        approved = row["status"] == "decided" and row["decision"] in ("approved", "exception")
+        if row["status"] not in ("received", "passed", "indeterminate") and not approved:
             raise conflict(f"{row['status']} 상태의 신청은 재검사할 수 없습니다.")
+        if approved:
+            server = fetchone(
+                ctx.conn,
+                "SELECT contract_status, status FROM mint.servers"
+                " WHERE instance_id = %s AND server_id = %s",
+                (ctx.instance_id, row["server_id"]),
+            )
+            if (server is None or server["contract_status"] != "managed"
+                    or server["status"] in ("rejected", "terminating", "terminated")):
+                raise conflict("관리 중인 승인 서버의 신청만 재검사할 수 있습니다.")
         if not is_complete(row):
             raise ControlError("필수 입력이 모두 채워져야 검사할 수 있습니다(intake create).")
-        if registry_first and not (row["source"] == "submission"
-                                   and row["needs_registry_credentials"]):
+        if registry_first and (approved or not (row["source"] == "submission"
+                                                and row["needs_registry_credentials"])):
             raise ControlError(
                 "레지스트리 등록 후 검사는 자격이 필요한 제출 신청"
                 "(CREDENTIALS_REQUIRED)에만 쓸 수 있습니다."
             )
-        return _enqueue_run(ctx, row, "registry" if registry_first else "")
+        return _enqueue_run(ctx, row, "evidence" if approved else "registry" if registry_first
+                            else "")
+
+
+def enqueue_drift_recheck(ctx: Context, server_id: str) -> str | None:
+    """서버를 승인한 가장 최근 신청의 재검사(``evidence``)를 등록한다. 작업 실행기가 부른다.
+
+    같은 시도 번호는 한 작업이라 처리 전에 드리프트가 여러 번 기록돼도 작업은 하나다. 승인한
+    신청이 없거나 입력이 비어 있으면 아무것도 하지 않는다(None).
+    """
+    row = fetchone(
+        ctx.conn,
+        "SELECT * FROM mint.intakes WHERE instance_id = %s AND server_id = %s"
+        " AND status = 'decided' AND decision IN ('approved', 'exception')"
+        " ORDER BY decided_at DESC, id DESC LIMIT 1",
+        (ctx.instance_id, server_id),
+    )
+    if row is None or not is_complete(row):
+        return None
+    return _enqueue_run(ctx, row, "evidence")
+
+
+def drift_pending(conn: Any, instance_id: str, server_id: str) -> bool:
+    """서버에 재승인을 기다리는 드리프트(배포·도구 변경·추가)가 있는가."""
+    row = fetchone(
+        conn,
+        "SELECT ((s.deployment_drift"
+        " OR EXISTS (SELECT 1 FROM mint.tool_contracts t WHERE t.instance_id = s.instance_id"
+        "   AND t.server_id = s.server_id AND t.status = 'approved' AND t.drift <> 'none')"
+        " OR EXISTS (SELECT 1 FROM mint.contract_observations o WHERE o.instance_id = s.instance_id"
+        "   AND o.server_id = s.server_id AND o.kind = 'tool' AND o.change_seq > 0"
+        "   AND NOT EXISTS (SELECT 1 FROM mint.tool_contracts t"
+        "     WHERE t.instance_id = o.instance_id AND t.id = o.entity_id)))"
+        # 재승인 계획이 진행 중이면 후보를 바꾸지 않는다(확정 중 후보 교체 방지)
+        " AND NOT EXISTS (SELECT 1 FROM mint.contract_reapproval_plans p"
+        "   WHERE p.instance_id = s.instance_id AND p.server_id = s.server_id"
+        "   AND p.status = 'pending')) AS pending"
+        " FROM mint.servers s WHERE s.instance_id = %s AND s.server_id = %s",
+        (instance_id, server_id),
+    )
+    return bool(row and row["pending"])
+
+
+def approved_deployment(conn: Any, instance_id: str, server_id: str) -> dict | None:
+    return fetchone(
+        conn,
+        "SELECT * FROM mint.deployment_contracts WHERE instance_id = %s AND server_id = %s"
+        " AND status = 'approved' ORDER BY version DESC LIMIT 1",
+        (instance_id, server_id),
+    )
+
+
+def store_deployment_candidate(
+    ctx: Context, server_id: str, entry: dict, approved: dict
+) -> bool:
+    """레지스트리에서 읽은 서버 값이 승인된 배포 계약과 다르면 배포 후보를 만든다(재검사용).
+
+    허용 도구·이미지 지문·소스 커밋은 승인본을 그대로 잇는다. 값이 같거나 URL을 읽지 못하면
+    아무것도 만들지 않고 거짓을 돌려준다.
+    """
+    url = entry.get("url")
+    if not url:
+        return False
+    transport = "openapi" if entry.get("spec_path") else entry.get("transport") or approved[
+        "transport"]
+    auth_type = normalize_auth_type(entry.get("auth_type"))
+    issuer = entry.get("issuer") or None
+    if (url, transport, auth_type, issuer) == (
+        approved["url"], approved["transport"], approved["auth_type"], approved["issuer"]
+    ):
+        return False
+    with transact(ctx):
+        _deployment_candidate(ctx, server_id, url, transport, auth_type, issuer,
+                              approved["allowed_tools"], approved["image_digest"],
+                              approved["source_commit"])
+    return True
 
 
 # --- 작업 처리기가 쓰는 전이 --------------------------------------------------------------------
