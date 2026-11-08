@@ -56,6 +56,8 @@ def test_console_high_risk_approval(rig):
                    120, "콘솔 승인 활성화")[0]
     assert sorted(row["conditions"].get("high_risk_tools", [])) == high, row["conditions"]
     arguments = candidates[tool]
+    rig.client.get(rig.site["litellm"][0].rstrip("/") + "/mcp-rest/tools/list",
+                   params={"server_id": server}, headers={"Authorization": "Bearer " + key})  # 예열
     rig.call(server, tool, arguments, key=key, allowed=False, approve=False,
              code="MINT-CALL-APPROVAL-REQUIRED")
     request = rig.cli("call-approval", "request", "--org", rig.site["intake"]["org_id"],

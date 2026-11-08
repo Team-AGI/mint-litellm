@@ -873,7 +873,14 @@ def cause_from_event(mark):
             return next((c for c in CAUSES if c in body), None)
         time.sleep(1)
     # 재시작한 LiteLLM은 목록 단계에서 막혀 호출 표식의 판정 사건이 없다. 그 시각 이후 MINT 로그의 원인으로 읽는다.
-    return next((c for c in CAUSES if LAST_SINCE[0] and log_count(c, LAST_SINCE[0]) > 0), None)
+    if LAST_SINCE[0]:
+        for cause in CAUSES:
+            if n(f"SELECT count(*) FROM mint.events WHERE instance_id={lit(iid())} AND "
+                 f"inserted_at >= {lit(LAST_SINCE[0].isoformat())} "
+                 f"AND payload::text LIKE {lit('%' + cause + '%')}") or log_count(
+                     cause, LAST_SINCE[0]):
+                return cause
+    return None
 
 
 def probe_once():
