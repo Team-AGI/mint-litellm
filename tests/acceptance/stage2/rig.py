@@ -396,8 +396,8 @@ class Rig:
             return (tools, deployments) if tools or deployments else None
 
         tools, deployments = self.wait(candidates, 120, "재승인 후보 계약")
-        intake = self.rows("intakes", "server_id=%s AND decision='approved' "
-                           "ORDER BY decided_at DESC LIMIT 1", [server])[0]
+        intake = max(self.rows("intakes", "server_id=%s AND decision='approved'", [server]),
+                     key=lambda row: row["decided_at"])
         args = ["contract", "reapprove", server, "--intake", str(intake["id"])]
         for tool in tools:
             args += ["--tool-contract", str(tool["id"])]

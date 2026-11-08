@@ -50,9 +50,11 @@ def timed_batch(rig, fixture, bases, args, count, *, workers=8, blocked=False):
         )
         elapsed = (time.perf_counter() - started) * 1000
         if blocked:
-            assert reply.status_code == 403 and "MINT-POLICY-DETECT-" in reply.text
+            assert reply.status_code == 403 and "MINT-POLICY-DETECT-" in reply.text, (
+                reply.status_code, reply.text[:300])
         else:
-            assert reply.status_code == 200 and not reply.json().get("isError", False)
+            assert reply.status_code == 200 and not reply.json().get("isError", False), (
+                reply.status_code, reply.text[:300])
         return {"mark": mark, "rtt_ms": elapsed, "replica": index % len(bases)}
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:

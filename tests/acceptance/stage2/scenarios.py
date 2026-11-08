@@ -589,7 +589,7 @@ def fixture_url():
 
 def register_fixture_server():
     """운영자 경로: 합성 서버를 LiteLLM에 새 항목으로 등록한다."""
-    alias = "acc-" + uuid.uuid4().hex[:8]
+    alias = "acc_" + uuid.uuid4().hex[:8]
     created = lite("POST", "/v1/mcp/server", {
         "alias": alias, "server_name": alias, "url": fixture_url(), "transport": "http",
         "allow_all_keys": False})
@@ -599,7 +599,7 @@ def register_fixture_server():
 
 def submit_server(url, allow_all_keys=False):
     """제출 경로: 비관리자 팀 범위 키로 공개 서버 제출. 책임 사용자는 조직에 묶여 있어야 한다."""
-    alias = "acc-" + uuid.uuid4().hex[:8]
+    alias = "acc_" + uuid.uuid4().hex[:8]
     status, text = lite_raw("POST", "/v1/mcp/server/register", {
         "alias": alias, "server_name": alias, "url": url, "transport": "http",
         "description": "acceptance", "allow_all_keys": allow_all_keys},
@@ -685,7 +685,7 @@ def intake_private_literal(ctx):
     upstream_before = upstream()
 
     def submit(url):
-        alias = "acc-" + uuid.uuid4().hex[:8]
+        alias = "acc_" + uuid.uuid4().hex[:8]
         return lite_raw("POST", "/v1/mcp/server/register", {
             "alias": alias, "server_name": alias, "url": url, "transport": "http",
             "description": "acceptance", "allow_all_keys": False}, key=A.env("ACC_SUBMIT_KEY"))
@@ -706,7 +706,7 @@ def intake_private_literal(ctx):
 @scenario("intake_private_ip_guard", undo=cleanup)
 def intake_private_ip_guard(ctx):
     """DS-174: 운영자 출처 신청에서 MINT url_guard가 사설 IP를 거부한다."""
-    alias = "acc-" + uuid.uuid4().hex[:8]
+    alias = "acc_" + uuid.uuid4().hex[:8]
     created = lite("POST", "/v1/mcp/server", {
         "alias": alias, "server_name": alias, "url": "https://10.20.30.40/mcp",
         "transport": "http", "allow_all_keys": False})
@@ -920,7 +920,8 @@ def probe_blocked(seconds, expect=True):
         if status and blocked_response(status, text, since) == expect:
             break
         if time.monotonic() - started > seconds:
-            raise SystemExit(f"시간 상한 초과: 호출 {'차단' if expect else '허용'} ({seconds}s)")
+            raise SystemExit(f"시간 상한 초과: 호출 {'차단' if expect else '허용'} ({seconds}s) "
+                             f"마지막 응답 {status} {text[:300]!r}")
         time.sleep(2)
     elapsed = time.monotonic() - started
     first = upstream() - before

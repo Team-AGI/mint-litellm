@@ -36,7 +36,7 @@ def test_external_mcp_forbidden(rig):
     from .rig import ROOT
 
     source = "".join(p.read_text(encoding="utf-8") for p in (ROOT / "src").rglob("*.py"))
-    if "MINT-EXTERNAL-MCP-FORBIDDEN" not in source:
+    if "EXTERNAL_MCP_FORBIDDEN" not in source:  # 사유 코드는 MINT-EXTERNAL-MCP-FORBIDDEN으로 직렬화된다
         rig.skip("미구현으로 건너뜀: DS-182 공급자 쪽 MCP 차단(미병합)")
     base = rig.site["litellm"][0].rstrip("/")
     external = {"type": "mcp", "server_label": "ext", "server_url": "https://external.invalid/mcp"}
