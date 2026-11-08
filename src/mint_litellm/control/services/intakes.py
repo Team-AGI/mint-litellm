@@ -24,6 +24,7 @@ from mint_litellm.control.services.base import (
     require_role,
     transact,
 )
+from mint_litellm.types.canonical import sha256
 from mint_litellm.types.cli_commands import APPROVER_UP
 from mint_litellm.types.decision import normalize_auth_type, url_sha256
 from mint_litellm.types.events import EventKind
@@ -460,11 +461,34 @@ def begin_checking(ctx: Context, intake_id: str) -> dict | None:
         return updated
 
 
+def contract_binding(conn: Any, instance_id: str, server_id: str) -> str:
+    """현재 후보 계약 전체의 증거 해시. 재승인이 요구하는 ``contract_sha256``과 같은 식이다."""
+    tools = fetchall(
+        conn,
+        "SELECT tool, sha256 FROM mint.tool_contracts WHERE instance_id = %s AND server_id = %s"
+        " AND status = 'candidate' AND source = 'intake'",
+        (instance_id, server_id),
+    )
+    deployment = deployment_candidate(conn, instance_id, server_id)
+    return sha256({"tools": {t["tool"]: t["sha256"] for t in tools},
+                   "deployment": deployment["sha256"] if deployment else None})
+
+
 def record_check(
-    ctx: Context, intake: dict, attempt: int, check: str, outcome: intake_checks.Outcome
+    ctx: Context, intake: dict, attempt: int, check: str, outcome: intake_checks.Outcome,
+    bound: str | None = None,
 ) -> dict:
-    """검사 한 행과 사건을 한 트랜잭션에 쓴다. 같은 시도의 같은 검사는 한 번만 기록된다."""
+    """검사 한 행과 사건을 한 트랜잭션에 쓴다. 같은 시도의 같은 검사는 한 번만 기록된다.
+
+    ``bound``는 후보 계약에 결속하는 해시다. 통과한 검사에 증거 해시가 없으면 입력 해시로 채운다.
+    """
     days = intake_checks.EVIDENCE_DAYS.get(check, intake_checks.DEFAULT_EVIDENCE_DAYS)
+    inputs = dict(outcome.inputs)
+    if bound:
+        inputs["contract_sha256"] = bound
+    evidence = outcome.evidence_sha256
+    if evidence is None and outcome.result == "pass":
+        evidence = intake_checks.sha256_hex(intake_checks.jcs(inputs))
     row_id = new_uuid7()
     with transact(ctx):
         ctx.conn.execute(
@@ -474,8 +498,8 @@ def record_check(
             " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s,"
             " now() + make_interval(days => %s))",
             (row_id, ctx.instance_id, intake["id"], check, attempt, outcome.result, outcome.reason,
-             outcome.method, json.dumps(outcome.inputs), outcome.evidence_ref,
-             outcome.evidence_sha256, days),
+             outcome.method, json.dumps(inputs), outcome.evidence_ref,
+             evidence, days),
         )
         ctx.emit(EventKind.INTAKE_CHECKED, row_id, attempt,
                  {"intake_id": str(intake["id"]), "check": check, "attempt": attempt,

@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from mint_litellm.console import compare
 from mint_litellm.console.core import Actor, api_actor, public, require_csrf
 from mint_litellm.control import operators
+from mint_litellm.control.approvals import build_conditions
 from mint_litellm.control.context import Operator
 from mint_litellm.control.errors import AdminCode, AdminError, AuthError, ControlError
 from mint_litellm.control.services import allowlists as allowlist_service
@@ -79,17 +80,22 @@ def confirm(actual: str, typed: str, what: str) -> None:
         raise ControlError(f"{what} 이름을 정확히 입력해야 합니다.")
 
 
-def approval_conditions(body: "ApprovalBody") -> dict[str, Any]:
-    """승인 조건. 경로는 지정(listed)·제한 없음(unrestricted)·미지정(unset)을 구분해 담는다."""
-    conditions: dict[str, Any] = {}
-    if body.allowed_hosts:
-        conditions["allowed_hosts"] = body.allowed_hosts
-    if body.allowed_arg_keys:
-        conditions["allowed_arg_keys"] = body.allowed_arg_keys
+def approval_conditions(body: "ApprovalBody", high_risk: list[str]) -> dict[str, Any]:
+    """승인 조건. CLI·수용 승인과 같은 ``build_conditions``로 만들고, 경로는 세 값을 구분한다."""
+    conditions = build_conditions(
+        high_risk_tools=high_risk,
+        business_hours_only=False,
+        business_hours=None,
+        require_consent=None,
+        allowed_hosts=body.allowed_hosts,
+        allowed_arg_keys=body.allowed_arg_keys,
+    )
     if body.paths_mode == "listed":
         if not body.allowed_paths:
             raise ControlError("허용 경로를 하나 이상 입력하거나 다른 옵션을 선택하십시오.")
-        conditions["allowed_paths"] = body.allowed_paths
+        conditions.update(build_conditions(
+            high_risk_tools=None, business_hours_only=False, business_hours=None,
+            require_consent=None, allowed_paths=body.allowed_paths))
     elif body.paths_mode == "unrestricted":
         conditions["allowed_paths_unrestricted"] = True
     return conditions
@@ -413,7 +419,7 @@ def grant_approval(body: ApprovalBody, actor: Actor = Depends(api_actor)):
         requested_by=body.requested_by,
         allowlist_ids=body.allowlist_ids,
         second=second_approver(actor, body.second_approver_token),
-        conditions=approval_conditions(body),
+        conditions=approval_conditions(body, high),
         expected_version=body.state_version,
     )
     return done(actor, id=approval_id)

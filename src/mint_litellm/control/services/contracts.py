@@ -268,6 +268,12 @@ def _plan(
             "deployment": deployment["sha256"] if deployment else None,
         }
     )
+    from mint_litellm.control.services.intakes import deployment_candidate
+
+    # 재검사 증거는 배포 후보까지 결속된다. 배포 후보가 있으면 함께 재승인해야 증거와 맞는다.
+    pending = deployment_candidate(ctx.conn, ctx.instance_id, server_id)
+    if pending and not deployment:
+        raise conflict("배포 값 후보가 있어 도구와 함께 재승인해야 합니다.")
     checks = fetchall(
         ctx.conn,
         'SELECT DISTINCT ON ("check") * FROM mint.intake_checks'

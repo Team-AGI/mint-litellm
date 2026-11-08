@@ -143,7 +143,7 @@ services:
   console:
     image: mint-litellm:local
     profiles: ["console"]
-    command: ["console", "--host", "::", "--port", "8080"]
+    command: ["console", "--host", "*", "--port", "8080"]
     entrypoint: ["mint-litellm"]
     environment:
       MINT_INSTANCE_ID: ${MINT_INSTANCE_ID:-default}

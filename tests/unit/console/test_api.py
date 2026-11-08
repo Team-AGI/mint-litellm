@@ -355,3 +355,16 @@ def test_unrestricted_paths_are_an_explicit_choice(world):
     response, rows = approval_conditions_of(world, paths_mode="unrestricted")
     assert response.status_code == 200
     assert rows[0][0] == {"allowed_paths_unrestricted": True}
+
+
+def test_console_approval_records_the_high_risk_tools_like_the_cli_does(world):
+    server = "srv-wait"
+    world.query(
+        "INSERT INTO mint.tool_contracts (id, instance_id, server_id, credential_scope, tool,"
+        " canonical_text, sha256, pin_sha256, risk_grade, action_type, source, status)"
+        " VALUES (gen_random_uuid(), %s, %s, 'server', 'drop', '{}', repeat('a', 64),"
+        " repeat('b', 64), 'high', 'delete', 'intake', 'candidate')", INSTANCE, server)
+    world.query("UPDATE mint.tool_contracts SET status = 'approved' WHERE server_id = %s", server)
+    response, rows = approval_conditions_of(world, tools=["drop"])
+    assert response.status_code == 200
+    assert rows[0][0] == {"high_risk_tools": ["drop"]}
