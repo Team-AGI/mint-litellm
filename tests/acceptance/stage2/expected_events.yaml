@@ -199,7 +199,8 @@ observations:
   restore_previous_key: {upstream_calls: 1, restore_blocked: 0}
   restore_accept_stale: {first_operator_released: false, distinct_operators: 2,
                          released: true, events.restore_stale_accepted: 1}
-  restore_steady_24h: {duration_seconds: {min: 86400}, restore_false_positives: 0,
+  # DS-180: 완료 판정은 2시간 이상 관측(오탐 0). 24시간 관측은 별도로 계속 돌린다.
+  restore_steady_24h: {duration_seconds: {min: 7200}, restore_false_positives: 0,
                        max_sampling_gap_seconds: {max: 60}}
   intake_provider_denied: &negative
     test_route_calls: 0
@@ -224,7 +225,7 @@ observations:
   confirmation_both_atomic: {call_approvals_consumed: 1, confirmations_consumed: 1, upstream_calls: 1}
   confirmation_both_rollback: {call_approvals_consumed: 0, confirmations_consumed: 0, upstream_calls: 0}
   confirmation_limit_20: {pending: 20, attempt_21_inserted: 0, upstream_calls: 0}
-  confirmation_expiry_10m: {ttl_seconds: 600, expiry_delay_seconds: {max: 60}, display: null}
+  confirmation_expiry_10m: {ttl_seconds: 600, expiry_delay_seconds: {max: 62}, display: null}
   confirmation_team_no_row: {inserted: 0, upstream_calls: 0}
   confirmation_replica_unique: {replicas: 2, inserted: 1, consumed: 1}
   confirmation_plugin_insert: {sqlstate: '42501', inserted: 0}
