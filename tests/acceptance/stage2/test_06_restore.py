@@ -29,7 +29,7 @@ def test_restore(rig, case):
     elif case == "operator_revert":
         # 시나리오가 attest까지 마쳤다. 되돌린 뒤 호출이 다시 허용되고 운영자 상태가 유지된다.
         rig.call(fixture["server_id"], fixture["tool"], fixture["arguments"])
-        assert {row["name"]: row["role"] for row in rig.rows(
-            "operators", "name LIKE 'acc-demote-%'")}.values() == {"viewer"}
+        roles = {row["role"] for row in rig.rows("operators", "name LIKE 'acc-demote-%%'")}
+        assert roles == {"viewer"}
     elif case == "previous_key":
         rig.call(fixture["server_id"], fixture["tool"], fixture["arguments"])
