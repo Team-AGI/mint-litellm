@@ -167,15 +167,23 @@ def _gate(job: JobContext, client: Any, server_id: str, mode: str) -> str | None
     return None
 
 
-def _oauth2_flow(client: Any, server_id: str) -> str | None:
-    """LiteLLM에 저장된 서버 설정의 ``oauth2_flow``. 읽지 못하거나 없으면 None(미확인)."""
+def _oauth2_flow_read(
+    client: Any, server_id: str, statuses: frozenset[str]
+) -> tuple[str | None, bool]:
+    """(``oauth2_flow``, 읽었는가). 현재 서버 설정을 먼저, 없으면 ``statuses``의 제출을 본다."""
     try:
-        entry = next((i for i in client.list_submissions() if i.get("server_id") == server_id),
-                     None) or client.get_server(server_id)
+        entry = client.get_server(server_id) or next(
+            (i for i in client.list_submissions()
+             if i.get("server_id") == server_id and i.get("approval_status") in statuses), None)
     except LiteLLMError:
-        return None
+        return None, False
     flow = (entry or {}).get("oauth2_flow")
-    return flow if isinstance(flow, str) else None
+    return (flow if isinstance(flow, str) else None), True
+
+
+def _oauth2_flow(client: Any, server_id: str) -> str | None:
+    """신청 검사용: LiteLLM에 저장된 서버 설정의 ``oauth2_flow``. 읽지 못하거나 없으면 None."""
+    return _oauth2_flow_read(client, server_id, frozenset({"approved", "pending_review"}))[0]
 
 
 def _run_checks(

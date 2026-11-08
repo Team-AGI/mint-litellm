@@ -22,6 +22,9 @@ def test_registered_server_missing_from_registry_stops_start_and_unverified_bloc
     since = world.now()
     try:
         # 다중 워커로 시작하면 워커마다 점검하고, 하나라도 실패하면 프로세스 전체가 끝난다.
+        # 첫 실패를 본 부모가 나머지 워커를 바로 끝내므로 실패를 남기는 워커 수는 1 이상이다
+        # (둘째 워커가 점검 결과를 쓰기 전에 끝날 수 있다). 워커마다 점검하고 사건을 따로 남기는
+        # 것은 단위 시험(여러 워커의 기동 실패가 모두 남는다)이 확인한다.
         started = time.monotonic()
         done = run_start(
             "./config/litellm.mint.yaml",
@@ -34,7 +37,7 @@ def test_registered_server_missing_from_registry_stops_start_and_unverified_bloc
         )
         output = done.stdout + done.stderr
         assert done.returncode != 0, output[-600:]
-        assert output.count("MINT 자가 점검 실패") == 2, output[-600:]
+        assert output.count("MINT 자가 점검 실패") >= 1, output[-600:]
         assert "Stopping parent process" in output, output[-600:]
         print(
             f"multi-worker start stopped after {time.monotonic() - started:.0f}s "
@@ -47,7 +50,7 @@ def test_registered_server_missing_from_registry_stops_start_and_unverified_bloc
         )
         assert events
         assert all(e["payload"]["failed"][0]["name"] == "SERVER_REGISTRY_MATCH" for e in events)
-        assert len({e["payload"]["worker_id"] for e in events}) == 2
+        assert len({e["payload"]["worker_id"] for e in events}) >= 1
 
         # 중단하지 않는 설정(MINT_REQUIRED=false)에서는 점검 실패 상태로 올라와 모든 호출을 막는다.
         support.compose(

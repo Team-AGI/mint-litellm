@@ -171,7 +171,7 @@ def test_limits_doc_covers_the_declared_limitations():
         "buffer_overflow",
         "evidence: stderr",
         "로그 드라이버",
-        "restore --attest",
+        "restore attest",
         "sync_divergence",
         "수렴은 상한 보장이 아니라 목표",
         "시점 일관성",
