@@ -115,14 +115,14 @@ capabilities:
   test_11_availability.py: {commands: [console, worker], handlers: [contract_observe, sync_target]}
   test_12_migration.py: {commands: [intake create], handlers: [intake_run]}
 required_scripts:
-  test_01_activation.py: 4
+  test_01_activation.py: 6
   test_02_contracts.py: 7
   test_03_unobserved.py: 1
   test_04_sync.py: 8
   test_05_exports.py: 1
-  test_06_restore.py: 8
+  test_06_restore.py: 9
   test_07_intake_negative.py: 8
-  test_08_confirmation.py: 16
+  test_08_confirmation.py: 17
   test_09_auth_ui.py: 10
   test_10_performance.py: 1
   test_11_availability.py: 1
@@ -186,6 +186,15 @@ observations:
     confirmation_after_restore: 1
     observation_after_restore: 1
   restore_consent: {<<: *restore, consent_reapplied: true}
+  restore_operator_revert:
+    <<: *restore
+    operator_items_pending: {min: 2}
+    revived_before_attest: true
+    reapplied_operators: {min: 2}
+    role_after: viewer
+    removed_after: true
+    demoted_token_rejected: true
+    removed_token_rejected: true
   restore_latest_missing: {upstream_calls: 0, cause: export_missing}
   restore_hmac_changed: {upstream_calls: 0, cause: export_unverified}
   restore_previous_key: {upstream_calls: 1, restore_blocked: 0}

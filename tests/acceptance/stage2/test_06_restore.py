@@ -5,7 +5,7 @@ import pytest
 
 @pytest.mark.parametrize("case", ["backup_before_revoke", "epoch_caught_up", "consent",
                                      "latest_missing", "hmac_changed", "previous_key",
-                                     "accept_stale", "steady_24h"])
+                                     "accept_stale", "operator_revert", "steady_24h"])
 def test_restore(rig, case):
     rig.require("restore check", "restore attest", "restore accept-stale",
                 handlers=("export_negative_state", "export_checkpoint", "sync_target"))
@@ -26,5 +26,10 @@ def test_restore(rig, case):
         rig.call(fixture["server_id"], fixture["tool"], fixture["arguments"], allowed=False,
                  code="MINT-ENFORCEMENT-UNVERIFIED",
                  cause="export_missing" if case == "latest_missing" else "export_unverified")
+    elif case == "operator_revert":
+        # 시나리오가 attest까지 마쳤다. 되돌린 뒤 호출이 다시 허용되고 운영자 상태가 유지된다.
+        rig.call(fixture["server_id"], fixture["tool"], fixture["arguments"])
+        assert {row["name"]: row["role"] for row in rig.rows(
+            "operators", "name LIKE 'acc-demote-%'")}.values() == {"viewer"}
     elif case == "previous_key":
         rig.call(fixture["server_id"], fixture["tool"], fixture["arguments"])

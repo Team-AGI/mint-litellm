@@ -29,3 +29,34 @@ def test_negative_intake(rig, case):
                        role="admin" if case == "same_requester" else "approver", check=False)
         assert done.returncode != 0 and word in done.stderr, rig.clean(done.stderr)
         assert rig.rows("intakes", "id=%s AND decision IS NULL", [intake["id"]])
+
+
+def test_external_mcp_forbidden(rig):
+    """DS-182: 모델 요청에 담긴 공급자 쪽 MCP(외부 server_url)는 403으로 막고 판정 사건을 남긴다."""
+    from .rig import ROOT
+
+    source = "".join(p.read_text(encoding="utf-8") for p in (ROOT / "src").rglob("*.py"))
+    if "MINT-EXTERNAL-MCP-FORBIDDEN" not in source:
+        rig.skip("미구현으로 건너뜀: DS-182 공급자 쪽 MCP 차단(미병합)")
+    base = rig.site["litellm"][0].rstrip("/")
+    external = {"type": "mcp", "server_label": "ext", "server_url": "https://external.invalid/mcp"}
+    bodies = {
+        "/v1/chat/completions": {"model": "acc-none", "tools": [external],
+                                 "messages": [{"role": "user", "content": "hi"}]},
+        "/v1/responses": {"model": "acc-none", "input": "hi", "tools": [external]},
+    }
+    headers = {"Authorization": "Bearer " + rig.secret("caller")}
+    for path, body in bodies.items():
+        before = rig.sql("SELECT count(*) AS n FROM mint.events WHERE instance_id=%s "
+                         "AND payload::text LIKE '%%EXTERNAL-MCP%%'", [rig.iid])[0]["n"]
+        reply = rig.client.post(base + path, headers=headers, json=body)
+        assert reply.status_code == 403 and "MINT-EXTERNAL-MCP-FORBIDDEN" in reply.text, (
+            path, reply.status_code, rig.clean(reply.text[:300]))
+        rig.wait(lambda before=before: rig.sql(
+            "SELECT count(*) AS n FROM mint.events WHERE instance_id=%s "
+            "AND payload::text LIKE '%%EXTERNAL-MCP%%'", [rig.iid])[0]["n"] > before,
+            20, "판정 사건")
+    gateway = {**external, "server_url": "litellm_proxy"}
+    reply = rig.client.post(base + "/v1/responses", headers=headers,
+                            json={"model": "acc-none", "input": "hi", "tools": [gateway]})
+    assert "MINT-EXTERNAL-MCP-FORBIDDEN" not in reply.text  # 게이트웨이 주소는 막지 않는다

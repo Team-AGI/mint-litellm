@@ -240,15 +240,38 @@ class Rig:
         assert not unexpected, f"흐름에 정의되지 않은 사건: {sorted(unexpected)}"
         assert len({row["source_key"] for row in rows}) == len(rows)
 
+    def call_approval(self, server, tool, arguments=None):
+        """위험 등급 high 이상 도구의 호출별 승인(R2): 승인 조건이 그 도구를 지정했으면 한 건 승인해 둔다.
+
+        호출 한 번이 승인을 소비하므로 허용 호출 직전에 부른다. 해당하지 않으면 아무것도 하지 않는다.
+        """
+        graded = self.rows("tool_contracts", "server_id=%s AND tool=%s AND status='approved' "
+                           "AND risk_grade IN ('high','critical')", [server, tool])
+        needed = graded and self.rows(
+            "approvals", "server_id=%s AND status='active' AND conditions->'high_risk_tools' ? %s",
+            [server, tool])
+        if not needed:
+            return None
+        user = self.site.get("caller_user", "acc-caller")
+        request = self.cli("call-approval", "request", "--org", self.site["intake"]["org_id"],
+                           "--principal-type", "user", "--principal-id", user, "--server", server,
+                           "--tool", tool, "--arguments", json.dumps(arguments or {}),
+                           "--requested-by", user)["id"]
+        self.cli("call-approval", "approve", request)
+        return request
+
     def call(self, server, tool, arguments=None, *, role="caller", base=None, allowed=True,
-             code=None, cause=None, litellm_rejects=False):
+             code=None, cause=None, litellm_rejects=False, approve=True, key=None):
+        if allowed and approve and role == "caller" and key is None:
+            self.call_approval(server, tool, arguments)
         mark = "acc-" + uuid.uuid4().hex
         url = base or self.site["litellm"][0]
         before = self.counter(server)
         started = time.monotonic()
         response = self.client.post(
             url.rstrip("/") + "/mcp-rest/tools/call",
-            headers={"Authorization": "Bearer " + self.secret(role), "x-litellm-call-id": mark},
+            headers={"Authorization": "Bearer " + (key or self.secret(role)),
+                     "x-litellm-call-id": mark},
             json={"server_id": server, "name": tool, "arguments": arguments or {}},
         )
         elapsed = (time.monotonic() - started) * 1000
@@ -378,6 +401,34 @@ class Rig:
         if deployments:
             args += ["--deployment-contract", str(deployments[0]["id"])]
         return self.cli(*args, role="approver")
+
+    def owned_approval(self, server):
+        """접근이 미리 없는 새 키에 승인을 넣는다(MINT가 쓴 소유 grant가 생긴다). (키, 승인 id)."""
+        user = "acc-" + uuid.uuid4().hex[:10]
+        self.request("POST", "/user/new", {"user_id": user, "user_role": "internal_user"},
+                     role="litellm_admin", base="litellm_admin")
+        key = self.request("POST", "/key/generate", {"user_id": user}, role="litellm_admin",
+                           base="litellm_admin")["key"]
+        scope = hashlib.sha256(key.encode()).hexdigest()
+        relation = self.rows("usage_relations", "server_id=%s AND status='active'", [server])[0]
+        tools = sorted({row["tool"] for row in self.rows(
+            "tool_contracts", "server_id=%s AND status='approved'", [server])})
+        approval = str(uuid.uuid4())
+        self.sql(
+            "INSERT INTO mint.approvals (id, instance_id, org_id, relation_id, class, server_id, "
+            "tools, scope_type, scope_id, valid_from, valid_until, conditions, basis, granted_by, "
+            "requested_by, status) VALUES (%s, %s, %s, %s, 'standard', %s, %s::text[], 'key', %s, "
+            "now(), now() + interval '1 day', '{}'::jsonb, '{\"text\":\"acceptance\"}'::jsonb, "
+            "'acceptance', 'acceptance', 'pending')",
+            [approval, self.iid, relation["org_id"], relation["id"], server, tools, scope])
+        for kind, ref in (("sync_server", server), ("sync_target", f"key:{scope}")):
+            self.sql("INSERT INTO mint.jobs (id, instance_id, kind, target_ref) VALUES "
+                     "(gen_random_uuid(), %s, %s, %s) ON CONFLICT (instance_id, kind, target_ref) "
+                     "WHERE status = 'pending' AND idempotency_key IS NULL DO NOTHING",
+                     [self.iid, kind, ref])
+        self.wait(lambda: self.rows("approvals", "id=%s AND status='active'", [approval]),
+                  self.expected["limits"]["sync_seconds"], "소유 승인 활성화")
+        return key, approval
 
     def active(self, name="context7"):
         entry = self.site["servers"][name]

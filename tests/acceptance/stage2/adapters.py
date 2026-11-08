@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 import urllib.request
 from pathlib import Path
 
@@ -230,12 +231,18 @@ def export_inside():
     return base if rel == "." else base + "/" + rel
 
 
+def image():
+    """제품 이미지. 스택마다 태그가 나뉜 판본은 프로젝트 이름, 이전 판본은 local."""
+    tag = "mint-litellm:" + env("COMPOSE_PROJECT_NAME", "local")
+    return tag if run(["docker", "image", "inspect", tag], check=False).returncode == 0         else "mint-litellm:local"
+
+
 def export_root(script, *mounts):
     """내보내기 볼륨은 비루트(65532) 소유라 호스트 사용자는 쓸 수 없다. 루트 컨테이너로 처리한다."""
     vol = env("COMPOSE_PROJECT_NAME", "mints2") + "_export"
     args = [a for m in mounts for a in ("-v", m)]
     run(["docker", "run", "--rm", "--user", "0", "-v", f"{vol}:/x", *args,
-         "--entrypoint", "sh", "mint-litellm:local", "-c", script])
+         "--entrypoint", "sh", image(), "-c", script])
 
 
 def export_unlink(path):
@@ -345,17 +352,28 @@ ADAPTERS["export_unwritable"] = (export_unwritable, export_unwritable_undo)
 
 @adapter("trigger_negative_state")
 def trigger_negative_state(ctx):
-    """활성 승인 하나를 철회해 부정 상태 세대를 올린다. 되돌리지 않는다(case_setup이 복구)."""
+    """부정 상태 세대를 올린다. 되돌리지 않는다(case_setup이 복구).
+
+    활성 승인이 있으면 철회하고, 사례가 이미 철회해 없으면 임시 조회 운영자를 만들었다 삭제한다
+    (운영자 삭제도 부정 상태, DS-176). 어느 쪽이든 제품 명령만 쓴다.
+    """
     token = {**os.environ, "MINT_OPERATOR_TOKEN": env("ACC_ADMIN_TOKEN")}
+    cli = shlex.split(os.environ.get("ACC_CLI", f"{sys.executable} -m mint_litellm.cli"))
+
+    def product(*args):
+        done = subprocess.run(cli + list(args), cwd=ROOT, env=token, text=True,
+                              capture_output=True, timeout=60)
+        if done.returncode:
+            raise SystemExit(done.stderr[-400:])
+
     approval = psql("SELECT id FROM mint.approvals WHERE status='active' ORDER BY id "
                     "DESC LIMIT 1", "mint")
-    if not approval:
-        raise SystemExit("철회할 활성 승인이 없음")
-    cli = shlex.split(os.environ.get("ACC_CLI", f"{sys.executable} -m mint_litellm.cli"))
-    done = subprocess.run(cli + ["revoke", approval, "--reason", "acceptance"],
-                          cwd=ROOT, env=token, text=True, capture_output=True, timeout=60)
-    if done.returncode:
-        raise SystemExit(done.stderr[-400:])
+    if approval:
+        product("revoke", approval, "--reason", "acceptance")
+        return
+    name = "acc-neg-" + uuid.uuid4().hex[:8]
+    product("operator", "add", name, "--role", "viewer")
+    product("operator", "remove", name)
 
 
 @adapter("seal_tamper")
@@ -395,17 +413,24 @@ for _mutation in ("description", "added", "removed"):
     ADAPTERS["contract_" + _mutation] = fixture_mode(_mutation)
 
 
+def _registry(method, body=None, server=None):
+    server = server or env("ACC_SERVER_ID")
+    path = "/v1/mcp/server" + ("" if method == "PUT" else f"/{server}")
+    return http(method, env("ACC_LITELLM_ADMIN_URL").rstrip("/") + path, body,
+                env("ACC_LITELLM_ADMIN_KEY"))  # 제어 평면 키는 등록 URL을 읽지 못해 관리 키를 쓴다
+
+
 def contract_deployment(ctx):
-    """합성 서버의 LiteLLM 등록 allowed_tools만 바꿔 배포 계약만 어긋나게 한다."""
+    """합성 서버의 LiteLLM 등록 URL만 바꿔 배포 계약(url_sha256)만 어긋나게 한다."""
     server = env("ACC_SERVER_ID")
-    original = litellm("GET", f"/v1/mcp/server/{server}").get("allowed_tools")
+    original = _registry("GET").get("url") or f"https://cnt:8443/{server}/mcp"
     state_file("deployment.json").write_text(json.dumps(original), encoding="utf-8")
-    litellm("PUT", "/v1/mcp/server", {"server_id": server, "allowed_tools": ["stable"]})
+    _registry("PUT", {"server_id": server, "url": original + "?acc=deployment"})
 
 
 def contract_deployment_undo(ctx):
     original = json.loads(state_file("deployment.json").read_text(encoding="utf-8"))
-    litellm("PUT", "/v1/mcp/server", {"server_id": env("ACC_SERVER_ID"), "allowed_tools": original})
+    _registry("PUT", {"server_id": env("ACC_SERVER_ID"), "url": original})
 
 
 ADAPTERS["contract_deployment"] = (contract_deployment, contract_deployment_undo)

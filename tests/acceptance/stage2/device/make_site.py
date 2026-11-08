@@ -29,6 +29,7 @@ site["secret_env"] = {
     "plugin_db": "ACC_PLUGIN_DATABASE_URL", "staff_db": "ACC_STAFF_DATABASE_URL",
 }
 site["intake"].update(org_id="default", owner_user_id="acc-owner")
+site["caller_user"] = "acc-caller"
 for name, entry in site["servers"].items():
     entry["server_id"] = name
     entry["url"] = f"https://cnt:8443/{name}/mcp"

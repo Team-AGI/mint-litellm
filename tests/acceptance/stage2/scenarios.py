@@ -410,6 +410,10 @@ def pin_mismatch_undo(ctx):
 @scenario("sync_pin_mismatch", undo=pin_mismatch_undo)
 def sync_pin_mismatch(ctx):
     server = sv()
+    # 아직 pin되지 않은 서버로 만든다(이미 맞게 pin한 서버는 pin 단계가 건너뛰어진다, 설계 21.4.3).
+    lite_raw("DELETE", f"/v1/mcp/server/{server}/pin")
+    A.psql("UPDATE mint.litellm_grants SET observed=false, applied_sha256=NULL WHERE "
+           f"instance_id={lit(iid())} AND item='pin' AND server_id={lit(server)}", "mint")
     start = datetime.now(UTC)
     since = db_now()
     team, user = new_team(), new_user()
@@ -513,7 +517,9 @@ def sync_lease_reclaim(ctx):
                f"'mcp_server', {lit(server)}, false)", "mint")
         current = permission("key", kid)
         lite("POST", "/key/update", {"key": kid, "object_permission": {
-            **current, "mcp_servers": [*(current.get("mcp_servers") or []), server]}})
+            **current, "mcp_servers": [*(current.get("mcp_servers") or []), server],
+            "mcp_tool_permissions": {**(current.get("mcp_tool_permissions") or {}),
+                                     server: tool_names(server)}}})
         A.psql("UPDATE mint.jobs SET status='running', lease_owner='acc-crashed', "
                "lease_until=now() + interval '2 seconds', attempts=1 WHERE "
                f"instance_id={lit(iid())} AND kind='sync_target' AND target_ref={lit(ref)} "
@@ -522,7 +528,7 @@ def sync_lease_reclaim(ctx):
     job = q1(f"SELECT status, attempts FROM mint.jobs WHERE instance_id={lit(iid())} "
              f"AND kind='sync_target' AND target_ref={lit(ref)} ORDER BY created_at DESC LIMIT 1")
     writes = log_count(r"POST /key/update", start) - 1  # 장애를 만든 내 쓰기 1건 제외
-    observe(ctx, server_id=server, reexecutions=int(job["attempts"]) - 0,
+    observe(ctx, server_id=server, reexecutions=int(job["attempts"]) - 1,  # 심은 죽은 실행의 시도 1을 뺀다
             duplicate_writes=max(0, writes),
             converged=converged("key", kid) and has_server("key", kid),
             approval=approval)
@@ -870,19 +876,31 @@ def probe_once():
     return status, text
 
 
+def blocked_response(status, text, since):
+    """집행 미확인 차단 응답인가. 재시작한 LiteLLM은 목록 단계에서 막혀 응답이 500 「Tool not found」로
+    보이므로(본문에 MINT 코드 없음) 그 경우는 같은 시각 이후 MINT 로그의 차단 코드로 판정한다."""
+    if status == 0 or status == 200:
+        return False
+    upper = text.upper()
+    if "ENFORCEMENT" in upper:
+        return True
+    return "NOT FOUND" in upper and log_count(r"MINT-ENFORCEMENT-UNVERIFIED", since) > 0
+
+
 def is_blocked():
     status, text = probe_once()
-    return status != 0 and status != 200 and "ENFORCEMENT" in text.upper()
+    return blocked_response(status, text, datetime.now(UTC) - timedelta(minutes=5))
 
 
 def probe_blocked(seconds, expect=True):
     """호출을 반복해 (막힘|허용)이 될 때까지 걸린 시간.
     (걸린 시간, 원인, 그 뒤 추가 호출 5번의 업스트림 증가분, 처음 성립 순간까지의 증가분)."""
     started = time.monotonic()
+    since = datetime.now(UTC)
     before = upstream()
     while True:
         status, text = probe_once()
-        if status and (status != 200 and "ENFORCEMENT" in text.upper()) == expect:
+        if status and blocked_response(status, text, since) == expect:
             break
         if time.monotonic() - started > seconds:
             raise SystemExit(f"시간 상한 초과: 호출 {'차단' if expect else '허용'} ({seconds}s)")
@@ -1079,6 +1097,55 @@ def restore_steady_24h(ctx):
             + blocked_samples, max_sampling_gap_seconds=max(gaps, default=0))
 
 
+@scenario("restore_operator_revert", undo=cleanup)
+def restore_operator_revert(ctx):
+    """DS-176·178: 운영자 강등·삭제 뒤 DB를 되돌리면 권한이 되살아난다 → 차단 → attest로 되돌리고 유지."""
+    tag = uuid.uuid4().hex[:6]
+    demoted, removed = f"acc-demote-{tag}", f"acc-remove-{tag}"
+    user = new_user()
+    t_demoted = cli("operator", "add", demoted, "--role", "approver", "--user-id", user)[1]["token"]
+    t_removed = cli("operator", "add", removed, "--role", "viewer")[1]["token"]
+
+    def state():
+        rows = q("SELECT name, role, expires_at IS NOT NULL AS ended FROM mint.operators "
+                 f"WHERE instance_id={lit(iid())} AND name IN ({lit(demoted)}, {lit(removed)})")
+        return {r["name"]: r for r in rows}
+
+    def mutate():
+        cli("operator", "set-role", demoted, "--role", "viewer")
+        cli("operator", "remove", removed)
+        target = epoch()
+        wait(lambda: newest_negative() >= target and json.loads(
+            (export_root() / "latest.json").read_text(encoding="utf-8"))["state_epoch"] >= target,
+            180, "운영자 변경 파일 기록")
+
+    since = restore_after_backup(ctx, ctx.run_id + "-pre", mutate)
+    revived = state()
+    elapsed, cause, upstream_calls, _ = probe_blocked(180)
+    checked_ = cli("restore", "check", role="admin")[1] or {}
+    writes = writes_since(since)
+    attested = cli("restore", "attest", "--reason", "acceptance", role="admin")[1]
+    probe_blocked(240, expect=False)
+    time.sleep(20)
+    after = state()
+    restricted = ["intake", "approve", "00000000-0000-0000-0000-000000000000", "--reason", "x",
+                  "--scope", "key", "--scope-id", "x"]
+    demoted_rc, _, demoted_err = cli(*restricted, token=t_demoted, check=False)
+    removed_rc, _, removed_err = cli(*restricted, token=t_removed, check=False)
+    observe(ctx, file_epoch=checked_.get("file_epoch"), db_epoch=checked_.get("db_epoch"),
+            upstream_calls=upstream_calls, worker_external_writes=writes,
+            elapsed_seconds=elapsed, cause=cause,
+            events={"restore_blocked": event_count("restore_blocked", since.isoformat())},
+            operator_items_pending=sum(i.get("kind") == "operator"
+                                       for i in checked_.get("items", [])),
+            revived_before_attest=revived[demoted]["role"] == "approver"
+            and not revived[removed]["ended"],
+            reapplied_operators=sum(i["kind"] == "operator" for i in attested["reapplied"]),
+            role_after=after[demoted]["role"], removed_after=after[removed]["ended"],
+            demoted_token_rejected=demoted_rc != 0 and "역할로 실행할 수 없습니다" in demoted_err,
+            removed_token_rejected=removed_rc != 0 and "만료" in removed_err)
+
+
 # ================================================================ 본인 확인 14종
 
 # 플러그인이 확인 행을 만들 때 쓰는 질의(plugin/snapshot.py request_confirmation)와 같은 문장
@@ -1094,9 +1161,9 @@ WHERE (SELECT count(*) FROM mint.self_confirmations
          AND status = 'pending' AND expires_at > clock_timestamp()) < 20
 ON CONFLICT DO NOTHING
 """
-# 정책이 본인 확인을 요구하게 하는 승인 조건(설계 §21.9). G9 정책 확장의 실제 키 이름에 맞춘다.
-CONFIRM_CONDITION = {"require_user_confirmation": {"purpose": "acceptance",
-                                                   "display_fields": ["text"]}}
+# 정책이 본인 확인을 요구하게 하는 승인 조건은 승인 명령의 --confirm-* 옵션(제품 경로)으로 넣는다.
+# 승인 조건은 저장 뒤 바꿀 수 없다(트리거). 직접 UPDATE하지 않는다.
+CONFIRM_ARGS = ("--confirm-purpose", "acceptance", "--confirm-field", "text")
 
 
 def need_policy():
@@ -1283,9 +1350,8 @@ def conf_world(*, team=False, call_approval=False):
             "--basis", "acceptance", "--requested-by", user]
     if call_approval:
         args += ["--high-risk-tools", tool]
+    args += ["--confirm-tool", tool, *CONFIRM_ARGS]
     approval = cli(*args)[1]["id"]
-    A.psql("UPDATE mint.approvals SET conditions = conditions || "
-           f"{lit(json.dumps(CONFIRM_CONDITION))}::jsonb WHERE id={lit(approval)}", "mint")
     return {"user": user, "k1": k1, "k1h": k1h, "k2": k2, "k2h": k2h,
             "org": rel["org_id"], "tool": tool, "approval": approval}
 
@@ -1474,20 +1540,6 @@ def confirmation_call_approval_only(ctx):
     confirm_pending(w)  # 확인은 있지만 관리자 호출별 승인은 없다
     blocked = wcall(w, args)
     observe(ctx, upstream_calls=blocked["upstream"], code=blocked["code"])
-
-
-def v001_probe(name):
-    """별도 v001 이행 스택에서 호출을 재는 장비 도구. 출력은 측정 JSON 한 개."""
-    spec = os.environ.get("ACC_V001_PROBE")
-    if not spec:
-        raise A.Skip("이행 스택의 호출 시험 장비(ACC_V001_PROBE)가 구성되지 않음")
-    done = A.run([*json.loads(spec), name], timeout=900)
-    return json.loads(done.stdout)
-
-
-@scenario("confirmation_v001_isolation")
-def confirmation_v001_isolation(ctx):
-    observe(ctx, **v001_probe("confirmation_v001_isolation"))
 
 
 # ================================================================ 인증·화면 9종(+이행 1종)
@@ -1748,106 +1800,40 @@ def auth_screens_13(ctx):
 
 # ================================================================ 이행 1종
 
-STAGE1_TABLES = ("orgs", "servers", "usage_relations", "approvals", "call_approvals")
+def stage1_stack():
+    from . import stage1
+
+    state = Path(A.env("ACC_STATE_DIR")).parent
+    return stage1.Stack(state / "stage1", A.ROOT, A.env("ACC_CERT_DIR"),
+                        site()["counters"]["synthetic"], A.env("COMPOSE_PROJECT_NAME"))
 
 
-def psql_in(database, sql, *, check=True):
-    pg, su = A.env("ACC_PG_SERVICE", "postgres"), A.env("ACC_PG_SUPERUSER", "postgres")
-    return A.compose("exec", "-T", pg, "psql", "-U", su, "-d", database, "-X", "-q", "-v",
-                     "ON_ERROR_STOP=1", "-1", "-f", "-", stdin=sql, check=check, timeout=300)
+def stage1_cleanup(ctx=None):
+    if not os.environ.get("ACC_KEEP_STAGE1"):
+        stage1_stack().teardown()
 
 
-def scalar_in(database, sql):
-    pg, su = A.env("ACC_PG_SERVICE", "postgres"), A.env("ACC_PG_SUPERUSER", "postgres")
-    return A.compose("exec", "-T", pg, "psql", "-U", su, "-d", database, "-X", "-A", "-t", "-c",
-                     sql).stdout.strip()
+def stage1_measure():
+    """1단계 SHA 스택 → 1단계 데이터 → `mint.sh upgrade` → 호출 측정(항목 12)."""
+    from . import stage1
+
+    head = A.run(["git", "rev-parse", "HEAD"]).stdout.strip()
+    try:
+        return stage1_stack().run(head)
+    except stage1.Stage1Failure as error:
+        raise SystemExit("이행 시험 실패: " + str(error)) from None
 
 
-def schema_of(database):
-    has = scalar_in(database, "SELECT count(*) FROM information_schema.columns WHERE "
-                    "table_schema='mint' AND table_name='servers' "
-                    "AND column_name='contract_status'")
-    return "v002" if has != "0" else "v001"
-
-
-def drop_migration_db(ctx):
-    name = A.state_file("migration-db")
-    if name.exists():
-        pg, su = A.env("ACC_PG_SERVICE", "postgres"), A.env("ACC_PG_SUPERUSER", "postgres")
-        A.compose("exec", "-T", pg, "psql", "-U", su, "-d", "postgres", "-X", "-q", "-c",
-                  f"DROP DATABASE IF EXISTS {name.read_text(encoding='utf-8')} WITH (FORCE)",
-                  check=False)
-        name.unlink()
-
-
-@scenario("migration_v001", undo=drop_migration_db)
+@scenario("migration_v001", undo=stage1_cleanup)
 def migration_v001(ctx):
-    from mint_litellm.control.db import migrate
+    measured = stage1_measure()
+    observe(ctx, **{k: v for k, v in measured.items() if not k.startswith("confirmation_")})
 
-    if not os.environ.get("ACC_V001_PROBE"):  # 호출 시험 장비가 없으면 DB 준비 전에 건너뛴다
-        v001_probe("migration_v001")
-    database = "mint_v001_" + uuid.uuid4().hex[:8]
-    pg, su = A.env("ACC_PG_SERVICE", "postgres"), A.env("ACC_PG_SUPERUSER", "postgres")
-    A.compose("exec", "-T", pg, "psql", "-U", su, "-d", "postgres", "-X", "-q", "-c",
-              f"CREATE DATABASE {database}")
-    A.state_file("migration-db").write_text(database, encoding="utf-8")
-    files = migrate._migration_files()
-    first, rest = files[0], files[1:]
-    instance = iid()
-    registry = ("CREATE TABLE IF NOT EXISTS mint.schema_migrations (name text PRIMARY KEY, "
-                "sha256 text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now());")
 
-    def record(name, text):
-        return (f"INSERT INTO mint.schema_migrations (name, sha256) VALUES "
-                f"({lit(name)}, {lit(hashlib.sha256(text.encode('utf-8')).hexdigest())});")
-
-    psql_in(database, first[1] + "\n" + registry + record(*first))
-    before_schema = schema_of(database)
-    psql_in(database, (
-        f"INSERT INTO mint.orgs (instance_id, org_id, name) VALUES ({lit(instance)}, 'legacy', "
-        "'legacy');"
-        "INSERT INTO mint.servers (id, instance_id, server_id, status, url_sha256, transport, "
-        f"auth_type, registered_by) VALUES (gen_random_uuid(), {lit(instance)}, 'legacy-server', "
-        f"'awaiting_approval', {lit(sha('https://legacy.invalid'))}, 'http', 'none', 'legacy');"
-        "UPDATE mint.servers SET status='approved' WHERE server_id='legacy-server';"
-        "INSERT INTO mint.usage_relations (id, instance_id, org_id, purpose, server_id) VALUES "
-        f"(gen_random_uuid(), {lit(instance)}, 'legacy', 'legacy', 'legacy-server');"
-        "INSERT INTO mint.policy_versions (instance_id, id, catalog_sha256, bundle_sha256) VALUES "
-        f"({lit(instance)}, 'legacy-policy', {lit(sha('c'))}, {lit(sha('b'))});"
-        "INSERT INTO mint.approvals (id, instance_id, org_id, relation_id, class, server_id, "
-        "tools, scope_type, scope_id, valid_from, valid_until, basis, granted_by, requested_by, "
-        f"status) SELECT gen_random_uuid(), {lit(instance)}, 'legacy', id, 'standard', "
-        "'legacy-server', ARRAY['stable'], 'user', 'legacy-user', now(), now() + interval '1 day', "
-        "'{\"text\":\"legacy\"}'::jsonb, 'legacy', 'legacy-user', 'active' FROM "
-        "mint.usage_relations WHERE server_id='legacy-server';"
-        "INSERT INTO mint.call_approvals (id, instance_id, org_id, principal_type, principal_id, "
-        "server_id, tool, args_fp, fp_key_version, policy_version_id, status, requested_by, "
-        f"expires_at) VALUES (gen_random_uuid(), {lit(instance)}, 'legacy', 'user', "
-        f"'legacy-user', 'legacy-server', 'stable', {lit(sha('legacy'))}, 1, 'legacy-policy', "
-        "'pending', 'legacy-user', now() + interval '1 day');"
-        "UPDATE mint.call_approvals SET status='approved', approved_by='legacy' "
-        "WHERE principal_id='legacy-user';"))
-    rows_before = sum(int(scalar_in(database, f"SELECT count(*) FROM mint.{t}"))
-                      for t in STAGE1_TABLES)
-    for name, text in rest:
-        psql_in(database, text + "\n" + record(name, text))
-    after_schema = schema_of(database)
-    rows_after = sum(int(scalar_in(database, f"SELECT count(*) FROM mint.{t}"))
-                     for t in STAGE1_TABLES)
-    contract = scalar_in(database, "SELECT string_agg(DISTINCT contract_status, ',') FROM "
-                         "mint.servers WHERE server_id='legacy-server'")
-    # 수용검증이 진행 중인 서버는 1단계 승인 전이로 승인되지 않는다(전이 트리거가 마지막 방어선)
-    psql_in(database, (
-        "INSERT INTO mint.servers (id, instance_id, server_id, status, url_sha256, transport, "
-        f"auth_type, registered_by) VALUES (gen_random_uuid(), {lit(instance)}, 'intake-server', "
-        f"'awaiting_approval', {lit(sha('https://intake.invalid'))}, 'http', 'none', 'acc');"
-        "INSERT INTO mint.intakes (id, instance_id, org_id, server_id, source) VALUES "
-        f"(gen_random_uuid(), {lit(instance)}, 'legacy', 'intake-server', 'operator');"))
-    refused = A.compose("exec", "-T", pg, "psql", "-U", su, "-d", database, "-X", "-q", "-c",
-                        "UPDATE mint.servers SET status='approved' WHERE server_id='intake-server'",
-                        check=False)
-    measured = v001_probe("migration_v001")  # 이행된 DB를 쓰는 별도 스택의 호출 시험
-    observe(ctx, before_schema=before_schema, after_schema=after_schema,
-            stage1_rows_before=rows_before, stage1_rows_after=rows_after,
-            legacy_contract_status=contract, pending_intake_server_approve_exit=refused.returncode,
-            migration_database=database, **measured)
+@scenario("confirmation_v001_isolation", undo=stage1_cleanup)
+def confirmation_v001_isolation(ctx):
+    measured = stage1_measure()
+    observe(ctx, confirmation_rows_seen=measured["confirmation_rows_seen"],
+            confirmation_rows_consumed=measured["confirmation_rows_consumed"],
+            stage1_call_approval_consumed=measured["stage1_call_approval_consumed"],
+            ready_seconds_after_upgrade=measured["ready_seconds_after_upgrade"])

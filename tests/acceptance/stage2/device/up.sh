@@ -40,7 +40,8 @@ wait_ready "${MINT_LITELLM_PORT:-4300}" || wait_ready 4300
 # mint.sh가 띄운 작업 실행기는 루트라 루트 소유 파일을 남긴다. 지우면 되돌림 탐지가 막으므로(쓰기 기록이 있는데
 # 파일이 없음) 소유자만 바꾸고 오버레이(비루트) 작업 실행기로 다시 올린다.
 "${C[@]}" --profile worker stop worker
-docker run --rm -v "${COMPOSE_PROJECT_NAME}_export:/x" --entrypoint sh mint-litellm:local -c 'chown -R 1000:1000 /x' || true
+IMG=mint-litellm:${COMPOSE_PROJECT_NAME}; docker image inspect "$IMG" >/dev/null 2>&1 || IMG=mint-litellm:local
+docker run --rm -v "${COMPOSE_PROJECT_NAME}_export:/x" --entrypoint sh "$IMG" -c 'chown -R 1000:1000 /x' || true
 "${C[@]}" up -d cnt fixture pgproxy
 set -a; . ./.env; set +a
 "${C[@]}" exec -T postgres psql -U postgres -d postgres -tc "SELECT 1 FROM pg_database WHERE datname='litellm_plain'" | grep -q 1 \

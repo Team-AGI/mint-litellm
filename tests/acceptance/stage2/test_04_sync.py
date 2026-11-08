@@ -7,6 +7,8 @@ def test_sync_hold_resume_revoke(rig):
     rig.require("sync status", "sync resume", handlers=("sync_target", "sync_reconcile",))
     fixture = rig.active()
     server = fixture["server_id"]
+    # 호출 키는 서버 접근이 미리 있어 grant가 전부 선재(preexisting)다. 접근이 없던 새 키로 소유 grant를 만든다.
+    owned_key, owned_id = rig.owned_approval(server)
     grants = rig.rows("litellm_grants", "server_id=%s AND NOT preexisting AND item='mcp_server'",
                       [server])
     assert grants
@@ -23,14 +25,15 @@ def test_sync_hold_resume_revoke(rig):
     rig.cli("sync", "resume", str(grant["id"]))
     rig.wait(lambda: rig.rows("litellm_grants", "id=%s AND observed AND NOT held", [grant["id"]]),
              rig.expected["limits"]["sync_seconds"], "수동 재개")
-    approval = rig.rows("approvals", "server_id=%s AND status='active'", [server])[0]
+    approval = rig.rows("approvals", "id=%s", [owned_id])[0]
     window = rig.begin("revocation", entities=[approval["id"]])
     rig.cli("revoke", str(approval["id"]), "--reason", "acceptance")
     rig.wait(lambda: all(row["observed"] is False for row in rig.rows(
         "litellm_grants", "server_id=%s AND NOT preexisting AND item='mcp_server'", [server],
     )), 60, "철회 read-back")
-    rig.call(server, fixture["tool"], fixture["arguments"], allowed=False,
-             code="MINT-APPROVAL-REVOKED")
+    # 소유 권한이 지워졌으므로 LiteLLM이 먼저 거절하거나 MINT가 철회로 막는다(DS-173).
+    rig.call(server, fixture["tool"], fixture["arguments"], key=owned_key, allowed=False,
+             code="MINT-APPROVAL-REVOKED", litellm_rejects=True)
     rig.check_events(window)
 
 
