@@ -25,3 +25,5 @@ export ACC_PLUGIN_SERVICES="litellm litellm2 worker" ACC_BUFFER_SERVICE=litellm 
 export MINT_POLICY_ROOT="$REPO" ACC_SITE="$REPO/tests/acceptance/stage2/.runtime/site.json"
 mkdir -p "$ACC_STATE_DIR"
 [ -f "$STATE/local.env" ] && . "$STATE/local.env"
+# 호출별 승인의 인자 지문은 스택이 쓰는 키로 계산해야 한다(호스트 기본 ~/.config/mint 키와 다르다).
+export MINT_SECRETS_FILE="$STATE/secrets/secrets.env"

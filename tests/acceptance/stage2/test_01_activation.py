@@ -115,19 +115,20 @@ def test_control_key_wait(rig):
     assert not rig.rows("jobs", "status='failed'")
     contracts = rig.rows("tool_contracts", "server_id=%s AND status='approved'", [server])
     assert len(contracts) == fixture["tool_count"]
+    rig.client.get(rig.site["litellm"][0].rstrip("/") + "/mcp-rest/tools/list",
+                   params={"server_id": server},
+                   headers={"Authorization": "Bearer " + rig.secret("caller")})  # 목록 캐시 예열
     rig.call(server, fixture["tool"], fixture["arguments"])
 
 
 def test_control_key_wait_revoked(rig):
-    """대기 중에 철회하면 키를 저장해도 실행 시점의 상태(철회)로 판정되어 핀이 적용되지 않는다."""
+    """대기 중에 서버를 중지하면 키를 저장해도 실행 시점의 상태로 판정되어 핀이 적용되지 않는다."""
     fixture, server = control_key_waiting(rig, "context7")
-    for approval in rig.rows("approvals", "server_id=%s AND status IN ('pending','active')",
-                             [server]):
-        rig.cli("revoke", str(approval["id"]), "--reason", "acceptance")
+    # 대기 중인 승인은 철회 대상(활성)이 아니므로 서버 중지로 거둔다. 키를 저장해도 실행 시점 상태가 판정한다.
+    rig.cli("server", "suspend", server)
     rig.cli("settings", "control-key")
     rig.wait(lambda: not rig.rows("jobs", "last_error_code='control_key_not_set' "
                                   "AND status IN ('pending','running')"), 420, "대기 작업 처리")
     assert not rig.rows("litellm_grants", "server_id=%s AND item='pin' AND observed", [server])
-    assert not rig.rows("approvals", "server_id=%s AND status='active'", [server])
     rig.call(server, fixture["tool"], fixture["arguments"], allowed=False, code="MINT-",
              litellm_rejects=True)
