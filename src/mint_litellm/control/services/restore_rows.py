@@ -29,13 +29,18 @@ _META: dict[str, tuple[str, str, str | None, str | None, dict[str, list[str]]]] 
     "approval": ("approvals", "id", "status", "active", {"active": ["revoked"]}),
     "denial": ("denials", "id", None, None, {}),
     "consent": ("consents", "id", None, None, {}),
+    "operator": ("operators", "name", None, None, {}),
 }
 # 부모 행을 먼저 되돌린다.
-ORDER = ("org", "server", "relation", "allowlist", "approval", "denial", "consent")
+ORDER = ("org", "server", "relation", "allowlist", "approval", "denial", "consent", "operator")
 _ONCE = {  # 상태 전이와 함께 채우는 한 번 쓰기 열
     "approval": ("revoked_at", "revoke_reason"),
 }
 MAX_VERSION_STEPS = 1000
+
+
+def _rank(role: str) -> int:
+    return {"admin": 3, "approver": 2}.get(role, 1)
 
 
 def _path(graph: dict[str, list[str]], start: str, goal: str) -> list[str] | None:
@@ -118,6 +123,23 @@ def restore_item(conn: psycopg.Connection, instance_id: str, item: dict[str, Any
                 (snap["revoked_at"], instance_id, ident),
             )
             changed = True
+    elif kind == "operator":
+        # 파일보다 권한이 높은 열만 파일 값으로 낮춘다(역할은 낮출 때만, 만료는 앞당길 때만).
+        # 이미 낮거나 같은 쪽은 그대로 둔다.
+        if _rank(current["role"]) > _rank(snap["role"]):
+            conn.execute(
+                "UPDATE mint.operators SET role = %s WHERE instance_id = %s AND name = %s",
+                (snap["role"], instance_id, ident),
+            )
+            changed = True
+        if snap["expires_at"] is not None:
+            moved = conn.execute(
+                "UPDATE mint.operators SET expires_at = %s::timestamptz"
+                " WHERE instance_id = %s AND name = %s AND (expires_at IS NULL"
+                " OR expires_at > %s::timestamptz)",
+                (snap["expires_at"], instance_id, ident, snap["expires_at"]),
+            )
+            changed = changed or moved.rowcount > 0
     elif kind == "denial" and current["lifted_at"] is not None:
         raise ValueError(f"denial {ident}: 이미 해제된 거부는 다시 걸 수 없습니다.")
     # 상태 버전이 파일보다 뒤처지면 값 변경 없는 갱신으로 올린다(트리거가 한 칸씩 올린다).

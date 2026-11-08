@@ -19,9 +19,11 @@ from mint_litellm.control.stage2_config import Stage2Settings
 from mint_litellm.restore import files
 from mint_litellm.types.events import EventKind
 
-# 부정 상태 항목 일곱 종류(철회·거부·중지·종료·rejected 서버, 종료 관계, 닫힌 조직, 해제된 허용
-# 목록, 철회된 동의). ``id``는 서버만 server_id이고 나머지는 행 식별자다. 항목마다 행 전체
-# 스냅숏(``row``, 모든 열)을 담아 복원 때 같은 id로 되돌릴 수 있게 한다.
+# 부정 상태 항목 여덟 종류(철회·거부·중지·종료·rejected 서버, 종료 관계, 닫힌 조직, 해제된 허용
+# 목록, 철회된 동의, 삭제·강등된 운영자). 운영자는 강등을 행만 봐서는 알 수 없으므로 한 번이라도
+# 바뀐 행(``state_version`` > 1)을 모두 담는다. ``id``는 서버만 server_id, 운영자는 이름이고
+# 나머지는 행 식별자다. 항목마다 행 전체 스냅숏(``row``, 모든 열)을 담아 복원 때 같은 id로
+# 되돌릴 수 있게 한다.
 # ponytail: 항목을 전부 한 파일에 담는다(철회가 수만 건이 되면 증분 파일로 나눈다).
 SNAPSHOT_SQL = """
 WITH items AS (
@@ -42,6 +44,9 @@ WITH items AS (
     FROM mint.allowlists t WHERE t.instance_id = %(i)s AND t.status = 'lifted'
   UNION ALL SELECT 'consent', t.id::text, t.state_version, 'revoked', to_jsonb(t)
     FROM mint.consents t WHERE t.instance_id = %(i)s AND t.revoked_at IS NOT NULL
+  UNION ALL SELECT 'operator', t.name, t.state_version,
+      CASE WHEN t.expires_at IS NULL THEN t.role ELSE 'removed' END, to_jsonb(t)
+    FROM mint.operators t WHERE t.instance_id = %(i)s AND t.state_version > 1
 ), last AS (
   SELECT to_seal_seq, encode(tail_hash, 'hex') AS tail FROM mint.seal_batches
   WHERE instance_id = %(i)s ORDER BY to_seal_seq DESC LIMIT 1

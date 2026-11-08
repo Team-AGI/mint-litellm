@@ -35,6 +35,9 @@ EXPORT_CONFIG_MISSING = "export_config_missing"
 #   해제 전이가 있는 것은 거부 해제와 서버 재개뿐이다(나머지 종류의 상태 기계는 종결 상태로만
 #   가며 해제 사건이 없다). 판본이 더 높고 아직 부정 상태인 행은 신원 열(범위·서버·도구·조직 등)이
 #   파일과 같아야 한다(다르면 ``content``).
+# - 운영자(``operator``)는 판본이 더 높아도 권한이 파일보다 낮거나 같으면 정상이다. 파일보다
+#   만료가 늦어졌거나 사라졌다면 되돌림이고, 역할이 올랐다면 원장에 그 판본 구간의 역할 변경 사건이
+#   있어야 한다(정당한 승격). 비교하는 행에는 토큰 해시가 없다(``operator_state``).
 # 값이 안 바뀐 UPDATE도 판본을 올리므로 판본만으로는 되돌림을 가릴 수 있다. 정상 해제·변경은 새
 # 부정 상태 파일을 내므로 파일이 따라온다.
 ITEM_CHECK_CTE = """
@@ -73,6 +76,10 @@ f AS (
       t.revoked_at IS NOT NULL, mint.row_json(t)
     FROM mint.consents t
     WHERE t.instance_id = %(i)s AND t.id::text IN (SELECT id FROM f WHERE kind = 'consent')
+  UNION ALL SELECT 'operator', t.name, t.name, t.state_version,
+      CASE WHEN t.expires_at IS NULL THEN t.role ELSE 'removed' END, true, mint.row_json(t)
+    FROM mint.operator_state t
+    WHERE t.instance_id = %(i)s AND t.name IN (SELECT id FROM f WHERE kind = 'operator')
 ), checked AS (
   SELECT f.kind, f.id, r.state AS db_state, CASE
     WHEN r.id IS NULL THEN 'missing_row'
@@ -82,6 +89,19 @@ f AS (
          <> (f.row - ARRAY(SELECT jsonb_object_keys(f.row) EXCEPT SELECT jsonb_object_keys(r.row)))
       THEN 'content'
     WHEN r.state_version = f.state_version AND r.state <> f.state THEN 'reapply'
+    WHEN f.kind = 'operator' AND r.state_version > f.state_version AND f.row IS NOT NULL AND (
+         (f.row ->> 'expires_at' IS NOT NULL AND (r.row ->> 'expires_at' IS NULL
+            OR (r.row ->> 'expires_at')::timestamptz > (f.row ->> 'expires_at')::timestamptz))
+         OR (mint.operator_rank(r.row ->> 'role') > mint.operator_rank(f.row ->> 'role')
+             AND NOT EXISTS (
+               SELECT 1 FROM mint.events e
+               WHERE e.instance_id = %(i)s AND e.kind = 'operator_role_changed'
+                 AND split_part(e.source_key, ':', 1) = 'operator'
+                 AND split_part(e.source_key, ':', 2) = r.ev
+                 AND (CASE WHEN split_part(e.source_key, ':', 3) ~ '^[0-9]{1,18}$'
+                           THEN split_part(e.source_key, ':', 3)::bigint END)
+                     BETWEEN f.state_version + 1 AND r.state_version)))
+      THEN 'reapply'
     WHEN r.state_version > f.state_version AND NOT r.neg AND NOT EXISTS (
          SELECT 1 FROM mint.events e
          WHERE e.instance_id = %(i)s
@@ -103,6 +123,7 @@ f AS (
            WHEN 'org' THEN ARRAY['org_id']
            WHEN 'allowlist' THEN ARRAY['org_id', 'kind', 'value']
            WHEN 'consent' THEN ARRAY['org_id', 'server_id', 'human_user_id', 'purpose']
+           WHEN 'operator' THEN ARRAY['name', 'user_id']
          END) AS k
          WHERE r.row -> k IS DISTINCT FROM f.row -> k)
       THEN 'content'
