@@ -63,8 +63,15 @@ def test_synthetic_contract_changes(rig, mutation):
                                   [server]), 120, "배포 변경 경보")
         rig.check_events(window, worker_count=2)
         rig.reapprove(server)
-        rig.wait(lambda: not rig.rows("servers", "server_id=%s AND deployment_drift", [server]),
-                 120, "배포 재승인")
+        try:
+            rig.wait(lambda: not rig.rows("servers", "server_id=%s AND deployment_drift", [server]),
+                     120, "배포 재승인")
+        except AssertionError:
+            dep = rig.sql("SELECT status, count(*) AS n FROM mint.deployment_contracts WHERE "
+                          "instance_id=%s AND server_id=%s GROUP BY 1", [rig.iid, server])
+            ev = rig.sql("SELECT kind, count(*) AS n FROM mint.events WHERE instance_id=%s AND "
+                         "inserted_at >= %s GROUP BY 1", [rig.iid, window["since"]])
+            raise AssertionError(f"deployment_contracts={dep} events={ev}")
         rig.call(server, fixture["tool"], fixture["arguments"])
         return
     rig.check_events(window)

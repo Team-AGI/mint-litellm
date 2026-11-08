@@ -48,13 +48,13 @@ def test_external_mcp_forbidden(rig):
     headers = {"Authorization": "Bearer " + rig.secret("caller")}
     for path, body in bodies.items():
         before = rig.sql("SELECT count(*) AS n FROM mint.events WHERE instance_id=%s "
-                         "AND payload::text LIKE '%%EXTERNAL-MCP%%'", [rig.iid])[0]["n"]
+                         "AND payload::text LIKE '%%EXTERNAL_MCP%%'", [rig.iid])[0]["n"]
         reply = rig.client.post(base + path, headers=headers, json=body)
         assert reply.status_code == 403 and "MINT-EXTERNAL-MCP-FORBIDDEN" in reply.text, (
             path, reply.status_code, rig.clean(reply.text[:300]))
         rig.wait(lambda before=before: rig.sql(
             "SELECT count(*) AS n FROM mint.events WHERE instance_id=%s "
-            "AND payload::text LIKE '%%EXTERNAL-MCP%%'", [rig.iid])[0]["n"] > before,
+            "AND payload::text LIKE '%%EXTERNAL_MCP%%'", [rig.iid])[0]["n"] > before,
             20, "판정 사건")
     gateway = {**external, "server_url": "litellm_proxy"}
     reply = rig.client.post(base + "/v1/responses", headers=headers,

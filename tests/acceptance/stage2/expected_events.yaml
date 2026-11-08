@@ -209,8 +209,9 @@ observations:
     reject_calls: 1
     resubmissions: 0
     failed_checks: 1
-  intake_private_literal: {litellm_rejected: true, mint_intakes: 0, control_accepted: true,
-                           upstream_calls: 0}
+  # 고정된 LiteLLM 판본은 사설 리터럴 IP 제출을 받아 주므로(201) MINT 수용검증이 자동 거절한다(DS-174 정정).
+  intake_private_literal: {litellm_rejected: false, mint_intakes: 1, mint_rejected: true,
+                           control_accepted: true, upstream_calls: 0}
   intake_private_ip_guard: {url_guard_reason: IP_FORBIDDEN, test_route_calls: 0}
   intake_allow_all_keys: {<<: *negative, submitted_allow_all_keys: true}
   intake_definitions_limit: {result: indeterminate, distinct_approvers: 2,

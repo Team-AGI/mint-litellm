@@ -16,9 +16,17 @@ def test_sync_hold_resume_revoke(rig):
     assert grants
     grant = grants[0]
     rig.fault("delete_owned_grant", restore=False)
-    rig.wait(lambda: rig.rows("litellm_grants", "id=%s AND observed AND missing_count=1",
-                              [grant["id"]]),
-             rig.expected["limits"]["sync_seconds"], "첫 권한 복구")
+    try:
+        rig.wait(lambda: rig.rows("litellm_grants", "id=%s AND observed AND missing_count=1",
+                                  [grant["id"]]),
+                 rig.expected["limits"]["sync_seconds"], "첫 권한 복구")
+    except AssertionError:
+        rows = rig.rows("litellm_grants", "id=%s", [grant["id"]])
+        jobs = rig.sql("SELECT kind, status, run_after FROM mint.jobs WHERE instance_id=%s AND kind "
+                       "IN ('sync_reconcile','sync_target') ORDER BY run_after DESC LIMIT 5",
+                       [rig.iid])
+        raise AssertionError(f"grant={[{k: str(v)[:40] for k, v in r.items()} for r in rows]} "
+                             f"jobs={[(j['kind'], j['status'], str(j['run_after'])) for j in jobs]}")
     window = rig.begin("sync_hold", entities=[grant["id"]])
     rig.fault("delete_owned_grant", restore=False)
     rig.wait(lambda: rig.rows("litellm_grants", "id=%s AND held", [grant["id"]]),

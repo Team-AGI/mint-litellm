@@ -696,11 +696,16 @@ def intake_private_literal(ctx):
     if control_status in (200, 201):
         track("server", json.loads(control_text)["server_id"])
     time.sleep(70)  # 제출 수신 작업 주기보다 길게 기다린다
+    private_id = json.loads(text)["server_id"] if status in (200, 201) else None
+    if private_id:  # 이 LiteLLM 판본은 사설 IP 제출을 받아 주므로 MINT url_guard가 거절해야 한다(DS 정정)
+        track("server", private_id)
+        wait(lambda: A.psql("SELECT coalesce(decision,'') FROM mint.intakes WHERE "
+                            f"server_id={lit(private_id)}", "mint") == "rejected", 180, "사설 IP 자동 거절")
     new_rows = n(f"SELECT count(*) FROM mint.intakes WHERE instance_id={lit(iid())}") - before
     observe(ctx, litellm_rejected=status in (400, 403, 422), litellm_status=status,
             litellm_reason=text[:160], control_accepted=control_status in (200, 201),
             mint_intakes=new_rows - (1 if control_status in (200, 201) else 0),
-            upstream_calls=upstream() - upstream_before)
+            mint_rejected=bool(private_id), upstream_calls=upstream() - upstream_before)
 
 
 @scenario("intake_private_ip_guard", undo=cleanup)
@@ -731,9 +736,14 @@ def intake_allow_all_keys(ctx):
 @scenario("intake_definitions_limit", undo=fixture_undo)
 def intake_definitions_limit(ctx):
     fixture_control("limit")  # 도구 501개: 상한 500 초과
-    intake_id = create_intake(register_fixture_server(), fixture_url())
+    server_id = register_fixture_server()
+    intake_id = create_intake(server_id, fixture_url())
     wait(lambda: checked(intake_id), 180, "검사")
     result = intake_status(intake_id)
+    # 예외 승인은 정의 수집이 만든 후보 계약에 묶인다. 수집이 끝나 후보가 생길 때까지 기다린다.
+    wait(lambda: n(f"SELECT count(*) FROM mint.tool_contracts WHERE instance_id={lit(iid())} "
+                   f"AND server_id={lit(server_id)} AND status='candidate'") > 0, 150,
+         "정의 수집 후보 계약(도구 501개)")
     second = A.env(ROLE_ENV["admin2"])
     over = cli("intake", "except", intake_id, "--reason", "acceptance", "--valid-until",
                iso(timedelta(days=91)), "--second-approver", second, role="approver", check=False)
@@ -764,10 +774,10 @@ def intake_stale_evidence(ctx):
     # 검사 기록은 추가 전용이라 시험 스택의 복제 역할로만 시각을 옮긴다
     A.psql("SET session_replication_role=replica; UPDATE mint.intake_checks SET "
            "ran_at = now() - interval '25 hours' WHERE intake_id=" + lit(intake_id)
-           + " AND check IN ('connection','definitions')", "mint")
+           + " AND \"check\" IN ('connection','definitions')", "mint")
     age = float(A.psql("SELECT extract(epoch FROM now() - min(ran_at)) / 3600 FROM "
                        f"mint.intake_checks WHERE intake_id={lit(intake_id)} "
-                       "AND check IN ('connection','definitions')", "mint"))
+                       "AND \"check\" IN ('connection','definitions')", "mint"))
     refused = cli("intake", "approve", intake_id, role="approver", check=False)
     observe(ctx, intake_id=intake_id, evidence_age_hours=round(age, 3), refused_exit=refused[0],
             decision_writes=decision_writes(intake_id))
@@ -1388,12 +1398,20 @@ def conf_world(*, team=False, call_approval=False):
             "org": rel["org_id"], "tool": tool, "approval": approval}
 
 
-def wcall(w, args):
-    before = upstream()
-    status, text, mark = rest_call(w["k1"], w["tool"], args)
-    time.sleep(site().get("settle_seconds", 2))
+def wcall(w, args, startup_wait=150):
+    """호출 한 번. 복원 직후 시작 유예 동안(집행 미확인·목록 단계 거절)은 같은 인자로 다시 보낸다."""
+    deadline = time.monotonic() + startup_wait
+    while True:
+        before = upstream()
+        status, text, mark = rest_call(w["k1"], w["tool"], args)
+        time.sleep(site().get("settle_seconds", 2))
+        starting = "ENFORCEMENT" in text.upper() or (status == 500 and "NOT FOUND" in text.upper())
+        if not starting or time.monotonic() > deadline:
+            break
+        time.sleep(3)
     code = "MINT-CALL-APPROVAL-REQUIRED" if "MINT-CALL-APPROVAL-REQUIRED" in text else code_of(text)
-    return {"status": status, "code": code, "mark": mark, "upstream": upstream() - before}
+    return {"status": status, "code": code, "mark": mark, "upstream": upstream() - before,
+            "text": text[:200]}
 
 
 def invocation_of(mark):
