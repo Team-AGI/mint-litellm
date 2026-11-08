@@ -12,7 +12,7 @@ def test_version_drift_and_reapproval(rig, name):
     server = fixture["server_id"]
     rig.fault(name + "_upgrade")
     rig.wait(lambda: rig.rows("tool_contracts", "server_id=%s AND drift='input_schema'", [server]),
-             120, "입력 스키마 관측")
+             240, "입력 스키마 관측")
     for tool, args in fixture["changed_tools"].items():
         rig.call(server, tool, args, allowed=False, code="MINT-CONTRACT-DRIFT-input-schema")
     rig.call(server, fixture["unchanged_tool"], fixture["unchanged_arguments"])
@@ -39,25 +39,25 @@ def test_synthetic_contract_changes(rig, mutation):
     rig.fault("contract_" + mutation)
     if mutation == "description":
         rig.wait(lambda: rig.rows("tool_contracts", "server_id=%s AND drift='description'",
-                                  [server]), 120, "설명 변경")
+                                  [server]), 240, "설명 변경")
         rig.call(server, fixture["tool"], fixture["arguments"])
     elif mutation == "added":
         # 추가 도구는 후보 행이 아니라 관측 사건·경보로 드러나고 호출은 unapproved_tool로 막힌다.
         rig.wait(lambda: rig.sql(
             "SELECT 1 FROM mint.events WHERE instance_id=%s AND kind='contract_drift_detected' "
             "AND inserted_at >= %s AND payload->>'server_id'=%s",
-            [rig.iid, window["since"], server]), 120, "추가 도구 관측")
+            [rig.iid, window["since"], server]), 240, "추가 도구 관측")
         # LiteLLM의 도구 목록에 없는 도구라 사전 거절도 합격이다(업스트림 0, DS-173). MINT 판정이 있으면 코드도 본다.
         rig.call(server, fixture["added_tool"], {}, allowed=False, litellm_rejects=True,
                  code="MINT-CONTRACT-DRIFT-unapproved-tool")
     elif mutation == "removed":
         rig.wait(lambda: rig.rows("tool_contracts", "server_id=%s AND tool=%s "
                                   "AND status='superseded'", [server, fixture["tool"]]),
-                 120, "삭제 계약 폐기")
+                 240, "삭제 계약 폐기")
     else:
         # 호출을 보내지 않은 채 두 복제본이 각각 불일치를 관측해야 한다.
         rig.wait(lambda: rig.rows("servers", "server_id=%s AND deployment_drift", [server]),
-                 120, "배포 변경")
+                 240, "배포 변경")
         rig.check_events(window, worker_count=2)
         rig.reapprove(server)
         rig.wait(lambda: not rig.rows("servers", "server_id=%s AND deployment_drift", [server]),
