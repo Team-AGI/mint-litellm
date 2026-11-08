@@ -252,8 +252,16 @@ SCHEDULES: dict[str, Callable[[Any], int]] = {
 }
 
 
-def backoff_seconds(attempts: int) -> int:
-    return min(2**attempts * 5, MAX_BACKOFF_SECONDS)
+# 관측을 이어 주는 주기 작업. 미관측 차단은 관측 주기의 2배에 닿으면 걸리므로, 일시 실패 뒤의
+# 재시도 간격은 관측 주기의 4분의 1(최소 5초)을 넘지 않는다.
+PERIODIC_RETRY_KINDS = frozenset({"contract_observe", "sync_reconcile", "submission_poll"})
+
+
+def backoff_seconds(attempts: int, kind: str | None = None, settings: Any = None) -> int:
+    cap = MAX_BACKOFF_SECONDS
+    if settings is not None and kind in PERIODIC_RETRY_KINDS:
+        cap = min(cap, max(5, settings.observe_seconds // 4))
+    return min(2**attempts * 5, cap)
 
 
 def period_key(kind: str, period_start: datetime) -> str:
@@ -347,11 +355,12 @@ def _requeue(
     *,
     count: bool,
     delay: float | None = None,
+    settings: Any = None,
 ) -> str | None:
     """실행 중 작업을 ``pending`` 또는 ``failed``로 돌린다. ``guard``를 만족하는 행이 없으면 None.
 
     ``count``이면 시도 횟수를 올리고 한도에 닿으면 ``failed``와 경보 ``job_failed``이다.
-    ``delay``가 None이면 재시도 간격 공식을 쓴다.
+    ``delay``가 None이면 재시도 간격 공식을 쓴다(``settings``가 있으면 주기 작업의 상한을 건다).
     """
     with conn.transaction():
         row = fetchone(
@@ -372,7 +381,7 @@ def _requeue(
             )
             _alert_failed(conn, {**row, "attempts": attempts}, code or "")
             return "failed"
-        wait = backoff_seconds(attempts) if delay is None else delay
+        wait = backoff_seconds(attempts, row["kind"], settings) if delay is None else delay
         try:
             with conn.transaction():  # 세이브포인트: 같은 대상의 대기 행이 따로 있으면 실패한다
                 conn.execute(
@@ -400,9 +409,13 @@ def _requeue(
         return "pending"
 
 
-def fail(conn: psycopg.Connection, job_id: Any, owner: str, code: str) -> str | None:
+def fail(
+    conn: psycopg.Connection, job_id: Any, owner: str, code: str, settings: Any = None
+) -> str | None:
     """처리기가 실패했다. ``pending``(재시도), ``failed``, 임대를 잃었으면 None을 돌려준다."""
-    return _requeue(conn, job_id, "lease_owner = %s", (owner,), code, count=True)
+    return _requeue(
+        conn, job_id, "lease_owner = %s", (owner,), code, count=True, settings=settings
+    )
 
 
 def fail_permanently(conn: psycopg.Connection, job_id: Any, owner: str, code: str) -> bool:
@@ -425,7 +438,7 @@ def release(
     return _requeue(conn, job_id, "lease_owner = %s", (owner,), code, count=False, delay=delay)
 
 
-def reclaim_expired(conn: psycopg.Connection, instance_id: str) -> int:
+def reclaim_expired(conn: psycopg.Connection, instance_id: str, settings: Any = None) -> int:
     """임대가 만료된 ``running`` 작업을 되돌린다(작업 실행기가 죽은 경우). 시도 한 번으로 센다."""
     ids = fetchall(
         conn,
@@ -437,7 +450,8 @@ def reclaim_expired(conn: psycopg.Connection, instance_id: str) -> int:
     for row in ids:
         # 그 사이 연장·완료됐거나 다른 실행기가 먼저 회수했으면 건너뛴다
         if _requeue(
-            conn, row["id"], "lease_until <= now()", (), "lease_expired", count=True
+            conn, row["id"], "lease_until <= now()", (), "lease_expired", count=True,
+            settings=settings,
         ):
             reclaimed += 1
     return reclaimed

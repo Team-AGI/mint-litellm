@@ -648,6 +648,43 @@ def test_the_pool_is_opened_lazily_and_closed_idempotently(plugin_dsn):
     assert config() is not None
 
 
+def test_the_pool_opens_with_every_connection_up_front(monkeypatch):
+    """최소 크기가 최대 크기와 같아야 몰린 요청이 새 연결을 만들다 획득 예산을 넘기지 않는다."""
+    import psycopg_pool
+
+    opened = {}
+
+    class FakePool:
+        def __init__(self, dsn, **kw):
+            opened.update(kw)
+
+        async def open(self):
+            pass
+
+        def connection(self):
+            return "connection"
+
+    monkeypatch.setattr(psycopg_pool, "AsyncConnectionPool", FakePool)
+    db = PluginDatabase("postgresql://unused", max_size=8)
+    run(db._connection())
+    assert opened["min_size"] == opened["max_size"] == 8
+
+
+def test_a_burst_as_wide_as_the_pool_is_served_within_the_budget(scenario, plugin_dsn):
+    db = database(plugin_dsn, max_size=8, acquire_timeout=0.3)
+
+    async def go():
+        try:
+            await db.read_epoch(scenario.iid)  # 첫 사용이 풀을 연다
+            await db._pool.wait(timeout=10)
+            assert db._pool.get_stats()["pool_size"] == 8
+            return await asyncio.gather(*(db.read_epoch(scenario.iid) for _ in range(8)))
+        finally:
+            await db.close()
+
+    assert len(run(go())) == 8
+
+
 def test_a_full_judgment_reads_the_real_state_and_consumes_a_call_approval_once(
     scenario, plugin_dsn, tmp_path
 ):

@@ -578,9 +578,11 @@ class PluginDatabase:
                     # 문장은 호출한 쪽이 포기한 뒤에도 서버에서 끝까지 갈 수 있게(커밋 결과 불명)
                     # 예산의 열 배까지 두고, 잠금 대기는 예산에서 끊는다.
                     statement_ms = max(1000, milliseconds * 10)
+                    # 연결은 처음부터 max_size까지 열어 둔다(축소하지 않는다). 최소 1개로 열면 몰린
+                    # 요청이 새 연결을 만드는 시간이 획득 예산(0.3초)을 넘겨 판정이 차단된다.
                     pool = AsyncConnectionPool(
                         self.dsn,
-                        min_size=1,
+                        min_size=self.max_size,
                         max_size=self.max_size,
                         kwargs={
                             "autocommit": True,
