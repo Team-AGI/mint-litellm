@@ -23,6 +23,9 @@ export ACC_EXPORT_HOST_DIR="$STATE/export" ACC_EXPORT_CONTAINER_DIR=/var/lib/min
 export ACC_READY_URLS=http://127.0.0.1:4300,http://127.0.0.1:4301 ACC_RESTORE_SERVICES="litellm litellm2 worker console"
 export ACC_PLUGIN_SERVICES="litellm litellm2 worker" ACC_BUFFER_SERVICE=litellm ACC_BUFFER_CONTAINER_DIR=/var/lib/mint/buffer
 export MINT_POLICY_ROOT="$REPO" ACC_SITE="$REPO/tests/acceptance/stage2/.runtime/site.json"
+# 호스트 CLI의 정책 활성화가 컨테이너의 OPA에 닿도록 한다(포트를 게시하지 않아 컨테이너 주소를 쓴다).
+OPA_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' mints2-opa-1 2>/dev/null </dev/null)
+[ -n "$OPA_IP" ] && export MINT_OPA_URL="http://$OPA_IP:8181"
 mkdir -p "$ACC_STATE_DIR"
 [ -f "$STATE/local.env" ] && . "$STATE/local.env"
 # 호출별 승인의 인자 지문은 스택이 쓰는 키로 계산해야 한다(호스트 기본 ~/.config/mint 키와 다르다).
