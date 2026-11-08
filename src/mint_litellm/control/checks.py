@@ -199,7 +199,7 @@ def _check_file_rows(judge, config, general, lsettings, servers_cfg, env, replic
         modes = [modes] if isinstance(modes, str) else list(modes or [])
         problems = []
         if not set(GUARDRAIL_MODES) <= set(modes):
-            problems.append("mode에 pre_mcp_call과 post_mcp_call이 모두 필요합니다")
+            problems.append("mode에 pre_call, pre_mcp_call, post_mcp_call이 모두 필요합니다")
         if params.get("default_on") is not True:
             problems.append("default_on이 true가 아닙니다")
         judge("guardrails[MINT]", not problems, "; ".join(problems))

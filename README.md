@@ -10,7 +10,7 @@ LiteLLM 프록시에 플러그인으로 붙어 MCP 서버와 도구 호출에 �
 
 | 구성요소 | 역할 |
 | --- | --- |
-| 플러그인 | LiteLLM 가드레일 훅(`pre_mcp_call`·`post_mcp_call`)에서 판정·기록·결과 검사 |
+| 플러그인 | LiteLLM 가드레일 훅(`pre_call`·`pre_mcp_call`·`post_mcp_call`)에서 판정·기록·결과 검사 |
 | 제어 평면·콘솔 | 수용검증, 승인, 계약 변경 재승인, 종료 판정, 원장, 경보 |
 | 정책 엔진 | OPA(Rego) 정책 패키지 |
 | 배포 | compose 묶음(LiteLLM·PostgreSQL·OPA·콘솔)과 `mint-litellm` CLI |

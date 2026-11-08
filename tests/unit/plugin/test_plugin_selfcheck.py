@@ -65,7 +65,7 @@ class OtherGuardrail(FakeGuardrail):
 def guardrail(**override):
     args = {
         "guardrail_name": "mint",
-        "event_hook": ["pre_mcp_call", "post_mcp_call"],
+        "event_hook": ["pre_call", "pre_mcp_call", "post_mcp_call"],
         "default_on": True,
         "run_in_parallel": True,
         "scan_raw_request": False,
@@ -135,12 +135,18 @@ def test_item_1_logger_must_be_registered_exactly_once():
 
 
 def test_item_2_guardrail_modes_and_default_on():
-    other = SimpleNamespace(value="pre_mcp_call"), SimpleNamespace(value="post_mcp_call")
+    other = (
+        SimpleNamespace(value="pre_call"),
+        SimpleNamespace(value="pre_mcp_call"),
+        SimpleNamespace(value="post_mcp_call"),
+    )
     enum_style = guardrail(event_hook=list(other))
     assert failed(run_checks(view(callbacks=[LOGGER, enum_style]), guard=enum_style)) == set()
     for bad in (
         guardrail(event_hook=["pre_mcp_call"]),
         guardrail(event_hook=["post_mcp_call"]),
+        guardrail(event_hook=["pre_mcp_call", "post_mcp_call"]),
+        guardrail(event_hook=["pre_call"]),
         guardrail(event_hook="pre_mcp_call"),
         guardrail(event_hook=None),
         guardrail(default_on=False),
@@ -902,3 +908,17 @@ class TestTerminateProcess:
         calls = self.stubbed(monkeypatch)
         terminate_process()
         assert calls["exited"] == [3] and len(calls["killed"]) == 1
+
+
+@pytest.mark.parametrize("value", [True, "true", "True"])
+def test_the_openai_websocket_passthrough_needs_the_explicit_realtime_allowance(value):
+    on = view(general_settings={"require_key_mcp_access_defined": True,
+                                "enable_openai_websocket_passthrough": value})
+    assert SelfCheckItem.REQUIRED_SETTINGS in failed(run_checks(on))
+    allowed = check_items(
+        on, logger=LOGGER, guardrail=GUARDRAIL, controlled=[registered()], allow_realtime=True
+    )
+    assert failed(allowed) == set()
+    off = view(general_settings={"require_key_mcp_access_defined": True,
+                                 "enable_openai_websocket_passthrough": False})
+    assert failed(run_checks(off)) == set()

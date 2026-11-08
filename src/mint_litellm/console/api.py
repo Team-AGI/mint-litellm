@@ -115,6 +115,11 @@ class Versioned(BaseModel):
     state_version: int
 
 
+class RecheckBody(Versioned):
+    url: str | None = None
+    transport: str | None = None
+
+
 class SuspendBody(Versioned):
     confirm_name: str
 
@@ -612,8 +617,11 @@ def assign_requester(intake_id: str, body: RequesterBody, actor: Actor = Depends
 
 
 @router.post("/intakes/{intake_id}/recheck")
-def recheck_intake(intake_id: str, body: Versioned, actor: Actor = Depends(api_actor)):
-    job = intake_service.recheck(actor.ctx, intake_id, expected_version=body.state_version)
+def recheck_intake(intake_id: str, body: RecheckBody, actor: Actor = Depends(api_actor)):
+    job = intake_service.recheck(
+        actor.ctx, intake_id, expected_version=body.state_version,
+        url=body.url or None, transport=body.transport or None,
+    )
     return done(actor, id=intake_id, job_id=job)
 
 

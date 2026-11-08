@@ -1,17 +1,19 @@
 """MINT의 판정 지점인 병렬 ``CustomGuardrail``.
 
-``guardrails`` 설정에서 ``pre_mcp_call``과 ``post_mcp_call`` 두 모드, ``default_on: true``로
-등록한다. 생성자가 병렬 실행(``run_in_parallel``)을 켜고 요청 원문 검사(``scan_raw_request``)를
-끈다. LiteLLM은 병렬 가드레일을 순차 훅이 모두 끝난 뒤의 최종 ``data``로 돌리고, 차단 예외가
-나면 업스트림에 닿기 전에 요청을 거부한다. 판정하는 인자는 전송부가 고르는 인자(참인 수정본,
-없으면 훅에 들어오기 전의 원래 인자)이다. 앞선 순차 가드레일이 수정본 없이 ``mcp_arguments``만
-바꾸면 원래 인자와 같다고 확인되지 않아 차단한다. 다만 ``mcp_arguments``와 첫 메시지를 함께 바꾸고
-수정본을 만들지 않는 가드레일은 이 확인을 통과하며, 그 경우 판정한 인자와 전송되는 인자가
-갈린다(보장과-한계에 적은 지원 범위 밖의 구성이다).
-``should_run_guardrail``을 재정의해 도구 호출 이벤트에서는 키·팀 메타데이터의 가드레일 제외
-설정과 무관하게 항상 판정한다. 도구 목록은 도구마다 이 훅이 불리고, 예외를 던진 도구는 목록에서
-빠진다. 응답·실패 관측용 로거는 이 생성자가 등록한다. ``litellm_settings.callbacks``에 따로 적으면
-두 번 등록되므로 기동을 거부한다.
+``guardrails`` 설정에서 ``pre_call``·``pre_mcp_call``·``post_mcp_call`` 세 모드,
+``default_on: true``로 등록한다. ``pre_call``은 모델 요청의 사전 단계이며 공급자가 외부 MCP
+서버를 직접 부르게 하는 항목(``provider_mcp``)이 있으면 막는다. 패스스루 경로도 같은 사전
+단계를 지난다. 생성자가 병렬 실행(``run_in_parallel``)을 켜고 요청 원문 검사
+(``scan_raw_request``)를 끈다. LiteLLM은 병렬 가드레일을 순차 훅이 모두 끝난 뒤의 최종
+``data``로 돌리고, 차단 예외가 나면 업스트림에 닿기 전에 요청을 거부한다. 판정하는 인자는
+전송부가 고르는 인자(참인 수정본, 없으면 훅에 들어오기 전의 원래 인자)이다. 앞선 순차
+가드레일이 수정본 없이 ``mcp_arguments``만 바꾸면 원래 인자와 같다고 확인되지 않아 차단한다.
+다만 ``mcp_arguments``와 첫 메시지를 함께 바꾸고 수정본을 만들지 않는 가드레일은 이 확인을
+통과하며, 그 경우 판정한 인자와 전송되는 인자가 갈린다(보장과-한계에 적은 지원 범위 밖의
+구성이다). ``should_run_guardrail``을 재정의해 도구 호출과 모델 요청 사전 이벤트에서는 키·팀
+메타데이터의 가드레일 제외 설정과 무관하게 항상 판정한다. 도구 목록은 도구마다 이 훅이 불리고,
+예외를 던진 도구는 목록에서 빠진다. 응답·실패 관측용 로거는 이 생성자가 등록한다.
+``litellm_settings.callbacks``에 따로 적으면 두 번 등록되므로 기동을 거부한다.
 """
 
 from __future__ import annotations
@@ -26,20 +28,22 @@ from litellm.types.guardrails import GuardrailEventHooks
 
 from mint_litellm.compat import litellm_1_106 as compat
 from mint_litellm.plugin.logger import MintLogger, internal_block
+from mint_litellm.plugin.provider_mcp import external_mcp, is_realtime
 from mint_litellm.plugin.selfcheck import (
     PluginRuntime,
     get_runtime,
     leave_startup_failure_marker,
 )
 from mint_litellm.types.decision import MINT_CTX_KEY
+from mint_litellm.types.reason_codes import Reason
 
 log = logging.getLogger("mint_litellm.guardrail")
 
-_TOOL_EVENTS = frozenset({"pre_mcp_call", "post_mcp_call"})
+_TOOL_EVENTS = frozenset({"pre_call", "pre_mcp_call", "post_mcp_call"})
 
 
 def _should_run_guardrail(self: Any, data: Any, event_type: Any) -> bool:
-    """도구 호출 이벤트에서는 키·팀 metadata와 요청 본문에 관계없이 항상 돈다."""
+    """도구 호출과 모델 요청 사전 이벤트에서는 키·팀 metadata와 요청 본문에 관계없이 항상 돈다."""
     return str(getattr(event_type, "value", event_type)) in _TOOL_EVENTS
 
 
@@ -87,7 +91,11 @@ class MintGuardrail(CustomGuardrail):
         compat.register_callback(logger)
 
     def get_supported_event_hooks(self):
-        return [GuardrailEventHooks.pre_mcp_call, GuardrailEventHooks.post_mcp_call]
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.pre_mcp_call,
+            GuardrailEventHooks.post_mcp_call,
+        ]
 
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
         if call_type == compat.LIST_TOOLS:
@@ -96,7 +104,29 @@ class MintGuardrail(CustomGuardrail):
             # 가드레일이 도는 단계의 호출 데이터는 서버·도구 이름이 있는 객체여야 한다. 아니면
             # 판정 없이 통과시키지 않고 차단한다. REST 요청 본문 단계는 LiteLLM이 건너뛴다.
             await self._judge(user_api_key_dict, data if isinstance(data, dict) else {})
+        else:
+            await self._screen_provider_mcp(user_api_key_dict, data, call_type)
         return None
+
+    async def _screen_provider_mcp(self, user_api_key_dict, data, call_type):
+        """모델 요청(패스스루 포함)을 거른다. 공급자 쪽 MCP와 허용되지 않은 실시간 경로를 막고,
+        판정 불능도 차단한다."""
+        try:
+            if is_realtime(call_type) and not self._runtime.config.allow_realtime:
+                reason, kind = Reason.REALTIME_FORBIDDEN, "realtime"
+            else:
+                reason, kind = Reason.EXTERNAL_MCP_FORBIDDEN, external_mcp(data, call_type)
+                if kind is None:
+                    return
+            outcome = await self._runtime.judge_refused_request(
+                data, user_api_key_dict, reason, kind
+            )
+        except Exception as exc:
+            log.error("모델 요청 판정 오류: %s", type(exc).__name__)
+            raise internal_block() from exc
+        if outcome.error is None:
+            raise internal_block()
+        raise HTTPException(status_code=403, detail=outcome.error.detail())
 
     async def _discover(self, user_api_key_dict, data):
         try:

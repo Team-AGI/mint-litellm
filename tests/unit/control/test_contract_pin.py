@@ -93,7 +93,7 @@ class MemoryConnection:
             self.locked = True
             return {"ok": ok}
         if "FROM mint.operators" in sql:
-            return None if self.state.get("requester_gone") else {"ok": 1}
+            return None if self.state.get("requester_gone") else {"ok": 1, "role": "approver"}
         if sql.startswith("SELECT * FROM mint.contract_reapproval_plans"):
             return deepcopy(self.state["saved"])
         if sql.startswith("UPDATE mint.servers SET deployment_drift=true"):
@@ -111,7 +111,7 @@ class MemoryConnection:
             return {"version": 3}
         raise AssertionError(sql)
 
-    def plan(self, *args):
+    def plan(self, *args, **kwargs):
         candidate = {
             "id": self.candidate,
             "version": self.version,

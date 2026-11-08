@@ -815,3 +815,26 @@ def test_init_creates_worker_and_staff_login_roles_when_passwords_are_given(mint
             for login in ("mint_worker_app", "mint_staff_app"):
                 conn.execute(f'DROP OWNED BY "{login}"')
                 conn.execute(f'DROP ROLE IF EXISTS "{login}"')
+
+
+def test_init_fix_config_adds_the_missing_modes_once_and_refuses_what_it_cannot_edit(mint):
+    config = mint.tmp / "litellm.config.yaml"
+    config.write_text(
+        "guardrails:\n  - guardrail_name: mint\n    litellm_params:\n"
+        "      guardrail: mint_litellm.plugin.guardrail.MintGuardrail\n"
+        "      mode: [pre_mcp_call, post_mcp_call]\n      default_on: true\n",
+        encoding="utf-8", newline="\n",
+    )
+    code, _, err = mint.run("init", "--fix-config", str(config))
+    assert code == 0 and "pre_call" in err and "mode" in err
+    assert "mode: [pre_mcp_call, post_mcp_call, pre_call]" in config.read_text(encoding="utf-8")
+    assert len(list(mint.tmp.glob("litellm.config.yaml.bak-*"))) == 1
+    code, _, err = mint.run("init", "--fix-config", str(config))
+    assert code == 0 and len(list(mint.tmp.glob("litellm.config.yaml.bak-*"))) == 1
+    config.write_text(
+        "guardrails:\n  - guardrail_name: mint\n    litellm_params:\n"
+        "      guardrail: mint_litellm.plugin.guardrail.MintGuardrail\n"
+        "      mode:\n        - pre_mcp_call\n", encoding="utf-8", newline="\n",
+    )
+    code, _, err = mint.run("init", "--fix-config", str(config))
+    assert code == 1 and "직접 고친 뒤" in err

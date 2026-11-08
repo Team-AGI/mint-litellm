@@ -28,6 +28,7 @@ from mint_litellm.plugin.buffer import EvidenceRecorder, LocalBuffer, SystemEven
 from mint_litellm.plugin.config import PluginConfig, configure_logging
 from mint_litellm.plugin.discovery import DiscoveryResult, evaluate_listed_tool
 from mint_litellm.plugin.pipeline import (
+    CallRequest,
     Outcome,
     PipelineDeps,
     PolicyEvaluate,
@@ -39,13 +40,14 @@ from mint_litellm.plugin.restore_watch import RestoreWatch
 from mint_litellm.plugin.result import ResultDeps
 from mint_litellm.plugin.snapshot import PluginDatabase, RegisteredServer
 from mint_litellm.types.canonical import sha256
-from mint_litellm.types.decision import OperationType
+from mint_litellm.types.decision import OperationType, StageResult
 from mint_litellm.types.events import Event, EventKind
+from mint_litellm.types.reason_codes import Reason
 from mint_litellm.types.settings import SELF_CHECK_DESCRIPTIONS, SelfCheckItem
 
 log = logging.getLogger("mint_litellm.selfcheck")
 
-REQUIRED_MODES = ("pre_mcp_call", "post_mcp_call")
+REQUIRED_MODES = ("pre_call", "pre_mcp_call", "post_mcp_call")
 # 통제 대상 서버 상태. 그 밖의 상태 서버는 LiteLLM에 없어도 기동을 막지 않는다.
 CONTROLLED_SERVER_STATUSES = frozenset({"approved", "suspended"})
 CONTRACT_FIELDS = ("url_sha256", "transport", "auth_type")
@@ -120,6 +122,13 @@ def guardrail_definition_check(callbacks: Sequence[Any], guardrail: Any) -> tupl
     return True, ""
 
 
+def _ws_passthrough_on(general_settings: Mapping[str, Any]) -> bool:
+    setting = general_settings.get("enable_openai_websocket_passthrough")
+    if isinstance(setting, str):
+        return setting.strip().lower() in ("1", "true", "yes", "on")
+    return setting is True
+
+
 def check_items(
     view: LiteLLMView,
     *,
@@ -127,6 +136,7 @@ def check_items(
     guardrail: Any,
     controlled: Sequence[RegisteredServer] | None,
     fingerprint_key_set: bool = True,
+    allow_realtime: bool = False,
 ) -> list[CheckResult]:
     """8개 항목을 확인한다. ``controlled``가 ``None``이면 MINT DB를 읽지 못한 것이다."""
     results: list[CheckResult] = []
@@ -213,6 +223,9 @@ def check_items(
     supported = view.general_settings.get("supported_db_objects")
     if isinstance(supported, list) and "mcp" not in [str(s) for s in supported]:
         problems.append("supported_db_objects lacks mcp")
+    # LiteLLM의 OpenAI WebSocket 패스스루는 사전 훅을 거치지 않으므로 실시간 허용을 명시해야 한다.
+    if _ws_passthrough_on(view.general_settings) and not allow_realtime:
+        problems.append("enable_openai_websocket_passthrough needs MINT_ALLOW_REALTIME=true")
     add(SelfCheckItem.REQUIRED_SETTINGS, not problems, "; ".join(problems))
     return results
 
@@ -358,6 +371,19 @@ class PluginRuntime:
         )
         return await evaluate_request(request, self.deps)
 
+    async def judge_refused_request(
+        self, data: Mapping[str, Any], auth: Any, reason: Reason, kind: str
+    ) -> Outcome:
+        """공급자 쪽 MCP가 담겼거나 실시간 경로인 모델 요청. 판정 사건을 남기고 항상 차단한다."""
+        request = CallRequest(
+            operation=OperationType.LLM_REQUEST,
+            principal=compat.principal_from_auth(auth, instance_id=self.config.instance_id),
+            hook=compat.parse_hook_data(data),
+            resolved=None,
+            resolution_failure=StageResult.stop(reason, detail=kind),
+        )
+        return await evaluate_request(request, self.deps)
+
     async def judge_listed_tool(self, data: Mapping[str, Any], auth: Any) -> DiscoveryResult:
         return await evaluate_listed_tool(
             data,
@@ -403,6 +429,7 @@ class PluginRuntime:
             guardrail=self.guardrail,
             controlled=controlled,
             fingerprint_key_set=self.config.fingerprint_key is not None,
+            allow_realtime=self.config.allow_realtime,
         )
         self.last_results = results
         self.last_mismatches = contract_mismatches(view, controlled or [])

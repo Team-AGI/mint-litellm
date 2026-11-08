@@ -70,6 +70,8 @@ def test_every_settings_row_is_reported(healthy):
         (lambda c: c.pop("guardrails"), "guardrails[MINT]"),
         (lambda c: c["guardrails"][0]["litellm_params"].update(mode=["pre_mcp_call"]),
          "guardrails[MINT]"),
+        (lambda c: c["guardrails"][0]["litellm_params"].update(
+            mode=["pre_mcp_call", "post_mcp_call"]), "guardrails[MINT]"),
         (lambda c: c["guardrails"][0]["litellm_params"].update(default_on=False),
          "guardrails[MINT]"),
         (lambda c: c["litellm_settings"].update(callbacks=["x.plugin.MintLogger"]), "callbacks"),

@@ -574,11 +574,15 @@ def recheck_intake(
     intake_id: str,
     request: Request,
     state_version: int = Form(...),
+    url: str = Form(""),
+    transport: str = Form(""),
     actor: Actor = Depends(page_actor),
 ):
     return act(
         actor,
-        lambda: intake_service.recheck(actor.ctx, intake_id, expected_version=state_version),
+        lambda: intake_service.recheck(
+            actor.ctx, intake_id, expected_version=state_version,
+            url=url.strip() or None, transport=transport.strip() or None),
         "rechecked", f"/intakes/{intake_id}",
         lambda **kw: intake_page(request, actor, intake_id, **kw),
     )
