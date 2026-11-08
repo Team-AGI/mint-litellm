@@ -13,7 +13,7 @@ from typing import Any
 
 from mint_litellm.plugin.config import PluginConfig
 from mint_litellm.plugin.snapshot import PluginDatabase
-from mint_litellm.restore import judge
+from mint_litellm.restore import files, judge
 
 log = logging.getLogger("mint_litellm.plugin.restore")
 
@@ -42,12 +42,26 @@ class RestoreWatch:
 
         return await self.database._run(read)
 
+    def _signed_file_exists(self) -> bool:
+        """서명 파일이 있는데 ``mint.exports``가 없으면 1단계 백업 복구다. 못 읽으면 있는 것."""
+        c = self.config
+        if c.export_dir is None:
+            return False
+        try:
+            return files.latest_path(c.export_dir, c.instance_id).exists()
+        except OSError:
+            return True
+
     async def refresh(self) -> judge.Verdict | None:
         """한 번 판정해 ``blocked_cause``를 갱신한다. DB 읽기에 실패하면 이전 값을 유지한다."""
         try:
             applied = await self._row("SELECT to_regclass('mint.exports') IS NOT NULL AS ok", ())
             if not applied or not applied["ok"]:
-                self.blocked_cause, self.verdict = None, None  # 1단계: 판정 대상이 아니다
+                self.verdict = None
+                self.blocked_cause = (
+                    judge.EXPORT_MISSING if await asyncio.to_thread(self._signed_file_exists)
+                    else None  # 1단계 설치: 판정 대상이 아니다
+                )
                 self.evaluated = True
                 return None
             c = self.config

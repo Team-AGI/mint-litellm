@@ -212,3 +212,31 @@ def test_the_config_reads_the_export_settings(monkeypatch):
     assert with_export.export_hmac_key_previous is not None
     with pytest.raises(RuntimeError, match="MINT_EXPORT_HMAC_KEY"):
         PluginConfig.from_env({**env, "MINT_EXPORT_HMAC_KEY": "short"})
+
+
+def test_a_signed_file_with_no_exports_table_blocks_a_restored_stage_one_backup(tmp_path):
+    write_latest(tmp_path)
+    watch = Watch(cfg(tmp_path), FakeDatabase(applied=False))
+    assert run(watch.refresh()) is None
+    assert watch.blocked_cause == "export_missing"
+    files.latest_path(tmp_path / "export", INSTANCE).unlink()
+    run(watch.refresh())
+    assert watch.blocked_cause is None  # 서명 파일이 없는 1단계 설치는 그대로 통과
+
+
+@pytest.mark.parametrize("document", [
+    {"key_id": ["x"], "hmac": "00"},
+    {"key_id": files.key_id(KEY), "hmac": "00", "value": 1.5},
+])
+def test_any_exception_while_verifying_a_signature_is_unverified(tmp_path, document):
+    path = files.latest_path(tmp_path / "export", INSTANCE)
+    path.parent.mkdir(parents=True)
+    import json as json_module
+
+    path.write_text(json_module.dumps(document), encoding="utf-8")
+    with pytest.raises(files.ExportUnverified):
+        files.verify(document, [KEY])
+    assert judge.read_files(tmp_path / "export", INSTANCE, [KEY]).error == "unverified"
+    watch = Watch(cfg(tmp_path), FakeDatabase())
+    run(watch.refresh())
+    assert watch.blocked_cause == "export_unverified"

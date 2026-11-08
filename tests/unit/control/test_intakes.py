@@ -1229,3 +1229,17 @@ def test_a_lost_approval_response_with_a_working_close_ends_closed_and_active(wo
     registry_first_with_all_keys(world)
     assert world.stub.submissions[0]["allow_all_keys"] is False
     assert world.stub.submissions[0]["approval_status"] == "active"
+
+
+def test_every_required_check_carries_the_candidate_binding_and_an_evidence_hash(world):
+    intake_id = passed(world)
+    row = fetchone(world.conn, "SELECT server_id FROM mint.intakes WHERE id = %s", (intake_id,))
+    bound = svc.contract_binding(world.conn, INSTANCE, row["server_id"])
+    rows = fetchall(
+        world.conn,
+        'SELECT "check", inputs, evidence_sha256 FROM mint.intake_checks WHERE intake_id = %s'
+        ' AND result = \'pass\'', (intake_id,))
+    by_name = {r["check"]: r for r in rows}
+    for name in ("connection", "definitions", "description_scan", "risk_grade"):
+        assert by_name[name]["inputs"]["contract_sha256"] == bound, name
+        assert by_name[name]["evidence_sha256"], name

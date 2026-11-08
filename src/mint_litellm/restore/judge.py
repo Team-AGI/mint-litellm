@@ -197,15 +197,15 @@ def read_files(export_dir: Path, instance_id: str, keys: Sequence[bytes]) -> Fil
         latest = files.read_verified(files.latest_path(export_dir, instance_id), keys)
     except FileNotFoundError:
         return FileState(error="missing")
-    except files.ExportUnverified:
+    except Exception:  # 서명 검증 밖의 예외도 미검증(차단)이다. 없는 파일만 따로 본다.
         return FileState(error="unverified")
     negative = None
-    path = files.newest_negative(export_dir, instance_id)
-    if path is not None:
-        try:
+    try:
+        path = files.newest_negative(export_dir, instance_id)
+        if path is not None:
             negative = files.read_verified(path, keys)
-        except (FileNotFoundError, files.ExportUnverified):
-            return FileState(latest=latest, error="unverified")
+    except Exception:
+        return FileState(latest=latest, error="unverified")
     return FileState(latest=latest, negative=negative)
 
 

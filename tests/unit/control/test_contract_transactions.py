@@ -604,3 +604,20 @@ def test_failures_counted_for_an_earlier_contract_start_over(oauth_db):
                  " WHERE name = 'oauth2_flow_read'")
     run_observe(conn, FlowClient("client_credentials", listing=False))
     assert not server(conn)["deployment_drift"]
+
+
+def test_intake_evidence_binding_matches_what_reapproval_demands(contract_db):
+    from mint_litellm.control.services import intakes
+
+    conn, _, _ = contract_db
+    new = add_tool(conn, NEW)
+    deployment = {"url": "https://mcp.test/api", "transport": "http", "auth_type": "none"}
+    conn.execute(
+        "INSERT INTO mint.deployment_contracts(id,instance_id,server_id,canonical_text,"
+        "sha256,url,url_sha256,transport,auth_type) VALUES (%s,'i','s',%s,%s,%s,%s,'http','none')",
+        (new_uuid7(), canonical_text(deployment), sha256(deployment), deployment["url"],
+         url_sha256(deployment["url"])),
+    )
+    bound = intakes.contract_binding(conn, "i", "s")
+    assert bound == sha256({"tools": {"read": sha256(NEW)}, "deployment": sha256(deployment)})
+    assert new

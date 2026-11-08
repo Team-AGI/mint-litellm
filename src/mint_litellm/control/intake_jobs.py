@@ -203,6 +203,16 @@ def _run_checks(
     if contract is not None:
         spec = {"url": contract["url"], "transport": contract["transport"],
                 "auth_type": contract["auth_type"]}
+    pending: list[tuple[str, Any]] = []
+
+    def flush() -> None:
+        if not pending:
+            return
+        bound = intakes.contract_binding(job.conn, job.instance_id, server_id)
+        for pending_name, pending_out in pending:
+            intakes.record_check(ctx, row, attempt, pending_name, pending_out, bound)
+        pending.clear()
+
     for name in checks.CHECKS:
         job.checkpoint()
         done = intakes.existing_check(job.conn, job.instance_id, row["id"], name, attempt)
@@ -257,9 +267,12 @@ def _run_checks(
         else:
             out = checks.supply_chain(contract and contract["image_digest"],
                                       contract and contract["source_commit"])
-        intakes.record_check(ctx, row, attempt, name, out)
+        pending.append((name, out))
+        if name == "definitions" or out.result == "fail" or halt:
+            flush()  # 후보 계약이 정해진 뒤에야 증거를 계약에 결속할 수 있다
         if out.result == "fail" or halt:
             break
+    flush()
     return needs_credentials
 
 
