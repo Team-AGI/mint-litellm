@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.metadata
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -25,7 +25,6 @@ LIST_TOOLS = "list_mcp_tools"
 
 _MANAGER_MODULE = "litellm.proxy._experimental.mcp_server.mcp_server_manager"
 _UTILS_MODULE = "litellm.proxy._experimental.mcp_server.utils"
-_PROXY_MCP_HANDLER_MODULE = "litellm.responses.mcp.litellm_proxy_mcp_handler"
 
 
 class ServerResolutionError(Exception):
@@ -121,12 +120,6 @@ def parse_hook_data(data: Mapping[str, Any]) -> HookData:
         arguments_ok=arguments is not None,
         arguments_confirmed=confirmed,
     )
-
-
-async def routes_through_gateway(tools: Sequence[Mapping[str, Any]]) -> tuple[bool, ...]:
-    """``tools`` 각 항목이 게이트웨이를 거쳐 실행되는지. LiteLLM 응답 경로의 판정을 그대로 쓴다."""
-    handler = importlib.import_module(_PROXY_MCP_HANDLER_MODULE).LiteLLM_Proxy_MCP_Handler
-    return await handler.routes_through_gateway(tools)
 
 
 def master_key_alias() -> str:
@@ -347,7 +340,6 @@ _REQUIRED_SYMBOLS: tuple[tuple[str, str], ...] = (
     (_MANAGER_MODULE, "global_mcp_server_manager.get_registry"),
     (_MANAGER_MODULE, "global_mcp_server_manager.catalog"),
     (_UTILS_MODULE, "normalize_server_name"),
-    (_PROXY_MCP_HANDLER_MODULE, "LiteLLM_Proxy_MCP_Handler.routes_through_gateway"),
     ("litellm.constants", "LITELLM_PROXY_MASTER_KEY_ALIAS"),
     ("litellm.secret_managers.main", "str_to_bool"),
     ("litellm.proxy.proxy_server", "general_settings"),

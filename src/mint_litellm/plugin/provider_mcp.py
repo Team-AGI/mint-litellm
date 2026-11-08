@@ -1,34 +1,90 @@
 """모델 요청에 담긴 공급자 쪽 MCP 판정.
 
-``tools[]``의 ``type="mcp"`` 항목과 Anthropic형 ``mcp_servers``는 공급자가 외부 서버를 직접
-호출하게 하므로 MINT의 서버 판정을 거치지 않는다. 게이트웨이가 서빙하는 주소(``litellm_proxy``
-또는 등록된 ``/mcp/<이름>``)의 ``type="mcp"``만 LiteLLM이 자기 MCP 경로로 실행하며 그 호출은
-도구 호출 훅을 지난다. 그 판정은 LiteLLM의 ``routes_through_gateway``와 같은 기준을 쓴다.
+``type="mcp"`` 객체(``tools[]``든 ``extra_body``·``input``·``session`` 안이든)와 비어 있지 않은
+``mcp_servers``는 공급자가 외부 서버를 직접 호출하게 하므로 MINT의 서버 판정을 거치지 않는다.
+요청 본문 전체를 재귀로 본다. 문자열로 직렬화된 JSON도 풀어서 보고, 깊이·크기 상한을 넘는
+본문은 판정할 수 없으므로 막는다. 예외는 하나뿐이다. 최상위 ``tools[]``의 ``litellm_proxy``
+형식 주소는 LiteLLM이 자기 MCP 경로로 실행하며 그 호출은 도구 호출 훅을 지난다. 임의 호스트의
+``/mcp/<이름>`` 경로는 공급자에게 그대로 전달될 수 있어 게이트웨이로 인정하지 않는다. 패스스루
+호출 유형에는 LiteLLM의 내부 MCP 처리가 없으므로 예외 없이 모두 막는다.
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+import json
+from collections.abc import Mapping
 from typing import Any
 
-from mint_litellm.compat import litellm_1_106 as compat
+MAX_DEPTH = 24
+MAX_NODES = 100_000
+MAX_JSON_CHARS = 1_000_000
+PASS_THROUGH = "pass_through_endpoint"
+GATEWAY = "litellm_proxy"
 
-Router = Callable[[Sequence[Mapping[str, Any]]], Awaitable[Sequence[bool]]]
+TOOLS = "tools"
+SERVERS = "mcp_servers"
+LIMIT = "limit"
 
 
-async def external_mcp(data: Any, routes: Router = compat.routes_through_gateway) -> str | None:
-    """공급자가 직접 부를 MCP 항목이 있으면 그 종류(``mcp_servers``·``tools``), 없으면 None.
+class _Found(Exception):
+    def __init__(self, kind: str) -> None:
+        self.kind = kind
 
-    MCP가 없는 요청은 비교 몇 번으로 끝나며 어떤 대기도 없다.
+
+def _gateway_form(tool: Mapping[str, Any]) -> bool:
+    url = tool.get("server_url")
+    return isinstance(url, str) and (url == GATEWAY or url.startswith(GATEWAY + "/"))
+
+
+def is_realtime(call_type: Any) -> bool:
+    """실시간 호출 유형. 연결 뒤의 ``session.update``는 사전 훅을 지나지 않는다."""
+    return isinstance(call_type, str) and "realtime" in call_type
+
+
+def external_mcp(data: Any, call_type: Any = None) -> str | None:
+    """공급자가 직접 부를 MCP 항목이 있으면 그 종류, 판정할 수 없으면 ``limit``, 없으면 None.
+
+    MCP가 없는 요청도 본문을 한 번 훑지만 대기는 없다.
     """
     if not isinstance(data, Mapping):
         return None
-    if data.get("mcp_servers"):
-        return "mcp_servers"
-    tools = data.get("tools")
-    if not isinstance(tools, list):
-        return None
-    mcp = [t for t in tools if isinstance(t, Mapping) and t.get("type") == "mcp"]
-    if mcp and not all(await routes(mcp)):
-        return "tools"
+    allowed: set[int] = set()
+    top = data.get("tools")
+    if call_type != PASS_THROUGH and isinstance(top, list):
+        allowed = {id(t) for t in top if isinstance(t, Mapping) and _gateway_form(t)}
+    nodes = 0
+
+    def walk(value: Any, depth: int) -> None:
+        nonlocal nodes
+        nodes += 1
+        if depth > MAX_DEPTH or nodes > MAX_NODES:
+            raise _Found(LIMIT)
+        if isinstance(value, Mapping):
+            if value.get("type") == "mcp" and id(value) not in allowed:
+                raise _Found(TOOLS)
+            if value.get("mcp_servers"):
+                raise _Found(SERVERS)
+            for key, item in value.items():
+                # LiteLLM이 요청 본문을 그대로 복사해 두는 자리라 같은 항목을 두 번 본다.
+                if depth == 0 and key == "proxy_server_request":
+                    continue
+                walk(item, depth + 1)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                walk(item, depth + 1)
+        elif isinstance(value, str) and value[:1] in ("{", "["):
+            if len(value) > MAX_JSON_CHARS:
+                raise _Found(LIMIT)
+            try:
+                inner = json.loads(value)
+            except ValueError:
+                return
+            walk(inner, depth + 1)
+
+    try:
+        walk(data, 0)
+    except _Found as found:
+        return found.kind
+    except RecursionError:
+        return LIMIT
     return None

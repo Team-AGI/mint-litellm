@@ -360,14 +360,16 @@ class PluginRuntime:
         )
         return await evaluate_request(request, self.deps)
 
-    async def judge_external_mcp(self, data: Mapping[str, Any], auth: Any, kind: str) -> Outcome:
-        """공급자 쪽 MCP가 담긴 모델 요청. 판정 사건을 남기고 항상 차단한다."""
+    async def judge_refused_request(
+        self, data: Mapping[str, Any], auth: Any, reason: Reason, kind: str
+    ) -> Outcome:
+        """공급자 쪽 MCP가 담겼거나 실시간 경로인 모델 요청. 판정 사건을 남기고 항상 차단한다."""
         request = CallRequest(
             operation=OperationType.LLM_REQUEST,
             principal=compat.principal_from_auth(auth, instance_id=self.config.instance_id),
             hook=compat.parse_hook_data(data),
             resolved=None,
-            resolution_failure=StageResult.stop(Reason.EXTERNAL_MCP_FORBIDDEN, detail=kind),
+            resolution_failure=StageResult.stop(reason, detail=kind),
         )
         return await evaluate_request(request, self.deps)
 

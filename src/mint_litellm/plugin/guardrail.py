@@ -28,13 +28,14 @@ from litellm.types.guardrails import GuardrailEventHooks
 
 from mint_litellm.compat import litellm_1_106 as compat
 from mint_litellm.plugin.logger import MintLogger, internal_block
-from mint_litellm.plugin.provider_mcp import external_mcp
+from mint_litellm.plugin.provider_mcp import external_mcp, is_realtime
 from mint_litellm.plugin.selfcheck import (
     PluginRuntime,
     get_runtime,
     leave_startup_failure_marker,
 )
 from mint_litellm.types.decision import MINT_CTX_KEY
+from mint_litellm.types.reason_codes import Reason
 
 log = logging.getLogger("mint_litellm.guardrail")
 
@@ -104,18 +105,24 @@ class MintGuardrail(CustomGuardrail):
             # 판정 없이 통과시키지 않고 차단한다. REST 요청 본문 단계는 LiteLLM이 건너뛴다.
             await self._judge(user_api_key_dict, data if isinstance(data, dict) else {})
         else:
-            await self._screen_provider_mcp(user_api_key_dict, data)
+            await self._screen_provider_mcp(user_api_key_dict, data, call_type)
         return None
 
-    async def _screen_provider_mcp(self, user_api_key_dict, data):
-        """모델 요청(패스스루 포함)에 공급자 쪽 MCP가 있으면 막는다. 판정 불능도 차단한다."""
+    async def _screen_provider_mcp(self, user_api_key_dict, data, call_type):
+        """모델 요청(패스스루 포함)을 거른다. 공급자 쪽 MCP와 허용되지 않은 실시간 경로를 막고,
+        판정 불능도 차단한다."""
         try:
-            kind = await external_mcp(data)
-            if kind is None:
-                return
-            outcome = await self._runtime.judge_external_mcp(data, user_api_key_dict, kind)
+            if is_realtime(call_type) and not self._runtime.config.allow_realtime:
+                reason, kind = Reason.REALTIME_FORBIDDEN, "realtime"
+            else:
+                reason, kind = Reason.EXTERNAL_MCP_FORBIDDEN, external_mcp(data, call_type)
+                if kind is None:
+                    return
+            outcome = await self._runtime.judge_refused_request(
+                data, user_api_key_dict, reason, kind
+            )
         except Exception as exc:
-            log.error("모델 요청 MCP 판정 오류: %s", type(exc).__name__)
+            log.error("모델 요청 판정 오류: %s", type(exc).__name__)
             raise internal_block() from exc
         if outcome.error is None:
             raise internal_block()

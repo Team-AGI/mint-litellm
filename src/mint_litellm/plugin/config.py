@@ -45,6 +45,8 @@ class PluginConfig:
     selfcheck_grace_seconds: float = DEFAULT_SELFCHECK_GRACE_SECONDS
     log_level: str | None = None
     observe_seconds: int = 3600
+    # 실시간 경로의 연결 뒤 도구 추가는 사전 훅을 지나지 않으므로 기본으로 거부한다.
+    allow_realtime: bool = False
     # 되돌림 탐지(2단계). 읽기 전용으로 마운트한 내보내기 디렉터리와 서명 키.
     export_dir: Path | None = None
     export_hmac_key: bytes | None = None
@@ -84,6 +86,7 @@ class PluginConfig:
             readiness_url=env.get("MINT_READINESS_URL") or None,
             log_level=_log_level(env.get("MINT_LOG_LEVEL")),
             observe_seconds=_integer(env, "MINT_OBSERVE_SECONDS", 3600, 1),
+            allow_realtime=_boolean(env, "MINT_ALLOW_REALTIME", False),
             export_dir=Path(export_dir) if export_dir else None,
             export_hmac_key=_hmac_key(env, "MINT_EXPORT_HMAC_KEY"),
             export_hmac_key_previous=_hmac_key(env, "MINT_EXPORT_HMAC_KEY_PREVIOUS"),

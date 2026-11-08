@@ -6,6 +6,7 @@
 """
 
 import json
+import re
 import uuid
 
 import httpx
@@ -77,15 +78,9 @@ def send(subject, path, body) -> httpx.Response:
 
 
 def code_of(reply: httpx.Response) -> str | None:
-    try:
-        detail = reply.json().get("detail")
-        detail = json.loads(detail) if isinstance(detail, str) else detail
-        return detail.get("code")
-    except (ValueError, AttributeError):
-        try:
-            return json.loads(reply.json()["error"]["message"]).get("code")
-        except (ValueError, KeyError, TypeError, AttributeError):
-            return None
+    """응답 어디에 담겼든(detail, error.message의 `403: {...}`) MINT 오류 코드를 찾는다."""
+    found = re.search(r'\\?"code\\?":\\?"(MINT-[A-Z0-9-]+)', reply.text)
+    return found.group(1) if found else None
 
 
 def decisions(world, subject, since) -> list[dict]:
@@ -120,6 +115,17 @@ CASES = {
     "passthrough-tools": ("/anthropic/v1/messages", lambda m: {
         "model": "claude-sonnet-4-5", "max_tokens": 16,
         "messages": [{"role": "user", "content": "hi"}], "tools": [external_tool()],
+    }),
+    "responses-extra_body": ("/v1/responses", lambda m: plain_body(
+        m, "/v1/responses", extra_body={"tools": [external_tool()]}
+    )),
+    "responses-registered-name-on-another-host": ("/v1/responses", lambda m: plain_body(
+        m, "/v1/responses", tools=[{"type": "mcp", "server_url": "https://evil.example/mcp/mcp_a"}]
+    )),
+    "passthrough-gateway-form": ("/anthropic/v1/messages", lambda m: {
+        "model": "claude-sonnet-4-5", "max_tokens": 16,
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": [{"type": "mcp", "server_url": "litellm_proxy/mcp/mcp_a"}],
     }),
 }
 
@@ -160,3 +166,22 @@ def test_a_request_without_mcp_passes_with_no_decision_event(world, model, path)
     reply = send(subject, path, plain_body(model, path))
     assert reply.status_code == 200, reply.text
     assert decisions(world, subject, since) == []
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/v1/realtime/client_secrets", {"session": {"type": "realtime"}}),
+        ("/v1/realtime/transcription_sessions", {}),
+        ("/v1/realtime/client_secrets", {"session": {"tools": [external_tool()]}}),
+    ],
+    ids=["client-secrets", "transcription-sessions", "client-secrets-with-mcp"],
+)
+def test_realtime_requests_are_refused_before_a_session_exists(world, model, path, body):
+    subject = world.subject(("a",))
+    since = world.now()
+    reply = send(subject, path, body)
+    assert reply.status_code == 403, reply.text
+    assert code_of(reply) == "MINT-REALTIME-FORBIDDEN", reply.text
+    (event,) = decisions(world, subject, since)
+    assert event["payload"]["stop"]["reason_code"] == "REALTIME_FORBIDDEN"

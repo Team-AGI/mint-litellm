@@ -105,7 +105,8 @@ cmd_up() {
     "${COMPOSE[@]}" build litellm
     "${COMPOSE[@]}" up -d --wait postgres
     fix_volume_owners
-    admin_cli init --out /app/config/litellm.mint.yaml >/dev/null
+    admin_cli init --out /app/config/litellm.mint.yaml \
+        --fix-config /app/config/litellm.config.yaml >/dev/null
     ensure_bundle
     "${COMPOSE[@]}" up -d opa litellm
     "${COMPOSE[@]}" --profile worker up -d worker
@@ -143,7 +144,8 @@ cmd_upgrade() {
     # 이전 판본이 루트로 쓰는 중에 소유자를 바꾸면 그 사이에 만든 파일이 루트로 남는다.
     "${COMPOSE[@]}" --profile worker --profile console stop litellm worker console
     fix_volume_owners
-    admin_cli init --out /app/config/litellm.mint.yaml >/dev/null
+    admin_cli init --out /app/config/litellm.mint.yaml \
+        --fix-config /app/config/litellm.config.yaml >/dev/null
     "${COMPOSE[@]}" up -d litellm
     "${COMPOSE[@]}" --profile worker up -d worker
     "${COMPOSE[@]}" --profile console up -d console

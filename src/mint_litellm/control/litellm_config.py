@@ -1,5 +1,8 @@
 """LiteLLM ``config.yaml`` 조각의 생성과 설정 파일·환경 파일 읽기."""
 
+import re
+import shutil
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -85,3 +88,75 @@ def load_env_file(path: Path) -> dict[str, str]:
         key, _, value = line.partition("=")
         values[key.strip()] = value.strip().strip("\"'")
     return values
+
+
+_MODE_LINE = re.compile(
+    r"^(?P<head>\s*mode:\s*)(?:\[(?P<flow>[^\]#]*)\]|(?P<scalar>[A-Za-z_]+))(?P<tail>\s*(?:#.*)?)$"
+)
+_CLASS_LINE = re.compile(r"^(?P<indent>\s*)guardrail:\s*\S*\.MintGuardrail\s*(?:#.*)?$")
+
+
+def _mint_item(document: Any) -> dict[str, Any] | None:
+    for item in (document or {}).get("guardrails") or []:
+        params = (item or {}).get("litellm_params") or {}
+        if str(params.get("guardrail", "")).endswith(".MintGuardrail"):
+            return params
+    return None
+
+
+def ensure_guardrail_modes(path: Path) -> list[str]:
+    """운영자 설정의 MINT 가드레일 ``mode``에 빠진 모드를 더한다. 더한 모드를 돌려준다.
+
+    한 줄 ``mode: [...]``나 ``mode: 이름`` 형태만 그 줄을 고친다(주석·다른 줄은 그대로). 바꾸기 전에
+    ``<파일>.bak-<UTC 시각>`` 사본을 두고, 이미 모두 있거나 파일·MINT 가드레일이 없으면 아무것도
+    하지 않는다. 안전하게 고칠 수 없는 모양이면 고칠 줄을 알리고 멈춘다.
+    """
+    if not path.is_file():
+        return []
+    raw = path.read_bytes().decode("utf-8")
+    try:
+        document = yaml.safe_load(raw)
+    except yaml.YAMLError as error:
+        raise ControlError(f"설정 파일을 읽을 수 없습니다({path}): {error}") from None
+    params = _mint_item(document)
+    if params is None:
+        return []
+    current = params.get("mode")
+    modes = [current] if isinstance(current, str) else list(current or [])
+    missing = [m for m in GUARDRAIL_MODES if m not in modes]
+    if not missing:
+        return []
+    wanted = [*modes, *missing]
+    fail = ControlError(
+        f"MINT 가드레일 mode를 자동으로 고칠 수 없습니다. {path}의 mode를 "
+        f"[{', '.join(GUARDRAIL_MODES)}]로 직접 고친 뒤 다시 실행하십시오."
+    )
+    lines = raw.split("\n")
+    class_at = [i for i, ln in enumerate(lines) if _CLASS_LINE.match(ln)]
+    if len(class_at) != 1:
+        raise fail
+    indent = _CLASS_LINE.match(lines[class_at[0]])["indent"]
+    candidates = [
+        i for i, ln in enumerate(lines)
+        if (m := _MODE_LINE.match(ln)) and m["head"].startswith(indent + "mode")
+        and len(m["head"]) - len(m["head"].lstrip()) == len(indent)
+    ]
+    if not candidates:
+        raise fail
+    at = min(candidates, key=lambda i: abs(i - class_at[0]))
+    match = _MODE_LINE.match(lines[at])
+    lines[at] = f"{match['head']}[{', '.join(wanted)}]{match['tail']}"
+    edited = "\n".join(lines)
+    expected = yaml.safe_load(raw)
+    _mint_item(expected)["mode"] = wanted
+    try:
+        unchanged_elsewhere = yaml.safe_load(edited) == expected
+    except yaml.YAMLError:
+        unchanged_elsewhere = False
+    if not unchanged_elsewhere:
+        raise fail
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    shutil.copy2(path, path.with_name(f"{path.name}.bak-{stamp}"))
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        handle.write(edited)
+    return missing

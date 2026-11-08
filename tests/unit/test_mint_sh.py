@@ -16,7 +16,7 @@ BASH = shutil.which("bash")
 pytestmark = pytest.mark.skipif(BASH is None, reason="bash가 필요하다")
 
 
-def run(tmp_path: Path, env_text: str, *args: str):
+def run(tmp_path: Path, env_text: str, *args: str, docker_tail: str = ""):
     deploy = tmp_path / "deploy"
     deploy.mkdir(exist_ok=True)
     shutil.copy(SCRIPT, deploy / "mint.sh")
@@ -24,7 +24,9 @@ def run(tmp_path: Path, env_text: str, *args: str):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     fake = bin_dir / "docker"
-    fake.write_text('#!/bin/sh\necho "$@" >> "$FAKE_DOCKER_LOG"\n', encoding="utf-8")
+    fake.write_text(
+        '#!/bin/sh\necho "$@" >> "$FAKE_DOCKER_LOG"\n' + docker_tail, encoding="utf-8"
+    )
     fake.chmod(0o755)
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
@@ -141,3 +143,30 @@ def test_values_are_appended_on_their_own_line_when_env_lacks_a_trailing_newline
     assert lines[0] == "POSTGRES_PASSWORD=x"
     assert any(ln.startswith("MINT_SECRETS_DIR=") for ln in lines)
     assert any(ln.startswith("MINT_EXPORT_HMAC_KEY=") for ln in lines)
+
+
+FIX_FLAG = "--fix-config /app/config/litellm.config.yaml"
+
+
+def test_upgrade_and_up_ask_init_to_add_missing_guardrail_modes_to_the_operator_config(tmp_path):
+    (tmp_path / "deploy").mkdir()
+    (tmp_path / "deploy" / "litellm.config.example.yaml").write_text("{}\n", encoding="utf-8")
+    for command in ("up", "upgrade"):
+        (tmp_path / "docker.log").unlink(missing_ok=True)
+        result, _, _ = run(tmp_path, "POSTGRES_PASSWORD=x\n", command)
+        assert result.returncode == 0, result.stderr
+        log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+        assert f"init --out /app/config/litellm.mint.yaml {FIX_FLAG}" in log
+
+
+def test_upgrade_stops_before_starting_litellm_when_init_cannot_fix_the_config(tmp_path):
+    (tmp_path / "deploy").mkdir()
+    result, _, _ = run(
+        tmp_path,
+        "POSTGRES_PASSWORD=x\n",
+        "upgrade",
+        docker_tail='case "$*" in *--fix-config*) exit 1;; esac\n',
+    )
+    assert result.returncode != 0
+    log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+    assert "up -d litellm" not in log
