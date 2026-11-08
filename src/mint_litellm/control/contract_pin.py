@@ -14,7 +14,7 @@ from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import fetchone
 from mint_litellm.control.errors import ControlError, conflict
 from mint_litellm.control.services.base import transact
-from mint_litellm.control.services.contracts import _plan, freeze_plan
+from mint_litellm.control.services.contracts import _plan, current_operator, freeze_plan
 from mint_litellm.types.canonical import pin_set_sha256, pin_sha256
 from mint_litellm.types.events import EventKind
 from mint_litellm.types.ids import new_uuid7
@@ -83,6 +83,12 @@ def _pending(ctx: Context, saved: dict) -> dict:
     plan = saved["plan"]
     if not _requester_valid(ctx.conn, ctx.instance_id, saved):
         raise conflict("재승인을 요청한 승인자가 더 이상 유효하지 않습니다.")
+    # 예외 서버의 확정은 요청자와 두 번째 승인자의 현재 자격으로 다시 확인한다
+    first = current_operator(ctx.conn, ctx.instance_id, saved["requested_by"],
+                             saved["requested_user_id"])
+    saved_second = plan.get("second")
+    second = current_operator(ctx.conn, ctx.instance_id, saved_second["name"],
+                              saved_second["user_id"]) if saved_second else None
     fresh = _plan(
         ctx,
         saved["server_id"],
@@ -90,9 +96,10 @@ def _pending(ctx: Context, saved: dict) -> dict:
         [c["id"] for c in plan["candidates"]],
         plan["deployment"]["id"] if plan["deployment"] else None,
         plan["server_version"],
-        replan=True,
+        second,
+        first,
     )
-    if freeze_plan(fresh) != plan:
+    if freeze_plan(fresh) != {k: v for k, v in plan.items() if k != "second"}:
         raise conflict("재pin 중 후보 또는 증거가 변경되었습니다.")
     if not fresh["server"]["deployment_drift"] or "pin_reapproval" not in plan["drift_fields"]:
         raise conflict("재승인 차단 표지가 없습니다.")

@@ -145,40 +145,61 @@ def request_deployment(
         _alert(ctx, old["id"], observation["observed_sha256"], "high", payload)
 
 
-def _exception_reapproval(
-    ctx: Context, intake: dict, deployment_id: str | None, second: Operator | None
-) -> None:
-    """예외 승인 신청의 재승인: 서로 다른 admin 2인이고, 원래 예외가 아직 유효해야 한다.
+def current_operator(conn, instance_id: str, name: str, user_id: str | None) -> Operator | None:
+    """지금 유효한 운영자(삭제·만료 아님, 사용자 결속 일치)의 현재 역할(``FOR SHARE``)."""
+    row = fetchone(
+        conn,
+        "SELECT role FROM mint.operators WHERE instance_id=%s AND name=%s AND user_id=%s"
+        " AND (expires_at IS NULL OR expires_at > now()) FOR SHARE",
+        (instance_id, name, user_id),
+    )
+    return Operator(name, row["role"], user_id) if row else None
 
-    새 유효 기한을 따로 두지 않으므로 기한은 원래 예외의 기한을 넘지 않는다.
+
+def _exception_gate(
+    ctx: Context, server_id: str, intake: dict, proposed_by: str | None,
+    first: Operator, second: Operator | None,
+) -> bool:
+    """서버의 현재 승인 근거가 예외이면 서로 다른 admin 2인과 아직 유효한 예외를 요구한다.
+
+    고른 신청이 아니라 서버의 현재 승인 근거(가장 최근에 승인·예외로 결정된 신청)로 판단한다.
+    새 유효 기한을 따로 두지 않으므로 기한은 원래 예외의 기한을 넘지 않는다. 확정 단계에서도
+    다시 불러 현재의 자격으로 확인한다. 요구했으면 참.
     """
-    proposer = fetchone(
+    basis = fetchone(
         ctx.conn,
-        "SELECT proposed_by FROM mint.deployment_contracts WHERE instance_id=%s AND id=%s",
-        (ctx.instance_id, deployment_id),
-    ) if deployment_id else None
-    barred = {intake["requested_by"], ctx.operator.user_id,
-              proposer["proposed_by"] if proposer else None}
+        "SELECT * FROM mint.intakes WHERE instance_id=%s AND server_id=%s AND status='decided'"
+        " AND decision IN ('approved','exception') ORDER BY decided_at DESC, id DESC LIMIT 1",
+        (ctx.instance_id, server_id),
+    )
+    involved = [i for i in (intake, basis) if i is not None and i["decision"] == "exception"]
+    if not involved:
+        return False
+    barred = {i["requested_by"] for i in (intake, basis) if i is not None}
+    barred |= {first.user_id, proposed_by}
     if (
-        ctx.operator.role != "admin"
+        first.role != "admin"
+        or first.user_id in {i["requested_by"] for i in (intake, basis) if i is not None}
         or second is None
         or second.role != "admin"
         or second.user_id is None
         or second.user_id in barred
     ):
         raise separation_of_duties(
-            "예외 승인 신청의 재승인에는 신청자·후보 제시자와 다른 admin 두 명이 필요합니다."
+            "예외 승인 서버의 재승인에는 신청자·후보 제시자와 다른 admin 두 명이 필요합니다."
         )
-    original = fetchone(
-        ctx.conn,
-        "SELECT max(valid_until) AS valid_until FROM mint.approvals WHERE instance_id=%s"
-        " AND class='exception' AND basis->>'intake_id'=%s",
-        (ctx.instance_id, str(intake["id"])),
-    )
-    if original is None or original["valid_until"] is None or original["valid_until"] <= (
-        fetchone(ctx.conn, "SELECT now() AS t")["t"]
-    ):
-        raise stale_evidence("원래 예외 승인의 유효 기한이 지났습니다. 새 예외 승인이 필요합니다.")
+    now = fetchone(ctx.conn, "SELECT now() AS t")["t"]
+    for item in involved:
+        original = fetchone(
+            ctx.conn,
+            "SELECT max(valid_until) AS valid_until FROM mint.approvals WHERE instance_id=%s"
+            " AND class='exception' AND basis->>'intake_id'=%s",
+            (ctx.instance_id, str(item["id"])),
+        )
+        if original is None or original["valid_until"] is None or original["valid_until"] <= now:
+            raise stale_evidence(
+                "원래 예외 승인의 유효 기한이 지났습니다. 새 예외 승인이 필요합니다.")
+    return True
 
 
 def _plan(
@@ -189,8 +210,9 @@ def _plan(
     deployment_id: str | None,
     expected_version: int | None,
     second: Operator | None = None,
-    replan: bool = False,
+    first: Operator | None = None,
 ) -> dict:
+    first = first or ctx.operator
     try:
         for value in [intake_id, *candidate_ids, *([deployment_id] if deployment_id else [])]:
             UUID(str(value))
@@ -221,8 +243,6 @@ def _plan(
         raise separation_of_duties("신청자와 승인자의 사용자 결속이 필요합니다.")
     if ctx.operator.user_id == intake["requested_by"]:
         raise separation_of_duties("신청자는 같은 계약을 재승인할 수 없습니다.")
-    if intake["decision"] == "exception" and not replan:
-        _exception_reapproval(ctx, intake, deployment_id, second)
     if not candidate_ids and deployment_id is None:
         raise conflict("새 후보 계약을 지정하십시오.")
     if len(set(candidate_ids)) != len(candidate_ids):
@@ -253,6 +273,8 @@ def _plan(
         raise conflict("후보 배포 계약이 없습니다.")
     if deployment and deployment["proposed_by"] == ctx.operator.user_id:
         raise separation_of_duties("배포 후보를 제시한 운영자는 그 후보를 재승인할 수 없습니다.")
+    exception_required = _exception_gate(
+        ctx, server_id, intake, deployment["proposed_by"] if deployment else None, first, second)
     auth = deployment["auth_type"] if deployment else server["auth_type"]
     scope = credential_scope(auth)
     if any(c["credential_scope"] != scope for c in candidates):
@@ -348,7 +370,7 @@ def _plan(
         "desired": desired,
         "scope": scope,
         "evidence_hash": evidence_hash,
-        "intake_decision": intake["decision"],
+        "exception_required": exception_required,
     }
 
 
@@ -371,6 +393,14 @@ def freeze_plan(plan: dict) -> dict:
         "evidence_hash": plan["evidence_hash"],
         "drift_fields": sorted(plan["server"]["deployment_drift_fields"] or ()),
     }
+
+
+def _saved_plan(plan: dict, second: Operator | None) -> dict:
+    """저장하는 계획. 예외 서버면 두 번째 승인자를 함께 고정해 확정 때 다시 확인한다."""
+    saved = freeze_plan(plan)
+    if plan.get("exception_required") and second is not None:
+        saved["second"] = {"name": second.name, "user_id": second.user_id}
+    return saved
 
 
 @service("contract reapprove")
@@ -417,7 +447,7 @@ def reapprove(
             intake_id,
             ctx.operator.name,
             ctx.operator.user_id,
-            Jsonb(freeze_plan(plan)),
+            Jsonb(_saved_plan(plan, second)),
         ),
     )
     requested = [(c, "tool") for c in plan["candidates"]]
@@ -445,7 +475,7 @@ def reapprove(
                     "kind": kind,
                     "candidate_sha256": candidate["sha256"],
                     **({"second_approver": second.name}
-                       if second is not None and plan["intake_decision"] == "exception" else {}),
+                       if second is not None and plan.get("exception_required") else {}),
                 },
             )
     job_id = enqueue_job(ctx, "sync_server", server_id)

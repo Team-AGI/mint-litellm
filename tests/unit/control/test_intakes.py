@@ -1775,3 +1775,117 @@ def test_an_expired_exception_cannot_be_reapproved(world):
             ctx, "srv-a", intake_id, [str(candidate["id"])],
             second=Operator("root2", "admin", "root-2")),
             name="helper", user="helper-1", role="admin")
+
+
+# --- 재확인 반영: 서버의 승인 근거, 확정 시점 재확인, 잠금 순서 -----------------------------
+
+
+def old_approved_intake(world):
+    """같은 서버의 더 오래된 승인 신청(서버의 현재 승인 근거는 아니다)."""
+    iid = fetchone(world.conn, "SELECT gen_random_uuid() AS i")["i"]
+    world.conn.execute(
+        "INSERT INTO mint.intakes (id, instance_id, org_id, server_id, source)"
+        " VALUES (%s, %s, 'acme', 'srv-a', 'operator')", (iid, INSTANCE))
+    world.conn.execute(
+        "UPDATE mint.intakes SET status = 'checking', purpose = 'p', data_grade = 'internal',"
+        " allowed_resources = '[]', provider = 'x', owner_user_id = 'o', readiness = %s::jsonb,"
+        " data_return_terms = 't', requested_by = 'old-requester' WHERE id = %s",
+        (json.dumps(READINESS), iid))
+    world.conn.execute("UPDATE mint.intakes SET status = 'passed' WHERE id = %s", (iid,))
+    world.conn.execute(
+        "UPDATE mint.intakes SET status = 'decided', decision = 'approved', decided_by = 'x',"
+        " decided_at = now() - interval '2 days' WHERE id = %s", (iid,))
+    return str(iid)
+
+
+def test_an_exception_server_needs_two_admins_whichever_intake_is_picked(world):
+    from mint_litellm.control.services import contracts
+
+    exception_world(world)
+    other = old_approved_intake(world)
+    observe(world, CHANGED_INPUT)
+    candidate = fetchone(
+        world.conn, "SELECT id FROM mint.tool_contracts WHERE status = 'candidate'")
+    with pytest.raises(AdminError) as raised:
+        world.call(lambda ctx: contracts.reapprove(ctx, "srv-a", other, [str(candidate["id"])]),
+                   name="helper", user="helper-1", role="admin")
+    assert raised.value.code == AdminCode.SEPARATION_OF_DUTIES
+
+
+class NoPin:
+    calls = 0
+
+    def pin(self, _):
+        NoPin.calls += 1
+        raise AssertionError("pin must not be called")
+
+    def unpin(self, _):
+        pass
+
+
+def planned_exception(world):
+    from mint_litellm.control.context import Operator
+    from mint_litellm.control.services import contracts
+
+    intake_id = exception_world(world)
+    observe(world, CHANGED_INPUT)
+    candidate = fetchone(
+        world.conn, "SELECT id FROM mint.tool_contracts WHERE status = 'candidate'")
+    world.call(lambda ctx: contracts.reapprove(
+        ctx, "srv-a", intake_id, [str(candidate["id"])],
+        second=Operator("root2", "admin", "root-2")),
+        name="helper", user="helper-1", role="admin")
+    world.conn.execute("DELETE FROM mint.jobs WHERE kind = 'sync_server'")
+    return candidate["id"]
+
+
+def test_finalizing_an_exception_reapproval_rechecks_the_expiry(world):
+    from mint_litellm.control.contract_pin import finalize_reapproval
+
+    planned_exception(world)
+    world.conn.execute("ALTER TABLE mint.approvals DISABLE TRIGGER USER")
+    world.conn.execute("UPDATE mint.approvals SET valid_from = now() - interval '2 days',"
+                       " valid_until = now() - interval '1 minute'")
+    with psycopg.connect(world.url) as conn, pytest.raises(AdminError):
+        finalize_reapproval(conn, INSTANCE, "srv-a", NoPin())
+    assert fetchone(world.conn, "SELECT count(*) AS n FROM mint.tool_contracts"
+                    " WHERE status = 'approved'")["n"] == 1
+    assert NoPin.calls == 0
+
+
+def test_finalizing_an_exception_reapproval_rechecks_the_second_admin(world):
+    from mint_litellm.control.contract_pin import finalize_reapproval
+
+    planned_exception(world)
+    world.conn.execute("UPDATE mint.operators SET role = 'approver' WHERE name = 'root2'")
+    with psycopg.connect(world.url) as conn, pytest.raises(AdminError):
+        finalize_reapproval(conn, INSTANCE, "srv-a", NoPin())
+    assert NoPin.calls == 0
+
+
+def test_a_manual_recheck_takes_the_server_lock_before_the_intake_lock(world):
+    import threading
+    import time
+
+    intake_id = approved_world(world)
+    holder = psycopg.connect(world.url)
+    holder.execute("SELECT 1 FROM mint.servers WHERE server_id = 'srv-a' FOR UPDATE")
+    done = []
+
+    def run():
+        as_admin(world, lambda ctx: svc.recheck(ctx, intake_id))
+        done.append(True)
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    time.sleep(1.5)
+    try:
+        assert not done  # 서버 행 잠금을 기다리는 중이다
+        with psycopg.connect(world.url) as other:  # 신청 행은 잠겨 있지 않아야 한다
+            other.execute("SELECT 1 FROM mint.intakes WHERE id = %s FOR UPDATE NOWAIT",
+                          (intake_id,))
+    finally:
+        holder.rollback()
+        holder.close()
+        thread.join(30)
+    assert done

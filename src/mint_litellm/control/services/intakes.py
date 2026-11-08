@@ -426,6 +426,16 @@ def recheck(
     """
     require_role(ctx, "intake recheck")
     with transact(ctx):
+        # 잠금 순서는 서버 행 → 신청 행이다(재승인 계획 등록과 같다). 승인된 신청만 서버 행을 먼저
+        # 잠근다: 결정 전 신청의 결정·검사 경로는 신청 행 → 서버 행 순서를 쓴다.
+        peek = get(ctx, intake_id)
+        if peek["status"] == "decided":
+            fetchone(
+                ctx.conn,
+                "SELECT 1 AS x FROM mint.servers WHERE instance_id = %s AND server_id = %s"
+                " FOR UPDATE",
+                (ctx.instance_id, peek["server_id"]),
+            )
         row = get(ctx, intake_id, lock=True)
         if expected_version is not None and row["state_version"] != expected_version:
             raise conflict(f"신청의 상태 버전이 요청({expected_version})과 다릅니다"
