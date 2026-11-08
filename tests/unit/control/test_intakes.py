@@ -1467,3 +1467,124 @@ def test_a_pending_reapproval_plan_keeps_its_candidates_from_being_replaced(worl
     rows = fetchall(world.conn, "SELECT id, status FROM mint.tool_contracts"
                     " WHERE status = 'candidate'")
     assert [r["id"] for r in rows] == [candidate["id"]]
+
+
+# --- 새 주소 입력과 서버 자격 흐름 드리프트 -------------------------------------------------------
+
+
+def identity_drift(world, url):
+    from mint_litellm.types.decision import url_sha256
+
+    world.conn.execute(
+        "INSERT INTO mint.events (event_id, instance_id, kind, source_key, payload)"
+        " VALUES (gen_random_uuid(), %s, 'server_identity_mismatch_observed', 'selfcheck:1', %s)",
+        (INSTANCE, json.dumps({"server_id": "srv-a", "fields": ["url_sha256"],
+                               "observed_hashes": {"url_sha256": url_sha256(url)}})),
+    )
+    observe(world)  # 레지스트리가 URL을 주지 않으므로(제한 키) 배포 후보는 아직 없다
+
+
+def test_a_matching_url_input_becomes_the_deployment_candidate(world):
+    intake_id = approved_world(world)
+    new_url = "http://moved.test:9000/mcp"
+    world.allow("provider", "moved.test")
+    world.allow("egress_target", "moved.test")
+    identity_drift(world, new_url)
+    assert fetchall(world.conn, "SELECT 1 FROM mint.deployment_contracts"
+                    " WHERE status = 'candidate'") == []
+    with psycopg.connect(world.url) as conn:
+        svc.recheck(make_ctx(conn), intake_id, url=new_url)
+        conn.commit()
+    cand = fetchone(
+        world.conn, "SELECT * FROM mint.deployment_contracts WHERE status = 'candidate'"
+    )
+    assert cand["url"] == new_url and cand["transport"] == "http"
+    world.drain()
+    checks = {c["check"]: c for c in svc.latest_checks(world.conn, INSTANCE,
+                                                       world.intake(intake_id)["id"])}
+    assert checks["url_guard"]["result"] == "pass"
+    assert checks["connection"]["inputs"]["contract_sha256"] == svc.contract_binding(
+        world.conn, INSTANCE, "srv-a")
+    # 레지스트리가 다른 값을 줘도 운영자가 준 후보를 덮지 않는다
+    world.stub.servers["srv-a"] = {"server_id": "srv-a", "transport": "http", "auth_type": None,
+                                   "url": "http://other.test:9000/mcp"}
+    with psycopg.connect(world.url) as conn:
+        svc.recheck(make_ctx(conn), intake_id)
+        conn.commit()
+    world.drain()
+    assert fetchone(world.conn, "SELECT url FROM mint.deployment_contracts"
+                    " WHERE status = 'candidate'")["url"] == new_url
+
+
+def test_a_url_input_that_differs_from_the_observed_hash_is_refused(world):
+    intake_id = approved_world(world)
+    identity_drift(world, "http://moved.test:9000/mcp")
+    with psycopg.connect(world.url) as conn, pytest.raises(ControlError, match="해시 불일치"):
+        svc.recheck(make_ctx(conn), intake_id, url="http://evil.test:9000/mcp")
+    assert fetchall(world.conn, "SELECT 1 FROM mint.deployment_contracts"
+                    " WHERE status = 'candidate'") == []
+    with psycopg.connect(world.url) as conn, pytest.raises(ControlError):
+        svc.recheck(make_ctx(conn), intake_id, transport="http")  # 주소 없이 전송 방식만
+
+
+def oauth_world(world):
+    world.stub.servers["srv-a"] = {
+        "server_id": "srv-a", "transport": "http", "auth_type": "oauth2", "url": None,
+        "issuer": "https://idp.test", "oauth2_flow": "client_credentials"}
+    world.allow("auth_server", "https://idp.test")
+    return approved_world(world)
+
+
+def test_an_oauth2_flow_drift_keeps_the_block_until_the_flow_is_fixed_and_rechecked(world):
+    from mint_litellm.control.contract_pin import finalize_reapproval
+    from mint_litellm.control.errors import AdminError
+    from mint_litellm.control.services import contracts
+
+    intake_id = oauth_world(world)
+    world.stub.servers["srv-a"]["oauth2_flow"] = "authorization_code"
+    observe(world)
+    assert world.server()["deployment_drift_fields"] == ["oauth2_flow"]
+    assert len(evidence_runs(world)) == 1
+    cand = fetchone(
+        world.conn, "SELECT * FROM mint.deployment_contracts WHERE status = 'candidate'"
+    )
+    assert cand["auth_type"] == "oauth2" and cand["url"] == URL  # 승인된 값 그대로
+    tools = fetchall(world.conn, "SELECT id FROM mint.tool_contracts WHERE status = 'candidate'")
+    oauth = {c["check"]: c for c in svc.latest_checks(world.conn, INSTANCE,
+                                                      world.intake(intake_id)["id"])}
+    assert oauth["oauth_issuer_allowlist"]["result"] != "pass"
+    ids = [str(t["id"]) for t in tools]
+    with psycopg.connect(world.url) as conn, pytest.raises(AdminError):  # 흐름이 틀리면 재승인 불가
+        contracts.reapprove(make_ctx(conn, "boss", "approver", "boss-1"), "srv-a", intake_id, ids,
+                            deployment_id=str(cand["id"]))
+    assert world.server()["deployment_drift"] is True
+
+    world.stub.servers["srv-a"]["oauth2_flow"] = "client_credentials"
+    with psycopg.connect(world.url) as conn:
+        svc.recheck(make_ctx(conn), intake_id)
+        conn.commit()
+    world.drain()
+    oauth = {c["check"]: c for c in svc.latest_checks(world.conn, INSTANCE,
+                                                      world.intake(intake_id)["id"])}
+    assert oauth["oauth_issuer_allowlist"]["result"] == "pass"
+    cand = fetchone(
+        world.conn, "SELECT id FROM mint.deployment_contracts WHERE status = 'candidate'"
+    )
+    ids = [str(t["id"]) for t in fetchall(
+        world.conn, "SELECT id FROM mint.tool_contracts WHERE status = 'candidate'")]
+
+    class Pin:
+        def pin(self, _):
+            return {"echo": {"description": TOOL["description"],
+                             "input_schema": TOOL["inputSchema"]}}
+
+        def unpin(self, _):
+            raise AssertionError("unpin")
+
+    with psycopg.connect(world.url) as conn:
+        contracts.reapprove(make_ctx(conn, "boss", "approver", "boss-1"), "srv-a", intake_id, ids,
+                            deployment_id=str(cand["id"]))
+        conn.commit()
+        finalize_reapproval(conn, INSTANCE, "srv-a", Pin())
+        conn.commit()
+    assert world.server()["deployment_drift"] is False

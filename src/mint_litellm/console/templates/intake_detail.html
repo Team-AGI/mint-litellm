@@ -46,6 +46,8 @@
 {% if actor.role == 'admin' and i.requested_by and (i.status in ('received', 'passed', 'indeterminate') or (i.status == 'decided' and i.decision in ('approved', 'exception'))) %}
 <form method="post" action="/intakes/{{ i.id }}/recheck" class="filters">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ i.state_version }}">
+  {% if i.status == 'decided' %}<label>새 배포 주소(선택)<input name="url" placeholder="https://"></label>
+  <label>전송 방식(선택)<input name="transport"></label>{% endif %}
   <button type="submit" class="{{ 'primary' if stale else '' }}">재검사</button>
 </form>
 {% endif %}

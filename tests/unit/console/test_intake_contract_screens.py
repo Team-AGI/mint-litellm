@@ -429,3 +429,16 @@ def test_an_approved_intake_of_a_managed_server_offers_and_accepts_a_recheck(wor
     assert response.status_code == 200, response.text
     assert world.query("SELECT target_ref FROM mint.jobs WHERE kind = 'intake_run'")[0][0] == (
         f"{intake}/evidence")
+
+
+def test_the_console_recheck_takes_a_url_and_reports_a_hash_mismatch(world):
+    intake = add_intake(world, server="srv-ok")
+    world.query("UPDATE mint.servers SET contract_status = 'managed' WHERE server_id = 'srv-ok'")
+    world.query("UPDATE mint.intakes SET status = 'decided', decision = 'approved',"
+                " decided_by = 'x', decided_at = now() WHERE id = %s", intake)
+    html = world.session_client("admin").get(f"/intakes/{intake}").text
+    assert 'name="url"' in html and 'name="transport"' in html
+    response = world.client.post(f"/api/v1/intakes/{intake}/recheck", headers=bearer("admin"),
+                                 json={"state_version": version(world, intake),
+                                       "url": "http://x.test/mcp"})
+    assert response.status_code in (400, 409, 422), response.text

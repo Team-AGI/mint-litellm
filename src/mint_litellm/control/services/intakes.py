@@ -413,12 +413,14 @@ def assign_requester(
 
 def recheck(
     ctx: Context, intake_id: str, *, registry_first: bool = False,
-    expected_version: int | None = None,
+    expected_version: int | None = None, url: str | None = None, transport: str | None = None,
 ) -> str:
     """재검사 작업을 등록한다. ``registry_first``는 제출 서버를 레지스트리에 올린 뒤 검사한다.
 
     승인된 신청(``decided``, 승인·예외)은 ``evidence`` 모드로 받는다. 이 재검사는 서버에
     드리프트가 있으면 후보 계약과 결속된 증거를 저장하고, 신청 상태는 ``decided``로 둔다.
+    ``url``(과 ``transport``)은 LiteLLM이 서버 URL을 돌려주지 않을 때 운영자가 주는 새 배포 주소로,
+    관측된 배포 URL 해시와 같을 때만 받아 배포 후보로 저장한다.
     """
     require_role(ctx, "intake recheck")
     with transact(ctx):
@@ -441,6 +443,10 @@ def recheck(
                 raise conflict("관리 중인 승인 서버의 신청만 재검사할 수 있습니다.")
         if not is_complete(row):
             raise ControlError("필수 입력이 모두 채워져야 검사할 수 있습니다(intake create).")
+        if (url is not None or transport is not None) and not approved:
+            raise ControlError("--url은 승인된 신청의 재검사에만 쓸 수 있습니다.")
+        if approved and (url is not None or transport is not None):
+            _operator_deployment_candidate(ctx, row["server_id"], url, transport)
         if registry_first and (approved or not (row["source"] == "submission"
                                                 and row["needs_registry_credentials"])):
             raise ControlError(
@@ -500,12 +506,15 @@ def approved_deployment(conn: Any, instance_id: str, server_id: str) -> dict | N
 
 
 def store_deployment_candidate(
-    ctx: Context, server_id: str, entry: dict, approved: dict
+    ctx: Context, server_id: str, approved: dict, entry: dict, *, keep_same: bool = False
 ) -> bool:
-    """레지스트리에서 읽은 서버 값이 승인된 배포 계약과 다르면 배포 후보를 만든다(재검사용).
+    """서버 값(``entry``)이 승인된 배포 계약과 다르면 배포 후보를 만든다.
 
-    허용 도구·이미지 지문·소스 커밋은 승인본을 그대로 잇는다. 값이 같거나 URL을 읽지 못하면
-    아무것도 만들지 않고 거짓을 돌려준다.
+    ``entry``는 url·transport·auth_type·issuer를 가진 사전이다.
+
+    허용 도구·이미지 지문·소스 커밋은 승인본을 그대로 잇는다. URL이 없으면 만들지 않는다. 값이
+    같을 때는 ``keep_same``이어야 같은 값의 후보를 만든다(OAuth 흐름 재검사: 값은 그대로 두고
+    검사만 다시 해 재승인한다). 만들었으면 참.
     """
     url = entry.get("url")
     if not url:
@@ -514,7 +523,7 @@ def store_deployment_candidate(
         "transport"]
     auth_type = normalize_auth_type(entry.get("auth_type"))
     issuer = entry.get("issuer") or None
-    if (url, transport, auth_type, issuer) == (
+    if not keep_same and (url, transport, auth_type, issuer) == (
         approved["url"], approved["transport"], approved["auth_type"], approved["issuer"]
     ):
         return False
@@ -523,6 +532,32 @@ def store_deployment_candidate(
                               approved["allowed_tools"], approved["image_digest"],
                               approved["source_commit"])
     return True
+
+
+def _operator_deployment_candidate(
+    ctx: Context, server_id: str, url: str | None, transport: str | None
+) -> None:
+    """운영자가 준 새 주소를 관측된 배포 URL 해시와 대조해 배포 후보로 저장한다."""
+    if not url:
+        raise ControlError("--transport는 --url과 함께 줘야 합니다.")
+    approved = approved_deployment(ctx.conn, ctx.instance_id, server_id)
+    observed = fetchone(
+        ctx.conn,
+        "SELECT canonical_text FROM mint.contract_observations WHERE instance_id = %s"
+        " AND server_id = %s AND kind = 'deployment' AND scope = 'server' AND name = 'identity'",
+        (ctx.instance_id, server_id),
+    )
+    digest = json.loads(observed["canonical_text"]).get("url_sha256") if observed else None
+    if approved is None or digest is None:
+        raise ControlError("관측된 배포 URL 해시가 없어 주소를 받을 수 없습니다.")
+    if url_sha256(url) != digest:
+        raise ControlError("입력한 주소가 관측된 배포 URL과 다릅니다(해시 불일치).")
+    store_deployment_candidate(
+        ctx, server_id, approved,
+        {"url": url, "transport": transport or approved["transport"],
+         "auth_type": approved["auth_type"], "issuer": approved["issuer"]},
+        keep_same=True,
+    )
 
 
 # --- 작업 처리기가 쓰는 전이 --------------------------------------------------------------------

@@ -301,15 +301,23 @@ def _evidence_run(job: JobContext, ctx: Context, row: dict, attempt: int) -> Non
     if persist:
         server = fetchone(
             job.conn,
-            "SELECT deployment_drift FROM mint.servers WHERE instance_id = %s AND server_id = %s",
+            "SELECT deployment_drift, deployment_drift_fields FROM mint.servers"
+            " WHERE instance_id = %s AND server_id = %s",
             (job.instance_id, row["server_id"]),
         )
         approved = intakes.approved_deployment(job.conn, job.instance_id, row["server_id"])
-        if server["deployment_drift"] and approved is not None:
+        if (server["deployment_drift"] and approved is not None
+                and intakes.deployment_candidate(job.conn, job.instance_id, row["server_id"])
+                is None):  # 운영자가 준 후보는 레지스트리 값으로 덮지 않는다
             job.checkpoint()
-            entry = _client(job).get_server(row["server_id"])
-            if entry:
-                intakes.store_deployment_candidate(ctx, row["server_id"], entry, approved)
+            entry = _client(job).get_server(row["server_id"]) or {}
+            made = intakes.store_deployment_candidate(ctx, row["server_id"], approved, entry)
+            if not made and "oauth2_flow" in (server["deployment_drift_fields"] or ()):
+                # 서버 자격 흐름 드리프트: 승인된 값 그대로 후보를 두고 OAuth 검사를 다시 한다
+                intakes.store_deployment_candidate(
+                    ctx, row["server_id"], approved,
+                    {k: approved[k] for k in ("url", "transport", "auth_type", "issuer")},
+                    keep_same=True)
     _run_checks(job, ctx, row, attempt, "evidence", persist=persist)
 
 

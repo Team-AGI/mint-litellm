@@ -300,8 +300,7 @@ def _deployment_drift(
         ctx.emit(EventKind.DEPLOYMENT_DRIFT_DETECTED, entity, observation["change_seq"], body)
         ctx.emit(EventKind.REAPPROVAL_REQUESTED, entity, observation["change_seq"], body)
         _alert(ctx, entity, observation["observed_sha256"], "critical", body)
-        if name != "oauth2_flow":  # 서버 자격 흐름은 새 배포 후보로 고칠 수 없다(LiteLLM 설정 문제)
-            intakes.enqueue_drift_recheck(ctx, server_id)
+        intakes.enqueue_drift_recheck(ctx, server_id)
 
 
 def record_oauth2_flow(
