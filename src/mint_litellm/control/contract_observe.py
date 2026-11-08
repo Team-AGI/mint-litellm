@@ -9,6 +9,8 @@ from psycopg.types.json import Jsonb
 from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import ControlError, conflict
+from mint_litellm.control.intake_checks import SERVER_CREDENTIAL_FLOW
+from mint_litellm.control.intake_jobs import _oauth2_flow
 from mint_litellm.control.services.base import transact
 from mint_litellm.types.canonical import canonical_text, sha256
 from mint_litellm.types.events import EventKind
@@ -267,34 +269,65 @@ def consume_deployment_events(ctx: Context) -> None:
             )
             if contract is None:
                 continue
-            observation, changed = _observe(
-                ctx, server_id, "deployment", "server", "identity", contract["id"], hashes
-            )
-            fields = sorted(set(server["deployment_drift_fields"] or ()) | hashes.keys())
-            if not server["deployment_drift"] or fields != server["deployment_drift_fields"]:
-                ctx.conn.execute(
-                    "UPDATE mint.servers SET deployment_drift=true,"
-                    " deployment_drift_fields=%s WHERE instance_id=%s AND server_id=%s",
-                    (fields, ctx.instance_id, server_id),
-                )
-            if changed:
-                body = {
-                    "server_id": server_id,
-                    "fields": sorted(hashes),
-                    "observed_sha256": observation["observed_sha256"],
-                    "version": contract["version"],
-                    "kind": "deployment",
-                }
-                ctx.emit(
-                    EventKind.DEPLOYMENT_DRIFT_DETECTED,
-                    contract["id"],
-                    observation["change_seq"],
-                    body,
-                )
-                ctx.emit(
-                    EventKind.REAPPROVAL_REQUESTED, contract["id"], observation["change_seq"], body
-                )
-                _alert(ctx, contract["id"], observation["observed_sha256"], "critical", body)
+            _deployment_drift(ctx, server, contract, "identity", hashes, sorted(hashes))
+
+
+def _deployment_drift(
+    ctx: Context, server: dict, contract: dict, name: str, value: Any, fields: list[str]
+) -> None:
+    """배포 드리프트 표지를 켜고(호출 차단), 값이 바뀐 때마다 사건·재승인 요청·경보를 낸다."""
+    server_id = server["server_id"]
+    observation, changed = _observe(ctx, server_id, "deployment", "server", name,
+                                    contract["id"], value)
+    merged = sorted(set(server["deployment_drift_fields"] or ()) | set(fields))
+    if not server["deployment_drift"] or merged != server["deployment_drift_fields"]:
+        ctx.conn.execute(
+            "UPDATE mint.servers SET deployment_drift=true,"
+            " deployment_drift_fields=%s WHERE instance_id=%s AND server_id=%s",
+            (merged, ctx.instance_id, server_id),
+        )
+    if changed:
+        body = {
+            "server_id": server_id,
+            "fields": sorted(fields),
+            "observed_sha256": observation["observed_sha256"],
+            "version": contract["version"],
+            "kind": "deployment",
+        }
+        ctx.emit(EventKind.DEPLOYMENT_DRIFT_DETECTED, contract["id"],
+                 observation["change_seq"], body)
+        ctx.emit(EventKind.REAPPROVAL_REQUESTED, contract["id"], observation["change_seq"], body)
+        _alert(ctx, contract["id"], observation["observed_sha256"], "critical", body)
+
+
+def record_oauth2_flow(ctx: Context, server_id: str, flow: str | None) -> bool:
+    """승인된 배포 계약이 oauth2인 서버의 관측된 ``oauth2_flow``를 판정한다.
+
+    서버 자격 흐름이 아니거나 읽지 못했으면(None) 배포 드리프트를 켠다. 서버 자격 흐름이면 아무것도
+    바꾸지 않는다(이미 켜진 표지는 재승인으로만 꺼진다). 드리프트를 켰으면 참이다.
+    """
+    if flow == SERVER_CREDENTIAL_FLOW:
+        return False
+    with transact(ctx):
+        server = fetchone(
+            ctx.conn,
+            "SELECT * FROM mint.servers WHERE instance_id=%s AND server_id=%s FOR UPDATE",
+            (ctx.instance_id, server_id),
+        )
+        contract = fetchone(
+            ctx.conn,
+            "SELECT * FROM mint.deployment_contracts"
+            " WHERE instance_id=%s AND server_id=%s AND status='approved'",
+            (ctx.instance_id, server_id),
+        )
+        if (
+            server is None or server["contract_status"] != "managed" or contract is None
+            or contract["auth_type"] != "oauth2"
+        ):
+            return False
+        value = {"oauth2_flow": flow} if flow else {"oauth2_flow_unreadable": True}
+        _deployment_drift(ctx, server, contract, "oauth2_flow", value, ["oauth2_flow"])
+    return True
 
 
 def handle(job) -> None:
@@ -344,5 +377,11 @@ def handle(job) -> None:
             )
         except (ControlError, ValueError):
             failed = True
+        if server["auth_type"] == "oauth2":
+            # 서버 자격 흐름이 아니거나 읽지 못하면 차단한다(30일 증거 재검사를 기다리지 않는다).
+            # 표지가 서버 판본을 올리므로 도구 관측이 끝난 뒤에 한다.
+            job.checkpoint()
+            flow = _oauth2_flow(job.litellm, server["server_id"])
+            record_oauth2_flow(ctx, server["server_id"], flow)
     if failed:
         raise ControlError("일부 서버의 계약 관측이 실패했습니다.")
