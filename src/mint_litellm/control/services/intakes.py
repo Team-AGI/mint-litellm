@@ -24,7 +24,7 @@ from mint_litellm.control.services.base import (
     require_role,
     transact,
 )
-from mint_litellm.types.canonical import sha256
+from mint_litellm.types.canonical import canonical_text, pin_sha256, sha256
 from mint_litellm.types.cli_commands import APPROVER_UP
 from mint_litellm.types.decision import normalize_auth_type, url_sha256
 from mint_litellm.types.events import EventKind
@@ -146,6 +146,7 @@ def _ensure_server(
 def _deployment_candidate(
     ctx: Context, server_id: str, url: str, transport: str, auth_type: str, issuer: str | None,
     allowed_tools: list[str] | None, image_digest: str | None, source_commit: str | None,
+    proposed_by: str | None = None,
 ) -> None:
     """배포 계약 후보를 새로 만든다. 이전 후보는 대체된다."""
     ctx.conn.execute(
@@ -158,14 +159,15 @@ def _deployment_candidate(
         "oauth_scopes": [], "allowed_tools": allowed_tools, "image_digest": image_digest,
         "source_commit": source_commit,
     }
-    text = intake_checks.jcs(values)
+    text = canonical_text(values)
     ctx.conn.execute(
         "INSERT INTO mint.deployment_contracts (id, instance_id, server_id, canonical_text, sha256,"
         " url, url_sha256, transport, auth_type, issuer, oauth_scopes, allowed_tools, image_digest,"
-        " source_commit) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        " source_commit, proposed_by)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (new_uuid7(), ctx.instance_id, server_id, text, intake_checks.sha256_hex(text), url,
          url_sha256(url), transport, auth_type, issuer, [], allowed_tools, image_digest,
-         source_commit),
+         source_commit, proposed_by),
     )
 
 
@@ -413,26 +415,178 @@ def assign_requester(
 
 def recheck(
     ctx: Context, intake_id: str, *, registry_first: bool = False,
-    expected_version: int | None = None,
+    expected_version: int | None = None, url: str | None = None, transport: str | None = None,
 ) -> str:
-    """재검사 작업을 등록한다. ``registry_first``는 제출 서버를 레지스트리에 올린 뒤 검사한다."""
+    """재검사 작업을 등록한다. ``registry_first``는 제출 서버를 레지스트리에 올린 뒤 검사한다.
+
+    승인된 신청(``decided``, 승인·예외)은 ``evidence`` 모드로 받는다. 이 재검사는 서버에
+    드리프트가 있으면 후보 계약과 결속된 증거를 저장하고, 신청 상태는 ``decided``로 둔다.
+    ``url``(과 ``transport``)은 LiteLLM이 서버 URL을 돌려주지 않을 때 운영자가 주는 새 배포 주소로,
+    관측된 배포 URL 해시와 같을 때만 받아 배포 후보로 저장한다.
+    """
     require_role(ctx, "intake recheck")
     with transact(ctx):
+        # 잠금 순서는 서버 행 → 신청 행이다(재승인 계획 등록과 같다). 승인된 신청만 서버 행을 먼저
+        # 잠근다: 결정 전 신청의 결정·검사 경로는 신청 행 → 서버 행 순서를 쓴다.
+        peek = get(ctx, intake_id)
+        if peek["status"] == "decided":
+            fetchone(
+                ctx.conn,
+                "SELECT 1 AS x FROM mint.servers WHERE instance_id = %s AND server_id = %s"
+                " FOR UPDATE",
+                (ctx.instance_id, peek["server_id"]),
+            )
         row = get(ctx, intake_id, lock=True)
         if expected_version is not None and row["state_version"] != expected_version:
             raise conflict(f"신청의 상태 버전이 요청({expected_version})과 다릅니다"
                            f"(현재 {row['state_version']}).")
-        if row["status"] not in ("received", "passed", "indeterminate"):
+        approved = row["status"] == "decided" and row["decision"] in ("approved", "exception")
+        if row["status"] not in ("received", "passed", "indeterminate") and not approved:
             raise conflict(f"{row['status']} 상태의 신청은 재검사할 수 없습니다.")
+        if approved:
+            server = fetchone(
+                ctx.conn,
+                "SELECT contract_status, status FROM mint.servers"
+                " WHERE instance_id = %s AND server_id = %s",
+                (ctx.instance_id, row["server_id"]),
+            )
+            if (server is None or server["contract_status"] != "managed"
+                    or server["status"] in ("rejected", "terminating", "terminated")):
+                raise conflict("관리 중인 승인 서버의 신청만 재검사할 수 있습니다.")
         if not is_complete(row):
             raise ControlError("필수 입력이 모두 채워져야 검사할 수 있습니다(intake create).")
-        if registry_first and not (row["source"] == "submission"
-                                   and row["needs_registry_credentials"]):
+        if (url is not None or transport is not None) and not approved:
+            raise ControlError("--url은 승인된 신청의 재검사에만 쓸 수 있습니다.")
+        if approved and (url is not None or transport is not None):
+            _operator_deployment_candidate(ctx, row["server_id"], url, transport)
+        if registry_first and (approved or not (row["source"] == "submission"
+                                                and row["needs_registry_credentials"])):
             raise ControlError(
                 "레지스트리 등록 후 검사는 자격이 필요한 제출 신청"
                 "(CREDENTIALS_REQUIRED)에만 쓸 수 있습니다."
             )
-        return _enqueue_run(ctx, row, "registry" if registry_first else "")
+        return _enqueue_run(ctx, row, "evidence" if approved else "registry" if registry_first
+                            else "")
+
+
+def enqueue_drift_recheck(ctx: Context, server_id: str) -> str | None:
+    """서버를 승인한 가장 최근 신청의 재검사(``evidence``)를 등록한다. 작업 실행기가 부른다.
+
+    같은 시도 번호는 한 작업이라 처리 전에 드리프트가 여러 번 기록돼도 작업은 하나다. 승인한
+    신청이 없거나 입력이 비어 있으면 아무것도 하지 않는다(None).
+    """
+    row = fetchone(
+        ctx.conn,
+        "SELECT * FROM mint.intakes WHERE instance_id = %s AND server_id = %s"
+        " AND status = 'decided' AND decision IN ('approved', 'exception')"
+        " ORDER BY decided_at DESC, id DESC LIMIT 1",
+        (ctx.instance_id, server_id),
+    )
+    if row is None or not is_complete(row):
+        return None
+    return _enqueue_run(ctx, row, "evidence")
+
+
+def drift_pending(conn: Any, instance_id: str, server_id: str) -> bool:
+    """서버에 재승인을 기다리는 드리프트(배포·도구 변경·추가)가 있는가."""
+    row = fetchone(
+        conn,
+        "SELECT ((s.deployment_drift"
+        " OR EXISTS (SELECT 1 FROM mint.tool_contracts t WHERE t.instance_id = s.instance_id"
+        "   AND t.server_id = s.server_id AND t.status = 'approved' AND t.drift <> 'none')"
+        " OR EXISTS (SELECT 1 FROM mint.contract_observations o WHERE o.instance_id = s.instance_id"
+        "   AND o.server_id = s.server_id AND o.kind = 'tool' AND o.change_seq > 0"
+        "   AND NOT EXISTS (SELECT 1 FROM mint.tool_contracts t"
+        "     WHERE t.instance_id = o.instance_id AND t.id = o.entity_id)))"
+        # 재승인 계획이 진행 중이면 후보를 바꾸지 않는다(확정 중 후보 교체 방지)
+        " AND NOT EXISTS (SELECT 1 FROM mint.contract_reapproval_plans p"
+        "   WHERE p.instance_id = s.instance_id AND p.server_id = s.server_id"
+        "   AND p.status = 'pending')) AS pending"
+        " FROM mint.servers s WHERE s.instance_id = %s AND s.server_id = %s",
+        (instance_id, server_id),
+    )
+    return bool(row and row["pending"])
+
+
+def approved_deployment(conn: Any, instance_id: str, server_id: str) -> dict | None:
+    return fetchone(
+        conn,
+        "SELECT * FROM mint.deployment_contracts WHERE instance_id = %s AND server_id = %s"
+        " AND status = 'approved' ORDER BY version DESC LIMIT 1",
+        (instance_id, server_id),
+    )
+
+
+def store_deployment_candidate(
+    ctx: Context, server_id: str, approved: dict, entry: dict, *, keep_same: bool = False,
+    only_if_none: bool = False, proposed_by: str | None = None,
+) -> bool:
+    """서버 값(``entry``)이 승인된 배포 계약과 다르면 배포 후보를 만든다.
+
+    ``entry``는 url·transport·auth_type·issuer를 가진 사전이다.
+
+    허용 도구·이미지 지문·소스 커밋은 승인본을 그대로 잇는다. URL이 없으면 만들지 않는다. 값이
+    같을 때는 ``keep_same``이어야 같은 값의 후보를 만든다(OAuth 흐름 재검사: 값은 그대로 두고
+    검사만 다시 해 재승인한다). ``only_if_none``이면 이미 배포 후보가 있을 때 만들지 않는다.
+    재승인 계획이 진행 중이면 만들지 않는다(확인과 교체는 한 트랜잭션, 서버 행 잠금 아래).
+    만들었으면 참.
+    """
+    url = entry.get("url")
+    if not url:
+        return False
+    transport = "openapi" if entry.get("spec_path") else entry.get("transport") or approved[
+        "transport"]
+    auth_type = normalize_auth_type(entry.get("auth_type"))
+    issuer = entry.get("issuer") or None
+    if not keep_same and (url, transport, auth_type, issuer) == (
+        approved["url"], approved["transport"], approved["auth_type"], approved["issuer"]
+    ):
+        return False
+    with transact(ctx):
+        if not server_free_of_plan(ctx, server_id):
+            return False
+        if only_if_none and deployment_candidate(ctx.conn, ctx.instance_id, server_id):
+            return False
+        _deployment_candidate(ctx, server_id, url, transport, auth_type, issuer,
+                              approved["allowed_tools"], approved["image_digest"],
+                              approved["source_commit"], proposed_by)
+    return True
+
+
+def _operator_deployment_candidate(
+    ctx: Context, server_id: str, url: str | None, transport: str | None
+) -> None:
+    """운영자가 준 새 주소·전송 방식을 관측값과 대조해 배포 후보로 저장한다(제시자를 기록)."""
+    if not url:
+        raise ControlError("--transport는 --url과 함께 줘야 합니다.")
+    if not server_free_of_plan(ctx, server_id):
+        raise conflict("재승인 계획이 진행 중이라 새 주소를 받을 수 없습니다.")
+    approved = approved_deployment(ctx.conn, ctx.instance_id, server_id)
+    observed = fetchone(
+        ctx.conn,
+        "SELECT canonical_text FROM mint.contract_observations WHERE instance_id = %s"
+        " AND server_id = %s AND kind = 'deployment' AND scope = 'server' AND name = 'identity'",
+        (ctx.instance_id, server_id),
+    )
+    hashes = json.loads(observed["canonical_text"]) if observed else {}
+    if approved is None or hashes.get("url_sha256") is None:
+        raise ControlError("관측된 배포 URL 해시가 없어 주소를 받을 수 없습니다.")
+    if url_sha256(url) != hashes["url_sha256"]:
+        raise ControlError("입력한 주소가 관측된 배포 URL과 다릅니다(해시 불일치).")
+    transport = transport or approved["transport"]
+    # 전송 방식이 관측됐으면 그 해시와, 아니면 승인된 전송 방식과 같아야 한다
+    if "transport" in hashes:
+        matches = sha256(transport) == hashes["transport"]
+    else:
+        matches = transport == approved["transport"]
+    if not matches:
+        raise ControlError("입력한 전송 방식이 관측값(또는 승인된 값)과 다릅니다.")
+    store_deployment_candidate(
+        ctx, server_id, approved,
+        {"url": url, "transport": transport,
+         "auth_type": approved["auth_type"], "issuer": approved["issuer"]},
+        keep_same=True, proposed_by=ctx.operator.user_id,
+    )
 
 
 # --- 작업 처리기가 쓰는 전이 --------------------------------------------------------------------
@@ -518,23 +672,48 @@ def existing_check(
     )
 
 
-def store_candidates(ctx: Context, server_id: str, defs: list[dict]) -> None:
-    """수집한 도구 정의를 후보 계약으로 둔다. 이전 후보는 대체된다."""
+def server_free_of_plan(ctx: Context, server_id: str) -> bool:
+    """서버 행을 잠그고(재승인 계획 등록과 같은 잠금) 진행 중인 재승인 계획이 없는가.
+
+    후보를 바꾸는 쪽은 이 확인과 교체를 같은 트랜잭션에서 한다. 계획이 진행 중이면 후보를
+    바꾸지 않는다(확정 중 후보 교체 방지).
+    """
+    fetchone(
+        ctx.conn,
+        "SELECT 1 AS x FROM mint.servers WHERE instance_id = %s AND server_id = %s FOR UPDATE",
+        (ctx.instance_id, server_id),
+    )
+    return fetchone(
+        ctx.conn,
+        "SELECT 1 AS x FROM mint.contract_reapproval_plans WHERE instance_id = %s"
+        " AND server_id = %s AND status = 'pending'",
+        (ctx.instance_id, server_id),
+    ) is None
+
+
+def store_candidates(ctx: Context, server_id: str, defs: list[dict]) -> bool:
+    """수집한 도구 정의를 후보 계약으로 둔다. 이전 후보는 대체된다.
+
+    재승인 계획이 진행 중이면 아무것도 바꾸지 않고 거짓을 돌려준다.
+    """
     with transact(ctx):
+        if not server_free_of_plan(ctx, server_id):
+            return False
         ctx.conn.execute(
             "UPDATE mint.tool_contracts SET status = 'superseded' WHERE instance_id = %s"
             " AND server_id = %s AND status = 'candidate' AND source = 'intake'",
             (ctx.instance_id, server_id),
         )
         for d in defs:
-            text = intake_checks.jcs(d)
+            text = canonical_text(d)
             ctx.conn.execute(
                 "INSERT INTO mint.tool_contracts (id, instance_id, server_id, credential_scope,"
                 " tool, canonical_text, sha256, pin_sha256, source) VALUES"
                 " (%s, %s, %s, 'server', %s, %s, %s, %s, 'intake')",
                 (new_uuid7(), ctx.instance_id, server_id, d["name"], text,
-                 intake_checks.sha256_hex(text), intake_checks.pin_sha256(d)),
+                 intake_checks.sha256_hex(text), pin_sha256(d)),
             )
+    return True
 
 
 def store_grades(ctx: Context, server_id: str, graded: dict[str, tuple[str, str]]) -> None:

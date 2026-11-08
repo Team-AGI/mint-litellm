@@ -572,6 +572,7 @@ def _contract(run: Run) -> None:
         result = contract_service.reapprove(
             run.context(), a.server_id, a.intake, a.tool_contract,
             deployment_id=a.deployment_contract, expected_version=a.state_version,
+            second=_second(run),
         )
     else:
         fn = contract_service.diff if a.command_name == "contract diff" else contract_service.show
@@ -713,7 +714,8 @@ INTAKE_HANDLERS: dict[str, Handler] = {
     "intake create": _intake_create,
     "intake recheck": lambda r: _created(
         r, intake_service.recheck(r.context(), r.args.intake_id,
-                                  registry_first=r.args.registry_first)),
+                                  registry_first=r.args.registry_first, url=r.args.url,
+                                  transport=r.args.transport)),
     "intake assign": lambda r: intake_service.assign_requester(
         r.context(), r.litellm(), r.args.intake_id, r.args.requester),
     "intake approve": _intake_decide("approve"),
@@ -743,6 +745,7 @@ ARGUMENTS: dict[str, list[Any]] = {
         _a("--tool-contract", action="append", default=[], help="후보 도구 계약 식별자(반복 가능)"),
         _a("--deployment-contract", help="후보 배포 계약 식별자"),
         _a("--state-version", type=int, help="서버의 상태 버전"),
+        _SECOND,
     ],
     "alert list": [
         _a("--status", choices=["open", "acknowledged", "resolved"], help="상태로 거른다"),
@@ -941,6 +944,8 @@ INTAKE_ARGUMENTS: dict[str, list[Any]] = {
         _INTAKE_ID,
         _a("--registry-first", action="store_true",
            help="제출 서버를 LiteLLM 레지스트리에 올린 뒤 검사(키 권한은 주지 않는다)"),
+        _a("--url", help="승인된 신청의 새 배포 주소(관측된 URL 해시와 같아야 한다)"),
+        _a("--transport", help="새 배포 주소의 전송 방식(기본은 승인된 값)"),
     ],
     "intake assign": [_INTAKE_ID, _a("--requester", required=True, help="신청자 사용자 식별자")],
     "intake approve": _DECISION,
