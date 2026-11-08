@@ -438,7 +438,11 @@ def sync_pin_mismatch(ctx):
             approval_status=A.psql(f"SELECT status FROM mint.approvals WHERE id={lit(approval)}",
                                    "mint"),
             unpin_calls=log_count(r"DELETE /v1/mcp/server/\S+/pin", start),
-            events={"reapproval_requested": event_count("reapproval_requested", since)})
+            # 설명 변경의 관측 사건도 같은 종류라서 pin 불일치가 낸 것(source=pin)만 센다.
+            events={"reapproval_requested": n(
+                f"SELECT count(*) FROM mint.events WHERE instance_id={lit(iid())} "
+                f"AND kind='reapproval_requested' AND inserted_at >= {lit(since)} "
+                "AND payload->>'source'='pin'")})
 
 
 @scenario("sync_race_30", undo=cleanup)
