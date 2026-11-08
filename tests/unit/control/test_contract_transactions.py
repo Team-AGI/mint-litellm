@@ -348,6 +348,9 @@ def test_deployment_proposal_blocks_until_atomic_reapproval(contract_db):
     assert server(conn)["deployment_drift"]
     assert len(events(conn, "deployment_drift_detected")) == 1
     iid = evidence(conn, candidate, deployment=sha256(definition))
+    # 배포 후보가 있으면 도구만 고른 재승인은 증거와 맞지 않으므로 명확히 거절한다.
+    with pytest.raises(AdminError, match="배포 값 후보"):
+        reapprove(ctx, Pin(conn, old, candidate, {"read": NEW}), "s", iid, [str(candidate)])
     reapprove(
         ctx,
         Pin(conn, old, candidate, {"read": NEW}),
@@ -604,3 +607,20 @@ def test_failures_counted_for_an_earlier_contract_start_over(oauth_db):
                  " WHERE name = 'oauth2_flow_read'")
     run_observe(conn, FlowClient("client_credentials", listing=False))
     assert not server(conn)["deployment_drift"]
+
+
+def test_intake_evidence_binding_matches_what_reapproval_demands(contract_db):
+    from mint_litellm.control.services import intakes
+
+    conn, _, _ = contract_db
+    new = add_tool(conn, NEW)
+    deployment = {"url": "https://mcp.test/api", "transport": "http", "auth_type": "none"}
+    conn.execute(
+        "INSERT INTO mint.deployment_contracts(id,instance_id,server_id,canonical_text,"
+        "sha256,url,url_sha256,transport,auth_type) VALUES (%s,'i','s',%s,%s,%s,%s,'http','none')",
+        (new_uuid7(), canonical_text(deployment), sha256(deployment), deployment["url"],
+         url_sha256(deployment["url"])),
+    )
+    bound = intakes.contract_binding(conn, "i", "s")
+    assert bound == sha256({"tools": {"read": sha256(NEW)}, "deployment": sha256(deployment)})
+    assert new

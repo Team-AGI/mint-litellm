@@ -62,7 +62,16 @@ def sign(document: dict[str, Any], key: bytes) -> dict[str, Any]:
 
 
 def verify(document: Any, keys: Sequence[bytes]) -> None:
-    """``key_id``가 가진 키 가운데 하나와 같고 HMAC이 맞아야 한다. 아니면 ``ExportUnverified``."""
+    """``key_id``가 가진 키와 HMAC이 맞아야 한다. 어떤 이유로든 아니면 ``ExportUnverified``."""
+    try:
+        _verify(document, keys)
+    except ExportUnverified:
+        raise
+    except Exception as error:  # 형식이 틀린 문서·키는 모두 미검증이다(차단 쪽으로 닫는다)
+        raise ExportUnverified(f"verify failed: {type(error).__name__}") from None
+
+
+def _verify(document: Any, keys: Sequence[bytes]) -> None:
     if not isinstance(document, dict):
         raise ExportUnverified("not an object")
     by_id = {key_id(k): k for k in keys}
@@ -85,7 +94,7 @@ def read_verified(path: Path, keys: Sequence[bytes]) -> dict[str, Any]:
         raise ExportUnverified(f"read failed: {type(error).__name__}") from None
     try:
         document = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):
         raise ExportUnverified("not json") from None
     verify(document, keys)
     return document
