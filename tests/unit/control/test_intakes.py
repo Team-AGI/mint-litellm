@@ -1472,14 +1472,18 @@ def test_a_pending_reapproval_plan_keeps_its_candidates_from_being_replaced(worl
 # --- 새 주소 입력과 서버 자격 흐름 드리프트 -------------------------------------------------------
 
 
-def identity_drift(world, url):
+def identity_drift(world, url, transport=None):
+    from mint_litellm.types.canonical import sha256 as value_sha256
     from mint_litellm.types.decision import url_sha256
 
+    hashes = {"url_sha256": url_sha256(url)}
+    if transport:
+        hashes["transport"] = value_sha256(transport)
     world.conn.execute(
         "INSERT INTO mint.events (event_id, instance_id, kind, source_key, payload)"
         " VALUES (gen_random_uuid(), %s, 'server_identity_mismatch_observed', 'selfcheck:1', %s)",
         (INSTANCE, json.dumps({"server_id": "srv-a", "fields": ["url_sha256"],
-                               "observed_hashes": {"url_sha256": url_sha256(url)}})),
+                               "observed_hashes": hashes})),
     )
     observe(world)  # 레지스트리가 URL을 주지 않으므로(제한 키) 배포 후보는 아직 없다
 
@@ -1588,3 +1592,186 @@ def test_an_oauth2_flow_drift_keeps_the_block_until_the_flow_is_fixed_and_rechec
         finalize_reapproval(conn, INSTANCE, "srv-a", Pin())
         conn.commit()
     assert world.server()["deployment_drift"] is False
+
+
+# --- PR 검토 반영: 전송 방식·제시자·계획 경쟁·정규화·예외 승인 ------------------------------------
+
+MOVED = "http://moved.test:9000/mcp"
+
+
+def allow_moved(world):
+    world.allow("provider", "moved.test")
+    world.allow("egress_target", "moved.test")
+
+
+def as_admin(world, fn, name="helper", user="helper-1"):
+    return world.call(fn, name=name, user=user, role="admin")
+
+
+def test_a_transport_input_must_match_the_observed_or_the_approved_transport(world):
+    intake_id = approved_world(world)
+    identity_drift(world, MOVED)  # 전송 방식은 관측되지 않았다: 승인된 http만 받는다
+    with pytest.raises(ControlError, match="전송 방식"):
+        as_admin(world, lambda ctx: svc.recheck(ctx, intake_id, url=MOVED, transport="sse"))
+    as_admin(world, lambda ctx: svc.recheck(ctx, intake_id, url=MOVED, transport="http"))
+    assert fetchone(world.conn, "SELECT transport FROM mint.deployment_contracts"
+                    " WHERE status = 'candidate'")["transport"] == "http"
+
+
+def test_an_observed_transport_hash_decides_the_accepted_transport(world):
+    intake_id = approved_world(world)
+    identity_drift(world, MOVED, transport="sse")
+    with pytest.raises(ControlError, match="전송 방식"):
+        as_admin(world, lambda ctx: svc.recheck(ctx, intake_id, url=MOVED, transport="http"))
+    as_admin(world, lambda ctx: svc.recheck(ctx, intake_id, url=MOVED, transport="sse"))
+    assert fetchone(world.conn, "SELECT transport FROM mint.deployment_contracts"
+                    " WHERE status = 'candidate'")["transport"] == "sse"
+
+
+def test_the_operator_who_proposed_the_deployment_candidate_cannot_reapprove_it(world):
+    from mint_litellm.control.services import contracts
+
+    intake_id = approved_world(world)
+    allow_moved(world)
+    identity_drift(world, MOVED)
+    as_admin(world, lambda ctx: svc.recheck(ctx, intake_id, url=MOVED))
+    world.drain()
+    cand = fetchone(world.conn, "SELECT id, proposed_by FROM mint.deployment_contracts"
+                    " WHERE status = 'candidate'")
+    assert cand["proposed_by"] == "helper-1"
+    ids = [str(t["id"]) for t in fetchall(
+        world.conn, "SELECT id FROM mint.tool_contracts WHERE status = 'candidate'")]
+
+    def reapprove(user, name):
+        return world.call(lambda ctx: contracts.reapprove(
+            ctx, "srv-a", intake_id, ids, deployment_id=str(cand["id"])),
+            name=name, user=user, role="approver")
+
+    with pytest.raises(AdminError) as raised:
+        reapprove("helper-1", "helper")
+    assert raised.value.code == AdminCode.SEPARATION_OF_DUTIES
+    reapprove("boss-1", "boss")
+
+
+def test_a_pending_plan_blocks_candidate_replacement_and_a_manual_url(world):
+    from mint_litellm.control.services import contracts
+
+    intake_id = approved_world(world)
+    observe(world, CHANGED_INPUT)
+    candidate = fetchone(
+        world.conn, "SELECT id FROM mint.tool_contracts WHERE status = 'candidate'"
+    )
+    world.call(lambda ctx: contracts.reapprove(ctx, "srv-a", intake_id, [str(candidate["id"])]),
+               name="boss", user="boss-1", role="approver")
+    with psycopg.connect(world.url) as conn:
+        ctx = make_ctx(conn)
+        assert svc.store_candidates(ctx, "srv-a", [{"name": "echo", "description": "x",
+                                                    "input_schema": {}}]) is False
+        approved = svc.approved_deployment(conn, INSTANCE, "srv-a")
+        assert svc.store_deployment_candidate(ctx, "srv-a", approved, {"url": MOVED}) is False
+        conn.commit()
+    ids = [r["id"] for r in fetchall(
+        world.conn, "SELECT id FROM mint.tool_contracts WHERE status = 'candidate'")]
+    assert ids == [candidate["id"]]
+    identity_drift(world, MOVED)
+    with pytest.raises(ControlError, match="진행 중"):
+        as_admin(world, lambda c: svc.recheck(c, intake_id, url=MOVED))
+
+
+FLOAT_TOOL = {**TOOL, "inputSchema": {"type": "object", "properties": {
+    "n": {"type": "number", "minimum": 1.0}}}}
+
+
+def test_candidates_are_stored_in_the_canonical_form_the_reapproval_compares(world):
+    from mint_litellm.control.contract_pin import finalize_reapproval
+    from mint_litellm.control.services import contracts
+
+    world.stub.tools = (200, {"tools": [FLOAT_TOOL], "error": None, "message": "ok"})
+    intake_id = approved_world(world)
+    observe(world, {**FLOAT_TOOL, "description": "Changed description."})
+    candidate = fetchone(
+        world.conn, "SELECT * FROM mint.tool_contracts WHERE status = 'candidate'"
+    )
+    assert '"minimum":1.0' not in candidate["canonical_text"]
+
+    class Pin:
+        def pin(self, _):
+            return {"echo": {"description": "Changed description.",
+                             "input_schema": FLOAT_TOOL["inputSchema"]}}
+
+        def unpin(self, _):
+            raise AssertionError("unpin")
+
+    with psycopg.connect(world.url) as conn:
+        contracts.reapprove(make_ctx(conn, "boss", "approver", "boss-1"), "srv-a", intake_id,
+                            [str(candidate["id"])])
+        conn.commit()
+        finalize_reapproval(conn, INSTANCE, "srv-a", Pin())
+        conn.commit()
+    assert fetchone(world.conn, "SELECT id FROM mint.tool_contracts WHERE status = 'approved'")[
+        "id"] == candidate["id"]
+
+
+def exception_world(world):
+    from mint_litellm.control.context import Operator
+
+    world.conn.execute(
+        "INSERT INTO mint.operators (instance_id, name, role, token_hash, user_id)"
+        " VALUES (%s, 'root2', 'admin', %s, 'root-2')", (INSTANCE, "ab" * 32))
+    intake_id = passed(world, readiness={**READINESS, "audit_access_days": 0})
+    world.call(
+        lambda ctx: svc.decide(ctx, intake_id, "except", reason="일시 허용", valid_until=FUTURE,
+                               second=Operator("boss2", "approver", "boss-2")),
+        name="boss", user="boss-1", role="approver")
+    world.conn.execute("DELETE FROM mint.jobs WHERE kind IN ('sync_server', 'sync_target')")
+    world.conn.execute("UPDATE mint.servers SET status = 'approved' WHERE server_id = 'srv-a'")
+    return intake_id
+
+
+def test_an_exception_intake_is_reapproved_by_two_distinct_admins(world):
+    from mint_litellm.control.context import Operator
+    from mint_litellm.control.services import contracts
+
+    intake_id = exception_world(world)
+    observe(world, CHANGED_INPUT)
+    candidate = fetchone(
+        world.conn, "SELECT id FROM mint.tool_contracts WHERE status = 'candidate'")
+    ids = [str(candidate["id"])]
+
+    def attempt(user, name, role, second):
+        return world.call(
+            lambda ctx: contracts.reapprove(ctx, "srv-a", intake_id, ids, second=second),
+            name=name, user=user, role=role)
+
+    for user, name, role, second in (
+        ("helper-1", "helper", "admin", None),  # 두 번째 승인자 없음
+        ("helper-1", "helper", "admin", Operator("boss2", "approver", "boss-2")),  # admin 아님
+        ("helper-1", "helper", "admin", Operator("helper", "admin", "helper-1")),  # 동일인
+        ("helper-1", "helper", "admin", Operator("root", "admin", "root-user")),  # 신청자
+        ("boss-1", "boss", "approver", Operator("root2", "admin", "root-2")),  # approver
+    ):
+        with pytest.raises(AdminError) as raised:
+            attempt(user, name, role, second)
+        assert raised.value.code == AdminCode.SEPARATION_OF_DUTIES
+    attempt("helper-1", "helper", "admin", Operator("root2", "admin", "root-2"))
+    assert "pin_reapproval" in world.server()["deployment_drift_fields"]
+    payload = world.events("reapproval_requested")[-1]["payload"]
+    assert payload["second_approver"] == "root2"
+
+
+def test_an_expired_exception_cannot_be_reapproved(world):
+    from mint_litellm.control.context import Operator
+    from mint_litellm.control.services import contracts
+
+    intake_id = exception_world(world)
+    observe(world, CHANGED_INPUT)
+    candidate = fetchone(
+        world.conn, "SELECT id FROM mint.tool_contracts WHERE status = 'candidate'")
+    world.conn.execute("ALTER TABLE mint.approvals DISABLE TRIGGER USER")
+    world.conn.execute("UPDATE mint.approvals SET valid_until = now() - interval '1 minute',"
+                       " valid_from = now() - interval '1 day'")
+    with pytest.raises(AdminError):
+        world.call(lambda ctx: contracts.reapprove(
+            ctx, "srv-a", intake_id, [str(candidate["id"])],
+            second=Operator("root2", "admin", "root-2")),
+            name="helper", user="helper-1", role="admin")

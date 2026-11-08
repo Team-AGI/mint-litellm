@@ -111,7 +111,7 @@ class MemoryConnection:
             return {"version": 3}
         raise AssertionError(sql)
 
-    def plan(self, *args):
+    def plan(self, *args, **kwargs):
         candidate = {
             "id": self.candidate,
             "version": self.version,

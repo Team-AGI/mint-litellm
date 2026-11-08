@@ -90,6 +90,7 @@ def _pending(ctx: Context, saved: dict) -> dict:
         [c["id"] for c in plan["candidates"]],
         plan["deployment"]["id"] if plan["deployment"] else None,
         plan["server_version"],
+        replan=True,
     )
     if freeze_plan(fresh) != plan:
         raise conflict("재pin 중 후보 또는 증거가 변경되었습니다.")

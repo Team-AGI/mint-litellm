@@ -6,7 +6,7 @@ from uuid import UUID
 
 from psycopg.types.json import Jsonb
 
-from mint_litellm.control.context import Context
+from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import (
     conflict,
@@ -145,6 +145,42 @@ def request_deployment(
         _alert(ctx, old["id"], observation["observed_sha256"], "high", payload)
 
 
+def _exception_reapproval(
+    ctx: Context, intake: dict, deployment_id: str | None, second: Operator | None
+) -> None:
+    """예외 승인 신청의 재승인: 서로 다른 admin 2인이고, 원래 예외가 아직 유효해야 한다.
+
+    새 유효 기한을 따로 두지 않으므로 기한은 원래 예외의 기한을 넘지 않는다.
+    """
+    proposer = fetchone(
+        ctx.conn,
+        "SELECT proposed_by FROM mint.deployment_contracts WHERE instance_id=%s AND id=%s",
+        (ctx.instance_id, deployment_id),
+    ) if deployment_id else None
+    barred = {intake["requested_by"], ctx.operator.user_id,
+              proposer["proposed_by"] if proposer else None}
+    if (
+        ctx.operator.role != "admin"
+        or second is None
+        or second.role != "admin"
+        or second.user_id is None
+        or second.user_id in barred
+    ):
+        raise separation_of_duties(
+            "예외 승인 신청의 재승인에는 신청자·후보 제시자와 다른 admin 두 명이 필요합니다."
+        )
+    original = fetchone(
+        ctx.conn,
+        "SELECT max(valid_until) AS valid_until FROM mint.approvals WHERE instance_id=%s"
+        " AND class='exception' AND basis->>'intake_id'=%s",
+        (ctx.instance_id, str(intake["id"])),
+    )
+    if original is None or original["valid_until"] is None or original["valid_until"] <= (
+        fetchone(ctx.conn, "SELECT now() AS t")["t"]
+    ):
+        raise stale_evidence("원래 예외 승인의 유효 기한이 지났습니다. 새 예외 승인이 필요합니다.")
+
+
 def _plan(
     ctx: Context,
     server_id: str,
@@ -152,6 +188,8 @@ def _plan(
     candidate_ids: list[str],
     deployment_id: str | None,
     expected_version: int | None,
+    second: Operator | None = None,
+    replan: bool = False,
 ) -> dict:
     try:
         for value in [intake_id, *candidate_ids, *([deployment_id] if deployment_id else [])]:
@@ -177,12 +215,14 @@ def _plan(
     )
     if intake is None or intake["status"] not in {"passed", "decided"}:
         raise stale_evidence("통과한 재검사 신청이 필요합니다.")
-    if intake["status"] == "decided" and intake["decision"] != "approved":
+    if intake["status"] == "decided" and intake["decision"] not in ("approved", "exception"):
         raise stale_evidence("승인되지 않은 신청의 증거입니다.")
     if not ctx.operator.user_id or not intake["requested_by"]:
         raise separation_of_duties("신청자와 승인자의 사용자 결속이 필요합니다.")
     if ctx.operator.user_id == intake["requested_by"]:
         raise separation_of_duties("신청자는 같은 계약을 재승인할 수 없습니다.")
+    if intake["decision"] == "exception" and not replan:
+        _exception_reapproval(ctx, intake, deployment_id, second)
     if not candidate_ids and deployment_id is None:
         raise conflict("새 후보 계약을 지정하십시오.")
     if len(set(candidate_ids)) != len(candidate_ids):
@@ -211,6 +251,8 @@ def _plan(
     )
     if deployment_id and deployment is None:
         raise conflict("후보 배포 계약이 없습니다.")
+    if deployment and deployment["proposed_by"] == ctx.operator.user_id:
+        raise separation_of_duties("배포 후보를 제시한 운영자는 그 후보를 재승인할 수 없습니다.")
     auth = deployment["auth_type"] if deployment else server["auth_type"]
     scope = credential_scope(auth)
     if any(c["credential_scope"] != scope for c in candidates):
@@ -306,6 +348,7 @@ def _plan(
         "desired": desired,
         "scope": scope,
         "evidence_hash": evidence_hash,
+        "intake_decision": intake["decision"],
     }
 
 
@@ -339,9 +382,14 @@ def reapprove(
     *,
     deployment_id: str | None = None,
     expected_version: int | None = None,
+    second: Operator | None = None,
 ) -> dict:
-    """계획·차단·사건과 sync_server만 커밋한다. LiteLLM에는 쓰지 않는다."""
-    plan = _plan(ctx, server_id, intake_id, candidate_ids, deployment_id, expected_version)
+    """계획·차단·사건과 sync_server만 커밋한다. LiteLLM에는 쓰지 않는다.
+
+    예외 승인 신청이면 ``second``(다른 admin)가 필요하다.
+    """
+    plan = _plan(ctx, server_id, intake_id, candidate_ids, deployment_id, expected_version,
+                 second)
     fields = set(plan["server"]["deployment_drift_fields"] or ())
     if plan["server"]["deployment_drift"] and not fields:
         fields.add("unknown")
@@ -396,6 +444,8 @@ def reapprove(
                     "version": candidate["version"],
                     "kind": kind,
                     "candidate_sha256": candidate["sha256"],
+                    **({"second_approver": second.name}
+                       if second is not None and plan["intake_decision"] == "exception" else {}),
                 },
             )
     job_id = enqueue_job(ctx, "sync_server", server_id)

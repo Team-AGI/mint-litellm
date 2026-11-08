@@ -562,6 +562,7 @@ def _contract(run: Run) -> None:
         result = contract_service.reapprove(
             run.context(), a.server_id, a.intake, a.tool_contract,
             deployment_id=a.deployment_contract, expected_version=a.state_version,
+            second=_second(run),
         )
     else:
         fn = contract_service.diff if a.command_name == "contract diff" else contract_service.show
@@ -734,6 +735,7 @@ ARGUMENTS: dict[str, list[Any]] = {
         _a("--tool-contract", action="append", default=[], help="후보 도구 계약 식별자(반복 가능)"),
         _a("--deployment-contract", help="후보 배포 계약 식별자"),
         _a("--state-version", type=int, help="서버의 상태 버전"),
+        _SECOND,
     ],
     "alert list": [
         _a("--status", choices=["open", "acknowledged", "resolved"], help="상태로 거른다"),
