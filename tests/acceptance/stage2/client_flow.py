@@ -17,6 +17,8 @@ def probe(rig, fixture, phase):
             "arguments": arguments, "counter_url": rig.site["counters"][server],
         }
         before = rig.counter(server)
+        if phase in ("active", "reapproved"):
+            rig.call_approval(server, tool, arguments)  # 고위험 도구는 호출 1회마다 승인이 필요하다(R2)
         since = rig.sql("SELECT clock_timestamp() AS t")[0]["t"]
         done = rig.command(rig.site["clients"][device], input=json.dumps(payload), timeout=210)
         output = json.loads(done.stdout)
