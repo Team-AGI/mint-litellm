@@ -212,7 +212,7 @@ def snapshot(ctx):
         if host:
             saved = state_file("baseline-export")
             shutil.rmtree(saved, ignore_errors=True)
-            shutil.copytree(export_dir(), saved)
+            shutil.copytree(Path(host), saved)  # 인스턴스 폴더째(부모 기준)
     finally:
         compose("start", "worker")
     state_file("last-backup").unlink(missing_ok=True)
