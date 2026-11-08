@@ -26,10 +26,15 @@ services:
     environment:
       <<: *acc-env
       MINT_LOG_LEVEL: DEBUG
+  # SSL_CERT_FILE을 받는 서비스는 모두 /certs를 장착한다(없으면 httpx가 FileNotFoundError로 500을 낸다).
   worker:
+    volumes:
+      - ${ACC_CERT_DIR:?}:/certs:ro
     environment:
       <<: *acc-env
   console:
+    volumes:
+      - ${ACC_CERT_DIR:?}:/certs:ro
     environment:
       <<: *acc-env
   litellm2:
