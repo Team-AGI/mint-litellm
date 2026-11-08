@@ -95,7 +95,8 @@ def control_key_waiting(rig, name):
         "alerts", "kind='sync_divergence' AND status <> 'resolved' "
         "AND subject->>'reason'='control_key_not_set' AND subject->>'server_id'=%s", [server]),
         240, "제어 키 없음 경보")
-    waiting = rig.rows("jobs", "last_error_code='control_key_not_set'")
+    waiting = rig.wait(lambda: rig.rows("jobs", "last_error_code='control_key_not_set'"), 60,
+                       "대기 작업")
     assert waiting and all(j["status"] == "pending" and j["attempts"] == 0 for j in waiting), waiting
     assert not rig.rows("litellm_grants", "server_id=%s AND item='pin' AND observed", [server])
     return fixture, server
@@ -113,6 +114,8 @@ def test_control_key_wait(rig):
     rig.wait(lambda: rig.rows("litellm_grants", "server_id=%s AND item='pin' AND observed",
                               [server]), 420, "키 저장 뒤 핀 맞춰짐")
     assert not rig.rows("jobs", "status='failed'")
+    rig.wait(lambda: rig.rows("approvals", "server_id=%s AND status='active'", [server]), 180,
+             "핀 뒤 승인 활성화")
     contracts = rig.rows("tool_contracts", "server_id=%s AND status='approved'", [server])
     assert len(contracts) == fixture["tool_count"]
     rig.client.get(rig.site["litellm"][0].rstrip("/") + "/mcp-rest/tools/list",
