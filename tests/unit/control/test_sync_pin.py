@@ -530,6 +530,10 @@ def test_a_missing_control_key_token_alerts_with_the_cause_and_the_next_run_pins
     assert row["subject"]["reason"] == "control_key_not_set"
     assert row["subject"]["action"] == "settings control-key"
     assert approval_status(admin, approval) == "pending"
+    job = fetchone(admin, "SELECT status, attempts, last_error_code FROM mint.jobs"
+                   " WHERE kind = 'sync_server' AND target_ref = 'srv-1' ORDER BY created_at DESC")
+    assert (job["status"], job["attempts"], job["last_error_code"]) == (
+        "pending", 0, "control_key_not_set")
     admin.execute("UPDATE mint.settings SET control_key_token = repeat('c', 64)")
     admin.execute("UPDATE mint.jobs SET run_after = now() WHERE status = 'pending'")
     drain(worker)

@@ -70,6 +70,13 @@ class PermanentFailure(Exception):
         self.code = code
 
 
+class WaitForOperator(Exception):
+    """운영자 조치(설정 저장 등)를 기다린다. 시도 횟수를 세지 않고 ``delay``초 뒤 다시 대기한다."""
+
+    code = "wait_for_operator"
+    delay = 300
+
+
 class RestoreBlocked(Exception):
     """되돌림 상태라 외부 쓰기를 하지 않는다. 작업은 실패가 아니라 대기로 돌아간다."""
 

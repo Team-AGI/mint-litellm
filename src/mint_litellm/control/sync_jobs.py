@@ -19,7 +19,7 @@ from mint_litellm.control.alerts import resolve as resolve_alert
 from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import AdminError, ControlError
-from mint_litellm.control.jobs import JobContext, PermanentFailure
+from mint_litellm.control.jobs import JobContext, PermanentFailure, WaitForOperator
 from mint_litellm.control.litellm_write import (
     LiteLLMForbidden,
     LiteLLMHttpError,
@@ -480,8 +480,11 @@ def _record_pin_mismatch(
             )
 
 
-class ControlKeyNotSet(Exception):
-    """제어 평면 키가 면제 키로 저장되지 않아 도구를 고정할 수 없다(저장하면 재시도로 풀린다)."""
+class ControlKeyNotSet(WaitForOperator):
+    """제어 평면 키가 면제 키로 저장되지 않아 도구를 고정할 수 없다(저장하면 재시도로 풀린다).
+
+    시도 횟수를 세지 않으므로 키 저장이 늦어도 작업이 ``failed``로 끝나지 않는다.
+    """
 
     code = "control_key_not_set"
 

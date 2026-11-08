@@ -304,7 +304,7 @@ def handle(job) -> None:
     consume_deployment_events(ctx)
     servers = fetchall(
         job.conn,
-        "SELECT s.server_id,s.auth_type,s.state_version,d.url,d.transport"
+        "SELECT s.server_id,d.auth_type,s.state_version,d.url,d.transport"
         " FROM mint.servers s LEFT JOIN mint.deployment_contracts d"
         " ON d.instance_id=s.instance_id AND d.server_id=s.server_id AND d.status='approved'"
         " WHERE s.instance_id=%s AND s.contract_status='managed' AND s.status='approved'"

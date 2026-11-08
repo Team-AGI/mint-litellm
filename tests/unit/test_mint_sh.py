@@ -114,6 +114,7 @@ def test_up_hands_worker_and_staff_passwords_to_init_and_starts_the_worker(tmp_p
     assert "--profile worker up -d worker" in log
     assert "--user 0 --entrypoint chown control -R 65532:65532 /var/lib/mint/export /bundles" in log
     assert "--user 0 --entrypoint chown litellm -R 65532:65532 /var/lib/mint/buffer" in log
+    assert "chgrp -R 65532 /app/config && chmod -R g+rX /app/config" in log
 
 
 def test_compose_refuses_to_start_litellm_without_an_export_key():

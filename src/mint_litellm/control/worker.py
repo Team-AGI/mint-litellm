@@ -258,7 +258,7 @@ class Worker:
         finished = threading.Event()
         beat = threading.Thread(target=self._beat, args=(ctx, finished), daemon=True)
         beat.start()
-        outcome: str | tuple[str, str] = "ok"
+        outcome: str | tuple = "ok"
         try:
             jobs.HANDLERS[job["kind"]](ctx)
         except jobs.PermanentFailure as error:
@@ -267,6 +267,8 @@ class Worker:
             outcome = "cancelled"
         except jobs.RestoreBlocked:
             outcome = "restore_blocked"
+        except jobs.WaitForOperator as error:
+            outcome = ("wait", error.code, error.delay)
         except Exception as error:  # 어떤 실패도 작업 실패로 센다(메시지는 저장하지 않는다)
             code = str(getattr(error, "code", None) or type(error).__name__)[:100]
             log.warning("작업 %s(%s) 실패: %s", job["kind"], job_id, code)
@@ -285,6 +287,8 @@ class Worker:
             jobs.release(conn, job_id, self.owner, "shutdown")
         elif outcome == "restore_blocked":
             jobs.release(conn, job_id, self.owner, "restore_blocked", RESTORE_BLOCKED_RETRY_SECONDS)
+        elif outcome[0] == "wait":
+            jobs.release(conn, job_id, self.owner, outcome[1], outcome[2])
         elif outcome[0] == "permanent":
             jobs.fail_permanently(conn, job_id, self.owner, outcome[1])
         else:

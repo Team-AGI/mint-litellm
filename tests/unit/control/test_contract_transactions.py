@@ -427,6 +427,8 @@ def test_contract_observe_reads_tools_through_the_g2_client(contract_db):
             seen.append(spec)
             return {"tools": [{"name": "read", **NEW, "inputSchema": NEW["input_schema"]}]}
 
+    # 레지스트리 인증 방식이 승인 뒤 바뀌어도 관측은 승인된 배포 계약의 값을 보낸다.
+    conn.execute("UPDATE mint.servers SET auth_type='oauth2' WHERE server_id='s'")
     job = {"target_ref": "contract_observe"}
     handle(JobContext(conn, "i", job, litellm=Client()))
     assert seen == [{"server_id": "s", "url": "https://mcp.test/api", "transport": "http",

@@ -93,6 +93,9 @@ fix_volume_owners() {
         -R 65532:65532 /var/lib/mint/export /bundles
     "${COMPOSE[@]}" run --rm --no-deps -T --user 0 --entrypoint chown litellm \
         -R 65532:65532 /var/lib/mint/buffer
+    # 설정 폴더는 운영자 파일이라 소유자는 두고 그룹에만 읽기를 연다.
+    "${COMPOSE[@]}" run --rm --no-deps -T --user 0 --entrypoint sh control \
+        -c 'chgrp -R 65532 /app/config && chmod -R g+rX /app/config'
 }
 
 cmd_up() {
@@ -136,6 +139,8 @@ cmd_upgrade() {
     require_env
     "${COMPOSE[@]}" build litellm
     "${COMPOSE[@]}" up -d --wait postgres
+    # 이전 판본이 루트로 쓰는 중에 소유자를 바꾸면 그 사이에 만든 파일이 루트로 남는다.
+    "${COMPOSE[@]}" --profile worker stop litellm worker
     fix_volume_owners
     admin_cli init --out /app/config/litellm.mint.yaml >/dev/null
     "${COMPOSE[@]}" up -d litellm
