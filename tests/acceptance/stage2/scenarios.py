@@ -698,15 +698,20 @@ def intake_private_literal(ctx):
         track("server", json.loads(control_text)["server_id"])
     time.sleep(70)  # 제출 수신 작업 주기보다 길게 기다린다
     private_id = json.loads(text)["server_id"] if status in (200, 201) else None
+    guard = None
     if private_id:  # 이 LiteLLM 판본은 사설 IP 제출을 받아 주므로 MINT url_guard가 거절해야 한다(DS 정정)
         track("server", private_id)
-        wait(lambda: A.psql("SELECT coalesce(decision,'') FROM mint.intakes WHERE "
-                            f"server_id={lit(private_id)}", "mint") == "rejected", 600, "사설 IP 자동 거절")
+        wait(lambda: A.psql("SELECT status FROM mint.intakes WHERE "
+                            f"server_id={lit(private_id)}", "mint") in ("failed", "decided"), 600,
+             "사설 IP 신청 검사")
+        guard = A.psql("SELECT c.reason_code FROM mint.intake_checks c JOIN mint.intakes i ON "
+                       f"i.id=c.intake_id WHERE i.server_id={lit(private_id)} AND c.\"check\"="
+                       "'url_guard'", "mint")
     new_rows = n(f"SELECT count(*) FROM mint.intakes WHERE instance_id={lit(iid())}") - before
     observe(ctx, litellm_rejected=status in (400, 403, 422), litellm_status=status,
             litellm_reason=text[:160], control_accepted=control_status in (200, 201),
             mint_intakes=new_rows - (1 if control_status in (200, 201) else 0),
-            mint_rejected=bool(private_id), upstream_calls=upstream() - upstream_before)
+            url_guard_reason=guard, upstream_calls=upstream() - upstream_before)
 
 
 @scenario("intake_private_ip_guard", undo=cleanup)
