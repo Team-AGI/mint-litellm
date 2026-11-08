@@ -158,9 +158,9 @@ flows:
     reapproval_requested: 1
     alert_opened: 1
 auxiliary_events:
-  activation: [approval_granted, server_registered, relation_created, sync_applied, export_written,
+  activation: [call_approval_requested, call_approval_approved, approval_granted, server_registered, relation_created, sync_applied, export_written,
                decision_evaluated, call_response_received, discovery_evaluated]
-  reapproval: [intake_checked, sync_applied, alert_resolved,
+  reapproval: [call_approval_requested, call_approval_approved, intake_checked, sync_applied, alert_resolved,
                decision_evaluated, call_response_received, discovery_evaluated]
   drift_description: [decision_evaluated, call_response_received]
   drift_added: [decision_evaluated]
