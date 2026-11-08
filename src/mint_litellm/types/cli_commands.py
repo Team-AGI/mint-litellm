@@ -266,6 +266,13 @@ COMMANDS: tuple[CliCommand, ...] = (
         events=(EventKind.SETTINGS_CHANGED,),
     ),
     CliCommand(
+        path=("settings", "control-key"),
+        summary="환경 변수 MINT_LITELLM_KEY의 제어 평면 키를 도구 목록 면제 키로 저장한다. "
+        "`init`도 키가 있으면 저장되지 않은 경우 같은 일을 한다.",
+        roles=ADMIN_ONLY,
+        events=(EventKind.SETTINGS_CHANGED,),
+    ),
+    CliCommand(
         path=("settings", "observable"),
         summary="관측 모드로 전환할 수 있는 사유 계열과 정책을 정한다.",
         roles=ADMIN_ONLY,

@@ -70,6 +70,13 @@ class PermanentFailure(Exception):
         self.code = code
 
 
+class WaitForOperator(Exception):
+    """운영자 조치(설정 저장 등)를 기다린다. 시도 횟수를 세지 않고 ``delay``초 뒤 다시 대기한다."""
+
+    code = "wait_for_operator"
+    delay = 300
+
+
 class RestoreBlocked(Exception):
     """되돌림 상태라 외부 쓰기를 하지 않는다. 작업은 실패가 아니라 대기로 돌아간다."""
 
@@ -440,7 +447,11 @@ def reclaim_expired(conn: psycopg.Connection, instance_id: str) -> int:
 
 
 def ensure_schedules(conn: psycopg.Connection, instance_id: str, settings: Any) -> None:
-    """처리기가 있는 주기 작업의 일정 행을 만든다. 주기가 설정과 다르면 맞춘다."""
+    """처리기가 있는 주기 작업의 일정 행을 만든다. 주기가 설정과 다르면 맞춘다.
+
+    주기를 줄이면 이미 잡혀 있던 먼 다음 시각도 새 주기 안으로 당긴다. 그대로 두면 옛 주기가
+    끝날 때까지 새 주기의 작업이 등록되지 않는다. 주기를 늘릴 때는 다음 시각을 그대로 둔다.
+    """
     with conn.transaction():
         for kind, interval in SCHEDULES.items():
             if kind not in HANDLERS:
@@ -449,7 +460,9 @@ def ensure_schedules(conn: psycopg.Connection, instance_id: str, settings: Any) 
                 "INSERT INTO mint.schedules (instance_id, kind, interval_seconds, next_run_at)"
                 " VALUES (%s, %s, %s, date_trunc('second', now()))"
                 " ON CONFLICT (instance_id, kind) DO UPDATE"
-                " SET interval_seconds = EXCLUDED.interval_seconds"
+                " SET interval_seconds = EXCLUDED.interval_seconds,"
+                " next_run_at = LEAST(mint.schedules.next_run_at,"
+                "  date_trunc('second', now()) + make_interval(secs => EXCLUDED.interval_seconds))"
                 " WHERE mint.schedules.interval_seconds <> EXCLUDED.interval_seconds",
                 (instance_id, kind, interval(settings)),
             )

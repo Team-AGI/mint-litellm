@@ -1,5 +1,6 @@
 """명령줄 도구: 명령 표와의 일치, 인증·역할, 성공 경로, 종료 코드."""
 
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 
@@ -87,7 +88,26 @@ def test_init_creates_the_default_org_settings_and_prints_the_snippet(mint):
         ).fetchone()
         assert settings == ("default", ["R1", "R3"])
         kinds = [r[0] for r in conn.execute("SELECT kind FROM mint.events ORDER BY inserted_at")]
-        assert kinds == ["settings_changed", "org_created", "settings_changed"]
+        assert kinds == ["settings_changed", "org_created", "settings_changed", "settings_changed"]
+        token = conn.execute("SELECT control_key_token FROM mint.settings").fetchone()[0]
+        assert token == hashlib.sha256(CONTROL_KEY.encode()).hexdigest()
+
+
+def test_init_keeps_a_stored_control_key_and_the_command_replaces_or_clears_it(mint):
+    token = bootstrap(mint)
+    stored = lambda: psycopg.connect(mint.env["MINT_DATABASE_URL"]).execute(  # noqa: E731
+        "SELECT control_key_token FROM mint.settings").fetchone()[0]
+    first = stored()
+    mint.env["MINT_LITELLM_KEY"] = "sk-other-control-key"
+    code, _, err = mint.run("init")
+    assert code == 0 and "settings control-key" in err and stored() == first
+    assert mint.run("settings", "control-key", token=token)[0] == 0
+    assert stored() == hashlib.sha256(b"sk-other-control-key").hexdigest()
+    assert mint.run("settings", "control-key", "--clear", token=token)[0] == 0
+    assert stored() is None
+    del mint.env["MINT_LITELLM_KEY"]
+    code, _, err = mint.run("settings", "control-key", token=token)
+    assert code == 1 and "MINT_LITELLM_KEY" in err
 
 
 def test_init_no_spend_logs_and_bad_server_argument(mint):
@@ -268,7 +288,7 @@ def test_init_writes_the_default_snippet_path_and_reports_json(mint):
     assert "MINT_FINGERPRINT_KEY=" in (mint.tmp / "secrets.env").read_text(encoding="utf-8")
     assert result["fingerprint_key_file"] == (mint.tmp / "secrets.env").as_posix()
     assert [e["kind"] for e in result["events"]] == [
-        "settings_changed", "org_created", "settings_changed"]
+        "settings_changed", "org_created", "settings_changed", "settings_changed"]
 
 
 def test_json_output_names_the_created_object_version_and_event_keys(mint):
