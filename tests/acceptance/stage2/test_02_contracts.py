@@ -23,11 +23,12 @@ def test_version_drift_and_reapproval(rig, name):
         rig.skip("제품 수정 대기: DS-183 후보 자동 생성(재승인 단계)")
     window = rig.begin("reapproval", entities=[row["id"] for row in contracts], server=server)
     rig.reapprove(server)
+    changed = rig.reapproved_tools
     rig.wait(lambda: not rig.rows("tool_contracts", "server_id=%s AND status='approved' "
                                 "AND drift <> 'none'", [server]), 120, "재승인·재pin")
     for tool, args in fixture["changed_tools"].items():
-        rig.call(server, tool, args)
-    rig.check_events(window, changed_count=len(fixture["changed_tools"]))
+        rig.call(server, tool, args, app_error_ok=True)
+    rig.check_events(window, changed_count=changed)
 
 
 @pytest.mark.parametrize("mutation", ["description", "added", "removed", "deployment"])

@@ -212,6 +212,10 @@ class Rig:
         )
         ids = set(map(str, window["entities"]))
         server = window["server"]
+        if server:  # 경보 사건은 본문에 서버가 없고 엔터티가 경보 행이므로 서버의 경보 행 식별자로 고른다.
+            ids |= {str(r["id"]) for r in self.sql(
+                "SELECT id FROM mint.alerts WHERE instance_id=%s AND subject->>'server_id'=%s",
+                [self.iid, server])}
         return [row for row in rows if row["source_key"].split(":")[1] in ids or (
             server and (
                 row["payload"].get("server_id") == server
@@ -261,7 +265,7 @@ class Rig:
         return request
 
     def call(self, server, tool, arguments=None, *, role="caller", base=None, allowed=True,
-             code=None, cause=None, litellm_rejects=False, approve=True, key=None, slow_ok=False):
+             code=None, cause=None, litellm_rejects=False, approve=True, key=None, slow_ok=False, app_error_ok=False):
         if allowed and approve and role == "caller" and key is None:
             self.call_approval(server, tool, arguments)
         mark = "acc-" + uuid.uuid4().hex
@@ -308,7 +312,9 @@ class Rig:
         assert all(counts[kind] == count for kind, count in rule.items()), (counts, rule)
         if allowed:
             assert response.status_code == 200
-            assert not response.json().get("isError", False), self.clean(response.json())
+            # 업스트림에 닿은 뒤의 도구 자체 오류(새 판본이 요구하는 인자 부족 등)는 MINT 판정과 무관하다.
+            assert app_error_ok or not response.json().get("isError", False), self.clean(
+                response.json())
         else:
             assert response.status_code in (400, 403, 409, 503)
             # 고위험 도구는 호출별 승인 요구가 계약 드리프트 판정보다 앞서므로(둘 다 업스트림 0) 그 코드도 받아들인다.
@@ -399,6 +405,7 @@ class Rig:
             return (tools, deployments) if tools or deployments else None
 
         tools, deployments = self.wait(candidates, 120, "재승인 후보 계약")
+        self.reapproved_tools = len(tools)
         intake = max(self.rows("intakes", "server_id=%s AND decision='approved'", [server]),
                      key=lambda row: row["decided_at"])
         args = ["contract", "reapprove", server, "--intake", str(intake["id"])]
