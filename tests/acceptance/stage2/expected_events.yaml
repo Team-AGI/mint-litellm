@@ -160,10 +160,12 @@ flows:
 auxiliary_events:
   activation: [call_approval_requested, call_approval_approved, approval_granted, server_registered, relation_created, sync_applied, export_written,
                decision_evaluated, call_response_received, discovery_evaluated]
-  reapproval: [call_approval_requested, call_approval_approved, intake_checked, sync_applied, alert_resolved,
+  reapproval: [reapproval_requested, call_approval_requested, call_approval_approved, intake_checked, sync_applied, alert_resolved,
                decision_evaluated, call_response_received, discovery_evaluated]
-  drift_description: [decision_evaluated, call_response_received]
-  drift_added: [decision_evaluated]
+  drift_description: [decision_evaluated, call_response_received, discovery_evaluated]
+  drift_added: [decision_evaluated, discovery_evaluated]
+  # 삭제도 드리프트 관측과 재승인 요청 사건을 남긴다(DS-185 ②는 후보 재검사만 만들지 않는다는 뜻).
+  drift_removed: [contract_drift_detected, reapproval_requested, discovery_evaluated]
 observations:
   sync_team_order: {team_before_key: true, key_first_status: 403, converged: true}
   sync_preexisting: {preexisting_after_revoke: 1, owned_after_revoke: 0}

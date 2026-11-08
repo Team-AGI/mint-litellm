@@ -59,6 +59,8 @@ def test_synthetic_contract_changes(rig, mutation):
         # 호출을 보내지 않은 채 두 복제본이 각각 불일치를 관측해야 한다.
         rig.wait(lambda: rig.rows("servers", "server_id=%s AND deployment_drift", [server]),
                  240, "배포 변경")
+        rig.wait(lambda: rig.rows("alerts", "kind='contract_drift' AND subject->>'server_id'=%s",
+                                  [server]), 120, "배포 변경 경보")
         rig.check_events(window, worker_count=2)
         rig.reapprove(server)
         rig.wait(lambda: not rig.rows("servers", "server_id=%s AND deployment_drift", [server]),
