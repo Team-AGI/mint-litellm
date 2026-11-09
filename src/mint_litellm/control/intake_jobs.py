@@ -49,7 +49,24 @@ def submission_poll(job: JobContext) -> None:
     ctx = _context(job)
     for item in pending[:POLL_LIMIT]:
         job.checkpoint()
-        intakes.receive_submission(ctx, item)
+        intake_id = intakes.receive_submission(ctx, item)
+        if intake_id:
+            _reject_forbidden_address(job, ctx, intake_id)
+
+
+def _url_guard(job: JobContext, contract: dict | None, allowlists: list[dict]) -> checks.Outcome:
+    ports = tuple(getattr(job.settings, "intake_allowed_ports", checks.DEFAULT_PORTS))
+    return checks.url_guard(contract and contract["url"], contract and contract["transport"],
+                            allowlists, ports)
+
+
+def _reject_forbidden_address(job: JobContext, ctx: Context, intake_id: str) -> None:
+    """제출 주소가 거부 대상 IP이면 운영자 입력을 기다리지 않고 바로 거절한다(같은 주소 검사)."""
+    row = intakes.get(ctx, intake_id)
+    contract = intakes.deployment_candidate(job.conn, job.instance_id, row["server_id"])
+    out = _url_guard(job, contract, _allowlists(job, row["org_id"]))
+    if out.reason == "IP_FORBIDDEN":
+        intakes.reject_on_address(ctx, intake_id, out)
 
 
 # --- intake_run ---------------------------------------------------------------------------
@@ -197,7 +214,6 @@ def _run_checks(
         contract = intakes.approved_deployment(job.conn, job.instance_id, server_id)
     allowlists = _allowlists(job, row["org_id"])
     data = job.policy_data.get(job.conn, job.instance_id) if job.policy_data else None
-    ports = tuple(getattr(job.settings, "intake_allowed_ports", checks.DEFAULT_PORTS))
     defs: list[dict] | None = None
     needs_credentials = False
     halt = False
@@ -229,8 +245,7 @@ def _run_checks(
                 return needs_credentials
             continue
         if name == "url_guard":
-            out = checks.url_guard(contract and contract["url"], contract and contract["transport"],
-                                   allowlists, ports)
+            out = _url_guard(job, contract, allowlists)
         elif name == "oauth_issuer_allowlist":
             auth = contract and contract["auth_type"]
             out = checks.oauth_issuer_allowlist(

@@ -571,7 +571,8 @@ def _operator_deployment_candidate(
     hashes = json.loads(observed["canonical_text"]) if observed else {}
     if approved is None or hashes.get("url_sha256") is None:
         raise ControlError("관측된 배포 URL 해시가 없어 주소를 받을 수 없습니다.")
-    if url_sha256(url) != hashes["url_sha256"]:
+    # 플러그인은 레지스트리 값(이미 URL 해시)의 정규 해시를 기록한다(전송 방식과 같은 규칙)
+    if sha256(url_sha256(url)) != hashes["url_sha256"]:
         raise ControlError("입력한 주소가 관측된 배포 URL과 다릅니다(해시 불일치).")
     transport = transport or approved["transport"]
     # 전송 방식이 관측됐으면 그 해시와, 아니면 승인된 전송 방식과 같아야 한다
@@ -775,6 +776,25 @@ def conclude(ctx: Context, intake_id: str, *, needs_registry_credentials: bool) 
         return verdict
 
 
+def reject_on_address(ctx: Context, intake_id: str, outcome: intake_checks.Outcome) -> None:
+    """``received`` 신청을 주소 검사(``url_guard``) 실패로 바로 거절한다. 운영자 입력은 필요 없다.
+
+    검사 한 행과 거절을 남기고 서버를 ``rejected``로 닫는다. 제출이므로 LiteLLM 거절은 작업이 한다.
+    """
+    with transact(ctx):
+        row = get(ctx, intake_id, lock=True)
+        if row["status"] != "received" or outcome.result != "fail":
+            return
+        record_check(ctx, row, next_attempt(ctx.conn, ctx.instance_id, row["id"]), "url_guard",
+                     outcome, contract_binding(ctx.conn, ctx.instance_id, row["server_id"]))
+        updated = _decided(ctx, row, "rejected", f"check_failed:url_guard:{outcome.reason}",
+                           {"automatic": True})
+        _server_to(ctx, row["server_id"], "validating", _SERVER_REENTRY)
+        _server_to(ctx, row["server_id"], "rejected", ("validating",))
+        _supersede_candidates(ctx, row["server_id"])
+        _enqueue_run(ctx, updated, "reject")
+
+
 # --- 결정 ---------------------------------------------------------------------------------
 
 
@@ -905,6 +925,9 @@ def _approve(
         (ctx.instance_id, server_id),
     )
     if not tools:
+        if any(c["check"] == "definitions" and c["reason_code"] == "LIMIT_EXCEEDED"
+               for c in checks):
+            raise ControlError("정의 상한 초과: 서버의 도구 수·크기를 줄여 다시 신청하십시오.")
         raise ControlError("승인할 도구 계약 후보가 없습니다. 정의 수집이 끝나야 합니다.")
     if any(t["risk_grade"] is None or t["action_type"] is None for t in tools):
         raise ControlError("위험 등급이 산정되지 않은 도구가 있어 승인할 수 없습니다.")

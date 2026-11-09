@@ -17,7 +17,7 @@ psycopg = pytest.importorskip("psycopg")
 
 from psycopg.conninfo import conninfo_to_dict, make_conninfo  # noqa: E402
 
-from mint_litellm.control import jobs  # noqa: E402
+from mint_litellm.control import intake_checks, jobs  # noqa: E402
 from mint_litellm.control.db.connection import fetchall, fetchone  # noqa: E402
 from mint_litellm.control.db.roles import LOGIN_ROLES  # noqa: E402
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError  # noqa: E402
@@ -426,6 +426,30 @@ def test_a_stdio_or_openapi_submission_fails_url_guard_and_is_rejected_at_litell
         ("PUT", "/v1/mcp/server/sub-2/reject"),
     ]
     assert {s["approval_status"] for s in world.stub.submissions} == {"rejected"}
+
+
+def test_a_submission_with_a_private_literal_ip_is_rejected_on_the_first_poll(world):
+    world.stub.submissions = [
+        submission("sub-1", url="https://[fd00::1]/mcp"),
+        submission("sub-2"),
+    ]
+    poll(world)
+    row = fetchone(world.conn, "SELECT * FROM mint.intakes WHERE server_id = 'sub-1'")
+    assert (row["status"], row["decision"], row["decided_by"]) == (
+        "decided", "rejected", "intake_run")
+    assert row["decision_reason"] == "check_failed:url_guard:IP_FORBIDDEN"
+    assert row["purpose"] is None  # 운영자 입력 없이 끝난다
+    assert [(c["check"], c["result"], c["reason_code"]) for c in world.checks(row["id"])] == [
+        ("url_guard", "fail", "IP_FORBIDDEN")]
+    assert world.server("sub-1")["status"] == "rejected"
+    assert world.stub.writes() == [("PUT", "/v1/mcp/server/sub-1/reject")]
+    assert not [p for _, p, _ in world.stub.requests if "/test/" in p]  # 업스트림 검사 없음
+    poll(world)  # 다시 조회해도 새 신청이 없다
+    assert fetchone(world.conn, "SELECT count(*) AS n FROM mint.intakes"
+                    " WHERE server_id = 'sub-1'")["n"] == 1
+    # 다른 제출은 그대로 운영자 입력을 기다린다
+    assert fetchone(world.conn, "SELECT status FROM mint.intakes"
+                    " WHERE server_id = 'sub-2'")["status"] == "received"
 
 
 def test_an_automatic_rejection_rejects_the_litellm_submission_exactly_once(world):
@@ -1130,6 +1154,19 @@ def test_an_exception_defaults_to_30_days_and_an_explicit_value_still_caps_at_90
     assert round(approval_days(world)) == 30
 
 
+def test_an_exception_for_a_server_over_the_definition_limit_names_the_cause(world):
+    from mint_litellm.control.context import Operator
+
+    many = [{**TOOL, "name": f"tool-{i}"} for i in range(intake_checks.MAX_TOOLS + 1)]
+    world.stub.tools = (200, {"tools": many, "message": "ok"})
+    intake_id = world.create()
+    world.drain()
+    assert world.intake(intake_id)["status"] == "indeterminate"
+    second = Operator("boss2", "approver", "boss-2")
+    with pytest.raises(ControlError, match="정의 상한 초과"):
+        world.decide(intake_id, "except", reason="상한 초과", second=second)
+
+
 def test_an_explicit_valid_until_overrides_the_default(world):
     intake_id = passed(world)
     world.decide(intake_id, "approve", valid_until=datetime.now(UTC) + timedelta(days=7))
@@ -1472,13 +1509,32 @@ def test_a_pending_reapproval_plan_keeps_its_candidates_from_being_replaced(worl
 # --- 새 주소 입력과 서버 자격 흐름 드리프트 -------------------------------------------------------
 
 
-def identity_drift(world, url, transport=None):
-    from mint_litellm.types.canonical import sha256 as value_sha256
+def plugin_observed_hashes(url, transport=None):
+    """플러그인 자가 점검이 승인값과 다른 레지스트리 값에서 만드는 관측 해시(손으로 안 만든다)."""
+    import asyncio
+    import sys
+    import tempfile
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugin"))
+    from test_plugin_selfcheck import entry, make_runtime, registered, view
+
     from mint_litellm.types.decision import url_sha256
 
-    hashes = {"url_sha256": url_sha256(url)}
-    if transport:
-        hashes["transport"] = value_sha256(transport)
+    runtime, _, _, _ = make_runtime(
+        Path(tempfile.mkdtemp()),
+        v=view(registry=[entry(server_id="srv-a", url_sha256=url_sha256(url),
+                               transport=transport or "http")]),
+        controlled=[registered(server_id="srv-a", contract_status="managed",
+                               url_sha256="b" * 64, transport="openapi")],
+    )
+    asyncio.run(runtime.run_checks())
+    return runtime._observed_hashes["srv-a"]
+
+
+def identity_drift(world, url, transport=None):
+    hashes = plugin_observed_hashes(url, transport)
+    if not transport:
+        hashes.pop("transport", None)
     world.conn.execute(
         "INSERT INTO mint.events (event_id, instance_id, kind, source_key, payload)"
         " VALUES (gen_random_uuid(), %s, 'server_identity_mismatch_observed', 'selfcheck:1', %s)",
