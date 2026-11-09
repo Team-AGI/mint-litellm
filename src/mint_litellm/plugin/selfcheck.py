@@ -476,9 +476,19 @@ class PluginRuntime:
         except RuntimeError:
             return
         self._task = loop.create_task(self._startup())
-        if self.restore_watch is not None:
-            self._restore_task = loop.create_task(self.restore_watch.run())
+        self._restore_task = loop.create_task(self._judge_loop())
         self._observe_task = loop.create_task(self._observe_contracts())
+
+    async def _judge_loop(self) -> None:
+        """판정 주기마다 되돌림 판정을 갱신하고, 호출이 없어도 버퍼에 남은 사건을 DB에 올린다."""
+        while True:
+            try:
+                await self.recorder.replay_pending()
+            except Exception as exc:  # 재적재 실패가 되돌림 판정 갱신을 막지 않는다
+                log.warning("버퍼 재적재 실패: %s", type(exc).__name__)
+            if self.restore_watch is not None:
+                await self.restore_watch.refresh()
+            await asyncio.sleep(self.config.restore_interval_seconds)
 
     async def _observe_contracts(self) -> None:
         while True:

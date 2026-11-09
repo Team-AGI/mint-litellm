@@ -17,7 +17,7 @@ psycopg = pytest.importorskip("psycopg")
 
 from psycopg.conninfo import conninfo_to_dict, make_conninfo  # noqa: E402
 
-from mint_litellm.control import jobs  # noqa: E402
+from mint_litellm.control import intake_checks, jobs  # noqa: E402
 from mint_litellm.control.db.connection import fetchall, fetchone  # noqa: E402
 from mint_litellm.control.db.roles import LOGIN_ROLES  # noqa: E402
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError  # noqa: E402
@@ -426,6 +426,95 @@ def test_a_stdio_or_openapi_submission_fails_url_guard_and_is_rejected_at_litell
         ("PUT", "/v1/mcp/server/sub-2/reject"),
     ]
     assert {s["approval_status"] for s in world.stub.submissions} == {"rejected"}
+
+
+def test_a_submission_with_a_private_literal_ip_is_rejected_on_the_first_poll(world):
+    world.stub.submissions = [
+        submission("sub-1", url="https://[fd00::1]/mcp"),
+        submission("sub-2"),
+    ]
+    poll(world)
+    row = fetchone(world.conn, "SELECT * FROM mint.intakes WHERE server_id = 'sub-1'")
+    assert (row["status"], row["decision"], row["decided_by"]) == (
+        "decided", "rejected", "intake_run")
+    assert row["decision_reason"] == "check_failed:url_guard:IP_FORBIDDEN"
+    assert row["purpose"] is None  # 운영자 입력 없이 끝난다
+    assert [(c["check"], c["result"], c["reason_code"]) for c in world.checks(row["id"])] == [
+        ("url_guard", "fail", "IP_FORBIDDEN")]
+    assert world.server("sub-1")["status"] == "rejected"
+    assert world.stub.writes() == [("PUT", "/v1/mcp/server/sub-1/reject")]
+    assert not [p for _, p, _ in world.stub.requests if "/test/" in p]  # 업스트림 검사 없음
+    poll(world)  # 다시 조회해도 새 신청이 없다
+    assert fetchone(world.conn, "SELECT count(*) AS n FROM mint.intakes"
+                    " WHERE server_id = 'sub-1'")["n"] == 1
+    # 다른 제출은 그대로 운영자 입력을 기다린다
+    assert fetchone(world.conn, "SELECT status FROM mint.intakes"
+                    " WHERE server_id = 'sub-2'")["status"] == "received"
+
+
+def test_a_received_submission_left_by_an_interrupted_poll_is_rejected_on_the_next_poll(world):
+    item = submission("sub-1", url="https://[fd00::1]/mcp")
+    world.call(lambda ctx: svc.receive_submission(ctx, item))  # 접수만 커밋되고 중단된 상태
+    assert fetchone(world.conn, "SELECT status FROM mint.intakes")["status"] == "received"
+    world.stub.submissions = [item]
+    poll(world)
+    row = fetchone(world.conn, "SELECT * FROM mint.intakes")
+    assert (row["status"], row["decision_reason"]) == (
+        "decided", "check_failed:url_guard:IP_FORBIDDEN")
+    assert world.stub.writes() == [("PUT", "/v1/mcp/server/sub-1/reject")]
+
+
+def wait_for_lock_waiter(world, seconds=15.0):
+    """다른 연결이 잠금을 기다리는 상태가 될 때까지 본다(기다리는 연결이 없으면 시험 실패)."""
+    import time
+
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        waiting = fetchone(
+            world.conn,
+            "SELECT count(*) AS n FROM pg_stat_activity WHERE wait_event_type = 'Lock'"
+            " AND datname = current_database()",
+        )["n"]
+        if waiting:
+            return
+        time.sleep(0.05)
+    raise AssertionError("잠금을 기다리는 연결이 없다")
+
+
+def test_the_address_check_uses_the_candidate_current_when_the_locks_are_taken(world):
+    import threading
+
+    item = submission("sub-1", url="https://[fd00::1]/mcp")
+    world.stub.submissions = [item]
+    world.call(lambda ctx: svc.receive_submission(ctx, item))
+    intake_id = str(fetchone(world.conn, "SELECT id FROM mint.intakes")["id"])
+    with psycopg.connect(world.url) as other:
+        # 운영자 쪽이 신청 행을 먼저 잠근 채(첫 잠금) 주소 후보를 허용된 주소로 바꾼다
+        fetchone(other, "SELECT 1 AS x FROM mint.intakes WHERE id = %s FOR UPDATE", (intake_id,))
+        thread = threading.Thread(target=poll, args=(world,))
+        thread.start()
+        wait_for_lock_waiter(world)  # 조회도 같은 신청 행을 첫 잠금으로 기다리는 중이다
+        svc._deployment_candidate(make_ctx(other), "sub-1", URL, "http", "none", None, None,
+                                  None, None)
+        other.commit()
+        thread.join(30)
+        assert not thread.is_alive()
+    assert world.intake(intake_id)["status"] == "received"
+    assert world.stub.writes() == []
+
+
+def test_delivering_one_rejection_converges_to_a_single_job_and_write(world):
+    item = submission("sub-1", url="https://[fd00::1]/mcp")
+    world.stub.submissions = [item]
+    world.call(lambda ctx: svc.receive_submission(ctx, item))
+    world.call(lambda ctx: svc.create(ctx, world.admin_client, "sub-1", **INPUTS))  # 검사 작업 등록
+    world.call(lambda ctx: svc.reject_forbidden_address(
+        ctx, "sub-1", lambda contract, org: intake_checks.url_guard(
+            contract["url"], contract["transport"], [], (443,))))
+    world.drain()
+    assert world.stub.writes() == [("PUT", "/v1/mcp/server/sub-1/reject")]
+    rejects = [j for j in world.jobs("intake_run") if j["target_ref"].endswith("/reject")]
+    assert len(rejects) == 1
 
 
 def test_an_automatic_rejection_rejects_the_litellm_submission_exactly_once(world):
@@ -1130,6 +1219,36 @@ def test_an_exception_defaults_to_30_days_and_an_explicit_value_still_caps_at_90
     assert round(approval_days(world)) == 30
 
 
+def test_an_exception_for_a_server_over_the_definition_limit_names_the_cause(world):
+    from mint_litellm.control.context import Operator
+
+    many = [{**TOOL, "name": f"tool-{i}"} for i in range(intake_checks.MAX_TOOLS + 1)]
+    world.stub.tools = (200, {"tools": many, "message": "ok"})
+    intake_id = world.create()
+    world.drain()
+    assert world.intake(intake_id)["status"] == "indeterminate"
+    second = Operator("boss2", "approver", "boss-2")
+    with pytest.raises(ControlError, match="정의 상한 초과"):
+        world.decide(intake_id, "except", reason="상한 초과", second=second)
+
+
+def test_an_exception_after_a_recheck_over_the_limit_is_refused_even_with_old_candidates(world):
+    from mint_litellm.control.context import Operator
+
+    intake_id = world.create()
+    world.drain()
+    assert world.intake(intake_id)["status"] == "passed"
+    many = [{**TOOL, "name": f"tool-{i}"} for i in range(intake_checks.MAX_TOOLS + 1)]
+    world.stub.tools = (200, {"tools": many, "message": "ok"})
+    world.call(lambda ctx: svc.recheck(ctx, intake_id))
+    world.drain()
+    assert world.intake(intake_id)["status"] == "indeterminate"
+    assert fetchall(world.conn, "SELECT 1 FROM mint.tool_contracts WHERE status = 'candidate'")
+    second = Operator("boss2", "approver", "boss-2")
+    with pytest.raises(ControlError, match="정의 상한 초과"):
+        world.decide(intake_id, "except", reason="상한 초과", second=second)
+
+
 def test_an_explicit_valid_until_overrides_the_default(world):
     intake_id = passed(world)
     world.decide(intake_id, "approve", valid_until=datetime.now(UTC) + timedelta(days=7))
@@ -1472,13 +1591,32 @@ def test_a_pending_reapproval_plan_keeps_its_candidates_from_being_replaced(worl
 # --- 새 주소 입력과 서버 자격 흐름 드리프트 -------------------------------------------------------
 
 
-def identity_drift(world, url, transport=None):
-    from mint_litellm.types.canonical import sha256 as value_sha256
+def plugin_observed_hashes(url, transport=None):
+    """플러그인 자가 점검이 승인값과 다른 레지스트리 값에서 만드는 관측 해시(손으로 안 만든다)."""
+    import asyncio
+    import sys
+    import tempfile
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugin"))
+    from test_plugin_selfcheck import entry, make_runtime, registered, view
+
     from mint_litellm.types.decision import url_sha256
 
-    hashes = {"url_sha256": url_sha256(url)}
-    if transport:
-        hashes["transport"] = value_sha256(transport)
+    runtime, _, _, _ = make_runtime(
+        Path(tempfile.mkdtemp()),
+        v=view(registry=[entry(server_id="srv-a", url_sha256=url_sha256(url),
+                               transport=transport or "http")]),
+        controlled=[registered(server_id="srv-a", contract_status="managed",
+                               url_sha256="b" * 64, transport="openapi")],
+    )
+    asyncio.run(runtime.run_checks())
+    return runtime._observed_hashes["srv-a"]
+
+
+def identity_drift(world, url, transport=None):
+    hashes = plugin_observed_hashes(url, transport)
+    if not transport:
+        hashes.pop("transport", None)
     world.conn.execute(
         "INSERT INTO mint.events (event_id, instance_id, kind, source_key, payload)"
         " VALUES (gen_random_uuid(), %s, 'server_identity_mismatch_observed', 'selfcheck:1', %s)",

@@ -260,7 +260,7 @@ def test_intake_walks_the_legal_paths(db, base, path):
 
 @pytest.mark.parametrize(
     ("path", "target"),
-    [([], "passed"), ([], "decided"), (["checking"], "decided"), (["checking"], "received"),
+    [([], "passed"), (["checking"], "decided"), (["checking"], "received"),
      (["checking", "failed"], "checking"), (["checking", "passed", "decided"], "checking"),
      (["checking", "passed"], "failed")],
 )  # fmt: skip
@@ -271,6 +271,16 @@ def test_intake_rejects_illegal_transitions(db, base, path, target):
     with fails(db, errors.CheckViolation):
         update(db, "intakes", f"id = '{iid}'", status=target, decision="approved",
                decided_by="a", decided_at=NOW, **INPUTS)  # fmt: skip
+
+
+def test_a_received_intake_can_be_rejected_without_inputs_but_not_approved(db, base):
+    iid = add_intake(db)
+    with fails(db, errors.CheckViolation):
+        update(db, "intakes", f"id = '{iid}'", status="decided", decision="approved",
+               decided_by="a", decided_at=NOW)
+    update(db, "intakes", f"id = '{iid}'", status="decided", decision="rejected",
+           decided_by="a", decided_at=NOW)
+    assert status_of(db, "intakes", iid) == "decided"
 
 
 def test_only_one_undecided_intake_per_server(db, base):
