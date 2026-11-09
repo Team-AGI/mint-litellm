@@ -648,26 +648,53 @@ def test_the_pool_is_opened_lazily_and_closed_idempotently(plugin_dsn):
     assert config() is not None
 
 
-def test_the_pool_opens_with_every_connection_up_front(monkeypatch):
-    """최소 크기가 최대 크기와 같아야 몰린 요청이 새 연결을 만들다 획득 예산을 넘기지 않는다."""
+def _fake_pool(monkeypatch, wait):
     import psycopg_pool
 
-    opened = {}
+    seen = {"events": []}
 
     class FakePool:
         def __init__(self, dsn, **kw):
-            opened.update(kw)
+            seen.update(kw)
 
         async def open(self):
-            pass
+            seen["events"].append("open")
+
+        async def wait(self, timeout):
+            seen["events"].append(("wait", timeout))
+            await wait()
 
         def connection(self):
+            seen["events"].append("connection")
             return "connection"
 
     monkeypatch.setattr(psycopg_pool, "AsyncConnectionPool", FakePool)
-    db = PluginDatabase("postgresql://unused", max_size=8)
+    return seen
+
+
+def test_the_pool_opens_with_every_connection_up_front_and_waits_for_them(monkeypatch):
+    """최소 크기가 최대 크기와 같고, 첫 호출은 연결이 다 찰 때까지 기다린 뒤에 연결을 내준다."""
+
+    async def ready():
+        pass
+
+    seen = _fake_pool(monkeypatch, ready)
+    db = PluginDatabase("postgresql://unused", max_size=8, acquire_timeout=0.3)
     run(db._connection())
-    assert opened["min_size"] == opened["max_size"] == 8
+    assert seen["min_size"] == seen["max_size"] == 8
+    assert seen["events"] == ["open", ("wait", 2), "connection"]
+
+
+def test_a_pool_that_is_not_full_in_time_stays_open_and_serves_calls(monkeypatch):
+    import psycopg_pool
+
+    async def late():
+        raise psycopg_pool.PoolTimeout("not full")
+
+    seen = _fake_pool(monkeypatch, late)
+    db = PluginDatabase("postgresql://unused", max_size=8)
+    assert run(db._connection()) == "connection"
+    assert seen["events"][-1] == "connection"
 
 
 def test_a_burst_as_wide_as_the_pool_is_served_within_the_budget(scenario, plugin_dsn):
@@ -675,8 +702,7 @@ def test_a_burst_as_wide_as_the_pool_is_served_within_the_budget(scenario, plugi
 
     async def go():
         try:
-            await db.read_epoch(scenario.iid)  # 첫 사용이 풀을 연다
-            await db._pool.wait(timeout=10)
+            await db.read_epoch(scenario.iid)  # 첫 사용이 풀을 열고 연결이 다 찰 때까지 기다린다
             assert db._pool.get_stats()["pool_size"] == 8
             return await asyncio.gather(*(db.read_epoch(scenario.iid) for _ in range(8)))
         finally:

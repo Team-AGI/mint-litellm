@@ -257,11 +257,15 @@ SCHEDULES: dict[str, Callable[[Any], int]] = {
 PERIODIC_RETRY_KINDS = frozenset({"contract_observe", "sync_reconcile", "submission_poll"})
 
 
+def retry_cap(kind: str | None, settings: Any) -> int | None:
+    """주기 작업의 재시도 간격 상한(초). 주기 작업이 아니거나 설정이 없으면 None."""
+    if settings is None or kind not in PERIODIC_RETRY_KINDS:
+        return None
+    return min(MAX_BACKOFF_SECONDS, max(5, settings.observe_seconds // 4))
+
+
 def backoff_seconds(attempts: int, kind: str | None = None, settings: Any = None) -> int:
-    cap = MAX_BACKOFF_SECONDS
-    if settings is not None and kind in PERIODIC_RETRY_KINDS:
-        cap = min(cap, max(5, settings.observe_seconds // 4))
-    return min(2**attempts * 5, cap)
+    return min(2**attempts * 5, retry_cap(kind, settings) or MAX_BACKOFF_SECONDS)
 
 
 def period_key(kind: str, period_start: datetime) -> str:
@@ -392,9 +396,13 @@ def _requeue(
                 )
         except UniqueViolation:
             # 대기 행이 실행 시점 상태를 읽으므로(수렴) 그 행에 합치고 이 행은 끝낸다.
+            cap = retry_cap(row["kind"], settings)
+            later = "GREATEST(run_after, now() + make_interval(secs => %s))"
+            if cap is not None:  # 이미 먼 시각으로 잡힌 대기 행도 상한 안으로 당긴다
+                later = f"LEAST({later}, now() + make_interval(secs => {int(cap)}))"
             conn.execute(
                 "UPDATE mint.jobs SET attempts = GREATEST(attempts, %s),"
-                " run_after = GREATEST(run_after, now() + make_interval(secs => %s)),"
+                f" run_after = {later},"
                 " last_error_code = %s, updated_at = now()"
                 " WHERE instance_id = %s AND kind = %s AND target_ref = %s"
                 " AND status = 'pending' AND idempotency_key IS NULL",
@@ -479,6 +487,14 @@ def ensure_schedules(conn: psycopg.Connection, instance_id: str, settings: Any) 
                 "  date_trunc('second', now()) + make_interval(secs => EXCLUDED.interval_seconds))"
                 " WHERE mint.schedules.interval_seconds <> EXCLUDED.interval_seconds",
                 (instance_id, kind, interval(settings)),
+            )
+        # 이전 판본이 먼 시각으로 잡아 둔 주기 작업의 대기 행을 새 재시도 상한 안으로 당긴다.
+        for kind in PERIODIC_RETRY_KINDS:
+            conn.execute(
+                "UPDATE mint.jobs SET run_after = now() + make_interval(secs => %s),"
+                " updated_at = now() WHERE instance_id = %s AND kind = %s AND status = 'pending'"
+                " AND run_after > now() + make_interval(secs => %s)",
+                (retry_cap(kind, settings), instance_id, kind, retry_cap(kind, settings)),
             )
 
 

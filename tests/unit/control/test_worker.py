@@ -313,13 +313,51 @@ def _periodic_key(kind):
 
 def test_periodic_retry_waits_are_capped_by_a_quarter_of_the_observe_period():
     short = Stage2Settings.from_env({**ENV, "MINT_OBSERVE_SECONDS": "60"})
-    tiny = Stage2Settings.from_env({**ENV, "MINT_OBSERVE_SECONDS": "8"})
+    tiny = Stage2Settings.from_env({**ENV, "MINT_OBSERVE_SECONDS": "20"})
     for kind in jobs.PERIODIC_RETRY_KINDS:
         assert [jobs.backoff_seconds(n, kind, short) for n in (1, 2, 3, 8)] == [10, 15, 15, 15]
         assert jobs.backoff_seconds(8, kind, tiny) == 5  # 최소 5초
         assert jobs.backoff_seconds(8, kind, SETTINGS) == 600  # 기본 주기에서는 10분 상한이 먼저
     assert jobs.backoff_seconds(8, "seal", short) == 600  # 주기 작업이 아니면 그대로
     assert jobs.backoff_seconds(8, "contract_observe") == 600
+
+
+@pytest.mark.parametrize("kind", sorted(jobs.PERIODIC_RETRY_KINDS))
+def test_startup_pulls_far_pending_periodic_jobs_inside_the_cap(make_worker, admin, kind):
+    """이전 판본이 먼 시각으로 잡아 둔 대기 행은 기동 때 새 상한 안으로 당겨진다."""
+    worker = make_worker(settings=Stage2Settings.from_env({**ENV, "MINT_OBSERVE_SECONDS": "60"}))
+    far = put(admin, kind, kind, _periodic_key(kind))
+    admin.execute("UPDATE mint.jobs SET run_after = now() + interval '600 seconds' WHERE id = %s",
+                  (far,))
+    near = put(admin, kind, "near", _periodic_key(kind) and f"{kind}:near")
+    admin.execute("UPDATE mint.jobs SET run_after = now() + interval '3 seconds' WHERE id = %s",
+                  (near,))
+    jobs.ensure_schedules(worker.conn, INSTANCE, worker.settings)
+    waits = {
+        str(r["id"]): float(r["s"])
+        for r in fetchall(admin, "SELECT id, extract(epoch FROM run_after - now()) AS s"
+                          " FROM mint.jobs")
+    }
+    assert 0 < waits[far] <= 15
+    assert waits[near] <= 3  # 가까운 행은 그대로
+
+
+def test_a_retry_folding_into_a_far_pending_job_stays_inside_the_cap(
+    make_worker, admin, monkeypatch
+):
+    monkeypatch.setitem(jobs.HANDLERS, "contract_observe", lambda ctx: 1 / 0)
+    settings = Stage2Settings.from_env({**ENV, "MINT_OBSERVE_SECONDS": "60"})
+    worker = make_worker(settings=settings)
+    running = put(admin, "contract_observe", "contract_observe")
+    got = jobs.lease(worker.conn, INSTANCE, worker.owner, 60, ["contract_observe"])
+    assert str(got["id"]) == running
+    waiting = put(admin, "contract_observe", "contract_observe")
+    admin.execute("UPDATE mint.jobs SET run_after = now() + interval '600 seconds' WHERE id = %s",
+                  (waiting,))
+    assert jobs.fail(worker.conn, running, worker.owner, "X", settings) == "done"
+    wait = fetchone(admin, "SELECT extract(epoch FROM run_after - now()) AS s FROM mint.jobs"
+                    " WHERE id = %s", (waiting,))["s"]
+    assert 0 < float(wait) <= 15
 
 
 @pytest.mark.parametrize("kind", sorted(jobs.PERIODIC_RETRY_KINDS))

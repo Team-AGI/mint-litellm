@@ -572,7 +572,7 @@ class PluginDatabase:
         if self._pool is None:
             async with self._lock:
                 if self._pool is None:
-                    from psycopg_pool import AsyncConnectionPool
+                    from psycopg_pool import AsyncConnectionPool, PoolTimeout
 
                     milliseconds = max(10, int(self.acquire_timeout * 1000))
                     # 문장은 호출한 쪽이 포기한 뒤에도 서버에서 끝까지 갈 수 있게(커밋 결과 불명)
@@ -597,6 +597,10 @@ class PluginDatabase:
                         timeout=self.acquire_timeout,
                     )
                     await pool.open()
+                    # 첫 사용(기동 자가 점검)에서 연결이 다 찰 때까지 기다린다. 시간이 넘으면 열린
+                    # 채로 두어 백그라운드가 채우게 하고, 호출은 획득 예산 안에서 차단되어 닫힌다.
+                    with contextlib.suppress(PoolTimeout):
+                        await pool.wait(timeout=max(2, math.ceil(self.acquire_timeout)))
                     self._pool = pool
         return self._pool.connection()
 
