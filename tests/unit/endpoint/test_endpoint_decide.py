@@ -200,3 +200,42 @@ def test_route_denies_when_the_decision_store_is_down(tmp_path):
     app, h = build_app(tmp_path)
     h.store.fail = RuntimeError("down")
     assert post(TestClient(app)).json()["decision"] == "deny"
+
+
+def test_standin_server_gives_the_row_its_url_hash_and_transport(tmp_path):
+    from endpoint_helpers import SERVER_ID, local_snapshot
+    from plugin_helpers import server_row
+
+    from mint_litellm.endpoint.decide import ContractRegistry, LocalServer
+    from mint_litellm.types.decision import url_sha256
+
+    standin = "https://standin.invalid/mcp"
+    snap = local_snapshot(
+        server=server_row(server_id=SERVER_ID, url_sha256=url_sha256(standin), transport="http")
+    )
+    h = harness(tmp_path, snap)
+    reg = ContractRegistry({"cnt": LocalServer(SERVER_ID, contract(), standin, "http")})
+    assert decide_direct(h, reg=reg).allowed
+    # 자리 서버 없이 만든 행(서버 ID 고정 값)과는 맞지 않아 차단된다.
+    other = harness(tmp_path / "b", snap)
+    assert not decide_direct(other).allowed
+
+
+def test_registry_file_round_trip(tmp_path):
+    from mint_litellm.endpoint.decide import ContractRegistry
+
+    document = {
+        "servers": [
+            {
+                "name": "cnt",
+                "server_id": "srv-1",
+                "standin_url": "https://standin.invalid/mcp",
+                "contract": contract().model_dump(mode="json"),
+            }
+        ]
+    }
+    path = tmp_path / "registry.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    entry = ContractRegistry.load(path).get("cnt")
+    assert entry.transport == "http" and entry.standin_url.endswith("/mcp")
+    assert entry.contract == contract()

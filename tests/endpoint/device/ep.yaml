@@ -1,0 +1,11 @@
+# 엔드포인트 탐색 스택 덧붙임(deploy/compose.yaml 위). 프로젝트 이름은 COMPOSE_PROJECT_NAME으로 정한다.
+# 결정 경로와 키트 내려받기, 설치 보고를 켜고 승인 계약 파일을 읽기 전용으로 붙인다.
+services:
+  litellm:
+    environment:
+      MINT_ENDPOINT_REGISTRY: /app/endpoint/registry.json
+      MINT_ENDPOINT_PUBLIC_URL: ${EP_PUBLIC_URL:?EP_PUBLIC_URL}
+      MINT_ENDPOINT_REPORTS: /var/lib/mint/buffer/endpoint-reports.jsonl
+      MINT_LOG_LEVEL: DEBUG
+    volumes:
+      - ${EP_STATE:?EP_STATE}/endpoint:/app/endpoint:ro

@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from mint_litellm.compat.litellm_1_106 import HookData, ServerResolutionError
 from mint_litellm.endpoint.contract import LocalExecContract, mismatched_fields, strict_json
 from mint_litellm.plugin.pipeline import CallRequest, build_request, evaluate_request
-from mint_litellm.types.decision import OperationType, ResolvedServer
+from mint_litellm.types.decision import OperationType, ResolvedServer, url_sha256
 from mint_litellm.types.identity import Principal
 from mint_litellm.types.reason_codes import Reason
 
@@ -70,8 +70,16 @@ class KitSettings:
 
 @dataclass(frozen=True)
 class LocalServer:
+    """승인된 로컬 서버. ``standin_url``은 LiteLLM 레지스트리에 대신 올려 둔 자리 서버의 주소이다.
+
+    자리 서버가 있으면 등록·승인·자가 점검이 기존 경로 그대로 동작하고, 서버 행의 URL 해시와
+    전송 방식이 자리 서버 값이 된다. 없으면 서버 ID에서 만든 고정 값과 ``stdio``를 쓴다.
+    """
+
     server_id: str
     contract: LocalExecContract
+    standin_url: str | None = None
+    transport: str = "stdio"
 
 
 class ContractRegistry:
@@ -89,7 +97,10 @@ class ContractRegistry:
         return cls(
             {
                 item["name"]: LocalServer(
-                    item["server_id"], LocalExecContract.model_validate(item["contract"])
+                    item["server_id"],
+                    LocalExecContract.model_validate(item["contract"]),
+                    item.get("standin_url"),
+                    item.get("transport", "http" if item.get("standin_url") else "stdio"),
                 )
                 for item in document["servers"]
             }
@@ -141,8 +152,12 @@ def local_request(
             )
         return ResolvedServer(
             server_id=entry.server_id,
-            url_sha256=stdio_identity_hash(entry.server_id),
-            transport="stdio",
+            url_sha256=(
+                url_sha256(entry.standin_url)
+                if entry.standin_url
+                else stdio_identity_hash(entry.server_id)
+            ),
+            transport=entry.transport,
             auth_type="none",
             candidates_with_same_name=1,
         )
