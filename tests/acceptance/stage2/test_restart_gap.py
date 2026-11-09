@@ -1,4 +1,4 @@
-"""결함 B(DS-190) 재확인: LiteLLM·작업 실행기를 재시작한 직후에도 승인된 도구가 목록에서 사라지지 않는다.
+"""결함 B(DS-190) 재확인: LiteLLM·작업 실행기 재시작 직후에도 승인된 도구가 목록에 남는다.
 
 `docker restart`로 두 컨테이너를 다시 띄우고, LiteLLM이 준비된 뒤 관측 주기 세 번 동안 5초마다
 호출 키로 `tools/list`를 본다. 미관측 차단(2×관측 주기)에 닿으면 목록이 비므로 빈 목록이 한 번도
@@ -17,7 +17,8 @@ def test_restart_gap(rig):
     server = fixture["server_id"]
     base = rig.site["litellm"][0].rstrip("/")
     observe = rig.expected["limits"]["observe_seconds"]
-    containers = os.environ.get("ACC_RESTART_CONTAINERS", "mints2-litellm-1 mints2-worker-1").split()
+    containers = os.environ.get("ACC_RESTART_CONTAINERS",
+                                "mints2-litellm-1 mints2-worker-1").split()
 
     def listed():
         try:
