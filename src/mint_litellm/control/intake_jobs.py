@@ -50,6 +50,15 @@ def submission_poll(job: JobContext) -> None:
     for item in pending[:POLL_LIMIT]:
         job.checkpoint()
         intakes.receive_submission(ctx, item)
+        # 접수 직후 중단돼도 다음 조회가 이어받도록, 이미 있는 received 제출도 매번 본다
+        intakes.reject_forbidden_address(ctx, item.get("server_id"), lambda contract, org_id: (
+            _url_guard(job, contract, _allowlists(job, org_id))))
+
+
+def _url_guard(job: JobContext, contract: dict | None, allowlists: list[dict]) -> checks.Outcome:
+    ports = tuple(getattr(job.settings, "intake_allowed_ports", checks.DEFAULT_PORTS))
+    return checks.url_guard(contract and contract["url"], contract and contract["transport"],
+                            allowlists, ports)
 
 
 # --- intake_run ---------------------------------------------------------------------------
@@ -197,7 +206,6 @@ def _run_checks(
         contract = intakes.approved_deployment(job.conn, job.instance_id, server_id)
     allowlists = _allowlists(job, row["org_id"])
     data = job.policy_data.get(job.conn, job.instance_id) if job.policy_data else None
-    ports = tuple(getattr(job.settings, "intake_allowed_ports", checks.DEFAULT_PORTS))
     defs: list[dict] | None = None
     needs_credentials = False
     halt = False
@@ -229,8 +237,7 @@ def _run_checks(
                 return needs_credentials
             continue
         if name == "url_guard":
-            out = checks.url_guard(contract and contract["url"], contract and contract["transport"],
-                                   allowlists, ports)
+            out = _url_guard(job, contract, allowlists)
         elif name == "oauth_issuer_allowlist":
             auth = contract and contract["auth_type"]
             out = checks.oauth_issuer_allowlist(
@@ -324,17 +331,18 @@ def _evidence_run(job: JobContext, ctx: Context, row: dict, attempt: int) -> Non
 
 def intake_run(job: JobContext) -> None:
     target, _, mode = job.job["target_ref"].partition("/")
-    attempt = int(job.job["idempotency_key"].rsplit(":", 1)[1])
     ctx = _context(job)
     row = intakes.get(ctx, target)
     if mode == "reject":
         _reject_at_litellm(job, row)
         return
+    attempt = int(job.job["idempotency_key"].rsplit(":", 1)[1])
     if mode == "evidence":
         _evidence_run(job, ctx, row, attempt)
         return
     if row["status"] == "decided":
-        _reject_at_litellm(job, row)  # 자동 거절 뒤 LiteLLM 거절이 끊긴 경우 이어서 한다
+        if row["decision"] == "rejected":  # 거절 전달은 신청마다 하나의 작업으로 수렴한다
+            intakes.enqueue_reject(ctx, row)
         return
     started = intakes.begin_checking(ctx, target)
     if started is None:

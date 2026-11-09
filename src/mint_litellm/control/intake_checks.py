@@ -15,7 +15,7 @@ import httpx
 
 from mint_litellm.control.db.connection import fetchone
 from mint_litellm.control.litellm_admin import LiteLLMError
-from mint_litellm.control.litellm_control import ResponseTooLarge
+from mint_litellm.control.litellm_control import ResponseTooLarge, ResponseTooSlow
 
 CHECKS = (
     "url_guard",
@@ -313,9 +313,10 @@ def definitions(client: Any, spec: dict) -> Outcome:
     method = "litellm:/mcp-rest/test/tools/list"
     try:
         body = client.test_tools_list(spec)
-    except ResponseTooLarge:
+    except ResponseTooLarge as error:
+        limit = "seconds" if isinstance(error, ResponseTooSlow) else "bytes"
         return _done("definitions", Outcome("indeterminate", "LIMIT_EXCEEDED", method,
-                                            {"limit": "bytes"}))
+                                            {"limit": limit}))
     except LiteLLMError:
         return _done("definitions", Outcome("indeterminate", "TEST_UNAVAILABLE", method, {}))
     tools = body.get("tools")

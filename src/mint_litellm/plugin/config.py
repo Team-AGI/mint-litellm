@@ -85,7 +85,7 @@ class PluginConfig:
             fingerprint_key_version=_integer(env, "MINT_FINGERPRINT_KEY_VERSION", 1, 1),
             readiness_url=env.get("MINT_READINESS_URL") or None,
             log_level=_log_level(env.get("MINT_LOG_LEVEL")),
-            observe_seconds=_integer(env, "MINT_OBSERVE_SECONDS", 3600, 1),
+            observe_seconds=_integer(env, "MINT_OBSERVE_SECONDS", 3600, 20),
             allow_realtime=_boolean(env, "MINT_ALLOW_REALTIME", False),
             export_dir=Path(export_dir) if export_dir else None,
             export_hmac_key=_hmac_key(env, "MINT_EXPORT_HMAC_KEY"),

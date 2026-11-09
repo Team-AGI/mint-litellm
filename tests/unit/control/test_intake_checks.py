@@ -8,7 +8,7 @@ from litellm_control_stub import TOOL
 
 from mint_litellm.control import intake_checks as c
 from mint_litellm.control.litellm_admin import LiteLLMError
-from mint_litellm.control.litellm_control import ResponseTooLarge
+from mint_litellm.control.litellm_control import ResponseTooLarge, ResponseTooSlow
 from mint_litellm.types.contracts import ActionType, DataGrade, risk_grade
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -238,6 +238,10 @@ def test_definitions_over_the_limits_are_indeterminate():
     assert c.definitions(FakeClient(tools=tools), {}).reason == "LIMIT_EXCEEDED"
     out = c.definitions(FakeClient(error=ResponseTooLarge("big")), {})
     assert (out.result, out.reason) == ("indeterminate", "LIMIT_EXCEEDED")
+    slow = c.definitions(FakeClient(error=ResponseTooSlow("slow")), {})
+    assert (slow.reason, slow.inputs) == ("LIMIT_EXCEEDED", {"limit": "seconds"})
+    down = c.definitions(FakeClient(error=LiteLLMError("down")), {})
+    assert down.reason == "TEST_UNAVAILABLE"  # 시간 초과와 달리 시험 불가
 
 
 def test_definitions_failures_and_credentials():

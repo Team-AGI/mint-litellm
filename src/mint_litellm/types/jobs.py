@@ -36,3 +36,8 @@ def intake_run_job_key(intake_id: UUID, attempt: int) -> str:
     if attempt < 1:
         raise ValueError("attempt starts at 1")
     return f"intake_run:{intake_id}:{attempt}"
+
+
+def intake_reject_job_key(intake_id: UUID) -> str:
+    """LiteLLM 제출 거절 전달: ``intake_run:<intake_id>:reject``. 신청마다 한 작업으로 수렴한다."""
+    return f"intake_run:{intake_id}:reject"

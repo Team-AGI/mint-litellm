@@ -9,6 +9,7 @@
 """
 
 import json
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -28,10 +29,35 @@ STAGE2_ALLOWED_ROUTES: tuple[str, ...] = (
 PROBE_ROUTES = frozenset({"/mcp-rest/test/connection", "/mcp-rest/test/tools/list"})
 PROBE_FIELDS = frozenset({"url", "transport", "auth_type", "server_id"})
 MAX_TOOLS_BYTES = 2 * 1024 * 1024
+TOOLS_SECONDS = 10.0  # 정의 수집 전체(연결·응답 읽기)의 기한
 
 
 class ResponseTooLarge(LiteLLMError):
     """응답이 상한(크기·중첩)을 넘었다."""
+
+
+class ResponseTooSlow(ResponseTooLarge):
+    """정의 수집이 기한(초)을 넘었다. 상한 초과의 한 종류라 시험 불가와 구분한다."""
+
+
+def _read_within(response: Any, limit: int | None, end: float) -> bytes:
+    """응답 본문을 ``end``(monotonic) 안에 읽는다. 조금씩 흘러오는 응답도 기한에 묶는다.
+
+    수신 한 번의 제한 시간을 남은 시간으로 줄여 가며 읽어, 넘으면 소켓 시간 초과로 끝난다.
+    """
+    raw = b""
+    sock = getattr(getattr(response.fp, "raw", None), "_sock", None)
+    while (limit is None or len(raw) < limit) and not response.isclosed():
+        left = end - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("deadline")
+        if sock is not None:
+            sock.settimeout(left)
+        chunk = response.read1(65536 if limit is None else min(65536, limit - len(raw)))
+        if not chunk:
+            break
+        raw += chunk
+    return raw
 
 
 class LiteLLMControl(LiteLLMSync):
@@ -63,7 +89,9 @@ class LiteLLMControl(LiteLLMSync):
         body = self._ok("/v1/mcp/server/submissions", key="items", shape=list)
         return [item for item in body["items"] if isinstance(item, dict)]
 
-    def _post(self, path: str, spec: dict, max_bytes: int | None) -> dict:
+    def _post(
+        self, path: str, spec: dict, max_bytes: int | None, seconds: float | None = None
+    ) -> dict:
         extra = set(spec) - PROBE_FIELDS
         if path not in PROBE_ROUTES or extra:
             raise ControlError(f"시험 요청에 허용되지 않은 필드입니다: {sorted(extra) or path}")
@@ -74,12 +102,16 @@ class LiteLLMControl(LiteLLMSync):
             headers={"Authorization": f"Bearer {self._key}", "Content-Type": "application/json"},
         )
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as response:
+            with urllib.request.urlopen(request, timeout=seconds or self._timeout) as response:
                 limit = None if max_bytes is None else max_bytes + 1
-                status, raw = response.status, response.read(limit)
+                status = response.status
+                raw = response.read(limit) if seconds is None else _read_within(
+                    response, limit, time.monotonic() + seconds)
         except urllib.error.HTTPError as error:
             status, raw = error.code, error.read()
         except (urllib.error.URLError, TimeoutError, OSError) as error:
+            if seconds and isinstance(getattr(error, "reason", error), TimeoutError):
+                raise ResponseTooSlow(f"LiteLLM {path} 응답이 {seconds}초를 넘었습니다.") from None
             raise LiteLLMError(f"LiteLLM 관리 API에 연결할 수 없습니다: {error}") from None
         if max_bytes is not None and len(raw) > max_bytes:
             raise ResponseTooLarge(f"LiteLLM {path} 응답이 {max_bytes}바이트를 넘었습니다.")
@@ -102,9 +134,11 @@ class LiteLLMControl(LiteLLMSync):
         """``{status: "ok"}`` 또는 ``{status: "error", message}``. 연결 실패도 HTTP 200으로 온다."""
         return self._post("/mcp-rest/test/connection", spec, None)
 
-    def test_tools_list(self, spec: dict, max_bytes: int = MAX_TOOLS_BYTES) -> dict:
-        """``{tools: [...]}`` 또는 ``{status: "error", message}``."""
-        return self._post("/mcp-rest/test/tools/list", spec, max_bytes)
+    def test_tools_list(
+        self, spec: dict, max_bytes: int = MAX_TOOLS_BYTES, seconds: float = TOOLS_SECONDS
+    ) -> dict:
+        """``{tools: [...]}`` 또는 ``{status: "error", message}``. ``seconds`` 안에 끝난다."""
+        return self._post("/mcp-rest/test/tools/list", spec, max_bytes, seconds)
 
     # --- 쓰기 결과 해석 ------------------------------------------------------------
 

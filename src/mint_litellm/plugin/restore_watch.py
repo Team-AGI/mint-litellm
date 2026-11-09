@@ -83,8 +83,3 @@ class RestoreWatch:
             if not self.evaluated:  # 첫 판정이 실패하면 통과가 아니라 차단으로 시작한다
                 self.blocked_cause = judge.EXPORT_UNVERIFIED
         return self.verdict
-
-    async def run(self) -> None:
-        while True:
-            await self.refresh()
-            await asyncio.sleep(self.config.restore_interval_seconds)

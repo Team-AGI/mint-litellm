@@ -573,6 +573,17 @@ class EvidenceRecorder:
             self._buffer.abandon(ticket)
             raise
 
+    async def replay_pending(self) -> None:
+        """호출이 끊겨 쓰기가 없어도 버퍼 사건이 DB에 들어가도록 주기 점검이 부른다.
+
+        버퍼 확인은 잠금·파일 작업이라 이벤트 루프 밖에서 한다.
+        """
+        if self._replaying is not None and not self._replaying.done():
+            return
+        if await asyncio.to_thread(self._buffer.has_pending):
+            self._last_replay = time.monotonic()
+            self._replaying = asyncio.get_running_loop().create_task(self.replay())
+
     def _schedule_replay(self) -> None:
         now = time.monotonic()
         if (
