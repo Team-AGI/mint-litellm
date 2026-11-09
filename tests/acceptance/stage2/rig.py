@@ -410,12 +410,40 @@ class Rig:
         self.reapproved_tools = len(tools)
         intake = max(self.rows("intakes", "server_id=%s AND decision='approved'", [server]),
                      key=lambda row: row["decided_at"])
+        if need_deployment:
+            self.wait_bound_evidence(intake["id"], tools, deployments[0])
         args = ["contract", "reapprove", server, "--intake", str(intake["id"])]
         for tool in tools:
             args += ["--tool-contract", str(tool["id"])]
         if deployments:
             args += ["--deployment-contract", str(deployments[0]["id"])]
         return self.cli(*args, role="approver")
+
+    def wait_bound_evidence(self, intake_id, tools, deployment):
+        """재승인 전, 후보(도구+배포) 해시에 결속된 재검사 증거가 쌓일 때까지 기다린다.
+
+        `intake recheck --url`은 배포 후보를 만든 뒤 증거 재검사 작업만 등록한다(검사는 작업 실행기가
+        나중에 한다). 그 전에 재승인하면 제품이 설계대로 stale_evidence로 거부한다.
+        """
+        from mint_litellm.types.canonical import sha256
+
+        bound = sha256({"tools": {c["tool"]: c["sha256"] for c in tools},
+                        "deployment": deployment["sha256"]})
+        required = {"connection", "definitions", "description_scan", "risk_grade", "url_guard",
+                    "oauth_issuer_allowlist"}
+
+        def ready():
+            if self.rows("jobs", "kind='intake_run' AND target_ref=%s "
+                                 "AND status IN ('pending', 'running')", [f"{intake_id}/evidence"]):
+                return False
+            rows = self.sql(
+                'SELECT DISTINCT ON ("check") "check", inputs->>\'contract_sha256\' AS bound '
+                "FROM mint.intake_checks WHERE instance_id=%s AND intake_id=%s "
+                'ORDER BY "check", attempt DESC', [self.iid, intake_id])
+            latest = {row["check"]: row["bound"] for row in rows}
+            return all(latest.get(name) == bound for name in required)
+
+        self.wait(ready, 300, "후보에 결속된 재검사 증거")
 
     def owned_approval(self, server):
         """접근이 미리 없는 새 키에 승인을 넣는다(MINT가 쓴 소유 grant가 생긴다). (키, 승인 id)."""
