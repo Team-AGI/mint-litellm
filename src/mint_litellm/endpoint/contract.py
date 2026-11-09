@@ -39,7 +39,8 @@ class LocalExecContract(BaseModel):
     identity_kind: Literal["stdio"] = "stdio"
     executable: str = Field(min_length=1, max_length=1024)
     argv: tuple[str, ...] = Field(max_length=64)
-    cwd: str = Field(min_length=1, max_length=1024)
+    # 승인본에서 비면 비교하지 않는다(하네스는 서버를 세션 디렉터리에서 띄운다).
+    cwd: str | None = Field(default=None, min_length=1, max_length=1024)
     executable_sha256: str = Field(pattern=SHA256)
     script_sha256: str | None = Field(default=None, pattern=SHA256)
     env: dict[str, str] = Field(default_factory=dict, max_length=64)
@@ -47,7 +48,9 @@ class LocalExecContract(BaseModel):
 
     @field_validator("executable", "cwd")
     @classmethod
-    def _absolute_normal_path(cls, value: str) -> str:
+    def _absolute_normal_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
         if "\0" in value or not posixpath.isabs(value) or posixpath.normpath(value) != value:
             raise ValueError("path must be absolute and normalized")
         return value
@@ -68,7 +71,12 @@ class LocalExecContract(BaseModel):
 
 def mismatched_fields(approved: LocalExecContract, reported: LocalExecContract) -> tuple[str, ...]:
     """승인본과 보고본이 다른 필드 이름. 비어 있으면 일치(``exec_definition_match``)이다."""
-    return tuple(name for name in FIELDS if getattr(approved, name) != getattr(reported, name))
+    return tuple(
+        name
+        for name in FIELDS
+        if not (name == "cwd" and approved.cwd is None)
+        and getattr(approved, name) != getattr(reported, name)
+    )
 
 
 def strict_json(raw: bytes) -> Any:

@@ -11,12 +11,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from mint_litellm.compat.litellm_1_106 import HookData, ServerResolutionError
@@ -42,6 +43,29 @@ class DecideBody(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
     contract: LocalExecContract
     tool_use_id: str | None = Field(default=None, max_length=128)
+
+
+class EndpointReport(BaseModel):
+    """설치기가 보내는 설치 상태 보고. 단말의 주장이며 MINT가 관측한 사실이 아니다."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kit_version: str = Field(pattern=r"^[0-9a-f]{64}$")
+    action: Literal["installed", "removed"]
+    mode: Literal["managed", "user", "none"]
+    managed: bool
+    files: dict[str, str] = Field(default_factory=dict, max_length=32)
+    mcp_servers: list[str] = Field(default_factory=list, max_length=64)
+    claude_version: str | None = Field(default=None, max_length=64)
+
+
+@dataclass(frozen=True)
+class KitSettings:
+    """키트 내려받기와 설치 보고에 필요한 값. 보고는 탐색용으로 줄 단위 JSON 파일에 덧붙인다."""
+
+    public_url: str
+    reports_path: Path
+    ca_pem: str | None = None
 
 
 @dataclass(frozen=True)
@@ -73,6 +97,9 @@ class ContractRegistry:
 
     def get(self, name: str) -> LocalServer | None:
         return self._servers.get(name)
+
+    def servers(self) -> Mapping[str, LocalServer]:
+        return dict(self._servers)
 
 
 def stdio_identity_hash(server_id: str) -> str:
@@ -148,9 +175,12 @@ def make_router(
     runtime_provider: Callable[[], Any],
     registry: ContractRegistry,
     principal_factory: Callable[..., Principal],
+    kit: KitSettings | None = None,
 ) -> APIRouter:
     """결정 경로. 인증은 호출자 키로 ``auth_dependency``(LiteLLM의 키 인증)가 한다."""
     router = APIRouter()
+    if kit is not None:
+        _add_kit_routes(router, auth_dependency, runtime_provider, registry, principal_factory, kit)
 
     @router.post(DECIDE_PATH)
     async def decide(request: Request, auth: Any = Depends(auth_dependency)) -> dict[str, Any]:
@@ -179,6 +209,46 @@ def make_router(
         return answer
 
     return router
+
+
+def _add_kit_routes(router, auth_dependency, runtime_provider, registry, principal_factory, kit):
+    from mint_litellm.endpoint.kit_build import build_kit
+
+    @router.get("/mint/v1/kit")
+    async def download_kit(request: Request, auth: Any = Depends(auth_dependency)) -> Response:
+        """로그인(키 인증)한 사용자에게 그 사람의 키가 묶인 키트를 준다."""
+        header = request.headers.get("authorization", "")
+        key = header[7:].strip() if header[:7].lower() == "bearer " else ""
+        if not key:
+            raise HTTPException(status_code=400, detail="Authorization: Bearer key is required")
+        data = build_kit(registry.servers(), decide_url=kit.public_url, key=key, ca_pem=kit.ca_pem)
+        return Response(
+            data,
+            media_type="application/gzip",
+            headers={"Content-Disposition": 'attachment; filename="mint-kit.tar.gz"'},
+        )
+
+    @router.post("/mint/v1/endpoint/report")
+    async def endpoint_report(request: Request, auth: Any = Depends(auth_dependency)) -> dict:
+        runtime = runtime_provider()
+        if runtime is None:
+            raise HTTPException(status_code=503, detail="decision runtime is not ready")
+        raw = await _read_limited(request, MAX_BODY_BYTES)
+        try:
+            report = EndpointReport.model_validate(strict_json(raw))
+        except (ValueError, ValidationError) as exc:
+            raise HTTPException(status_code=422, detail="invalid report") from exc
+        who = principal_factory(auth, instance_id=runtime.config.instance_id)
+        line = {
+            "ts": time.time(),
+            "user_id": who.user_id,
+            "team_id": who.team_id,
+            "key_id": who.key_id,
+            **report.model_dump(),
+        }
+        with open(kit.reports_path, "a", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(line) + "\n")
+        return {"ok": True, "managed": report.managed}
 
 
 def install(app: Any, router: APIRouter) -> bool:

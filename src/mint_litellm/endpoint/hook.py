@@ -65,7 +65,8 @@ def declared_contract(
     entry = (mcp_config.get("mcpServers") or {}).get(server)
     if not isinstance(entry, dict) or not isinstance(entry.get("command"), str):
         raise Refuse("server is not a local command server in the MCP config")
-    cwd = entry.get("cwd") or session_cwd
+    # 하네스는 MCP 설정의 cwd를 무시하고 서버를 세션 디렉터리에서 띄우므로 그 값을 보고한다.
+    cwd = session_cwd
     if not isinstance(cwd, str):
         raise Refuse("working directory is unknown")
     executable = shutil.which(entry["command"], path=(entry.get("env") or {}).get("PATH"))
@@ -183,9 +184,9 @@ def main(argv: list[str] | None = None) -> None:
         event = json.loads(sys.stdin.read())
         if not isinstance(event, dict):
             raise Refuse("hook input is not an object")
-        with open(args.key_file, encoding="utf-8") as handle:
+        with open(os.path.expanduser(args.key_file), encoding="utf-8") as handle:
             key = handle.read().strip()
-        with open(args.mcp_config, encoding="utf-8") as handle:
+        with open(os.path.expanduser(args.mcp_config), encoding="utf-8") as handle:
             mcp_config = json.load(handle)
         decide(
             event,
