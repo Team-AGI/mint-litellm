@@ -34,7 +34,7 @@ def _required_key(env: Mapping[str, str], name: str) -> bytes:
     return key
 
 
-def _seconds(env: Mapping[str, str], name: str, default: int) -> int:
+def _seconds(env: Mapping[str, str], name: str, default: int, minimum: int = 1) -> int:
     raw = env.get(name)
     if raw is None or not raw.strip():
         return default
@@ -42,8 +42,8 @@ def _seconds(env: Mapping[str, str], name: str, default: int) -> int:
         value = int(raw.strip())
     except ValueError:
         raise ControlError(f"{name}은(는) 양의 정수여야 합니다: {raw!r}") from None
-    if value < 1:
-        raise ControlError(f"{name}은(는) 1 이상이어야 합니다: {value}")
+    if value < minimum:
+        raise ControlError(f"{name}은(는) {minimum} 이상이어야 합니다: {value}")
     return value
 
 
@@ -140,7 +140,7 @@ class Stage2Settings:
             webhook_hmac_key=webhook_key,
             worker_lease_seconds=_seconds(env, "MINT_WORKER_LEASE_SECONDS", 60),
             reconcile_seconds=_seconds(env, "MINT_RECONCILE_SECONDS", 300),
-            observe_seconds=_seconds(env, "MINT_OBSERVE_SECONDS", 3600),
+            observe_seconds=_seconds(env, "MINT_OBSERVE_SECONDS", 3600, 20),
             submission_poll_seconds=_seconds(env, "MINT_SUBMISSION_POLL_SECONDS", 60),
             checkpoint_seconds=_seconds(env, "MINT_CHECKPOINT_SECONDS", 600),
             session_idle_seconds=_seconds(env, "MINT_SESSION_IDLE_SECONDS", 1800),

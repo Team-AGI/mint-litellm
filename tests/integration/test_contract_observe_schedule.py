@@ -27,7 +27,7 @@ from mint_litellm.types.ids import new_uuid7
 
 INSTANCE = "obs-it"
 UPSTREAM_URL = "http://counting-proxy:8080/a/mcp"
-OBSERVE_SECONDS = 3
+OBSERVE_SECONDS = 20
 
 
 def _admin_url() -> str:

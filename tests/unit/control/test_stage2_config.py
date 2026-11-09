@@ -62,6 +62,7 @@ def test_missing_required_values_are_refused(drop):
         {"MINT_EXPORT_HMAC_KEY": "not base64!"},
         {"MINT_EXPORT_HMAC_KEY_PREVIOUS": "short"},
         {"MINT_OBSERVE_SECONDS": "0"},
+        {"MINT_OBSERVE_SECONDS": "19"},
         {"MINT_OBSERVE_SECONDS": "abc"},
         {"MINT_WORKER_LEASE_SECONDS": "-5"},
         {"MINT_WEBHOOK_URLS": "http://a.example/hook", "MINT_WEBHOOK_HMAC_KEY": KEY},
