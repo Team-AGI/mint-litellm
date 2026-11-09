@@ -69,7 +69,7 @@ def secrets() -> dict:
 
 
 def cli(*args: str, token: str = "ADMIN_TOKEN") -> dict:
-    env = f"MINT_OPERATOR_TOKEN={shlex.quote(secrets().get(token, ''))}"
+    env = f"COMPOSE_PROJECT_NAME=mintep MINT_OPERATOR_TOKEN={shlex.quote(secrets().get(token, ''))}"
     quoted = " ".join(shlex.quote(a) for a in args)
     return j(device(f"cd {REPO}/deploy && {env} ./mint.sh cli {quoted} --json < /dev/null"))
 
@@ -136,9 +136,9 @@ def reapprove() -> str:
         "--relation",
         s.get("RELATION", ""),
         "--scope",
-        "user",
+        "key",
         "--scope-id",
-        "ep-user1",
+        s.get("USER1_KEY_ID", ""),
         "--tools",
         "echo,slow",
         "--valid-until",
@@ -167,7 +167,7 @@ def grant_call(arguments: dict) -> str:
         "--principal-id",
         "ep-user1",
         "--server",
-        secrets().get("SERVER_ID", "srv-local-cnt"),
+        secrets().get("SERVER_ID", "srv_local_cnt"),
         "--tool",
         "slow",
         "--arguments",
@@ -208,7 +208,7 @@ def step_gate():
         pj1(
             f'curl -s -X POST {BASE}/key/generate -H "Authorization: Bearer {s.get("MASTER", "")}" '
             '-H "Content-Type: application/json" -d \'{"user_id":"ep-user1","allowed_routes":["/mint/v1"],'
-            '"duration":"8s","object_permission":{"mcp_servers":["srv-local-cnt"]}}\''
+            '"duration":"8s","object_permission":{"mcp_servers":["srv_local_cnt"]}}\''
         )
     )
     short = made.get("key", "")
@@ -334,7 +334,7 @@ def step_revoke():
     s = secrets()
     approval = s.get("APPROVAL", "")
     token = shlex.quote(s.get("APPROVER_TOKEN", ""))
-    command = f"cd {REPO}/deploy && MINT_OPERATOR_TOKEN={token} ./mint.sh cli revoke {approval} --reason acceptance --json < /dev/null"
+    command = f"cd {REPO}/deploy && COMPOSE_PROJECT_NAME=mintep MINT_OPERATOR_TOKEN={token} ./mint.sh cli revoke {approval} --reason acceptance --json < /dev/null"
     result = client(device, "revoke-latency", f"--cmd {shlex.quote(command)}")
     delay = result.get("seconds_to_deny")
     record("revoke-approval-to-deny", delay is not None and delay <= 2.0, **result)
@@ -344,7 +344,7 @@ def step_revoke():
     key_made = j(
         device(
             f'curl -s -X POST {LOCAL}/key/generate -H "Authorization: Bearer {s.get("MASTER", "")}" -H "Content-Type: application/json" '
-            '-d \'{"user_id":"ep-user1","allowed_routes":["/mint/v1"],"object_permission":{"mcp_servers":["srv-local-cnt"]}}\''
+            '-d \'{"user_id":"ep-user1","allowed_routes":["/mint/v1"],"object_permission":{"mcp_servers":["srv_local_cnt"]}}\''
         )
     )
     SECRETS["TEMP_KEY"] = key_made.get("key", "")

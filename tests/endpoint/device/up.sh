@@ -27,7 +27,7 @@ cd "$REPO/deploy"
 if [ ! -f .env ]; then
   cp .env.example .env
   for pair in POSTGRES_PASSWORD=$(rand 24) MINT_PLUGIN_DB_PASSWORD=$(rand 24) MINT_CONTROL_DB_PASSWORD=$(rand 24) \
-              MINT_WORKER_DB_PASSWORD=$(rand 24) MINT_STAFF_DB_PASSWORD=$(rand 24) MINT_EXPORT_HMAC_KEY=$(rand 40) \
+              MINT_WORKER_DB_PASSWORD=$(rand 24) MINT_STAFF_DB_PASSWORD=$(rand 24) MINT_EXPORT_HMAC_KEY=$(head -c 32 /dev/urandom | base64 | tr "+/" "-_" | tr -d "=") \
               LITELLM_MASTER_KEY=sk-ep-$(rand 32) MINT_INSTANCE_ID=endpoint MINT_LITELLM_PORT=$PORT \
               MINT_CONSOLE_PORT=$((PORT + 30)) MINT_SELFCHECK_GRACE_SECONDS=30 MINT_SECRETS_DIR=$EP_STATE/secrets; do
     k=${pair%%=*}; v=${pair#*=}

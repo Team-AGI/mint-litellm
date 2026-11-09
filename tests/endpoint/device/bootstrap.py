@@ -10,12 +10,15 @@ import json
 import os
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
+# mint.sh가 docker compose를 부르므로 프로젝트 이름을 이 스택으로 고정한다(기본값 mint는 다른 스택의 이름이다).
+os.environ["COMPOSE_PROJECT_NAME"] = "mintep"
 STATE = Path(os.environ.get("EP_HOME", Path.home() / "mint-ep"))
 PORT = os.environ.get("EP_PORT", "4500")
 BASE = f"http://localhost:{PORT}"
@@ -57,11 +60,20 @@ def lite(path, body):
         sys.exit(f"{path} {exc.code} {text[:300]}")
 
 
+def info(path, query):
+    from urllib.parse import urlencode
+
+    request = urllib.request.Request(BASE + path + "?" + urlencode(query), headers={"Authorization": "Bearer " + MASTER})
+    with urllib.request.urlopen(request, timeout=60) as reply:
+        return json.loads(reply.read())
+
+
 def user(user_id, role="internal_user"):
     lite("/user/new", {"user_id": user_id, "user_role": role, "auto_create_key": False})
 
 
 def key(**body):
+    body["key_alias"] = f"{body['key_alias']}-{int(time.time())}"  # 다시 실행해도 별칭이 겹치지 않게
     return lite("/key/generate", body)["key"]
 
 
@@ -114,6 +126,7 @@ def main():
         allowed_routes=["/mint/v1"],
         object_permission=access,
     )
+    out["USER1_KEY_ID"] = info("/key/info", {"key": out["USER1_KEY"]})["info"]["token"]
     out["USER1_NOROUTE_KEY"] = key(
         user_id="ep-user1", key_alias="ep-user1-noroute", object_permission=access
     )
@@ -148,6 +161,9 @@ def main():
         token=out["ADMIN_TOKEN"],
     )["token"]
     admin = out["ADMIN_TOKEN"]
+    STATE.mkdir(parents=True, exist_ok=True)
+    (STATE / "ep.json").write_text(json.dumps(out))  # 중간에 멈춰도 발급한 토큰은 남긴다.
+    os.chmod(STATE / "ep.json", 0o600)
     cli("policy", "activate", "initial", token=admin)
     cli("settings", "control-key", token=admin)
     for org, name in (("org1", "조직 하나"), ("org2", "조직 둘")):
@@ -167,9 +183,9 @@ def main():
             "--relation",
             out["RELATIONS"][sid],
             "--scope",
-            "user",
+            "key",
             "--scope-id",
-            "ep-user1",
+            out["USER1_KEY_ID"],
             "--tools",
             item.get("tools", TOOLS),
             "--valid-until",
