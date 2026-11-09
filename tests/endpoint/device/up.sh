@@ -15,9 +15,9 @@ export EP_STATE=${EP_HOME:-$HOME/mint-ep}
 export EP_PUBLIC_URL
 mkdir -p "$EP_STATE/endpoint" "$EP_STATE/secrets"
 chmod 700 "$EP_STATE" "$EP_STATE/secrets"
-# 기기 메모리 여유가 작다. 가용 메모리가 1.2GB 아래이면 멈춘다(EP_FORCE=1이면 건너뜀).
+# 기기 메모리 여유가 작다. 가용 메모리가 2GB 아래이면 멈춘다(EP_FORCE=1이면 건너뜀).
 avail=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
-if [ "${EP_FORCE:-0}" != 1 ] && [ "$avail" -lt 1200 ]; then
+if [ "${EP_FORCE:-0}" != 1 ] && [ "$avail" -lt 2000 ]; then
   echo "가용 메모리 ${avail}MB: 다른 시험 스택 상태를 확인하십시오." >&2; exit 3
 fi
 if ss -ltn "sport = :$PORT" | grep -q LISTEN; then echo "포트 $PORT 사용 중" >&2; exit 4; fi
