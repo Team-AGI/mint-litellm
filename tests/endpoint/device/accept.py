@@ -99,6 +99,16 @@ def pause(seconds: float) -> None:
         time.sleep(seconds)
 
 
+def guard() -> None:
+    """기기 가용 메모리가 2GB 아래이면 탐색 스택을 멈추고 실행을 중단한다."""
+    if DRY:
+        return
+    text = device("awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo").strip()
+    if text.isdigit() and int(text) < 2000:
+        device("docker stop mintep-litellm-1 mintep-opa-1 mintep-postgres-1")
+        raise SystemExit(f"기기 가용 메모리 {text}MB: 탐색 스택을 멈추고 중단합니다")
+
+
 def record(name: str, passed, **evidence) -> None:
     LOG.append({"name": name, "passed": passed, **evidence})
     print(
@@ -252,6 +262,7 @@ def step_failures():
     }
     names = {"c": "mintep-litellm-1", "pg": "mintep-postgres-1", "opa": "mintep-opa-1"}
     for fault, (down, up) in faults.items():
+        guard()
         device(down.format(**names))
         pause(2)
         run = claude_call()
@@ -363,10 +374,21 @@ def step_perf():
 
 
 def step_ghidra():
+    """pj1에 이미 있는 Ghidra MCP로 비파괴 조회 한 건(바이너리 목록)을 훅 판정을 거쳐 실행한다."""
+    out = pj1(
+        "MCP_TIMEOUT=180000 timeout 290 ~/.local/bin/claude -p "
+        + shlex.quote(
+            "Call mcp__ghidra__list_project_binaries once and list the binary names it returns. If it is blocked do not retry; report the error text."
+        )
+        + " --allowedTools mcp__ghidra__list_project_binaries --max-turns 4 2>&1 | tail -c 500",
+        timeout=320,
+    )
+    events = cli("ledger", "list", "--kind", "decision_evaluated", "--limit", "5")
     record(
         "ghidra-readonly-query",
-        None,
-        note="pj1에 pyghidra-mcp가 설치되어 있지 않다. 설치·계약 승인 뒤 별도로 실행한다.",
+        "base64" in out,
+        reply=out.strip()[-200:],
+        recent_events=len(events.get("events", []) or []),
     )
 
 
@@ -421,6 +443,7 @@ def main(argv=None) -> int:
     wanted = args.only.split(",") if args.only else ORDER
     for name in ORDER:
         if name in wanted:
+            guard()
             try:
                 STEPS[name]()
             except Exception as exc:  # 한 기준의 오류가 나머지를 막지 않는다.

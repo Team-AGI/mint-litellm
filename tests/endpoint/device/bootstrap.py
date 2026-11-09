@@ -3,8 +3,7 @@
 
 표준 라이브러리만 쓴다. 사용: python3 bootstrap.py (deploy/.env가 있는 복제본에서, up.sh 뒤).
 마스터 키는 사용자·키를 만드는 데만 쓴다. 값은 출력하지 않고 ep.json에만 둔다.
-환경: EP_HOME(기본 ~/mint-ep), EP_PORT(기본 4500), EP_STANDIN_URL(자리 서버 주소),
-EP_SERVER_ID(기본 srv-local-cnt), EP_TOOLS(승인 도구, 기본 echo,slow), EP_HIGH_RISK(기본 slow).
+환경: EP_HOME(기본 ~/mint-ep), EP_PORT(기본 4500), EP_TOOLS(승인 도구, 기본 echo,slow), EP_HIGH_RISK(기본 slow).
 """
 
 import json
@@ -20,8 +19,6 @@ REPO = Path(__file__).resolve().parents[3]
 STATE = Path(os.environ.get("EP_HOME", Path.home() / "mint-ep"))
 PORT = os.environ.get("EP_PORT", "4500")
 BASE = f"http://localhost:{PORT}"
-SERVER_ID = os.environ.get("EP_SERVER_ID", "srv-local-cnt")
-STANDIN = os.environ.get("EP_STANDIN_URL", "https://standin.invalid/mcp")
 TOOLS = os.environ.get("EP_TOOLS", "echo,slow")
 HIGH_RISK = os.environ.get("EP_HIGH_RISK", "slow")
 ROUTES = [
@@ -89,24 +86,27 @@ def when(days):
 
 
 def main():
-    out = {"MASTER": MASTER, "BASE": BASE, "SERVER_ID": SERVER_ID}
+    servers = json.loads((STATE / "endpoint" / "registry.json").read_text())["servers"]
+    out = {"MASTER": MASTER, "BASE": BASE, "SERVER_ID": servers[0]["server_id"]}
     for name in ("ep-admin", "ep-approver", "ep-owner", "ep-user1", "ep-user2"):
         user(name)
     user("ep-control", "proxy_admin")
-    lite(
-        "/v1/mcp/server",
-        {
-            "server_id": SERVER_ID,
-            "alias": SERVER_ID,
-            "server_name": SERVER_ID,
-            "transport": "http",
-            "url": STANDIN,
-            "auth_type": "none",
-            "allow_all_keys": False,
-            "description": "endpoint standin",
-        },
-    )
-    access = {"mcp_servers": [SERVER_ID]}
+    ids = [item["server_id"] for item in servers]
+    for item in servers:
+        lite(
+            "/v1/mcp/server",
+            {
+                "server_id": item["server_id"],
+                "alias": item["server_id"],
+                "server_name": item["server_id"],
+                "transport": "http",
+                "url": item["standin_url"],
+                "auth_type": "none",
+                "allow_all_keys": False,
+                "description": "endpoint standin",
+            },
+        )
+    access = {"mcp_servers": ids}
     out["CONTROL_KEY"] = key(user_id="ep-control", key_alias="ep-control", allowed_routes=ROUTES)
     out["USER1_KEY"] = key(
         user_id="ep-user1",
@@ -130,7 +130,7 @@ def main():
         if not x.startswith("MINT_LITELLM_KEY=")
     ]
     (REPO / "deploy" / ".env").write_text(
-        "\n".join(lines + ["MINT_LITELLM_KEY=" + out["CONTROL_KEY"]]) + "\n"
+        chr(10).join([*lines, "MINT_LITELLM_KEY=" + out["CONTROL_KEY"]]) + chr(10)
     )
     os.chmod(REPO / "deploy" / ".env", 0o600)
 
@@ -154,40 +154,36 @@ def main():
         cli("org", "add", org, "--name", name, token=admin)
     cli("org", "bind", "--org", "org1", "--user", "ep-user1", token=admin)
     cli("org", "bind", "--org", "org2", "--user", "ep-user2", token=admin)
-    cli("server", "register", SERVER_ID, "--url", STANDIN, token=admin)
-    relation = cli(
-        "relation",
-        "add",
-        "--org",
-        "org1",
-        "--server",
-        SERVER_ID,
-        "--purpose",
-        "support",
-        token=admin,
-    )
-    out["RELATION"] = relation.get("relation_id") or relation.get("id")
-    approval = cli(
-        "approve",
-        "--relation",
-        out["RELATION"],
-        "--scope",
-        "user",
-        "--scope-id",
-        "ep-user1",
-        "--tools",
-        TOOLS,
-        "--valid-until",
-        when(30),
-        "--basis",
-        "endpoint exploration",
-        "--requested-by",
-        "ep-owner",
-        "--high-risk-tools",
-        HIGH_RISK,
-        token=out["APPROVER_TOKEN"],
-    )
-    out["APPROVAL"] = approval.get("approval_id") or approval.get("id")
+    out["RELATIONS"], out["APPROVALS"] = {}, {}
+    for item in servers:
+        sid = item["server_id"]
+        cli("server", "register", sid, "--url", item["standin_url"], token=admin)
+        relation = cli(
+            "relation", "add", "--org", "org1", "--server", sid, "--purpose", "support", token=admin
+        )
+        out["RELATIONS"][sid] = relation.get("id")
+        args = [
+            "approve",
+            "--relation",
+            out["RELATIONS"][sid],
+            "--scope",
+            "user",
+            "--scope-id",
+            "ep-user1",
+            "--tools",
+            item.get("tools", TOOLS),
+            "--valid-until",
+            when(30),
+            "--basis",
+            "endpoint exploration",
+            "--requested-by",
+            "ep-owner",
+        ]
+        if item.get("high_risk", HIGH_RISK):
+            args += ["--high-risk-tools", item.get("high_risk", HIGH_RISK)]
+        out["APPROVALS"][sid] = cli(*args, token=out["APPROVER_TOKEN"]).get("id")
+    out["RELATION"] = out["RELATIONS"][servers[0]["server_id"]]
+    out["APPROVAL"] = out["APPROVALS"][servers[0]["server_id"]]
     STATE.mkdir(parents=True, exist_ok=True)
     (STATE / "ep.json").write_text(json.dumps(out))
     os.chmod(STATE / "ep.json", 0o600)
