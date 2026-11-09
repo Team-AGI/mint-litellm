@@ -422,8 +422,8 @@ class Rig:
     def wait_bound_evidence(self, intake_id, tools, deployment):
         """재승인 전, 후보(도구+배포) 해시에 결속된 재검사 증거가 쌓일 때까지 기다린다.
 
-        `intake recheck --url`은 배포 후보를 만든 뒤 증거 재검사 작업만 등록한다(검사는 작업 실행기가
-        나중에 한다). 그 전에 재승인하면 제품이 설계대로 stale_evidence로 거부한다.
+        `intake recheck --url`은 배포 후보를 만든 뒤 증거 재검사 작업만 등록한다(검사는 작업
+        실행기가 나중에 한다). 그 전에 재승인하면 제품이 설계대로 stale_evidence로 거부한다.
         """
         from mint_litellm.types.canonical import sha256
 
