@@ -7,6 +7,7 @@ HTTP 400 ``already ...``, 제출 목록은 ``items``).
 import json
 import socket
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
 
@@ -54,6 +55,7 @@ class ControlStub:
         }
         self.servers: dict[str, dict] = {}
         self.tools_raw: bytes | None = None
+        self.tools_delay = 0.0  # 도구 목록 응답을 늦추는 초
         self.reject_refused = False  # True면 거절이 400(다른 사유)으로 거부된다
         self.close_works = True  # False면 allow_all_keys 수정이 반영되지 않는다
         self.context = None  # 정책 엔진 문맥 응답(GET /v1/data/mint/context)
@@ -119,6 +121,7 @@ class ControlStub:
                 if self.command == "POST" and path == "/mcp-rest/test/connection":
                     return self._send(*stub.connection)
                 if self.command == "POST" and path == "/mcp-rest/test/tools/list":
+                    time.sleep(stub.tools_delay)
                     if stub.tools_raw is not None:
                         return self._send(200, None, stub.tools_raw)
                     return self._send(*stub.tools)

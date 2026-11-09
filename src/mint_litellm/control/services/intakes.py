@@ -4,6 +4,7 @@
 """
 
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -29,7 +30,7 @@ from mint_litellm.types.cli_commands import APPROVER_UP
 from mint_litellm.types.decision import normalize_auth_type, url_sha256
 from mint_litellm.types.events import EventKind
 from mint_litellm.types.ids import new_uuid7
-from mint_litellm.types.jobs import intake_run_job_key
+from mint_litellm.types.jobs import intake_reject_job_key, intake_run_job_key
 
 DATA_GRADES = ("public", "internal", "confidential", "restricted")
 READINESS_KEYS = ("credential_notice", "revocation_record", "audit_access_days")
@@ -182,8 +183,10 @@ def deployment_candidate(conn: Any, instance_id: str, server_id: str) -> dict | 
 
 def _enqueue_run(ctx: Context, row: dict, mode: str = "") -> str:
     """수용검증 작업을 등록한다. 시도 번호가 같으면 한 작업이다."""
-    attempt = next_attempt(ctx.conn, ctx.instance_id, row["id"])
     target = f"{row['id']}/{mode}" if mode else str(row["id"])
+    if mode == "reject":  # 같은 신청의 LiteLLM 거절 전달은 어느 경로에서든 한 작업이다
+        return enqueue_job(ctx, "intake_run", target, intake_reject_job_key(row["id"]))
+    attempt = next_attempt(ctx.conn, ctx.instance_id, row["id"])
     return enqueue_job(ctx, "intake_run", target, intake_run_job_key(row["id"], attempt))
 
 
@@ -776,23 +779,43 @@ def conclude(ctx: Context, intake_id: str, *, needs_registry_credentials: bool) 
         return verdict
 
 
-def reject_on_address(ctx: Context, intake_id: str, outcome: intake_checks.Outcome) -> None:
-    """``received`` 신청을 주소 검사(``url_guard``) 실패로 바로 거절한다. 운영자 입력은 필요 없다.
+def enqueue_reject(ctx: Context, row: dict) -> str:
+    """결정된 거절의 LiteLLM 전달 작업을 등록한다. 신청마다 하나로 수렴한다."""
+    return _enqueue_run(ctx, row, "reject")
 
-    검사 한 행과 거절을 남기고 서버를 ``rejected``로 닫는다. 제출이므로 LiteLLM 거절은 작업이 한다.
+
+def reject_forbidden_address(
+    ctx: Context, server_id: str, check: Callable[[dict | None, str], intake_checks.Outcome]
+) -> bool:
+    """제출 신청(``received``)의 주소가 거부 대상 IP이면 운영자 입력 없이 바로 거절한다.
+
+    서버 행 → 신청 행 순서로 잠근 뒤 그 시점의 배포 후보로 ``check(후보, 조직)``을 판정하므로
+    운영자 입력·후보 교체·검사 시작과 겹치지 않는다. 검사 한 행과 거절을 남기고 서버를 닫는다.
+    제출이므로 LiteLLM 거절은 작업이 한다. 거절했으면 참.
     """
     with transact(ctx):
-        row = get(ctx, intake_id, lock=True)
-        if row["status"] != "received" or outcome.result != "fail":
-            return
+        fetchone(ctx.conn, "SELECT 1 AS x FROM mint.servers WHERE instance_id = %s"
+                 " AND server_id = %s FOR UPDATE", (ctx.instance_id, server_id))
+        row = fetchone(
+            ctx.conn,
+            "SELECT * FROM mint.intakes WHERE instance_id = %s AND server_id = %s"
+            " AND source = 'submission' AND status = 'received' FOR UPDATE",
+            (ctx.instance_id, server_id),
+        )
+        if row is None:
+            return False
+        outcome = check(deployment_candidate(ctx.conn, ctx.instance_id, server_id), row["org_id"])
+        if outcome.reason != "IP_FORBIDDEN":
+            return False
         record_check(ctx, row, next_attempt(ctx.conn, ctx.instance_id, row["id"]), "url_guard",
-                     outcome, contract_binding(ctx.conn, ctx.instance_id, row["server_id"]))
+                     outcome, contract_binding(ctx.conn, ctx.instance_id, server_id))
         updated = _decided(ctx, row, "rejected", f"check_failed:url_guard:{outcome.reason}",
                            {"automatic": True})
-        _server_to(ctx, row["server_id"], "validating", _SERVER_REENTRY)
-        _server_to(ctx, row["server_id"], "rejected", ("validating",))
-        _supersede_candidates(ctx, row["server_id"])
+        _server_to(ctx, server_id, "validating", _SERVER_REENTRY)
+        _server_to(ctx, server_id, "rejected", ("validating",))
+        _supersede_candidates(ctx, server_id)
         _enqueue_run(ctx, updated, "reject")
+        return True
 
 
 # --- 결정 ---------------------------------------------------------------------------------
@@ -924,10 +947,10 @@ def _approve(
         " AND server_id = %s AND status = 'candidate' AND source = 'intake' ORDER BY tool",
         (ctx.instance_id, server_id),
     )
+    if any(c["check"] == "definitions" and c["reason_code"] == "LIMIT_EXCEEDED" for c in checks):
+        # 이전 검사의 후보가 남아 있어도 최신 정의 수집이 상한을 넘었으면 승인하지 않는다
+        raise ControlError("정의 상한 초과: 서버의 도구 수·크기를 줄여 다시 신청하십시오.")
     if not tools:
-        if any(c["check"] == "definitions" and c["reason_code"] == "LIMIT_EXCEEDED"
-               for c in checks):
-            raise ControlError("정의 상한 초과: 서버의 도구 수·크기를 줄여 다시 신청하십시오.")
         raise ControlError("승인할 도구 계약 후보가 없습니다. 정의 수집이 끝나야 합니다.")
     if any(t["risk_grade"] is None or t["action_type"] is None for t in tools):
         raise ControlError("위험 등급이 산정되지 않은 도구가 있어 승인할 수 없습니다.")

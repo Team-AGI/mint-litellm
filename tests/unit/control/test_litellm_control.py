@@ -8,6 +8,7 @@ from mint_litellm.control.litellm_control import (
     STAGE2_ALLOWED_ROUTES,
     LiteLLMControl,
     ResponseTooLarge,
+    ResponseTooSlow,
 )
 
 
@@ -168,3 +169,10 @@ def test_a_refused_reject_is_reported_and_a_too_deep_response_is_a_limit(stub):
     stub.tools_raw = b"[" * 5000 + b"]" * 5000
     with pytest.raises(ResponseTooLarge):
         client(stub).test_tools_list({"url": "http://x"})
+
+
+def test_tools_list_must_finish_within_the_time_limit(stub):
+    stub.tools_delay = 0.4
+    assert client(stub).test_tools_list({"url": "http://x"}, seconds=3.0)["tools"]  # 기한 직전
+    with pytest.raises(ResponseTooSlow):  # 기한 직후
+        client(stub).test_tools_list({"url": "http://x"}, seconds=0.1)

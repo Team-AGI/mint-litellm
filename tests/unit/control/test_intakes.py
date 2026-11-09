@@ -452,6 +452,54 @@ def test_a_submission_with_a_private_literal_ip_is_rejected_on_the_first_poll(wo
                     " WHERE server_id = 'sub-2'")["status"] == "received"
 
 
+def test_a_received_submission_left_by_an_interrupted_poll_is_rejected_on_the_next_poll(world):
+    item = submission("sub-1", url="https://[fd00::1]/mcp")
+    world.call(lambda ctx: svc.receive_submission(ctx, item))  # 접수만 커밋되고 중단된 상태
+    assert fetchone(world.conn, "SELECT status FROM mint.intakes")["status"] == "received"
+    world.stub.submissions = [item]
+    poll(world)
+    row = fetchone(world.conn, "SELECT * FROM mint.intakes")
+    assert (row["status"], row["decision_reason"]) == (
+        "decided", "check_failed:url_guard:IP_FORBIDDEN")
+    assert world.stub.writes() == [("PUT", "/v1/mcp/server/sub-1/reject")]
+
+
+def test_the_address_check_uses_the_candidate_current_when_the_locks_are_taken(world):
+    import threading
+
+    item = submission("sub-1", url="https://[fd00::1]/mcp")
+    world.stub.submissions = [item]
+    world.call(lambda ctx: svc.receive_submission(ctx, item))
+    intake_id = str(fetchone(world.conn, "SELECT id FROM mint.intakes")["id"])
+    with psycopg.connect(world.url) as other:
+        # 운영자 쪽이 신청 행을 잠그고 주소 후보를 허용된 주소로 바꾸는 동안 조회가 겹친다
+        fetchone(other, "SELECT 1 AS x FROM mint.intakes WHERE id = %s FOR UPDATE", (intake_id,))
+        thread = threading.Thread(target=poll, args=(world,))
+        thread.start()
+        thread.join(1.0)
+        assert thread.is_alive()  # 신청 잠금을 기다린다
+        svc._deployment_candidate(make_ctx(other), "sub-1", URL, "http", "none", None, None,
+                                  None, None)
+        other.commit()
+        thread.join(30)
+    assert world.intake(intake_id)["status"] == "received"
+    assert world.stub.writes() == []
+
+
+def test_delivering_one_rejection_converges_to_a_single_job_and_write(world):
+    item = submission("sub-1", url="https://[fd00::1]/mcp")
+    world.stub.submissions = [item]
+    world.call(lambda ctx: svc.receive_submission(ctx, item))
+    world.call(lambda ctx: svc.create(ctx, world.admin_client, "sub-1", **INPUTS))  # 검사 작업 등록
+    world.call(lambda ctx: svc.reject_forbidden_address(
+        ctx, "sub-1", lambda contract, org: intake_checks.url_guard(
+            contract["url"], contract["transport"], [], (443,))))
+    world.drain()
+    assert world.stub.writes() == [("PUT", "/v1/mcp/server/sub-1/reject")]
+    rejects = [j for j in world.jobs("intake_run") if j["target_ref"].endswith("/reject")]
+    assert len(rejects) == 1
+
+
 def test_an_automatic_rejection_rejects_the_litellm_submission_exactly_once(world):
     world.stub.submissions = [submission("sub-1", url="https://other.test/mcp")]
     poll(world)
@@ -1162,6 +1210,23 @@ def test_an_exception_for_a_server_over_the_definition_limit_names_the_cause(wor
     intake_id = world.create()
     world.drain()
     assert world.intake(intake_id)["status"] == "indeterminate"
+    second = Operator("boss2", "approver", "boss-2")
+    with pytest.raises(ControlError, match="정의 상한 초과"):
+        world.decide(intake_id, "except", reason="상한 초과", second=second)
+
+
+def test_an_exception_after_a_recheck_over_the_limit_is_refused_even_with_old_candidates(world):
+    from mint_litellm.control.context import Operator
+
+    intake_id = world.create()
+    world.drain()
+    assert world.intake(intake_id)["status"] == "passed"
+    many = [{**TOOL, "name": f"tool-{i}"} for i in range(intake_checks.MAX_TOOLS + 1)]
+    world.stub.tools = (200, {"tools": many, "message": "ok"})
+    world.call(lambda ctx: svc.recheck(ctx, intake_id))
+    world.drain()
+    assert world.intake(intake_id)["status"] == "indeterminate"
+    assert fetchall(world.conn, "SELECT 1 FROM mint.tool_contracts WHERE status = 'candidate'")
     second = Operator("boss2", "approver", "boss-2")
     with pytest.raises(ControlError, match="정의 상한 초과"):
         world.decide(intake_id, "except", reason="상한 초과", second=second)

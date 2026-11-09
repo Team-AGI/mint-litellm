@@ -476,14 +476,20 @@ class PluginRuntime:
         except RuntimeError:
             return
         self._task = loop.create_task(self._startup())
-        if self.restore_watch is not None:
-            self._restore_task = loop.create_task(self.restore_watch.run())
+        self._restore_task = loop.create_task(self._judge_loop())
         self._observe_task = loop.create_task(self._observe_contracts())
+
+    async def _judge_loop(self) -> None:
+        """판정 주기마다 되돌림 판정을 갱신하고, 호출이 없어도 버퍼에 남은 사건을 DB에 올린다."""
+        while True:
+            self.recorder.replay_pending()
+            if self.restore_watch is not None:
+                await self.restore_watch.refresh()
+            await asyncio.sleep(self.config.restore_interval_seconds)
 
     async def _observe_contracts(self) -> None:
         while True:
             await asyncio.sleep(self.config.observe_seconds)
-            self.recorder.replay_pending()  # 호출이 없어도 버퍼에 남은 사건을 DB에 올린다
             if not self.verified:
                 continue
             try:

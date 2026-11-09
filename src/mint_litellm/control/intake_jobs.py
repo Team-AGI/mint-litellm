@@ -49,24 +49,16 @@ def submission_poll(job: JobContext) -> None:
     ctx = _context(job)
     for item in pending[:POLL_LIMIT]:
         job.checkpoint()
-        intake_id = intakes.receive_submission(ctx, item)
-        if intake_id:
-            _reject_forbidden_address(job, ctx, intake_id)
+        intakes.receive_submission(ctx, item)
+        # 접수 직후 중단돼도 다음 조회가 이어받도록, 이미 있는 received 제출도 매번 본다
+        intakes.reject_forbidden_address(ctx, item.get("server_id"), lambda contract, org_id: (
+            _url_guard(job, contract, _allowlists(job, org_id))))
 
 
 def _url_guard(job: JobContext, contract: dict | None, allowlists: list[dict]) -> checks.Outcome:
     ports = tuple(getattr(job.settings, "intake_allowed_ports", checks.DEFAULT_PORTS))
     return checks.url_guard(contract and contract["url"], contract and contract["transport"],
                             allowlists, ports)
-
-
-def _reject_forbidden_address(job: JobContext, ctx: Context, intake_id: str) -> None:
-    """제출 주소가 거부 대상 IP이면 운영자 입력을 기다리지 않고 바로 거절한다(같은 주소 검사)."""
-    row = intakes.get(ctx, intake_id)
-    contract = intakes.deployment_candidate(job.conn, job.instance_id, row["server_id"])
-    out = _url_guard(job, contract, _allowlists(job, row["org_id"]))
-    if out.reason == "IP_FORBIDDEN":
-        intakes.reject_on_address(ctx, intake_id, out)
 
 
 # --- intake_run ---------------------------------------------------------------------------
@@ -339,17 +331,18 @@ def _evidence_run(job: JobContext, ctx: Context, row: dict, attempt: int) -> Non
 
 def intake_run(job: JobContext) -> None:
     target, _, mode = job.job["target_ref"].partition("/")
-    attempt = int(job.job["idempotency_key"].rsplit(":", 1)[1])
     ctx = _context(job)
     row = intakes.get(ctx, target)
     if mode == "reject":
         _reject_at_litellm(job, row)
         return
+    attempt = int(job.job["idempotency_key"].rsplit(":", 1)[1])
     if mode == "evidence":
         _evidence_run(job, ctx, row, attempt)
         return
     if row["status"] == "decided":
-        _reject_at_litellm(job, row)  # 자동 거절 뒤 LiteLLM 거절이 끊긴 경우 이어서 한다
+        if row["decision"] == "rejected":  # 거절 전달은 신청마다 하나의 작업으로 수렴한다
+            intakes.enqueue_reject(ctx, row)
         return
     started = intakes.begin_checking(ctx, target)
     if started is None:

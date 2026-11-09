@@ -924,7 +924,7 @@ def test_the_openai_websocket_passthrough_needs_the_explicit_realtime_allowance(
     assert failed(run_checks(off)) == set()
 
 
-def test_buffered_events_reach_the_database_from_the_periodic_check_without_calls(tmp_path):
+def test_buffered_events_reach_the_database_from_the_judgement_loop_without_calls(tmp_path):
     from dataclasses import replace as replace_config
     from datetime import UTC, datetime
     from uuid import uuid4
@@ -933,7 +933,7 @@ def test_buffered_events_reach_the_database_from_the_periodic_check_without_call
 
     store = FakeStore()
     runtime, _, _, _ = make_runtime(tmp_path, store=store)
-    runtime.config = replace_config(runtime.config, observe_seconds=1)
+    runtime.config = replace_config(runtime.config, restore_interval_seconds=1.0)
     invocation = uuid4()
     event = Event(
         instance_id="inst", inserted_at=datetime.now(UTC), kind=EventKind.DECISION_EVALUATED,
@@ -950,6 +950,7 @@ def test_buffered_events_reach_the_database_from_the_periodic_check_without_call
         assert not store.events and runtime.recorder._buffer.has_pending()
         store.fail = None  # DB 복구 뒤 호출은 오지 않는다
         await asyncio.sleep(2.5)
+        runtime._restore_task.cancel()
         runtime._observe_task.cancel()
         runtime._task.cancel()
 
