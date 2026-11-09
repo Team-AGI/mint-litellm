@@ -15,6 +15,7 @@ interpretations:
 limits:
   call_ms: 1500
   observe_seconds: 60
+  submission_poll_seconds: 60
   sync_seconds: 360
   decision_ms: {p50: 30, p95: 100, p99: 300}
 intake_checks:
@@ -209,13 +210,16 @@ observations:
     reject_calls: 1
     resubmissions: 0
     failed_checks: 1
-  # 고정된 LiteLLM 판본은 사설 리터럴 IP 제출을 받아 주므로(201) MINT 수용검증이 자동 거절한다(DS-174 정정).
-  intake_private_literal: {litellm_rejected: false, mint_intakes: 1, url_guard_reason: IP_FORBIDDEN,
-                           control_accepted: true, upstream_calls: 0}
+  # 고정된 LiteLLM 판본은 사설 리터럴 IP 제출을 받아 주므로(201) MINT가 첫 수신 작업 안에 운영자
+  # 입력 없이 url_guard로 거절하고(IP_FORBIDDEN), LiteLLM에는 거절을 한 번 알린다.
+  intake_private_literal: {litellm_accepted: true, mint_intakes: 1, intake_status: decided,
+                           url_guard_reason: IP_FORBIDDEN, reject_calls: 1, test_route_calls: 0,
+                           control_accepted: true, control_decision: "", upstream_calls: 0}
   intake_private_ip_guard: {url_guard_reason: IP_FORBIDDEN, test_route_calls: 0}
   intake_allow_all_keys: {<<: *negative, submitted_allow_all_keys: true}
-  intake_definitions_limit: {result: indeterminate, distinct_approvers: 2,
-                            exception_days: {max: 90}, day_91_rejected: true}
+  # 정의 상한 초과로 판별 불가인 서버는 예외로도 승인하지 않고, 거부 사유에 원인을 밝힌다.
+  intake_definitions_limit: {result: indeterminate, except_refused: true, reason_over_limit: true,
+                            exception_approvals: 0}
   intake_same_requester: {decision_writes: 0}
   intake_stale_evidence: {evidence_age_hours: {min: 24.001}, decision_writes: 0}
   intake_credentials_required: {upstream_status: 401, test_http_status: 200,
@@ -226,7 +230,7 @@ observations:
   confirmation_stale_policy: {upstream_calls: 0, code: MINT-CONFIRMATION-STALE}
   confirmation_concurrent: {submissions: 2, consumed: 1, upstream_calls: 1}
   confirmation_both_atomic: {call_approvals_consumed: 1, confirmations_consumed: 1, upstream_calls: 1}
-  confirmation_both_rollback: {call_approvals_consumed: 0, confirmations_consumed: 0, upstream_calls: 0}
+  confirmation_both_rollback: {contended: true, call_approvals_consumed: 0, confirmations_consumed: 0, upstream_calls: 0}
   confirmation_limit_20: {pending: 20, attempt_21_inserted: 0, upstream_calls: 0}
   confirmation_expiry_10m: {ttl_seconds: 600, expiry_delay_seconds: {max: 62}, display: null}
   confirmation_team_no_row: {inserted: 0, upstream_calls: 0}
@@ -234,7 +238,9 @@ observations:
   confirmation_plugin_insert: {sqlstate: '42501', inserted: 0}
   confirmation_plugin_confirm: {sqlstate: '42501', confirmed: 0}
   confirmation_freeze_columns: {changed_columns: 0, rejected: true}
-  confirmation_call_approval_only: {upstream_calls: 0, code: MINT-CALL-APPROVAL-REQUIRED}
+  # 호출별 승인이 없으면 본인 확인 행을 만들지 않는다. 승인이 생기면 다음 단계의 확인 행이 생긴다.
+  confirmation_call_approval_only: {upstream_calls: 0, code: MINT-CALL-APPROVAL-REQUIRED,
+                                    rows_before_approval: 0, rows_after_approval: 1}
   confirmation_v001_isolation: {confirmation_rows_seen: 0, confirmation_rows_consumed: 0,
                                 stage1_call_approval_consumed: 1}
   auth_no_plaintext: {matches: 0, search_complete: true}

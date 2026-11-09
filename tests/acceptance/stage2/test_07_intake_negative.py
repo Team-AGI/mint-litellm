@@ -11,12 +11,12 @@ def test_negative_intake(rig, case):
     rig.fault("intake_" + case)
     observation = rig.read_observation("intake_" + case)
     rig.check_observation("intake_" + case, observation)
-    if case == "private_literal":  # 신청이 없다: LiteLLM 거절만 본다
-        return
     intake = rig.rows("intakes", "id=%s", [observation["intake_id"]])[0]
-    if case in ("provider_denied", "allow_all_keys", "private_ip_guard"):
+    if case in ("provider_denied", "allow_all_keys", "private_ip_guard", "private_literal"):
         assert intake["decision"] == "rejected"
         assert rig.rows("intake_checks", "intake_id=%s AND result='fail'", [intake["id"]])
+    if case == "definitions_limit":  # 예외로도 승인하지 않으므로 결정이 없다
+        assert intake["decision"] is None
     if case == "credentials_required":
         assert intake["needs_registry_credentials"] is True
         checks = rig.rows("intake_checks", "intake_id=%s AND reason_code='CREDENTIALS_REQUIRED'",

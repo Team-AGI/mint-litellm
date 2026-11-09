@@ -142,13 +142,20 @@ def lite_raw(method, path, body=None, key=None):
                key or admin_key())
 
 
-def cli(*args, role="admin", token=None, check=True, env_over=None):
-    """운영자 CLI 한 번. (종료 코드, JSON 또는 None, 표준 오류)."""
+def cli(*args, role="admin", token=None, check=True, env_over=None, stack=False):
+    """운영자 CLI 한 번. (종료 코드, JSON 또는 None, 표준 오류).
+
+    ``stack``이면 호스트 CLI 대신 ``deploy/mint.sh cli``(스택 안의 CLI)로 돌린다. 호스트에 없는
+    도구(``opa`` 바이너리)가 필요한 명령용이다.
+    """
     env = {**os.environ, "MINT_OPERATOR_TOKEN": token or A.env(ROLE_ENV[role]),
            **(env_over or {})}
-    command = shlex.split(os.environ.get("ACC_CLI", f"{sys.executable} -m mint_litellm.cli"))
-    done = subprocess.run([*command, *map(str, args), "--json"], cwd=A.ROOT, env=env, text=True,
-                          encoding="utf-8", capture_output=True, timeout=180)
+    command = ["./mint.sh", "cli"] if stack else shlex.split(
+        os.environ.get("ACC_CLI", f"{sys.executable} -m mint_litellm.cli"))
+    done = subprocess.run([*command, *map(str, args), "--json"],
+                          cwd=A.ROOT / "deploy" if stack else A.ROOT, env=env, text=True,
+                          encoding="utf-8", capture_output=True, timeout=180,
+                          stdin=subprocess.DEVNULL if stack else None)
     try:
         data = json.loads(done.stdout) if done.stdout.strip() else None
     except ValueError:
@@ -269,7 +276,8 @@ def new_team(servers=()):
 
 
 def new_key(user, team=None, servers=(), **extra):
-    body = {"user_id": user, **extra}
+    """호출 키 발급. ``user``가 None이면 ``user_id`` 없이 팀 범위 키로 만든다."""
+    body = {**({"user_id": user} if user else {}), **extra}
     if team:
         body["team_id"] = team
     if servers:
@@ -678,10 +686,12 @@ def intake_provider_denied(ctx):
 
 @scenario("intake_private_literal", undo=cleanup)
 def intake_private_literal(ctx):
-    """DS-174·176: 사설 리터럴 IP 제출은 LiteLLM이 거절(사유 문자열 기록)하고 MINT 신청은 없다.
+    """사설 리터럴 IP 제출은 LiteLLM이 받아 주고, MINT가 첫 제출 수신 작업 안에 운영자 입력 없이
+    `url_guard`(IP_FORBIDDEN)로 거절하며 LiteLLM에도 거절을 알린다.
 
-    같은 제출에서 URL만 해석되는 주소로 바꾼 대조군은 접수된다.
+    같은 제출에서 URL만 해석되는 주소로 바꾼 대조군은 접수되고 결정되지 않은 채 입력을 기다린다.
     """
+    start = datetime.now(UTC)
     before = n(f"SELECT count(*) FROM mint.intakes WHERE instance_id={lit(iid())}")
     upstream_before = upstream()
 
@@ -694,24 +704,35 @@ def intake_private_literal(ctx):
     status, text = submit("https://10.20.30.40/mcp")
     control_url = site()["servers"]["synthetic"]["url"] + "?c=" + uuid.uuid4().hex[:6]
     control_status, control_text = submit(control_url)
-    if control_status in (200, 201):
-        track("server", json.loads(control_text)["server_id"])
-    time.sleep(70)  # 제출 수신 작업 주기보다 길게 기다린다
-    private_id = json.loads(text)["server_id"] if status in (200, 201) else None
-    guard = None
-    if private_id:  # 이 LiteLLM 판본은 사설 IP 제출을 받아 주므로 MINT url_guard가 거절해야 한다(DS 정정)
-        track("server", private_id)
-        wait(lambda: A.psql("SELECT status FROM mint.intakes WHERE "
-                            f"server_id={lit(private_id)}", "mint") in ("failed", "decided"), 600,
-             "사설 IP 신청 검사")
-        guard = A.psql("SELECT c.reason_code FROM mint.intake_checks c JOIN mint.intakes i ON "
-                       f"i.id=c.intake_id WHERE i.server_id={lit(private_id)} AND c.\"check\"="
-                       "'url_guard'", "mint")
+    control_id = json.loads(control_text)["server_id"] if control_status in (200, 201) else None
+    if control_id:
+        track("server", control_id)
+    if status not in (200, 201):
+        raise SystemExit(f"사설 IP 제출이 거절됨(HTTP {status}): 고정 판본의 동작과 다름")
+    private_id = json.loads(text)["server_id"]
+    track("server", private_id)
+    # 첫 수신 작업(주기 1회) 안에 접수와 거절이 모두 끝나야 한다. 운영자 입력은 넣지 않는다.
+    deadline = 2 * limit("submission_poll_seconds") + 30
+    intake_id = wait(lambda: A.psql(
+        f"SELECT id FROM mint.intakes WHERE instance_id={lit(iid())} AND "
+        f"server_id={lit(private_id)} ORDER BY created_at LIMIT 1", "mint"), deadline,
+        "사설 IP 제출 신청 수신")
+    wait(lambda: A.psql(f"SELECT coalesce(decision,'') FROM mint.intakes WHERE "
+                        f"id={lit(intake_id)}", "mint") == "rejected", deadline, "자동 거절")
+    time.sleep(5)  # 뒤늦은 시험 호출·재신청이 없는지 본다
+    guard = A.psql("SELECT reason_code FROM mint.intake_checks WHERE "
+                   f"intake_id={lit(intake_id)} AND \"check\"='url_guard'", "mint")
+    control_decision = A.psql(
+        f"SELECT coalesce(decision,'') FROM mint.intakes WHERE server_id={lit(control_id)} "
+        f"AND instance_id={lit(iid())}", "mint") if control_id else None
     new_rows = n(f"SELECT count(*) FROM mint.intakes WHERE instance_id={lit(iid())}") - before
-    observe(ctx, litellm_rejected=status in (400, 403, 422), litellm_status=status,
-            litellm_reason=text[:160], control_accepted=control_status in (200, 201),
-            mint_intakes=new_rows - (1 if control_status in (200, 201) else 0),
-            url_guard_reason=guard, upstream_calls=upstream() - upstream_before)
+    observe(ctx, intake_id=intake_id, litellm_accepted=status in (200, 201),
+            intake_status=intake_status(intake_id), url_guard_reason=guard,
+            reject_calls=log_count(r"PUT /v1/mcp/server/\S+/reject", start),
+            test_route_calls=log_count(r"/mcp-rest/test/", start),
+            control_accepted=control_status in (200, 201), control_decision=control_decision,
+            mint_intakes=new_rows - (1 if control_id else 0),
+            upstream_calls=upstream() - upstream_before)
 
 
 @scenario("intake_private_ip_guard", undo=cleanup)
@@ -746,22 +767,17 @@ def intake_definitions_limit(ctx):
     intake_id = create_intake(server_id, fixture_url())
     wait(lambda: checked(intake_id), 180, "검사")
     result = intake_status(intake_id)
-    # 예외 승인은 정의 수집이 만든 후보 계약에 묶인다. 수집이 끝나 후보가 생길 때까지 기다린다.
-    wait(lambda: n(f"SELECT count(*) FROM mint.tool_contracts WHERE instance_id={lit(iid())} "
-                   f"AND server_id={lit(server_id)} AND status='candidate'") > 0, 600,
-         "정의 수집 후보 계약(도구 501개)")
+    # 정의 상한을 넘어 판별할 수 없는 서버는 고정할 도구 계약이 없어 예외로도 승인하지 않는다.
+    # 거부 문구는 원인(정의 상한 초과)을 밝혀야 한다.
     second = A.env(ROLE_ENV["admin2"])
-    over = cli("intake", "except", intake_id, "--reason", "acceptance", "--valid-until",
-               iso(timedelta(days=91)), "--second-approver", second, role="approver", check=False)
-    ok = cli("intake", "except", intake_id, "--reason", "acceptance", "--valid-until",
-             iso(timedelta(days=89, hours=23)), "--second-approver", second, role="approver")
-    approval = q1("SELECT extract(epoch FROM valid_until - valid_from) / 86400 AS days, "
-                  "basis->>'second_approver' AS second, granted_by FROM mint.approvals WHERE "
-                  f"instance_id={lit(iid())} AND basis->>'intake_id'={lit(intake_id)}")
-    observe(ctx, intake_id=intake_id, result=result,
-            distinct_approvers=len({approval["second"], approval["granted_by"]} - {None}),
-            exception_days=round(float(approval["days"]), 3), day_91_rejected=over[0] != 0,
-            exception_exit=ok[0])
+    refused = cli("intake", "except", intake_id, "--reason", "acceptance", "--valid-until",
+                  iso(timedelta(days=89, hours=23)), "--second-approver", second,
+                  role="approver", check=False)
+    observe(ctx, intake_id=intake_id, result=result, except_refused=refused[0] != 0,
+            reason_over_limit="정의 상한 초과" in refused[2],
+            exception_approvals=n(f"SELECT count(*) FROM mint.approvals WHERE "
+                                  f"instance_id={lit(iid())} AND "
+                                  f"basis->>'intake_id'={lit(intake_id)}"))
 
 
 @scenario("intake_same_requester", undo=fixture_undo)
@@ -1388,7 +1404,8 @@ def conf_world(*, team=False, call_approval=False):
     server, tool = sv(), synthetic()["tool"]
     user = new_user()
     team_id = new_team([server]) if team else None
-    k1, k1h = new_key(user, team_id, servers=[server])
+    # 팀 범위 호출은 user_id가 없는 팀 키여야 한다(user_id가 있으면 사용자 주체가 된다).
+    k1, k1h = new_key(None if team else user, team_id, servers=[server])
     k2, k2h = new_key(user)
     rel = relation(server)
     cli("org", "bind", "--org", rel["org_id"], *(("--team", team_id) if team else ("--user", user)))
@@ -1420,11 +1437,11 @@ def wcall(w, args, startup_wait=900):
             "text": text[:200]}
 
 
-def invocation_of(mark):
+def invocation_of(mark, seconds=15):
     return wait(lambda: A.psql(
         f"SELECT invocation_id FROM mint.events WHERE instance_id={lit(iid())} "
         f"AND kind='decision_evaluated' AND payload->>'litellm_call_id'={lit(mark)} LIMIT 1",
-        "mint"), 15, "판정 사건")
+        "mint"), seconds, "판정 사건")
 
 
 def confirm_pending(w):
@@ -1484,7 +1501,8 @@ def confirmation_stale_policy(ctx):
     args = fresh_args()
     wcall(w, args)
     confirm_pending(w)
-    cli("policy", "activate", "acc-" + uuid.uuid4().hex[:8])  # 같은 번들을 새 판본으로
+    # 같은 번들을 새 판본으로. 호스트에 opa 바이너리가 없어 스택 안의 CLI로 활성화한다.
+    cli("policy", "activate", "acc-" + uuid.uuid4().hex[:8], stack=True)
     stale = wcall(w, args)
     observe(ctx, upstream_calls=stale["upstream"], code=stale["code"])
 
@@ -1557,6 +1575,23 @@ class RowLock:
         self.proc.stdin.close()
         self.proc.wait(timeout=60)
 
+    def cancel_when_contended(self, seconds=60):
+        """다른 세션이 이 행 잠금을 기다리는 것이 보이는 즉시(수 ms 안) 확인을 취소하고 푼다.
+
+        판정 예산(300ms)보다 오래 쥐면 플러그인이 잠금 대기 제한으로 먼저 포기해 「해제 뒤
+        소비 실패」 경로를 타지 못하므로, 기다림이 시작된 직후에 푼다. 경합이 끝내 없으면 거짓.
+        """
+        self.proc.stdin.write(
+            "DO $$ DECLARE t timestamptz := clock_timestamp() + "
+            f"make_interval(secs => {int(seconds)}); BEGIN LOOP EXIT WHEN EXISTS (SELECT 1 FROM "
+            "pg_stat_activity WHERE pid <> pg_backend_pid() AND wait_event_type = 'Lock' AND "
+            "query ILIKE '%self_confirmations%'); IF clock_timestamp() > t THEN "
+            "RAISE EXCEPTION 'no contention'; END IF; PERFORM pg_sleep(0.005); END LOOP; "
+            "END $$;\nSET LOCAL ROLE mint_control;\nUPDATE mint.self_confirmations SET "
+            f"status='cancelled' WHERE id={lit(self.row_id)};\nCOMMIT;\n")
+        self.proc.stdin.close()
+        return self.proc.wait(timeout=seconds + 30) == 0
+
 
 @scenario("confirmation_both_rollback", undo=cleanup)
 def confirmation_both_rollback(ctx):
@@ -1570,12 +1605,15 @@ def confirmation_both_rollback(ctx):
     before = upstream()
     thread = threading.Thread(target=lambda: box.append(wcall(w, args)))
     thread.start()
-    time.sleep(5)  # 플러그인이 호출별 승인 소비 뒤 확인 행에서 기다리는 동안
-    lock.cancel_and_release()
+    # 플러그인이 호출별 승인을 소비한 뒤 확인 행 갱신에서 기다리기 시작하면 확인을 취소하고 푼다.
+    # 풀린 뒤 확인 소비가 실패하면 같은 트랜잭션의 호출별 승인 소비도 되돌아가야 한다(설계 경로).
+    contended = lock.cancel_when_contended()
     thread.join()
-    observe(ctx, call_approvals_consumed=call_approvals_consumed(w),
+    # 사건은 호출 직후 또는 플러그인 주기의 버퍼 재적재 안에 DB에 나타나야 한다.
+    observe(ctx, contended=contended, call_approvals_consumed=call_approvals_consumed(w),
             confirmations_consumed=consumed_count(w), upstream_calls=upstream() - before,
-            invocation_id=invocation_of(box[0]["mark"]), code=box[0]["code"])
+            invocation_id=invocation_of(box[0]["mark"], limit("observe_seconds") + 30),
+            code=box[0]["code"])
 
 
 @scenario("confirmation_team_no_row", undo=cleanup)
@@ -1590,12 +1628,20 @@ def confirmation_team_no_row(ctx):
 
 @scenario("confirmation_call_approval_only", undo=cleanup)
 def confirmation_call_approval_only(ctx):
+    """호출별 승인과 본인 확인이 함께 걸린 도구는 호출별 승인을 먼저 본다.
+
+    승인이 없으면 확인 행을 만들지 않는다(승인되지 않은 호출을 이용자에게 확인시키지 않는다).
+    승인이 생기면 그 다음 단계인 확인 행이 만들어진다.
+    """
     w = conf_world(call_approval=True)
     args = fresh_args()
-    wcall(w, args)
-    confirm_pending(w)  # 확인은 있지만 관리자 호출별 승인은 없다
     blocked = wcall(w, args)
-    observe(ctx, upstream_calls=blocked["upstream"], code=blocked["code"])
+    rows_before = len(confirmation_rows(principal_id=w["user"]))
+    approved_call(w, args)
+    wcall(w, args)
+    observe(ctx, upstream_calls=blocked["upstream"], code=blocked["code"],
+            rows_before_approval=rows_before,
+            rows_after_approval=len(confirmation_rows(principal_id=w["user"])))
 
 
 # ================================================================ 인증·화면 9종(+이행 1종)
