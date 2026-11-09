@@ -573,6 +573,10 @@ class EvidenceRecorder:
             self._buffer.abandon(ticket)
             raise
 
+    def replay_pending(self) -> None:
+        """호출이 끊겨 쓰기가 없어도 버퍼 사건이 DB에 들어가도록 주기 점검이 부른다."""
+        self._schedule_replay()
+
     def _schedule_replay(self) -> None:
         now = time.monotonic()
         if (

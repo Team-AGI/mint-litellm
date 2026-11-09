@@ -483,6 +483,7 @@ class PluginRuntime:
     async def _observe_contracts(self) -> None:
         while True:
             await asyncio.sleep(self.config.observe_seconds)
+            self.recorder.replay_pending()  # 호출이 없어도 버퍼에 남은 사건을 DB에 올린다
             if not self.verified:
                 continue
             try:

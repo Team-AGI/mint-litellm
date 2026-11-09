@@ -922,3 +922,37 @@ def test_the_openai_websocket_passthrough_needs_the_explicit_realtime_allowance(
     off = view(general_settings={"require_key_mcp_access_defined": True,
                                  "enable_openai_websocket_passthrough": False})
     assert failed(run_checks(off)) == set()
+
+
+def test_buffered_events_reach_the_database_from_the_periodic_check_without_calls(tmp_path):
+    from dataclasses import replace as replace_config
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    from mint_litellm.types.events import Event, call_source_key
+
+    store = FakeStore()
+    runtime, _, _, _ = make_runtime(tmp_path, store=store)
+    runtime.config = replace_config(runtime.config, observe_seconds=1)
+    invocation = uuid4()
+    event = Event(
+        instance_id="inst", inserted_at=datetime.now(UTC), kind=EventKind.DECISION_EVALUATED,
+        source_key=call_source_key(invocation, 1, EventKind.DECISION_EVALUATED),
+        invocation_id=invocation, attempt_id=1, payload={},
+    )
+
+    async def scenario():
+        store.fail = ConnectionError("down")
+        await runtime.recorder.record(event)  # DB가 안 돼 로컬 버퍼에만 남는다
+        assert not store.events
+        runtime.ensure_started()
+        await asyncio.sleep(1.5)  # DB가 계속 안 되는 동안: 사건은 버퍼에 남고 다시 시도할 뿐이다
+        assert not store.events and runtime.recorder._buffer.has_pending()
+        store.fail = None  # DB 복구 뒤 호출은 오지 않는다
+        await asyncio.sleep(2.5)
+        runtime._observe_task.cancel()
+        runtime._task.cancel()
+
+    asyncio.run(scenario())
+    assert [e.source_key for e in store.of_kind("decision_evaluated")] == [event.source_key]
+    assert not runtime.recorder._buffer.has_pending()
