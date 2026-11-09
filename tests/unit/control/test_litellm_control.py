@@ -176,3 +176,44 @@ def test_tools_list_must_finish_within_the_time_limit(stub):
     assert client(stub).test_tools_list({"url": "http://x"}, seconds=3.0)["tools"]  # 기한 직전
     with pytest.raises(ResponseTooSlow):  # 기한 직후
         client(stub).test_tools_list({"url": "http://x"}, seconds=0.1)
+
+
+def test_a_slowly_streamed_response_is_cut_at_the_deadline_without_leaving_threads(stub):
+    import socket
+    import threading
+    import time
+
+    listener = socket.socket()
+    listener.bind(("localhost", 0))
+    listener.listen(1)
+    stop = threading.Event()
+
+    def serve():
+        conn, _ = listener.accept()
+        conn.recv(65536)
+        conn.sendall(
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+            b"Content-Length: 100000\r\n\r\n"
+        )
+        while not stop.is_set():  # 조금씩 계속 흘려보낸다
+            try:
+                conn.sendall(b"x")
+            except OSError:
+                break
+            time.sleep(0.1)
+        conn.close()
+
+    server = threading.Thread(target=serve, daemon=True)
+    server.start()
+    port = listener.getsockname()[1]
+    slow = LiteLLMControl(f"http://localhost:{port}", CONTROL_KEY, guard=lambda: None)
+    before = threading.active_count()
+    started = time.monotonic()
+    with pytest.raises(ResponseTooSlow):
+        slow.test_tools_list({"url": "http://x"}, seconds=0.5)
+    elapsed = time.monotonic() - started
+    stop.set()
+    server.join(5)
+    listener.close()
+    assert elapsed < 1.5  # 기한 안에 끝난다
+    assert threading.active_count() <= before - 1  # 요청용 스레드가 남지 않는다

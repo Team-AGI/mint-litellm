@@ -789,13 +789,12 @@ def reject_forbidden_address(
 ) -> bool:
     """제출 신청(``received``)의 주소가 거부 대상 IP이면 운영자 입력 없이 바로 거절한다.
 
-    서버 행 → 신청 행 순서로 잠근 뒤 그 시점의 배포 후보로 ``check(후보, 조직)``을 판정하므로
-    운영자 입력·후보 교체·검사 시작과 겹치지 않는다. 검사 한 행과 거절을 남기고 서버를 닫는다.
+    신청 행을 먼저 잠근 뒤(``begin_checking``·``create``와 같은 순서, 서버 행은 뒤따르는 갱신이
+    잠근다) 그 시점의 배포 후보로 ``check(후보, 조직)``을 판정하므로 운영자 입력·후보 교체·검사
+    시작과 겹치지 않는다. 검사 한 행과 거절을 남기고 서버를 닫는다.
     제출이므로 LiteLLM 거절은 작업이 한다. 거절했으면 참.
     """
     with transact(ctx):
-        fetchone(ctx.conn, "SELECT 1 AS x FROM mint.servers WHERE instance_id = %s"
-                 " AND server_id = %s FOR UPDATE", (ctx.instance_id, server_id))
         row = fetchone(
             ctx.conn,
             "SELECT * FROM mint.intakes WHERE instance_id = %s AND server_id = %s"

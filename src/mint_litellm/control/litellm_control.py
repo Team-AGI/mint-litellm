@@ -9,11 +9,10 @@
 """
 
 import json
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeout
 from typing import Any
 
 from mint_litellm.control.errors import ControlError
@@ -39,6 +38,26 @@ class ResponseTooLarge(LiteLLMError):
 
 class ResponseTooSlow(ResponseTooLarge):
     """정의 수집이 기한(초)을 넘었다. 상한 초과의 한 종류라 시험 불가와 구분한다."""
+
+
+def _read_within(response: Any, limit: int | None, end: float) -> bytes:
+    """응답 본문을 ``end``(monotonic) 안에 읽는다. 조금씩 흘러오는 응답도 기한에 묶는다.
+
+    수신 한 번의 제한 시간을 남은 시간으로 줄여 가며 읽어, 넘으면 소켓 시간 초과로 끝난다.
+    """
+    raw = b""
+    sock = getattr(getattr(response.fp, "raw", None), "_sock", None)
+    while (limit is None or len(raw) < limit) and not response.isclosed():
+        left = end - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("deadline")
+        if sock is not None:
+            sock.settimeout(left)
+        chunk = response.read1(65536 if limit is None else min(65536, limit - len(raw)))
+        if not chunk:
+            break
+        raw += chunk
+    return raw
 
 
 class LiteLLMControl(LiteLLMSync):
@@ -85,7 +104,9 @@ class LiteLLMControl(LiteLLMSync):
         try:
             with urllib.request.urlopen(request, timeout=seconds or self._timeout) as response:
                 limit = None if max_bytes is None else max_bytes + 1
-                status, raw = response.status, response.read(limit)
+                status = response.status
+                raw = response.read(limit) if seconds is None else _read_within(
+                    response, limit, time.monotonic() + seconds)
         except urllib.error.HTTPError as error:
             status, raw = error.code, error.read()
         except (urllib.error.URLError, TimeoutError, OSError) as error:
@@ -117,15 +138,7 @@ class LiteLLMControl(LiteLLMSync):
         self, spec: dict, max_bytes: int = MAX_TOOLS_BYTES, seconds: float = TOOLS_SECONDS
     ) -> dict:
         """``{tools: [...]}`` 또는 ``{status: "error", message}``. ``seconds`` 안에 끝난다."""
-        pool = ThreadPoolExecutor(max_workers=1)
-        try:
-            return pool.submit(
-                self._post, "/mcp-rest/test/tools/list", spec, max_bytes, seconds
-            ).result(seconds)
-        except FutureTimeout:
-            raise ResponseTooSlow(f"LiteLLM 정의 수집이 {seconds}초를 넘었습니다.") from None
-        finally:
-            pool.shutdown(wait=False)  # 늦은 응답 스레드는 소켓 제한 시간에 끝난다
+        return self._post("/mcp-rest/test/tools/list", spec, max_bytes, seconds)
 
     # --- 쓰기 결과 해석 ------------------------------------------------------------
 

@@ -464,6 +464,23 @@ def test_a_received_submission_left_by_an_interrupted_poll_is_rejected_on_the_ne
     assert world.stub.writes() == [("PUT", "/v1/mcp/server/sub-1/reject")]
 
 
+def wait_for_lock_waiter(world, seconds=15.0):
+    """다른 연결이 잠금을 기다리는 상태가 될 때까지 본다(기다리는 연결이 없으면 시험 실패)."""
+    import time
+
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        waiting = fetchone(
+            world.conn,
+            "SELECT count(*) AS n FROM pg_stat_activity WHERE wait_event_type = 'Lock'"
+            " AND datname = current_database()",
+        )["n"]
+        if waiting:
+            return
+        time.sleep(0.05)
+    raise AssertionError("잠금을 기다리는 연결이 없다")
+
+
 def test_the_address_check_uses_the_candidate_current_when_the_locks_are_taken(world):
     import threading
 
@@ -472,16 +489,16 @@ def test_the_address_check_uses_the_candidate_current_when_the_locks_are_taken(w
     world.call(lambda ctx: svc.receive_submission(ctx, item))
     intake_id = str(fetchone(world.conn, "SELECT id FROM mint.intakes")["id"])
     with psycopg.connect(world.url) as other:
-        # 운영자 쪽이 신청 행을 잠그고 주소 후보를 허용된 주소로 바꾸는 동안 조회가 겹친다
+        # 운영자 쪽이 신청 행을 먼저 잠근 채(첫 잠금) 주소 후보를 허용된 주소로 바꾼다
         fetchone(other, "SELECT 1 AS x FROM mint.intakes WHERE id = %s FOR UPDATE", (intake_id,))
         thread = threading.Thread(target=poll, args=(world,))
         thread.start()
-        thread.join(1.0)
-        assert thread.is_alive()  # 신청 잠금을 기다린다
+        wait_for_lock_waiter(world)  # 조회도 같은 신청 행을 첫 잠금으로 기다리는 중이다
         svc._deployment_candidate(make_ctx(other), "sub-1", URL, "http", "none", None, None,
                                   None, None)
         other.commit()
         thread.join(30)
+        assert not thread.is_alive()
     assert world.intake(intake_id)["status"] == "received"
     assert world.stub.writes() == []
 

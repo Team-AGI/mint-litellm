@@ -957,3 +957,57 @@ def test_buffered_events_reach_the_database_from_the_judgement_loop_without_call
     asyncio.run(scenario())
     assert [e.source_key for e in store.of_kind("decision_evaluated")] == [event.source_key]
     assert not runtime.recorder._buffer.has_pending()
+
+
+def test_a_buffer_replay_failure_does_not_end_the_judgement_loop(tmp_path):
+    from dataclasses import replace as replace_config
+
+    runtime, _, _, _ = make_runtime(tmp_path)
+    runtime.config = replace_config(runtime.config, restore_interval_seconds=0.05)
+    refreshed = []
+
+    class Watch:
+        evaluated = True
+        blocked_cause = None
+
+        async def refresh(self):
+            refreshed.append(1)
+
+    runtime.restore_watch = Watch()
+    calls = []
+
+    async def broken():
+        calls.append(1)
+        raise OSError("buffer unreadable")
+
+    runtime.recorder.replay_pending = broken
+
+    async def scenario():
+        task = asyncio.ensure_future(runtime._judge_loop())
+        await asyncio.sleep(0.4)
+        assert not task.done()  # 예외가 루프를 끝내지 않는다
+        task.cancel()
+
+    asyncio.run(scenario())
+    assert len(calls) >= 2 and len(refreshed) >= 2  # 재적재가 실패해도 판정 갱신은 계속된다
+
+
+def test_the_buffer_check_runs_off_the_event_loop_thread(tmp_path):
+    import threading
+
+    runtime, _, _, _ = make_runtime(tmp_path)
+    seen = []
+    real = runtime.recorder._buffer.has_pending
+
+    def has_pending():
+        seen.append(threading.get_ident())
+        return real()
+
+    runtime.recorder._buffer.has_pending = has_pending
+
+    async def scenario():
+        await runtime.recorder.replay_pending()
+        return threading.get_ident()
+
+    loop_thread = asyncio.run(scenario())
+    assert seen and loop_thread not in seen
