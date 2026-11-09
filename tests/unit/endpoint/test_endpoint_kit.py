@@ -197,7 +197,8 @@ def test_user_level_install_merges_settings_and_removal_restores_them(tmp_path, 
     settings_path = kit.home / ".claude/settings.json"
     settings_path.parent.mkdir(parents=True)
     original = {"model": "sonnet", "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": []}]}}
-    settings_path.write_text(json.dumps(original), encoding="utf-8")
+    text = json.dumps(original, indent=1)
+    settings_path.write_text(text, encoding="utf-8")
     state = kit.install()
     merged = json.loads(settings_path.read_text(encoding="utf-8"))
     assert merged["model"] == "sonnet" and "allowManagedHooksOnly" not in merged
@@ -208,7 +209,7 @@ def test_user_level_install_merges_settings_and_removal_restores_them(tmp_path, 
     kit.install()  # 다시 설치해도 우리 항목은 하나
     assert len(json.loads(settings_path.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]) == 2
     kit.uninstall()
-    assert json.loads(settings_path.read_text(encoding="utf-8")) == original
+    assert settings_path.read_text(encoding="utf-8") == text
     assert any(c[1:3] == ["mcp", "remove"] for c in fake_claude)
     assert not (kit.home / ".local/lib/mint-endpoint").exists()
 

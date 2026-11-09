@@ -28,6 +28,7 @@ MANAGED_DIR = "/etc/claude-code"
 PROGRAMS = "/usr/local/lib/mint-endpoint"
 HOOK_ARGS_KEY = "--key-file"
 KEY_REL = ".config/mint/key"
+NL = chr(10)
 REPORT_TIMEOUT = 5
 
 
@@ -133,6 +134,8 @@ class Kit:
             "backups": dict(previous.get("backups", {})),
             "mcp_servers": [],
         }
+        if "settings_backup" in previous:
+            state["settings_backup"] = previous["settings_backup"]
         hook = (self.folder / "hook.py").read_bytes()
         hook_path = f"{self.logical_programs}/hook.py"
         self.write_tracked(state, self.programs / "hook.py", hook_path, hook, 0o755)
@@ -200,17 +203,17 @@ class Kit:
 
     def install_user(self, state: dict, servers: dict, matcher: dict) -> None:
         settings_path = self.home / ".claude/settings.json"
-        settings = (
-            json.loads(settings_path.read_text(encoding="utf-8")) if settings_path.exists() else {}
-        )
+        original = settings_path.read_text(encoding="utf-8") if settings_path.exists() else None
+        mode = (settings_path.stat().st_mode & 0o777) if original is not None else 0o600
+        settings = json.loads(original) if original is not None else {}
         hooks = settings.setdefault("hooks", {}).setdefault("PreToolUse", [])
         hooks[:] = [item for item in hooks if not ours(item)] + [matcher]
-        if "settings_backup" not in state:
-            state["settings_backup"] = (
-                settings_path.read_text(encoding="utf-8") if settings_path.exists() else None
-            )
-        write_atomic(settings_path, json.dumps(settings, indent=2).encode(), 0o600)
-        claude = shutil.which("claude")
+        # 처음 설치 때의 원문을 보관해 제거 때 글자까지 되돌린다(다시 설치해도 덮어쓰지 않는다).
+        state.setdefault("settings_backup", original)
+        text = json.dumps(settings, indent=2) + NL
+        write_atomic(settings_path, text.encode(), mode)
+        state["settings_sha"] = sha256_bytes(text.encode())
+        claude = find_claude(self.home)
         for name, definition in servers.items():
             if claude is None:
                 print("claude 실행 파일이 없어 MCP 서버 등록을 건너뜁니다:", name, file=sys.stderr)
@@ -260,18 +263,22 @@ class Kit:
     def uninstall_user(self, state: dict) -> None:
         settings_path = self.home / ".claude/settings.json"
         if settings_path.exists():
-            settings = json.loads(settings_path.read_text(encoding="utf-8"))
-            hooks = settings.get("hooks", {}).get("PreToolUse", [])
-            hooks[:] = [item for item in hooks if not ours(item)]
-            if not hooks:
-                settings["hooks"].pop("PreToolUse", None)
-            if not settings.get("hooks"):
-                settings.pop("hooks", None)
-            if settings or state.get("settings_backup") is not None:
-                write_atomic(settings_path, json.dumps(settings, indent=2).encode(), 0o600)
+            current = settings_path.read_text(encoding="utf-8")
+            backup = state.get("settings_backup")
+            if sha256_bytes(current.encode()) == state.get("settings_sha"):
+                # 설치 뒤 바뀌지 않았으면 처음 원문으로 되돌린다(원래 없었으면 지운다).
+                if backup is None:
+                    settings_path.unlink()
+                else:
+                    write_atomic(
+                        settings_path, backup.encode(), settings_path.stat().st_mode & 0o777
+                    )
             else:
-                settings_path.unlink()
-        claude = shutil.which("claude")
+                settings = json.loads(current)
+                hooks = settings.get("hooks", {}).get("PreToolUse", [])
+                hooks[:] = [item for item in hooks if not ours(item)]
+                write_atomic(settings_path, (json.dumps(settings, indent=2) + NL).encode(), 0o600)
+        claude = find_claude(self.home)
         for name in state.get("mcp_servers", []):
             if claude is not None:
                 subprocess.run([claude, "mcp", "remove", "-s", "user", name], capture_output=True)
@@ -284,7 +291,7 @@ class Kit:
             "managed": state.get("mode") == "managed" and action == "installed",
             "files": {k: v for k, v in state.get("files", {}).items() if not k.endswith(KEY_REL)},
             "mcp_servers": state.get("mcp_servers", []),
-            "claude_version": claude_version(),
+            "claude_version": claude_version(self.home),
         }
         url = self.config["decide_url"].rstrip("/") + "/mint/v1/endpoint/report"
         ca = f"{self.logical_programs}/ca.pem" if self.config.get("ca_pem") else None
@@ -305,8 +312,15 @@ def ours(item: object) -> bool:
     )
 
 
-def claude_version() -> str | None:
-    claude = shutil.which("claude")
+def find_claude(home: Path) -> str | None:
+    """PATH에 없어도 공식 설치 위치(홈의 .local/bin)를 본다. 비대화형 접속은 PATH가 짧다."""
+    found = shutil.which("claude")
+    fallback = home / ".local/bin/claude"
+    return found or (str(fallback) if fallback.is_file() else None)
+
+
+def claude_version(home: Path) -> str | None:
+    claude = find_claude(home)
     if claude is None:
         return None
     try:
