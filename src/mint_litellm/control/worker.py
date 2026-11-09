@@ -146,7 +146,7 @@ class Worker:
         assert self.conn is not None
         self.verdict = self._judge()
         jobs.register_due_schedules(self.conn, self.instance_id)
-        jobs.reclaim_expired(self.conn, self.instance_id)
+        jobs.reclaim_expired(self.conn, self.instance_id, self.settings)
         if self.settings.webhook_urls:
             alerts.enqueue_deliveries(self.conn, self.instance_id, self.settings.webhook_urls)
         job = jobs.lease(
@@ -292,7 +292,7 @@ class Worker:
         elif outcome[0] == "permanent":
             jobs.fail_permanently(conn, job_id, self.owner, outcome[1])
         else:
-            jobs.fail(conn, job_id, self.owner, outcome[1])
+            jobs.fail(conn, job_id, self.owner, outcome[1], self.settings)
 
 
 def install_signals(worker: Worker) -> Callable[[], None]:
