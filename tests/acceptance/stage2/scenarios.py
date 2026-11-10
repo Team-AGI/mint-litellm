@@ -1618,7 +1618,8 @@ class RowLock:
         """
         self.proc.stdin.write(
             "DO $$ DECLARE t timestamptz := clock_timestamp() + "
-            f"make_interval(secs => {int(seconds)}); BEGIN LOOP EXIT WHEN EXISTS (SELECT 1 FROM "
+            f"make_interval(secs => {int(seconds)}); BEGIN LOOP PERFORM pg_stat_clear_snapshot(); "
+            "EXIT WHEN EXISTS (SELECT 1 FROM "
             "pg_stat_activity WHERE pid <> pg_backend_pid() AND wait_event_type = 'Lock' AND "
             "query ILIKE '%self_confirmations%'); IF clock_timestamp() > t THEN "
             "RAISE EXCEPTION 'no contention'; END IF; PERFORM pg_sleep(0.005); END LOOP; "
