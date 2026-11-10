@@ -1940,6 +1940,7 @@ def auth_screens_13(ctx):
     observe(ctx, screen_count=len(reachable), reachable=reachable,
             screenshots=audit["screenshots"], reviewer=os.environ["ACC_UI_REVIEWER"],
             explanatory_paragraphs=audit["explanatory_paragraphs"],
+            allowed_consent_text=audit.get("allowed_consent_text", 0),  # DS-207 2: 허용: 동의 문언
             english_enums=audit["english_enums"], contrast_min=audit["contrast_min"],
             keyboard_failures=audit["keyboard_failures"])
 
