@@ -138,3 +138,27 @@ test_context_without_markers_is_empty if {
 	context := data.mint.context with data.mint.meta as meta with data.mint.data as {}
 	context.secret_markers == []
 }
+
+with_grade(value, grade) := object.union(value, {"tool": {"name": "read", "risk_grade": grade}})
+
+test_r2_from_contract_grade_without_any_approval_condition if {
+	every grade in {"high", "critical"} {
+		d := evaluate(with_grade(managed, grade))
+		d.decision == "RequireApproval"
+		d.policy_ids == ["R2"]
+		{"type": "require_call_approval"} in d.obligations
+	}
+}
+
+test_contract_grade_below_high_does_not_apply_r2 if {
+	every grade in {"low", "medium"} {
+		d := evaluate(with_grade(managed, grade))
+		d.decision == "Allow"
+		d.missing_inputs == []
+	}
+}
+
+test_managed_server_without_a_valid_contract_grade_is_an_input_error if {
+	evaluate(managed).missing_inputs == ["tool.risk_grade"]
+	evaluate(with_grade(managed, "urgent")).missing_inputs == ["tool.risk_grade"]
+}
