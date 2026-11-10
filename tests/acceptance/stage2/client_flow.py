@@ -36,6 +36,7 @@ def probe(rig, fixture, phase):
         record = output["record"]
         raw = base64.b64decode(output["transcript_base64"], validate=True)
         assert hashlib.sha256(raw).hexdigest() == record["transcript"]["sha256"]
+        rig.root.mkdir(parents=True, exist_ok=True)
         target = rig.root / ("client-" + device + ".log")
         target.write_bytes(raw)
         record["transcript"]["path"] = str(target)
