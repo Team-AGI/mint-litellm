@@ -143,8 +143,8 @@ def claude_call(tool_args: str = '{"text":"hello"}') -> dict:
     return j(text)
 
 
-def reapprove() -> str:
-    """철회한 뒤 같은 사용자·도구의 승인을 다시 만든다."""
+def reapprove(scope_id: str | None = None) -> str:
+    """철회한 뒤 같은 사용자·도구의 승인을 다시 만든다(scope_id를 주면 그 키의 승인)."""
     s = secrets()
     out = cli(
         "approve",
@@ -153,7 +153,7 @@ def reapprove() -> str:
         "--scope",
         "key",
         "--scope-id",
-        s.get("USER1_KEY_ID", ""),
+        scope_id or s.get("USER1_KEY_ID", ""),
         "--tools",
         "echo,slow",
         "--valid-until",
@@ -167,7 +167,9 @@ def reapprove() -> str:
         token="APPROVER_TOKEN",
     )
     new = out.get("approval_id") or out.get("id") or ""
-    s["APPROVAL"] = new
+    if scope_id is None:
+        s["APPROVAL"] = new
+        device(f"umask 077; cat > {STATE}/ep.json", stdin=json.dumps(s))  # 다음 실행이 철회된 id를 쓰지 않게
     return new
 
 
@@ -304,11 +306,21 @@ def step_failures():
         )
 
 
+NONCE = str(int(time.time()))  # 이전 실행이 남긴 미소비 승인과 섞이지 않게
+
+
+def targs(text: str) -> str:
+    return "--tool slow --args '" + json.dumps({"text": text}) + "'"
+
+
+OWNER_ARGS = targs("owner-only" + NONCE)
+
+
 def step_identity():
     """다른 사용자·조직·인자 거부, 호출별 승인 1회 소비, 병렬 소비 1건 이하, 소비 직후 응답 유실."""
-    ident = grant_call({"text": "approved"})
-    first = client(pj1, "decide", '--tool slow --args \'{"text": "approved"}\'')
-    again = client(pj1, "decide", '--tool slow --args \'{"text": "approved"}\'')
+    ident = grant_call({"text": "approved" + NONCE})
+    first = client(pj1, "decide", targs("approved" + NONCE))
+    again = client(pj1, "decide", targs("approved" + NONCE))
     record(
         "identity-call-approval-consumed-once",
         first.get("verdict") == "allow" and again.get("verdict") == "deny",
@@ -316,25 +328,34 @@ def step_identity():
         second=again.get("verdict"),
         approval=bool(ident),
     )
-    grant_call({"text": "approved"})
-    changed = client(pj1, "decide", '--tool slow --args \'{"text": "changed"}\'')
+    grant_call({"text": "owner-only" + NONCE})
+    other_user = client(pj1, "decide", OWNER_ARGS, key="USER2_KEY")
+    owner_after = client(pj1, "decide", OWNER_ARGS)
+    record(
+        "identity-other-user-cannot-consume",
+        other_user.get("verdict") == "deny" and owner_after.get("verdict") == "allow",
+        other_user=other_user.get("verdict"),
+        owner_after=owner_after.get("verdict"),
+    )
+    grant_call({"text": "approved" + NONCE})
+    changed = client(pj1, "decide", targs("changed" + NONCE))
     record(
         "identity-changed-arguments",
         changed.get("verdict") == "deny",
         verdict=changed.get("verdict"),
     )
-    grant_call({"text": "race"})
-    race = client(pj1, "race", '--tool slow --args \'{"text": "race"}\' --n 8')
+    grant_call({"text": "race" + NONCE})
+    race = client(pj1, "race", targs("race" + NONCE) + " --n 8")
     record(
         "identity-parallel-consume",
         race.get("allowed", 99) <= 1,
         allowed=race.get("allowed"),
         verdicts=race.get("verdicts"),
     )
-    grant_call({"text": "lost"})
-    client(pj1, "lost-response", '--tool slow --args \'{"text": "lost"}\'')
+    grant_call({"text": "lost" + NONCE})
+    client(pj1, "lost-response", targs("lost" + NONCE))
     pause(1)
-    after = client(pj1, "decide", '--tool slow --args \'{"text": "lost"}\'')
+    after = client(pj1, "decide", targs("lost" + NONCE))
     events = cli("ledger", "list", "--kind", "decision_evaluated", "--limit", "20")
     record(
         "identity-response-lost-after-consume",
@@ -359,21 +380,23 @@ def step_revoke():
     key_made = j(
         device(
             f'curl -s -X POST {LOCAL}/key/generate -H "Authorization: Bearer {s.get("MASTER", "")}" -H "Content-Type: application/json" '
-            '-d \'{"user_id":"ep-user1","allowed_routes":["/mint/v1"],"object_permission":{"mcp_servers":["srv_local_cnt"]}}\''
+            "-d '{\"user_id\":\"ep-user1\",\"allowed_routes\":[\"/mint/v1\"],\"object_permission\":{\"mcp_servers\":[\"srv_local_cnt\"]}}'"
         )
     )
     SECRETS["TEMP_KEY"] = key_made.get("key", "")
-    first = client(pj1, "decide", key="TEMP_KEY")
-    device(
-        f'curl -s -X POST {LOCAL}/key/delete -H "Authorization: Bearer {s.get("MASTER", "")}" -H "Content-Type: application/json" '
-        f'-d \'{{"keys":["{SECRETS["TEMP_KEY"]}"]}}\''
+    import hashlib
+
+    reapprove(hashlib.sha256(SECRETS["TEMP_KEY"].encode()).hexdigest())
+    delete = (
+        f'curl -s -X POST {LOCAL}/key/delete -H "Authorization: Bearer {s.get("MASTER", "")}" '
+        '-H "Content-Type: application/json" -d \'' + json.dumps({"keys": [SECRETS["TEMP_KEY"]]}) + "'"
     )
-    second = client(pj1, "decide", key="TEMP_KEY")
+    result = client(device, "revoke-latency", f"--cmd {shlex.quote(delete)}", key="TEMP_KEY")
+    delay = result.get("seconds_to_deny")
     record(
         "revoke-key-deleted",
-        first.get("verdict") == "allow" and second.get("status") in (401, 403),
-        before=first.get("verdict"),
-        after=second.get("status"),
+        result.get("before") == "allow" and delay is not None and delay <= 2.0,
+        **result,
     )
 
 

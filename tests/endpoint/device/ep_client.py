@@ -145,6 +145,16 @@ def cmd_revoke_latency(args):
     return {"before": before, "revoke_rc": done.returncode, "seconds_to_deny": None, "polls": polls}
 
 
+def cmd_decide_latency(args):
+    """결정 경로 왕복 시간만 잰다(훅 프로세스 기동 제외). 재사용 연결 없이 매번 새 연결."""
+    body = body_for(args)
+    post(args.base, args.key, body)  # 준비 호출
+    with concurrent.futures.ThreadPoolExecutor(args.par) as pool:
+        results = list(pool.map(lambda _: post(args.base, args.key, body), range(args.n)))
+    verdicts = [verdict(r) for r in results]
+    return {**percentiles([r["ms"] for r in results]), "par": args.par, "allowed": verdicts.count("allow")}
+
+
 def run_hook(args, event):
     started = time.perf_counter()
     done = subprocess.run(
@@ -218,6 +228,9 @@ def parser():
     rev.add_argument("--cmd", required=True)
     rev.add_argument("--limit", type=float, default=10.0)
     rev.add_argument("--interval", type=float, default=0.1)
+    dec = add("decide-latency", cmd_decide_latency)
+    dec.add_argument("--n", type=int, default=100)
+    dec.add_argument("--par", type=int, default=1)
     lat = add("hook-latency", cmd_hook_latency)
     lat.add_argument("--n", type=int, default=100)
     lat.add_argument("--par", type=int, default=1)
