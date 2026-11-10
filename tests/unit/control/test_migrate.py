@@ -18,7 +18,7 @@ def test_applies_once_and_is_a_no_op_the_second_time(fresh_db):
             "009_contract_reapproval_plans", "010_staff_owner",
             "011_reapproval_plan_cancelled", "012_staff_records", "013_stage2_hardening",
             "014_operator_negative", "015_deployment_proposer",
-            "016_intake_address_reject",
+            "016_intake_address_reject", "017_approval_contract_binding",
         ]
 
 
@@ -38,7 +38,7 @@ def test_first_run_on_an_empty_database_applies_everything(fresh_db):
                 "009_contract_reapproval_plans", "010_staff_owner",
                 "011_reapproval_plan_cancelled", "012_staff_records", "013_stage2_hardening",
                 "014_operator_negative", "015_deployment_proposer",
-            "016_intake_address_reject",
+            "016_intake_address_reject", "017_approval_contract_binding",
             ]
             assert conn.execute("SELECT count(*) FROM mint.orgs").fetchone()[0] == 0
     finally:
@@ -91,7 +91,7 @@ def test_a_database_with_only_the_first_migration_is_upgraded(fresh_db):
                 "009_contract_reapproval_plans", "010_staff_owner",
                 "011_reapproval_plan_cancelled", "012_staff_records", "013_stage2_hardening",
                 "014_operator_negative", "015_deployment_proposer",
-            "016_intake_address_reject",
+            "016_intake_address_reject", "017_approval_contract_binding",
             ]
             assert conn.execute("SELECT count(*) FROM mint.intakes").fetchone()[0] == 0
             row = conn.execute(
@@ -103,6 +103,67 @@ def test_a_database_with_only_the_first_migration_is_upgraded(fresh_db):
             roles = {r[0] for r in conn.execute("SELECT rolname FROM pg_roles")}
             assert {"mint_control", "mint_staff", "mint_worker", "mint_sealer"} <= roles
             assert migrate.apply_migrations(conn) == []
+    finally:
+        with psycopg.connect(make_conninfo(**admin), autocommit=True) as conn:
+            conn.execute(f'DROP DATABASE "{name}" WITH (FORCE)')
+
+
+def test_open_approvals_without_a_contract_are_closed_on_managed_servers_only(fresh_db):
+    import hashlib
+
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    params = conninfo_to_dict(fresh_db)
+    admin = dict(params, dbname="postgres")
+    name = params["dbname"] + "_d"
+    with psycopg.connect(make_conninfo(**admin), autocommit=True) as conn:
+        conn.execute(f'CREATE DATABASE "{name}"')
+    try:
+        with psycopg.connect(make_conninfo(**dict(params, dbname=name))) as conn:
+            files = migrate._migration_files()
+            conn.execute("CREATE SCHEMA IF NOT EXISTS mint")
+            conn.execute(
+                "CREATE TABLE mint.schema_migrations (name text PRIMARY KEY, sha256 text NOT NULL,"
+                " applied_at timestamptz NOT NULL DEFAULT now())"
+            )
+            for file_name, sql in files[:-1]:
+                conn.execute(sql.encode("utf-8"))
+                conn.execute(
+                    "INSERT INTO mint.schema_migrations (name, sha256) VALUES (%s, %s)",
+                    (file_name, hashlib.sha256(sql.encode("utf-8")).hexdigest()),
+                )
+            assert files[-1][0] == "017_approval_contract_binding"
+            conn.execute("INSERT INTO mint.orgs (instance_id, org_id, name) VALUES ('i', 'o', 'o')")
+            conn.execute(
+                "INSERT INTO mint.policy_versions (instance_id, id, catalog_sha256, bundle_sha256)"
+                " VALUES ('i', 'pv', repeat('a', 64), repeat('b', 64))"
+            )
+            for server, status in (("managed", "managed"), ("plain", "none")):
+                conn.execute(
+                    "INSERT INTO mint.servers (id, instance_id, server_id, status, url_sha256,"
+                    " transport, auth_type, registered_by, contract_status, last_observed_at)"
+                    " VALUES (gen_random_uuid(), 'i', %s, 'awaiting_approval', repeat('a', 64),"
+                    " 'http', 'none', 'alice', %s, now())", (server, status))
+            for server in ("managed", "plain"):
+                for approved in (False, True):
+                    call_id = conn.execute(
+                        "INSERT INTO mint.call_approvals (id, instance_id, org_id, principal_type,"
+                        " principal_id, server_id, tool, args_fp, fp_key_version,"
+                        " policy_version_id, status, requested_by, expires_at) VALUES"
+                        " (gen_random_uuid(), 'i', 'o', 'user', 'u', %s, 't', repeat('c', 64), 1,"
+                        " 'pv', 'pending', 'r', now() + interval '1 hour') RETURNING id",
+                        (server,)).fetchone()[0]
+                    if approved:
+                        conn.execute(
+                            "UPDATE mint.call_approvals SET status = 'approved',"
+                            " approved_by = 'a' WHERE id = %s", (call_id,))
+            assert migrate.apply_migrations(conn) == ["017_approval_contract_binding"]
+            rows = conn.execute(
+                "SELECT server_id, status, count(*) FROM mint.call_approvals"
+                " GROUP BY server_id, status ORDER BY 1, 2"
+            ).fetchall()
+            assert rows == [("managed", "expired", 2), ("plain", "approved", 1),
+                            ("plain", "pending", 1)]
     finally:
         with psycopg.connect(make_conninfo(**admin), autocommit=True) as conn:
             conn.execute(f'DROP DATABASE "{name}" WITH (FORCE)')

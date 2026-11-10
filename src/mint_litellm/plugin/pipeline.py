@@ -38,6 +38,7 @@ from mint_litellm.plugin.snapshot import (
     CallApprovalRow,
     Snapshot,
     SnapshotQuery,
+    ToolContractRow,
 )
 from mint_litellm.types.canonical import credential_scope
 from mint_litellm.types.decision import (
@@ -323,20 +324,37 @@ def control_listing_negative(
     return None
 
 
+def current_contract(snapshot: Snapshot, tool: str) -> ToolContractRow | None:
+    """계약 관리 서버에서 이 도구의 지금 승인된 계약(서버의 자격 범위 기준). 아니면 None."""
+    server = snapshot.server
+    if server is None or server.contract_status != "managed":
+        return None
+    scope = credential_scope(server.auth_type)
+    return next(
+        (c for c in snapshot.tool_contracts if c.credential_scope == scope and c.tool == tool), None
+    )
+
+
+def bound_to_current_contract(snapshot: Snapshot, tool: str, bound: str | None) -> bool:
+    """승인이 받은 때의 계약이 지금 승인된 계약인가. 계약 관리 서버가 아니면 묶인 계약이 없다."""
+    server = snapshot.server
+    if server is None or server.contract_status != "managed":
+        return bound is None
+    contract = current_contract(snapshot, tool)
+    return contract is not None and bound == contract.id
+
+
 def contract_result(
     snapshot: Snapshot, tool: str, observe_seconds: int
 ) -> StageResult | SkippedStage:
     server = snapshot.server
     if server is None or server.contract_status != "managed":
         return UNSUPPORTED_STAGE
-    scope = credential_scope(server.auth_type)
     if server.pin_blocked:
         return StageResult.finding(Reason.CONTRACT_DRIFT, "pin")
     if server.approved_contracts == 0:
         return StageResult.finding(Reason.CONTRACT_DRIFT, "no_contract")
-    contract = next(
-        (c for c in snapshot.tool_contracts if c.credential_scope == scope and c.tool == tool), None
-    )
+    contract = current_contract(snapshot, tool)
     if contract is None:
         return StageResult.finding(Reason.CONTRACT_DRIFT, "unapproved_tool")
     if contract.drift == "input_schema":
@@ -453,6 +471,11 @@ def build_policy_input(
     managed = server is not None and server.contract_status == "managed"
     if managed:
         server_doc["contract_status"] = "managed"
+    # 승인된 계약의 위험 등급. 승인이 어떤 경로로 만들어졌든 정책이 같은 등급을 본다.
+    tool_doc: dict[str, Any] = {"name": tool}
+    contract = current_contract(snapshot, tool)
+    if contract is not None:
+        tool_doc["risk_grade"] = contract.risk_grade
 
     if selected is None:
         approval: dict[str, Any] = {"present": False}
@@ -478,7 +501,7 @@ def build_policy_input(
     return make_policy_input(
         principal=principal,
         server=server_doc,
-        tool={"name": tool},
+        tool=tool_doc,
         argument_keys=sorted(str(k) for k in arguments),
         argument_sizes=_argument_sizes(arguments),
         approval=approval,
@@ -617,6 +640,7 @@ def match_call_approval(
             and row.args_fp == fingerprint
             and row.fp_key_version == config.fingerprint_key_version
             and row.contract_version is None
+            and bound_to_current_contract(snapshot, tool, row.contract_id)
             and row.expires_at > snapshot.now
         )
 
@@ -637,6 +661,7 @@ def match_call_approval(
             args_fp=row.args_fp,
             policy_version_id=row.policy_version_id,
             state_version=row.state_version,
+            contract_id=row.contract_id,
         )
     if candidates:
         return StageResult.stop(Reason.CALL_APPROVAL_STALE), None
@@ -700,6 +725,7 @@ def match_confirmation(
         and c.confirmed_by_user_id == principal.principal_id
         and c.server_id == resolved.server_id and c.tool == tool
         and c.args_fp == fingerprint and c.fp_key_version == config.fingerprint_key_version
+        and bound_to_current_contract(snapshot, tool, c.contract_id)
         and c.expires_at > snapshot.now
         and (snapshot.settings is not None and (
             not snapshot.settings.require_separate_confirm_key
@@ -717,6 +743,7 @@ def match_confirmation(
             principal_id=c.principal_id, server_id=c.server_id, tool=c.tool, args_fp=c.args_fp,
             policy_version_id=c.policy_version_id, state_version=c.state_version,
             confirmation=ConfirmationConsume(c.id, c.org_id, c.fp_key_version, c.state_version),
+            contract_id=c.contract_id,
         )
     reason = Reason.CONFIRMATION_STALE if candidates else Reason.CONFIRMATION_REQUIRED
     return StageResult.stop(reason), None
@@ -1048,6 +1075,7 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         obligation = next(
             o for o in run.policy.obligations if isinstance(o, RequireUserConfirmation)
         )
+        contract = current_contract(snapshot, tool)
         assert snapshot.policy_version is not None
         try:
             async with asyncio.timeout(run.deadline.remaining()):
@@ -1060,6 +1088,7 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
                     "policy_version_id": snapshot.policy_version.id,
                     "purpose": obligation.purpose, "key_token": run.principal.key_id,
                     "display": confirmation_display(hook.arguments, obligation.display_fields),
+                    "contract_id": contract.id if contract is not None else None,
                 })
         except Exception as exc:
             # 확인을 만들지 못해도 이미 stop이며, 표시 값은 다른 저장소로 보내지 않는다.

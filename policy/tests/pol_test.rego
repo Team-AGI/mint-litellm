@@ -7,7 +7,10 @@ patterns(overrides) := object.union(
 	overrides,
 )
 
-managed := object.union(sample, {"server": object.union(sample.server, {"contract_status": "managed"})})
+managed := object.union(sample, {
+	"server": object.union(sample.server, {"contract_status": "managed"}),
+	"tool": {"name": "read", "risk_grade": "low"},
+})
 
 with_patterns(overrides) := object.union(managed, {"arguments": {"keys": [], "sizes": {}, "patterns": patterns(overrides)}})
 
@@ -158,7 +161,16 @@ test_contract_grade_below_high_does_not_apply_r2 if {
 	}
 }
 
-test_managed_server_without_a_valid_contract_grade_is_an_input_error if {
-	evaluate(managed).missing_inputs == ["tool.risk_grade"]
+test_a_contract_without_a_valid_grade_is_an_input_error if {
+	evaluate(with_grade(managed, null)).missing_inputs == ["tool.risk_grade"]
 	evaluate(with_grade(managed, "urgent")).missing_inputs == ["tool.risk_grade"]
+}
+
+test_a_tool_without_a_contract_has_no_grade_to_check if {
+	evaluate(replace(managed, {"tool": {"name": "read"}})).missing_inputs == []
+}
+
+test_the_grade_adds_to_approval_conditions_and_never_removes_them if {
+	value := with_conditions(with_grade(managed, "low"), {"high_risk_tools": ["read"]})
+	evaluate(value).decision == "RequireApproval"
 }

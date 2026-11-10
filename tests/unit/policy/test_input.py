@@ -48,3 +48,11 @@ def test_input_rejects_naive_time_and_invalid_sizes():
         make_input(now=datetime(1970, 1, 1))
     with pytest.raises(ValueError):
         make_input(argument_sizes={"x": -1})
+
+
+def test_input_keeps_the_contract_grade_of_the_tool_and_the_engine_client_accepts_it():
+    from mint_litellm.plugin.policy.input import has_only_policy_fields
+
+    result = make_input(tool={"name": "read", "risk_grade": "high", "raw_arguments": "secret"})
+    assert result["tool"] == {"name": "read", "risk_grade": "high"}
+    assert has_only_policy_fields(result)

@@ -34,7 +34,7 @@ from mint_litellm.plugin.pipeline import (
     evaluate_request,
 )
 from mint_litellm.plugin.policy.input import has_only_policy_fields
-from mint_litellm.plugin.snapshot import RelationRow, SettingsRow
+from mint_litellm.plugin.snapshot import RelationRow, SettingsRow, ToolContractRow
 from mint_litellm.types.decision import (
     Action,
     OperationType,
@@ -851,6 +851,7 @@ class TestObligations:
             call_approval(org_id="org2"),
             call_approval(fp_key_version=2),
             call_approval(contract_version="v1"),
+            call_approval(contract_id="c1"),
             call_approval(expires_at=NOW),
         ],
         ids=[
@@ -862,6 +863,7 @@ class TestObligations:
             "org",
             "key-version",
             "contract",
+            "unmanaged-server-bound",
             "expired",
         ],
     )
@@ -869,6 +871,34 @@ class TestObligations:
         evaluate = evaluator("RequireApproval", policy_ids=("R2",))
         h = harness(tmp_path, snapshot(call_approvals=(row,)), evaluate=evaluate)
         assert code(decide(h)) == "MINT-CALL-APPROVAL-REQUIRED"
+
+    def managed_snapshot(self, bound, *, contract="c1", **override):
+        contracts = () if contract is None else (
+            ToolContractRow(contract, "server", "search", "none", 1, "high"),)
+        managed = server_row(contract_status="managed", approved_contracts=1, last_observed_at=NOW)
+        return snapshot(
+            server=managed, tool_contracts=contracts,
+            call_approvals=(call_approval(contract_id=bound),), **override,
+        )
+
+    def test_a_call_approval_bound_to_the_current_contract_is_consumed_with_it(self, tmp_path):
+        evaluate = evaluator("RequireApproval", policy_ids=("R2",))
+        h = harness(tmp_path, self.managed_snapshot("c1"), evaluate=evaluate)
+        assert decide(h).allowed
+        assert h.store.consumed[0].contract_id == "c1"
+
+    @pytest.mark.parametrize(
+        ("bound", "contract"), [("c0", "c1"), (None, "c1"), ("c1", None), (None, None)],
+        ids=["replaced", "unbound", "no-contract", "unbound-no-contract"],
+    )
+    def test_a_call_approval_not_bound_to_the_current_contract_does_not_match(
+        self, tmp_path, bound, contract
+    ):
+        evaluate = evaluator("RequireApproval", policy_ids=("R2",))
+        snap = self.managed_snapshot(bound, contract=contract)
+        h = harness(tmp_path, snap, evaluate=evaluate)
+        assert code(decide(h)) == "MINT-CALL-APPROVAL-REQUIRED"
+        assert h.store.consumed == []
 
     def test_a_call_approval_from_another_policy_version_is_stale(self, tmp_path):
         evaluate = evaluator("RequireApproval", policy_ids=("R2",))

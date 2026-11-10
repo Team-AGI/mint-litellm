@@ -14,6 +14,7 @@ from test_plugin_database import ARGS_FP, run
 
 from mint_litellm.control import approvals
 from mint_litellm.control.context import Context, Operator
+from mint_litellm.control.errors import ControlError
 from mint_litellm.plugin.buffer import ConsumptionLost
 from mint_litellm.plugin.pipeline import match_call_approval, match_confirmation
 from mint_litellm.plugin.snapshot import PluginDatabase
@@ -168,3 +169,143 @@ def test_a_self_confirmation_given_under_a_replaced_contract_does_not_match(worl
 
     failure, consume = run(go())
     assert failure is not None and consume is None
+
+
+def status_of(scene, table, row_id):
+    return scene.conn.execute(
+        f"SELECT status FROM mint.{table} WHERE id = %s", (row_id,)).fetchone()[0]
+
+
+def test_a_call_approval_is_bound_to_the_approved_contract_when_requested(world):
+    scene, _ = world
+    contract = make_managed(scene, "high")
+    call_id = granted_call_approval(scene)
+    assert scene.conn.execute(
+        "SELECT contract_id FROM mint.call_approvals WHERE id = %s", (call_id,)
+    ).fetchone()[0] == contract
+
+
+def test_a_call_approval_cannot_be_requested_for_a_tool_without_an_approved_contract(world):
+    scene, _ = world
+    make_managed(scene, "high")
+    requester = Context(scene.conn, scene.iid, Operator("boss", "admin", "boss"))
+    with pytest.raises(ControlError, match="승인된 계약이 없어"):
+        approvals.call_request(
+            requester, org_id="org1", principal_type="user", principal_id="u1",
+            server_id="srv-1", tool="other", args_fp=ARGS_FP, fp_key_version=1,
+            policy_version_id=None, expires_in_minutes=30, requested_by="boss")
+
+
+def test_a_call_approval_for_a_server_without_contracts_stays_unbound(world, tmp_path):
+    scene, dsn = world
+    call_id = granted_call_approval(scene)
+    assert scene.conn.execute(
+        "SELECT contract_id FROM mint.call_approvals WHERE id = %s", (call_id,)
+    ).fetchone()[0] is None
+
+    async def go():
+        live, (failure, consume) = await snapshot_and_match(
+            scene, dsn, tmp_path, match_call_approval)
+        try:
+            assert failure is None and consume.contract_id is None
+            await live.insert_event(scene.event(), consume)
+        finally:
+            await live.close()
+
+    run(go())
+    assert status_of(scene, "call_approvals", call_id) == "consumed"
+
+
+def test_a_bound_call_approval_is_consumed_while_its_contract_is_current(world, tmp_path):
+    scene, dsn = world
+    contract = make_managed(scene, "high")
+    call_id = granted_call_approval(scene)
+
+    async def go():
+        live, (failure, consume) = await snapshot_and_match(
+            scene, dsn, tmp_path, match_call_approval)
+        try:
+            assert failure is None and consume.contract_id == str(contract)
+            await live.insert_event(scene.event(), consume)
+        finally:
+            await live.close()
+
+    run(go())
+    assert status_of(scene, "call_approvals", call_id) == "consumed"
+
+
+def test_replacing_a_contract_expires_the_unused_approvals_bound_to_it(world, tmp_path):
+    scene, dsn = world
+    contract = make_managed(scene, "high")
+    pending = approvals.call_request(
+        Context(scene.conn, scene.iid, Operator("boss", "admin", "boss")),
+        org_id="org1", principal_type="user", principal_id="u1", server_id="srv-1",
+        tool="search", args_fp=ARGS_FP, fp_key_version=1, policy_version_id=None,
+        expires_in_minutes=30, requested_by="boss")
+    approved = granted_call_approval(scene)
+
+    async def first():
+        live, deps = base.replica(scene, dsn, tmp_path)
+        try:
+            await base.ask(scene, deps)
+        finally:
+            await live.close()
+
+    run(first())
+    base.decide_as_staff(scene)
+    (confirmation,) = scene.conn.execute(
+        "SELECT id FROM mint.self_confirmations WHERE instance_id = %s", (scene.iid,)
+    ).fetchone()
+    assert status_of(scene, "self_confirmations", confirmation) == "confirmed"
+    replace_contract(scene, contract, "high")
+    assert status_of(scene, "call_approvals", pending) == "expired"
+    assert status_of(scene, "call_approvals", approved) == "expired"
+    assert status_of(scene, "self_confirmations", confirmation) == "expired"
+
+
+def test_a_request_racing_a_replacement_ends_expired_without_a_deadlock(world):
+    """요청이 계약 행의 공유 잠금을 쥔 채 교체가 대기하고, 요청이 커밋되면 새 승인도 만료된다."""
+    import threading
+
+    import psycopg
+
+    scene, _ = world
+    contract = make_managed(scene, "high")
+    requesting = psycopg.connect(scene.url)
+    replaced = threading.Event()
+    failure: list[BaseException] = []
+
+    def replace_in_thread():
+        try:
+            with psycopg.connect(scene.url, autocommit=True) as other:
+                other.execute("SET lock_timeout = '20s'")
+                other.execute(
+                    "UPDATE mint.tool_contracts SET status = 'superseded' WHERE id = %s",
+                    (contract,))
+        except BaseException as exc:
+            failure.append(exc)
+        finally:
+            replaced.set()
+
+    try:
+        call_id = approvals.call_request(
+            Context(requesting, scene.iid, Operator("boss", "admin", "boss")),
+            org_id="org1", principal_type="user", principal_id="u1", server_id="srv-1",
+            tool="search", args_fp=ARGS_FP, fp_key_version=1, policy_version_id=None,
+            expires_in_minutes=30, requested_by="boss")
+        worker = threading.Thread(target=replace_in_thread)
+        worker.start()
+        for _ in range(100):
+            waiting = scene.conn.execute(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()"
+                " AND wait_event_type = 'Lock'").fetchone()[0]
+            if waiting:
+                break
+            replaced.wait(0.1)
+        assert waiting == 1 and not replaced.is_set()
+        requesting.commit()
+        worker.join(30)
+    finally:
+        requesting.close()
+    assert not failure
+    assert status_of(scene, "call_approvals", call_id) == "expired"
