@@ -324,8 +324,8 @@ def test_intake_to_revoke_in_one_flow(world, evidence, upstreams, flow):
         row["kind"]
         for row in world.query(
             "select distinct kind from mint.events where inserted_at >= %s "
-            "and (payload->>'server_id' = %s or source_key like %s)",
-            (since, server_id, f"%:{intake_id}:%"),
+            "and (payload->>'server_id' = %s or payload->>'intake_id' = %s)",
+            (since, server_id, intake_id),
         )
     }
     expected = {
@@ -359,8 +359,15 @@ def dependency_codes(outcomes) -> list[str]:
     return sorted(o.code for o in outcomes if (o.code or "").startswith("MINT-DEPENDENCY-"))
 
 
-def not_allowed(outcomes) -> list[tuple]:
-    return [(o.status, o.code) for o in outcomes if not o.allowed]
+def not_allowed(world, outcomes) -> list[tuple]:
+    """막힌 호출의 (상태, 코드, 판정 사건의 차단 맥락). 버퍼에서 적재되기를 잠시 기다린다."""
+    rows = []
+    for o in outcomes:
+        if not o.allowed:
+            events = world.events(o.mark, wait=20)
+            stop = events[0]["payload"].get("stop") if events else None
+            rows.append((o.status, o.code, stop))
+    return rows
 
 
 @pytest.fixture(scope="module")
@@ -410,8 +417,8 @@ def test_no_dependency_failure_right_after_a_replica_starts(after_restart):
     assert dependency_codes(after_restart) == []
 
 
-def test_every_call_is_allowed_right_after_a_replica_starts(after_restart):
-    assert not_allowed(after_restart) == []
+def test_every_call_is_allowed_right_after_a_replica_starts(world, after_restart):
+    assert not_allowed(world, after_restart) == []
 
 
 def test_the_outage_is_visible_to_a_call(after_db_outage):
@@ -425,6 +432,6 @@ def test_no_dependency_failure_right_after_the_database_recovers(after_db_outage
     assert dependency_codes(outcomes) == []
 
 
-def test_every_call_is_allowed_right_after_the_database_recovers(after_db_outage):
+def test_every_call_is_allowed_right_after_the_database_recovers(world, after_db_outage):
     _, outcomes = after_db_outage
-    assert not_allowed(outcomes) == []
+    assert not_allowed(world, outcomes) == []
