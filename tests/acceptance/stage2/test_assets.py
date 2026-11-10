@@ -67,7 +67,9 @@ def test_observation_contracts_cover_cases():
                     assert prefix + name in expected["observations"], (filename, name)
 
 
-def test_every_required_fault_has_a_named_adapter():
+def test_every_required_fault_has_a_named_adapter(monkeypatch):
+    # 장비 실행에서 화면 도구 환경이 켜져 있어도 이 정적 확인은 도구 없는 상태(건너뜀)를 본다.
+    monkeypatch.delenv("ACC_UI_AUDIT_CMD", raising=False)
     from .adapters import ADAPTERS, SKIPPED, emit_site, main
     from .inventory import required_faults
 
