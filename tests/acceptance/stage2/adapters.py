@@ -469,7 +469,10 @@ def contract_deployment(ctx):
     server = env("ACC_SERVER_ID")
     original = _registry("GET").get("url") or f"https://cnt:8443/{server}/mcp"
     state_file("deployment.json").write_text(json.dumps(original), encoding="utf-8")
-    _registry("PUT", {"server_id": server, "url": original + "?acc=deployment"})
+    # 쿼리 문자열은 url_guard가 설계상 거부하므로(URL_QUERY) 쿼리 없이 경로 구분자만 하나 더한다.
+    # nginx는 겹친 슬래시를 합쳐 같은 업스트림으로 보낸다.
+    head, _, tail = original.rpartition("/")
+    _registry("PUT", {"server_id": server, "url": head + "//" + tail})
 
 
 def contract_deployment_undo(ctx):
