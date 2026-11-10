@@ -62,7 +62,9 @@ def act(
 
 @router.get("/")
 def overview(request: Request, actor: Actor = Depends(page_actor)):
-    data = reads.overview(actor.conn, actor.instance, sorted(jobs.HANDLERS))
+    data = reads.overview(
+        actor.conn, actor.instance, sorted(jobs.HANDLERS), actor.config.time_zone
+    )
     data["workers"] = control_status.enforcement_states(actor.ctx)
     chart = {
         "days": [d["day"] for d in data["decisions_by_day"]],
@@ -336,17 +338,26 @@ def ledger(
     page: int = 1,
     actor: Actor = Depends(page_actor),
 ):
+    zone = actor.config.zone
+
     def day(text: str, end: bool = False) -> datetime | None:
         if not text:
             return None
-        parsed = datetime.fromisoformat(text).astimezone() if "T" in text else (
-            datetime.fromisoformat(text).replace(tzinfo=datetime.now().astimezone().tzinfo)
-        )
+        parsed = datetime.fromisoformat(text)
+        parsed = parsed.replace(tzinfo=zone) if parsed.tzinfo is None else parsed.astimezone(zone)
         return (parsed + timedelta(days=1)) if end and "T" not in text else parsed
 
-    start = day(since) or datetime.now(UTC) - timedelta(days=reads.LEDGER_DEFAULT_DAYS)
+    error = None
+    try:
+        begin, finish = day(since), day(until, end=True)
+    except ValueError:
+        begin = finish = None
+        since = until = ""
+        error = "날짜는 연-월-일 형식으로 입력하십시오."
+    first = datetime.now(zone) - timedelta(days=reads.LEDGER_DEFAULT_DAYS)
+    start = begin or first.replace(hour=0, minute=0, second=0, microsecond=0)
     rows = reads.ledger(
-        actor.conn, actor.instance, since=start, until=day(until, end=True), kind=kind or None,
+        actor.conn, actor.instance, since=start, until=finish, kind=kind or None,
         actor=actor_name or None, server_id=server_id or None, result=result or None, page=page,
     )
     query = {
@@ -358,10 +369,12 @@ def ledger(
         "filters": reads.ledger_filters(actor.conn, actor.instance),
         "q": query,
         "start": start,
+        "start_day": start.strftime("%Y-%m-%d"),
         "page": page,
         "servers": [s["server_id"] for s in reads.servers(actor.conn, actor.instance)],
+        "error": error,
     }
-    return render(request, "ledger.html", ctx, actor=actor)
+    return render(request, "ledger.html", ctx, actor=actor, status=400 if error else 200)
 
 
 # --- 정책·관측 설정 ---------------------------------------------------------------------------
@@ -614,7 +627,7 @@ def decide_intake(
                lambda **kw: intake_page(request, actor, intake_id, **kw))
 
 
-# --- 계약 드리프트 비교·재승인 -------------------------------------------------------------------
+# --- 계약 변경 비교·재승인 -------------------------------------------------------------------
 
 
 @router.get("/contracts")

@@ -2,6 +2,8 @@
 
 import re
 import uuid
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from console_fixtures import Keys
@@ -64,7 +66,7 @@ def test_the_menu_lists_only_screens_that_exist(admin):
     html = admin.get("/").text
     labels = re.findall(r'<nav class="sidebar".*?</nav>', html, re.S)[0]
     names = re.findall(r">([^<]+)</a>", labels)
-    assert names == ["개요", "MCP 서버", "신청·수용검증", "승인 대기열", "계약 드리프트",
+    assert names == ["개요", "MCP 서버", "신청·수용검증", "승인 대기열", "계약 변경",
                      "거부·철회", "호출별 승인", "원장", "정책·관측 설정", "운영자·조직"]
     for text in ("준비 중", "예정", "곧 제공", "TBD"):
         assert text not in html
@@ -92,14 +94,13 @@ def test_bundled_assets_are_served_locally(world):
         "content-security-policy"]
 
 
-def test_status_names_are_korean_and_codes_stay_in_the_detail(admin):
+def test_status_names_are_korean_on_the_list_and_the_detail(admin):
     servers = admin.get("/servers").text
     assert "승인됨" in servers and "승인 대기" in servers
     for enum in ENUMS:
         assert enum not in servers
     detail = admin.get("/servers/srv-ok").text
-    assert "<code>approved</code>" in detail
-    assert detail.count("approved") == 1
+    assert "approved" not in detail and "승인됨" in detail
 
 
 def test_the_overview_shows_counts_and_the_decision_chart(world, admin):
@@ -143,14 +144,17 @@ def test_the_review_form_is_prefilled_with_the_default_period(admin, world):
     assert 'name="valid_days" value="90"' in html and "신청자" in html
 
 
-def test_the_ledger_defaults_to_seven_days_and_shows_the_time_zone(world, admin):
+def test_the_ledger_defaults_to_seven_days_and_shows_the_organisation_time_zone(world, admin):
     world.query(
         "INSERT INTO mint.events (event_id, instance_id, inserted_at, kind, source_key, payload)"
         " VALUES (%s, %s, now(), 'org_created', 'org:x:1:org_created', '{}')",
         uuid.uuid4(), INSTANCE)
     html = admin.get("/ledger").text
-    assert "조직 생성" in html and "조회 범위" in html
-    assert re.search(r"\d{4}-\d\d-\d\d \d\d:\d\d \(UTC[+-]\d\d:\d\d\)", html)
+    assert "조직 생성" in html and "조회 범위" not in html
+    now = datetime.now(ZoneInfo("Asia/Seoul"))
+    shown = {f"{moment:%Y-%m-%d %H:%M}" for moment in (now, now - timedelta(minutes=1))}
+    assert any(f'<td class="nowrap">{text}</td>' in html for text in shown)
+    assert "UTC" not in html and 'type="date"' not in html
     assert "/api/v1/ledger/export?format=csv" in html
 
 

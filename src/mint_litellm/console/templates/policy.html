@@ -5,7 +5,7 @@
 <h2>정책 판본</h2>
 {% if versions %}
 <table><thead><tr><th>판본</th><th>상태</th><th>적용 시각</th><th>적용자</th></tr></thead><tbody>
-{% for v in versions %}<tr><td>{{ v.id }}</td><td>{{ m.badge(L.POLICY_VERSION, v.status) }}</td><td>{{ v.activated_at | when }}</td><td>{{ v.activated_by | blank }}</td></tr>{% endfor %}
+{% for v in versions %}<tr><td>{{ v.id }}</td><td>{{ m.badge(L.POLICY_VERSION, v.status) }}</td><td class="nowrap">{{ v.activated_at | when }}</td><td>{{ v.activated_by | who }}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}{{ m.empty('적용된 정책 판본이 없습니다', '/', '개요로 이동') }}{% endif %}
 <h2>관측 설정</h2>

@@ -6,6 +6,7 @@ from collections import deque
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import psycopg
 from fastapi import Depends, Request
@@ -32,6 +33,7 @@ STATUS = {
     AdminCode.STALE_EVIDENCE: 409,
 }
 INVALID = "MINT-ADMIN-INVALID-INPUT"
+DEFAULT_TIME_ZONE = "Asia/Seoul"
 COOKIE_OPTIONS = {"httponly": True, "secure": True, "samesite": "strict", "path": "/"}
 
 
@@ -63,6 +65,8 @@ class ConsoleConfig:
     database_url: str
     # 직원 화면 전용 로그인 역할(mint_staff_app)의 주소. 없으면 직원 화면을 열지 않는다.
     staff_database_url: str | None = None
+    # 화면에 보이는 모든 시각의 시간대(IANA 이름). 환경 변수 MINT_CONSOLE_TIME_ZONE로 바꾼다.
+    time_zone: str = DEFAULT_TIME_ZONE
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "ConsoleConfig":
@@ -72,9 +76,19 @@ class ConsoleConfig:
             raise ControlError("MINT_LITELLM_URL이 설정되어 있지 않습니다.")
         admin = ReadOnlyLiteLLM(control.litellm()) if control.litellm_key else None
         staff_url = (env.get("MINT_STAFF_DATABASE_URL") or "").strip() or None
+        zone = (env.get("MINT_CONSOLE_TIME_ZONE") or "").strip() or DEFAULT_TIME_ZONE
+        try:
+            ZoneInfo(zone)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise ControlError(f"MINT_CONSOLE_TIME_ZONE을 알 수 없습니다: {zone}") from None
         return cls(
-            control, stage2, control.litellm_url, admin, control.require_database(), staff_url
+            control, stage2, control.litellm_url, admin, control.require_database(), staff_url,
+            zone,
         )
+
+    @property
+    def zone(self) -> ZoneInfo:
+        return ZoneInfo(self.time_zone)
 
     @property
     def instance_id(self) -> str:

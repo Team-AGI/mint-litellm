@@ -5,15 +5,14 @@
 <dl class="detail">
   <dt>전송</dt><dd>{{ L.pick(L.TRANSPORT, s.transport) }}</dd>
   <dt>인증</dt><dd>{{ L.pick(L.AUTH_TYPE, s.auth_type) }}</dd>
-  <dt>등록자</dt><dd>{{ s.registered_by }}</dd>
+  <dt>등록자</dt><dd>{{ s.registered_by | who }}</dd>
   <dt>마지막 관측</dt><dd>{{ s.last_observed_at | when }}</dd>
   <dt>주소 지문</dt><dd><code>{{ s.url_sha256 }}</code></dd>
-  <dt>코드</dt><dd><code>{{ s.status }}</code></dd>
 </dl>
 <h2>도구</h2>
 {% if s.tools %}
 <table><thead><tr><th>도구</th><th>위험 등급</th><th>동작 유형</th><th>변경</th></tr></thead><tbody>
-{% for t in s.tools %}<tr><td>{{ t.tool }}</td><td>{{ t.risk_grade }}</td><td>{{ t.action_type }}</td><td>{{ '변경됨' if t.drift != 'none' else '—' }}</td></tr>{% endfor %}
+{% for t in s.tools %}<tr><td>{{ t.tool }}</td><td>{{ L.pick(L.RISK, t.risk_grade) }}</td><td>{{ L.pick(L.ACTION, t.action_type) }}</td><td>{{ '변경됨' if t.drift != 'none' else '—' }}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}<p class="muted">승인된 도구 계약이 없습니다.</p>{% endif %}
 <h2>이용 관계</h2>

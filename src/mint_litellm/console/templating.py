@@ -4,12 +4,15 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from jinja2 import pass_context
 
 from mint_litellm.console import labels
+from mint_litellm.console.core import DEFAULT_TIME_ZONE
 
 HERE = Path(__file__).parent
 templates = Jinja2Templates(directory=HERE / "templates")
@@ -19,7 +22,7 @@ MENU = (
     ("/servers", "MCP 서버"),
     ("/intakes", "신청·수용검증"),
     ("/approvals", "승인 대기열"),
-    ("/contracts", "계약 드리프트"),
+    ("/contracts", "계약 변경"),
     ("/revocations", "거부·철회"),
     ("/call-approvals", "호출별 승인"),
     ("/ledger", "원장"),
@@ -34,17 +37,26 @@ STAFF_MENU = (
 ICONS = {"ok": "✓", "wait": "◷", "error": "▲", "block": "⊘", "off": "–"}
 
 
-def when(value: Any) -> str:
-    """``연-월-일 시:분 (UTC±hh:mm)`` 형식. 시간대는 서버의 지역 시간대이다."""
+def zone_name(request: Request | None) -> str:
+    """요청을 받은 콘솔 앱의 표시 시간대 이름(설정이 없으면 기본값)."""
+    config = getattr(getattr(getattr(request, "app", None), "state", None), "config", None)
+    return getattr(config, "time_zone", DEFAULT_TIME_ZONE)
+
+
+def local_time(value: Any, zone: str = DEFAULT_TIME_ZONE) -> str:
+    """``연-월-일 시:분`` 형식으로 조직 시간대의 시각을 돌려준다."""
     if value is None or value == "":
         return "—"
     if isinstance(value, str):
         value = datetime.fromisoformat(value)
     if value.tzinfo is None:
         value = value.replace(tzinfo=UTC)
-    local = value.astimezone()
-    offset = local.strftime("%z")
-    return f"{local:%Y-%m-%d %H:%M} (UTC{offset[:3]}:{offset[3:]})"
+    return f"{value.astimezone(ZoneInfo(zone)):%Y-%m-%d %H:%M}"
+
+
+@pass_context
+def when(context: Any, value: Any) -> str:
+    return local_time(value, zone_name(context.get("request")))
 
 
 def span(seconds: Any) -> str:
@@ -72,12 +84,17 @@ def clip(value: Any, limit: int = 256) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
+def yes_no(value: Any) -> Any:
+    return ("예" if value else "아니오") if isinstance(value, bool) else blank(value)
+
+
 def to_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
 templates.env.filters.update(
-    span=span, when=when, blank=blank, join=join, to_json=to_json, clip=clip
+    span=span, when=when, blank=blank, join=join, to_json=to_json, clip=clip, yes_no=yes_no,
+    who=labels.actor,
 )
 templates.env.globals.update(L=labels, ICONS=ICONS, MENU=MENU, STAFF_MENU=STAFF_MENU)
 
@@ -91,7 +108,11 @@ def render(
     actor: Any = None,
 ) -> HTMLResponse:
     notice = labels.NOTICES.get(request.query_params.get("ok", ""))
-    base = {"actor": actor, "path": request.url.path, "notice": notice, "error": None}
+    zone = zone_name(request)
+    base = {
+        "actor": actor, "path": request.url.path, "notice": notice, "error": None,
+        "zone_label": labels.pick(labels.TIME_ZONE, zone),
+    }
     return templates.TemplateResponse(
         request, name, {**base, **(context or {})}, status_code=status
     )
