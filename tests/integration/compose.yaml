@@ -144,6 +144,11 @@ services:
       <<: *mint-env
       MINT_DATABASE_URL: postgresql://mint_worker_app:${MINT_E_WORKER_PASSWORD:-integration-worker}@postgres:5432/mint
       MINT_OPA_URL: http://opa:8181
+      # 배포 묶음과 같은 이름이다. 전 구간 흐름 시험이 관리 키·짧은 관측 주기·수용검증 허용 포트로 다시 띄운다.
+      MINT_LITELLM_URL: http://litellm1:4000
+      MINT_LITELLM_KEY: ${MINT_E_WORKER_LITELLM_KEY:-}
+      MINT_OBSERVE_SECONDS: ${MINT_E_OBSERVE_SECONDS:-3600}
+      MINT_INTAKE_ALLOWED_PORTS: ${MINT_E_INTAKE_PORTS:-}
     volumes:
       - export:/var/lib/mint/export
     healthcheck:
