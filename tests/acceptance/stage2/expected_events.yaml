@@ -122,7 +122,7 @@ required_scripts:
   test_04_sync.py: 8
   test_05_exports.py: 1
   test_06_restore.py: 9
-  test_07_intake_negative.py: 8
+  test_07_intake_negative.py: 9
   test_08_confirmation.py: 17
   test_09_auth_ui.py: 10
   test_10_performance.py: 1
