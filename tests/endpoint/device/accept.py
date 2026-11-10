@@ -28,11 +28,26 @@ LOG: list[dict] = []
 
 
 def sh(prefix: str, command: str, stdin: str | None = None, timeout: int = 600) -> str:
-    argv = [*shlex.split(prefix), command]
+    """원격에서 명령을 돌린다. 따옴표·$( )가 접속 도구(wsl 등)에서 깨지지 않도록 base64로 보낸다."""
+    import base64
+
+    blob = base64.b64encode(command.encode()).decode()
+    argv = [
+        *shlex.split(prefix),
+        f"echo {blob} | base64 -d > /tmp/.ep_cmd.sh; bash /tmp/.ep_cmd.sh",
+    ]
     if DRY:
         print("DRY", prefix.split()[-1] if prefix else "", command[:160])
         return "{}"
-    done = subprocess.run(argv, input=stdin, capture_output=True, text=True, timeout=timeout)
+    done = subprocess.run(
+        argv,
+        input=stdin,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+    )
     return done.stdout + (done.stderr if done.returncode and not done.stdout else "")
 
 

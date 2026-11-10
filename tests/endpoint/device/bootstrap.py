@@ -6,6 +6,7 @@
 환경: EP_HOME(기본 ~/mint-ep), EP_PORT(기본 4500), EP_TOOLS(승인 도구, 기본 echo,slow), EP_HIGH_RISK(기본 slow).
 """
 
+import hashlib
 import json
 import os
 import subprocess
@@ -63,7 +64,9 @@ def lite(path, body):
 def info(path, query):
     from urllib.parse import urlencode
 
-    request = urllib.request.Request(BASE + path + "?" + urlencode(query), headers={"Authorization": "Bearer " + MASTER})
+    request = urllib.request.Request(
+        BASE + path + "?" + urlencode(query), headers={"Authorization": "Bearer " + MASTER}
+    )
     with urllib.request.urlopen(request, timeout=60) as reply:
         return json.loads(reply.read())
 
@@ -73,7 +76,9 @@ def user(user_id, role="internal_user"):
 
 
 def key(**body):
-    body["key_alias"] = f"{body['key_alias']}-{int(time.time())}"  # 다시 실행해도 별칭이 겹치지 않게
+    body["key_alias"] = (
+        f"{body['key_alias']}-{int(time.time())}"  # 다시 실행해도 별칭이 겹치지 않게
+    )
     return lite("/key/generate", body)["key"]
 
 
@@ -126,7 +131,7 @@ def main():
         allowed_routes=["/mint/v1"],
         object_permission=access,
     )
-    out["USER1_KEY_ID"] = info("/key/info", {"key": out["USER1_KEY"]})["info"]["token"]
+    out["USER1_KEY_ID"] = hashlib.sha256(out["USER1_KEY"].encode()).hexdigest()  # LiteLLM이 인증 객체의 token으로 쓰는 값
     out["USER1_NOROUTE_KEY"] = key(
         user_id="ep-user1", key_alias="ep-user1-noroute", object_permission=access
     )
