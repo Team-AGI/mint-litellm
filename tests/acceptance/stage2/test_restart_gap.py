@@ -31,7 +31,8 @@ def test_restart_gap(rig):
             return None
         return len(response.json().get("tools", []))
 
-    assert listed(), "재시작 전 목록이 이미 비어 있음"
+    # 사례 준비 직후에는 첫 관측 전이라 목록이 잠시 비어 있을 수 있다(관측 주기의 2배 이내).
+    rig.wait(lambda: listed(), 3 * observe + 60, "재시작 전 목록")
     rig.command(["docker", "restart", *containers], timeout=180)
     restarted = time.monotonic()
     rig.wait(lambda: listed() is not None, 300, "재시작 뒤 LiteLLM 준비")
