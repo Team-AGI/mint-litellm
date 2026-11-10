@@ -1099,12 +1099,31 @@ def restore_consent(ctx):
         i.get("kind") == "consent" for i in c.get("items", []))})
 
 
+def quiet_before_checkpoint(seconds):
+    """작업 실행기의 주기 체크포인트(10분)는 지워진 latest.json을 다시 쓴다. 판정 주기(60초)와 호출
+    관찰(180초) 안에 체크포인트가 끼면 파일이 되살아나 차단이 걸리지 않으므로, 다음 체크포인트까지
+    `seconds` 넘게 남고 진행 중인 체크포인트가 없을 때 시작한다."""
+    deadline = time.monotonic() + 900
+    while True:
+        gap = float(A.psql(
+            "SELECT coalesce(extract(epoch FROM next_run_at - now()), 0) FROM mint.schedules "
+            f"WHERE instance_id={lit(iid())} AND kind='export_checkpoint'", "mint") or 0)
+        busy = n(f"SELECT count(*) FROM mint.jobs WHERE instance_id={lit(iid())} "
+                 "AND kind='export_checkpoint' AND status IN ('pending', 'running')")
+        if gap > seconds and not busy:
+            return
+        if time.monotonic() > deadline:
+            raise SystemExit("체크포인트 사이의 조용한 구간을 기다리다 시간 초과")
+        time.sleep(5)
+
+
 @scenario("restore_latest_missing", undo=put_back_latest)
 def restore_latest_missing(ctx):
     if not n(f"SELECT count(*) FROM mint.exports WHERE instance_id={lit(iid())} "
              "AND status='written'"):
         raise SystemExit("기록된 내보내기가 없어 export_missing을 만들 수 없음")
     latest = export_root() / "latest.json"
+    quiet_before_checkpoint(240)
     keep_file(latest)
     since = datetime.now(UTC)
     A.export_unlink(latest)
