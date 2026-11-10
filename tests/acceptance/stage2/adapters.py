@@ -245,6 +245,50 @@ def export_root(script, *mounts):
          "--entrypoint", "sh", image(), "-c", script])
 
 
+def bundle_root(script, *mounts):
+    """정책 번들 볼륨도 루트 소유 파일이 섞여 있어 루트 컨테이너로 처리한다."""
+    vol = env("COMPOSE_PROJECT_NAME", "mints2") + "_bundles"
+    args = [a for m in mounts for a in ("-v", m)]
+    run(["docker", "run", "--rm", "--user", "0", "-v", f"{vol}:/x", *args,
+         "--entrypoint", "sh", image(), "-c", script])
+
+
+def served_policy_version():
+    """정책 엔진이 지금 서빙하는 번들 판본 ID(닿지 못하면 None)."""
+    url = os.environ.get("MINT_OPA_URL")
+    if not url:
+        return None
+    try:
+        return http("GET", url.rstrip("/") + "/v1/data/mint/meta")["result"]["policy_version_id"]
+    except (OSError, KeyError, TypeError, ValueError):
+        return None
+
+
+def settle_policy_bundle(seconds=120):
+    """DB를 기준으로 되돌리면 활성 정책 판본도 기준 판본이 된다. 정책 활성화 시험(stale_policy)이
+    엔진에 올려 둔 번들이 DB의 활성 판본과 다르면 호출 판정(MINT-DEPENDENCY-OPA)과 수용검증의
+    정책 자료(POLICY_DATA_UNAVAILABLE)가 모두 막히므로 기준 번들 사본으로 되돌린다."""
+    if served_policy_version() is None:
+        return
+    active = psql("SELECT id FROM mint.policy_versions WHERE status='active' LIMIT 1", "mint")
+    saved = state_file("baseline-bundle")
+    saved.mkdir(parents=True, exist_ok=True)
+    mount = f"{saved}:/b"
+    if served_policy_version() == active:
+        if not (saved / "mint.tar.gz").is_file():  # 처음 한 번: 기준 번들을 사본으로 둔다
+            bundle_root("cp /x/mint.tar.gz /b/mint.tar.gz", mount)
+        return
+    if not (saved / "mint.tar.gz").is_file():
+        raise SystemExit("엔진의 번들 판본이 DB 활성 판본과 다르고 기준 번들 사본이 없습니다")
+    bundle_root("cp /b/mint.tar.gz /x/.mint.tar.gz.new && chmod 644 /x/.mint.tar.gz.new "
+                "&& mv -f /x/.mint.tar.gz.new /x/mint.tar.gz", mount)
+    deadline = time.monotonic() + seconds
+    while served_policy_version() != active:
+        if time.monotonic() > deadline:
+            raise SystemExit("정책 엔진이 기준 번들을 적재하지 않았습니다")
+        time.sleep(2)
+
+
 def export_unlink(path):
     """내보내기 안의 파일 하나를 지운다(호스트 권한이 모자라면 루트 컨테이너로)."""
     try:
@@ -563,6 +607,7 @@ def case_setup(case):
         # 기준 DB와 같은 세대의 파일로 되돌린다(비우고 기준 사본을 덮고 소유자를 65532로)
         script = "find /x -mindepth 1 -delete; cp -a /b/. /x/ 2>/dev/null; chown -R 65532:65532 /x"
         export_root(script, f"{saved}:/b:ro" if saved.is_dir() else "/tmp:/b:ro")
+    settle_policy_bundle()
     for server, (new, old) in SWAPS.items():
         if state_file(server + "-swapped").exists():
             swap(server, new, old)[1](None)
