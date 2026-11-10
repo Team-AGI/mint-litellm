@@ -1,7 +1,7 @@
 {% extends "base.html" %}{% import "macros.html" as m %}
-{% block title %}계약 드리프트 · MINT{% endblock %}
+{% block title %}계약 변경 · MINT{% endblock %}
 {% block body %}
-<h1>계약 드리프트</h1>
+<h1>계약 변경</h1>
 {% if rows %}
 <table><thead><tr><th>서버</th><th>배포 계약</th><th class="num">변경된 도구</th><th class="num">후보 계약</th><th>재승인</th><th>마지막 관측</th><th></th></tr></thead><tbody>
 {% for r in rows %}<tr>
@@ -9,9 +9,9 @@
 <td>{% if r.deployment_drift %}<span class="badge error"><span class="icon" aria-hidden="true">▲</span>변경됨</span>{% else %}—{% endif %}</td>
 <td class="num">{{ r.drifted_tools }}</td><td class="num">{{ r.candidates }}</td>
 <td>{% if r.plan_status %}{{ m.badge(L.PLAN, r.plan_status) }}{% else %}—{% endif %}</td>
-<td>{{ r.last_observed_at | when }}</td>
+<td class="nowrap">{{ r.last_observed_at | when }}</td>
 <td><a class="button" href="/contracts/{{ r.server_id | urlencode }}">비교</a></td>
 </tr>{% endfor %}
 </tbody></table>
-{% else %}{{ m.empty('계약 드리프트가 있는 서버가 없습니다', '/servers', '서버 목록 보기') }}{% endif %}
+{% else %}{{ m.empty('계약 변경이 있는 서버가 없습니다', '/servers', '서버 목록 보기') }}{% endif %}
 {% endblock %}

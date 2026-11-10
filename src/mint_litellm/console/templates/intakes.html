@@ -13,7 +13,7 @@
 <td>{{ L.pick(L.SOURCE, r.source) }}</td>
 <td>{{ m.badge(L.INTAKE, r.status) }}</td>
 <td>{% if r.decision %}{{ m.badge(L.DECISION, r.decision) }}{% else %}—{% endif %}</td>
-<td>{{ r.requested_by | blank }}</td><td>{{ r.created_at | when }}</td>
+<td>{{ r.requested_by | who }}</td><td class="nowrap">{{ r.created_at | when }}</td>
 <td><a class="button" href="/intakes/{{ r.id }}">상세</a></td>
 </tr>{% endfor %}
 </tbody></table>

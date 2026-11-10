@@ -150,14 +150,14 @@ class MintGuardrail(CustomGuardrail):
         reference = None
         allowed = False
         try:
-            hook = compat.parse_hook_data(data)
             try:
                 outcome = await self._runtime.judge_call(data, user_api_key_dict)
             except Exception as exc:
                 log.error("도구 호출 판정 오류: %s", type(exc).__name__)
                 raise internal_block() from exc
+            # 인자 확인이 들어 있는 훅 데이터 해석은 판정 안에서 한 번만 한다.
             reference, allowed = outcome.snapshot.decision_ref, outcome.allowed
-            details = compat.logging_details(hook.logging_obj)
+            details = compat.logging_details(data.get("litellm_logging_obj"))
             if details is not None:
                 details[MINT_CTX_KEY] = outcome.context
             if not outcome.allowed:

@@ -1,7 +1,7 @@
 {% extends "base.html" %}{% import "macros.html" as m %}
-{% block title %}계약 드리프트 비교 · MINT{% endblock %}
+{% block title %}계약 변경 비교 · MINT{% endblock %}
 {% block body %}
-<h1>계약 드리프트: {{ server_id }}</h1>
+<h1>계약 변경: {{ server_id }}</h1>
 <dl class="detail">
   <dt>마지막 관측</dt><dd>{{ server.last_observed_at | when }}</dd>
   <dt>재승인 계획</dt><dd>{% if plan %}{{ m.badge(L.PLAN, plan.status) }} · 요청자 {{ plan.requested_by }}{% if plan.status == 'pending' %} · 작업 실행기가 반영하는 중입니다{% endif %}{% else %}—{% endif %}</dd>

@@ -1,4 +1,4 @@
-"""화면 3·5(신청·수용검증, 계약 드리프트 비교·재승인): 권한, 직무 분리, 증거 만료, 이스케이프."""
+"""화면 3·5(신청·수용검증, 계약 변경 비교·재승인): 권한, 직무 분리, 증거 만료, 이스케이프."""
 
 import json
 import re
@@ -91,7 +91,7 @@ def test_the_detail_shows_eight_checks_risk_grade_and_the_evidence_expiry(world)
                  "종료 준비", "공급망"):
         assert name in html
     assert "증거 만료" in html and "낮음" in html and "읽기" in html
-    assert "<code>X_CODE</code>" in html and "human-9" in html
+    assert "X_CODE" in html and "<code>X_CODE</code>" not in html and "human-9" in html
     assert 'name="valid_days" value="90"' in html
 
 
@@ -248,7 +248,7 @@ def test_the_drift_list_shows_only_servers_with_changes(world):
 
 def test_an_empty_drift_list_has_one_next_action(world):
     html = world.session_client("viewer").get("/contracts").text
-    assert "계약 드리프트가 있는 서버가 없습니다" in html and html.count('class="empty"') == 1
+    assert "계약 변경이 있는 서버가 없습니다" in html and html.count('class="empty"') == 1
 
 
 def test_the_comparison_lists_added_removed_and_changed_items(world):
@@ -409,10 +409,10 @@ def test_bad_form_values_are_a_korean_400_on_the_screen(world):
     assert role.status_code == 400 and "입력 값이 올바르지 않습니다" in role.text
 
 
-def test_the_detail_shows_korean_reasons_and_no_english_status_code(world):
+def test_the_detail_shows_korean_reasons_and_no_english_codes(world):
     intake = add_intake(world, reason="URL_QUERY")
     html = world.session_client("viewer").get(f"/intakes/{intake}").text
-    assert "주소에 질의 문자열 포함" in html and "<code>URL_QUERY</code>" in html
+    assert "주소에 질의 문자열 포함" in html and "URL_QUERY" not in html
     assert "<code>passed</code>" not in html
 
 

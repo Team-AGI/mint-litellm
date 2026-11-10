@@ -7,7 +7,7 @@
 {% for q in queue %}<tr>
 <td><a href="/servers/{{ q.server_id | urlencode }}">{{ q.server_id }}</a></td>
 <td>{{ q.org_name | blank }}</td><td>{{ q.team_id | blank }}</td><td>{{ q.purpose | blank }}</td>
-<td>{{ L.pick(L.TRANSPORT, q.transport) }}</td><td>{{ q.registered_by }}</td>
+<td>{{ L.pick(L.TRANSPORT, q.transport) }}</td><td>{{ q.registered_by | who }}</td>
 <td>{% if q.relation_id and actor.role != 'viewer' %}<a class="button primary" href="/approvals/new?relation_id={{ q.relation_id }}">검토</a>{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
@@ -19,7 +19,7 @@
 <td><a href="/servers/{{ a.server_id | urlencode }}">{{ a.server_id }}</a></td>
 <td>{{ L.pick(L.SCOPE, a.scope_type) }} {{ a.scope_id }}</td><td>{{ a.tools | join }}</td>
 <td>{{ L.pick(L.APPROVAL_CLASS, a.class) }}</td><td>{{ a.valid_from | when }} ~ {{ a.valid_until | when }}</td>
-<td>{{ a.granted_by | blank }}</td><td>{{ m.badge(L.APPROVAL, a.status) }}</td>
+<td>{{ a.granted_by | who }}</td><td>{{ m.badge(L.APPROVAL, a.status) }}</td>
 </tr>{% endfor %}
 </tbody></table>
 {{ m.pager('/approvals', page, rows | length) }}

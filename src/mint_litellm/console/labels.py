@@ -187,6 +187,7 @@ RESULT = {
     "transform": "변환",
     "observe": "관측",
 }
+RESULT_FILTER = {"allow": "허용", "deny": "차단", "transform": "변환", "observe": "관측"}
 OBSERVATION = {
     "spend_log_arguments_stored": "지출 기록에 인자 저장",
     "guardrail_optout_subjects": "가드레일 제외 대상",
@@ -201,6 +202,22 @@ REASON = {
     "POLICY_DETECT": "정책 탐지",
     "CONTRACT_DRIFT": "계약 변경",
     "OUTPUT_SCAN": "결과 검사",
+}
+
+# 사람이 아닌 주체(작업 처리기·초기 설정)가 사건에 남기는 이름
+SYSTEM_ACTOR = {
+    "intake_run": "수용검증",
+    "contract-observer": "계약 관측",
+    "session_verify": "세션 재확인",
+    "worker": "작업 실행기",
+    "mint-worker": "작업 실행기",
+    "init": "초기 설정",
+    "bootstrap": "최초 등록",
+}
+TIME_ZONE = {
+    "Asia/Seoul": "한국 표준시",
+    "Asia/Tokyo": "일본 표준시",
+    "UTC": "협정 세계시",
 }
 
 EVENT_KIND = {
@@ -330,6 +347,11 @@ def status(table: dict[str, Status], value: str | None) -> Status:
 
 def pick(mapping: dict[str, str], value: str | None) -> str:
     return "—" if value in (None, "") else mapping.get(value, value)
+
+
+def actor(value: str | None) -> str:
+    """사건·기록의 주체 이름. 사람이 아닌 주체는 한국어 이름으로 바꾼다."""
+    return pick(SYSTEM_ACTOR, value)
 
 
 def worst(levels: list[str]) -> str:

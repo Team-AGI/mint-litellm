@@ -7,7 +7,7 @@
 {% for c in rows %}<tr>
 <td><a href="/servers/{{ c.server_id | urlencode }}">{{ c.server_id }}</a></td><td>{{ c.tool }}</td>
 <td>{{ L.pick(L.PRINCIPAL, c.principal_type) }} {{ c.principal_id }}</td><td>{{ c.requested_by }}</td>
-<td>{{ c.expires_at | when }}</td><td>{{ m.badge(L.CALL_APPROVAL, c.status) }}</td>
+<td class="nowrap">{{ c.expires_at | when }}</td><td>{{ m.badge(L.CALL_APPROVAL, c.status) }}</td>
 <td>{% if actor.role != 'viewer' and c.status in ('pending', 'approved') %}
 <form method="post" class="actions">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ c.state_version }}">

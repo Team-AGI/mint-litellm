@@ -5,7 +5,7 @@
 <h2>운영자</h2>
 {% if operators %}
 <table><thead><tr><th>이름</th><th>역할</th><th>사용자</th><th>만료</th><th></th></tr></thead><tbody>
-{% for o in operators %}<tr><td>{{ o.name }}</td><td>{{ L.pick(L.ROLE, o.role) }}</td><td>{{ o.user_id | blank }}</td><td>{{ o.expires_at | when }}</td>
+{% for o in operators %}<tr><td>{{ o.name }}</td><td>{{ L.pick(L.ROLE, o.role) }}</td><td>{{ o.user_id | blank }}</td><td class="nowrap">{{ o.expires_at | when }}</td>
 <td>{% if actor.role == 'admin' %}
 <form method="post" action="/operators/{{ o.name | urlencode }}/role" class="filters">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ o.state_version }}">
@@ -37,7 +37,7 @@
 {% if bindings %}
 <h3>조직 연결</h3>
 <table><thead><tr><th>조직</th><th>구분</th><th>대상</th><th>등록자</th></tr></thead><tbody>
-{% for b in bindings %}<tr><td>{{ b.org_id }}</td><td>{{ L.pick(L.SCOPE, b.subject_type) }}</td><td>{{ b.subject_id }}</td><td>{{ b.created_by }}</td></tr>{% endfor %}
+{% for b in bindings %}<tr><td>{{ b.org_id }}</td><td>{{ L.pick(L.SCOPE, b.subject_type) }}</td><td>{{ b.subject_id }}</td><td>{{ b.created_by | who }}</td></tr>{% endfor %}
 </tbody></table>
 {% endif %}
 {% if actor.role == 'admin' %}

@@ -263,11 +263,13 @@ def _ledger_where(
         ("kind = %s", kind),
         ("actor = %s", actor),
         ("(payload->>'resolved_server_id' = %s OR payload->>'server_id' = %s)", server_id),
-        ("payload->>'enforced_action' = %s", result),
     ):
         if value is not None:
             clauses.append(clause)
             params.extend([value, value] if clause.count("%s") == 2 else [value])
+    if result is not None:  # 차단은 deny와 stop 두 값으로 기록된다
+        clauses.append("payload->>'enforced_action' = ANY(%s)")
+        params.append(["deny", "stop"] if result == "deny" else [result])
     return " AND ".join(clauses), params
 
 
@@ -318,7 +320,8 @@ def ledger_filters(conn: psycopg.Connection, instance: str) -> dict[str, list[st
 
 
 def overview(
-    conn: psycopg.Connection, instance: str, handled: list[str] | None = None
+    conn: psycopg.Connection, instance: str, handled: list[str] | None = None,
+    time_zone: str = "UTC",
 ) -> dict[str, Any]:
     def one(sql: str, *params: Any) -> Any:
         row = fetchone(conn, sql, (instance, *params))
@@ -344,13 +347,14 @@ def overview(
     }
     days = fetchall(
         conn,
-        "SELECT to_char(date_trunc('day', inserted_at AT TIME ZONE 'UTC'), 'MM-DD') AS day,"
+        "SELECT to_char(date_trunc('day', inserted_at AT TIME ZONE %s::text), 'MM-DD') AS day,"
         " count(*) FILTER (WHERE payload->>'enforced_action' = 'allow') AS allowed,"
         " count(*) FILTER (WHERE payload->>'enforced_action' <> 'allow') AS blocked"
         " FROM mint.events WHERE instance_id = %s AND kind = 'decision_evaluated'"
-        " AND inserted_at >= date_trunc('day', now() AT TIME ZONE 'UTC') - interval '6 days'"
+        " AND inserted_at >= (date_trunc('day', now() AT TIME ZONE %s::text)"
+        " - interval '6 days') AT TIME ZONE %s::text"
         " GROUP BY 1 ORDER BY 1",
-        (instance,),
+        (time_zone, instance, time_zone, time_zone),
     )
     unhandled = fetchone(
         conn,

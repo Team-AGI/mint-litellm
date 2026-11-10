@@ -6,23 +6,23 @@
 <dl class="detail">
   <dt>대상 서버</dt><dd><a href="/servers/{{ i.server_id | urlencode }}">{{ i.server_id }}</a></dd>
   <dt>출처</dt><dd>{{ L.pick(L.SOURCE, i.source) }}</dd>
-  <dt>신청자</dt><dd>{{ i.requested_by | blank }}</dd>
+  <dt>신청자</dt><dd>{{ i.requested_by | who }}</dd>
   <dt>담당 사용자</dt><dd>{{ i.owner_user_id | blank }}</dd>
   <dt>목적</dt><dd>{{ i.purpose | blank }}</dd>
   <dt>데이터 등급</dt><dd>{{ L.pick(L.DATA_GRADE, i.data_grade) }}</dd>
   <dt>허용 범위</dt><dd>{{ i.allowed_resources | to_json if i.allowed_resources else '—' }}</dd>
   <dt>제공자</dt><dd>{{ i.provider | blank }}</dd>
-  <dt>종료 준비</dt><dd>{% if i.readiness %}자격 증명 고지 {{ i.readiness.credential_notice | blank }} · 철회 기록 {{ i.readiness.revocation_record | blank }} · 감사 로그 열람 {{ i.readiness.audit_access_days | blank }}일{% else %}—{% endif %}</dd>
+  <dt>종료 준비</dt><dd>{% if i.readiness %}자격 증명 고지 {{ i.readiness.credential_notice | yes_no }} · 철회 기록 {{ i.readiness.revocation_record | yes_no }} · 감사 로그 열람 {{ i.readiness.audit_access_days | blank }}일{% else %}—{% endif %}</dd>
   <dt>데이터 반환 조건</dt><dd>{{ i.data_return_terms | blank }}</dd>
   <dt>증거 만료</dt><dd>{{ expires | when }}</dd>
   <dt>접수 시각</dt><dd>{{ i.created_at | when }}</dd>
-  {% if i.decision %}<dt>결정</dt><dd>{{ m.badge(L.DECISION, i.decision) }} · {{ i.decided_by | blank }} · {{ i.decided_at | when }}</dd>
+  {% if i.decision %}<dt>결정</dt><dd>{{ m.badge(L.DECISION, i.decision) }} · {{ i.decided_by | who }} · {{ i.decided_at | when }}</dd>
   <dt>결정 사유</dt><dd>{{ i.decision_reason | blank }}</dd>{% endif %}
 </dl>
 <h2>검사 결과</h2>
 {% if checks %}
-<table><thead><tr><th>단계</th><th>결과</th><th>실행 시각</th><th>증거 만료</th><th>사유</th><th>코드</th></tr></thead><tbody>
-{% for c in checks %}<tr><td>{{ L.pick(L.CHECK, c.check) }}</td><td>{{ m.badge(L.CHECK_RESULT, c.result) }}</td><td>{{ c.ran_at | when }}</td><td>{{ c.evidence_valid_until | when }}</td><td>{{ L.pick(L.CHECK_REASON, c.reason_code) }}</td><td><code>{{ c.reason_code | blank }}</code></td></tr>{% endfor %}
+<table><thead><tr><th>단계</th><th>결과</th><th>실행 시각</th><th>증거 만료</th><th>사유</th></tr></thead><tbody>
+{% for c in checks %}<tr><td>{{ L.pick(L.CHECK, c.check) }}</td><td>{{ m.badge(L.CHECK_RESULT, c.result) }}</td><td class="nowrap">{{ c.ran_at | when }}</td><td class="nowrap">{{ c.evidence_valid_until | when }}</td><td>{{ L.pick(L.CHECK_REASON, c.reason_code) }}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}<p class="muted">아직 검사 결과가 없습니다.</p>{% endif %}
 <h2>도구와 위험 등급</h2>

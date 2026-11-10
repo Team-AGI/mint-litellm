@@ -28,7 +28,7 @@
 <table><thead><tr><th>대상</th><th>서버</th><th>도구</th><th>사유</th><th>등록자</th><th>상태</th><th></th></tr></thead><tbody>
 {% for d in denials %}<tr>
 <td>{{ L.pick(L.SCOPE, d.scope_type) }} {{ d.scope_id }}</td><td>{{ d.server_id | blank }}</td><td>{{ d.tools | join }}</td>
-<td>{{ d.reason }}</td><td>{{ d.created_by }}</td>
+<td>{{ d.reason }}</td><td>{{ d.created_by | who }}</td>
 <td>{{ m.badge({'a': L.Status('유효', 'block'), 'l': L.Status('해제됨', 'off')}, 'l' if d.lifted_at else 'a') }}</td>
 <td>{% if not d.lifted_at and actor.role != 'viewer' %}<form method="post" action="/denials/{{ d.id }}/lift">{{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ d.state_version }}"><button type="submit">해제</button></form>{% endif %}</td>
 </tr>{% endfor %}
