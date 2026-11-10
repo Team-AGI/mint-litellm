@@ -49,13 +49,21 @@ def timed_batch(rig, fixture, bases, args, count, *, workers=8, blocked=False):
                   "arguments": args}, timeout=30,
         )
         elapsed = (time.perf_counter() - started) * 1000
+        by = None
         if blocked:
-            assert reply.status_code == 403 and "MINT-POLICY-DETECT-" in reply.text, (
-                reply.status_code, reply.text[:300])
+            # DS-206: 막혀야 할 큰 문자열 호출은 탐지 사유로 막히거나, 복제본이 잠시 멈춰 예산을 넘기면
+            # 의존 장애 코드로 fail-closed 된다(둘 다 업스트림 미전송). 후자의 건수·비율을 보고한다.
+            if reply.status_code == 403 and "MINT-POLICY-DETECT-" in reply.text:
+                by = "detect"
+            else:
+                assert (reply.status_code == 403 and "MINT-DEPENDENCY-" in reply.text
+                        and "not_dispatched" in reply.text), (reply.status_code, reply.text[:300])
+                by = reply.text.split("MINT-DEPENDENCY-")[1][:3].strip('\\"').lower()
         else:
             assert reply.status_code == 200 and not reply.json().get("isError", False), (
                 reply.status_code, reply.text[:300])
-        return {"mark": mark, "rtt_ms": elapsed, "replica": index % len(bases)}
+        return {"mark": mark, "rtt_ms": elapsed, "replica": index % len(bases), "by": by,
+                "at": datetime.now(UTC).isoformat()}
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
         return list(pool.map(one, range(count)))
@@ -106,27 +114,33 @@ def measure(rig, fixture):
             timed_batch(rig, fixture, plain, args, 8, workers=workers)
         since = datetime.now(UTC).isoformat()
         mint_samples, plain_samples = [], []
+        upstream_before = rig.counter(fixture["server_id"]) if blocked else None
         for index in range(4):
             order = ((bases, mint_samples), (plain, plain_samples))
             for endpoints, target in (order if index % 2 == 0 else reversed(order)):
                 target.extend(timed_batch(rig, fixture, endpoints, args, 800,
                                           blocked=blocked and endpoints == bases))
         marks = [sample["mark"] for sample in mint_samples]
+        dependency = [sample for sample in mint_samples if sample["by"] not in (None, "detect")]
+        if blocked:  # DS-206: 보안 속성은 업스트림 0이다
+            assert rig.counter(fixture["server_id"]) == upstream_before, "막힌 호출이 업스트림에 닿음"
         rows = rig.sql(
             "SELECT payload FROM mint.events WHERE instance_id=%s "
             "AND kind='decision_evaluated' AND payload->>'litellm_call_id'=ANY(%s)",
             [rig.iid, marks],
         )
-        assert len(rows) == len(marks) == 3200
+        assert len(marks) == 3200 and len(rows) >= len(marks) - len(dependency)
         assert all(row["payload"]["state_epoch"] is not None for row in rows)
         # 본문 미저장 계약을 지킨다. 패턴 불리언 자체는 원장에 저장되지 않는다.
         # 대형 문자열의 보수적 패턴 판정은 실제 적용된 정책 ID로 확인한다.
         if blocked:
+            detected = [row for row in rows if row["payload"]["policy_ids"]]
+            assert len(detected) >= len(marks) - len(dependency)
             assert all({"POL-E-07", "POL-E-09", "POL-E-14"} <= set(
                 row["payload"]["policy_ids"],
-            ) for row in rows), "패턴 계산이 정책 판정에 반영되지 않음"
+            ) for row in detected), "패턴 계산이 정책 판정에 반영되지 않음"
         refs = {row["payload"]["decision_ref"] for row in rows}
-        assert len(refs) == 3200
+        assert len(refs) == len(rows)
         logs = []
         for command in rig.site["decision_logs"]:
             result = rig.command([*command, "--since", since])
@@ -148,5 +162,15 @@ def measure(rig, fixture):
             "mint_rtt_ms": mq, "plain_rtt_ms": pq,
             "supplemental_rtt_difference_ms": {key: mq[key] - pq[key] for key in mq},
             "raw_log": str(path), "raw_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            **({"ds206": {
+                "dependency_blocked": len(dependency), "of": len(marks),
+                "ratio": len(dependency) / len(marks),
+                "codes": sorted({sample["by"] for sample in dependency}),
+                "at": [sample["at"] for sample in dependency],
+                "upstream_calls": rig.counter(fixture["server_id"]) - upstream_before,
+                "log_signature": {name: raw.count(name) for name in (
+                    "사건 기록 실패", "스냅숏 조회 실패", "discarding closed connection")},
+                "rtt_over_1s": sum(sample["rtt_ms"] > 1000 for sample in mint_samples)}}
+               if blocked else {}),
         })
     return report
