@@ -586,6 +586,8 @@ class PluginDatabase:
     max_size: int = 8
     acquire_timeout: float = 0.3
     _pool: Any = field(default=None, init=False, repr=False)
+    # 연결 오류를 마지막으로 본 시각. 이보다 먼저 쓴 연결은 함께 끊겼을 수 있어 쓰기 전에 확인한다.
+    _failed_at: float = field(default=0.0, init=False, repr=False)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     async def _connection(self):
@@ -648,15 +650,22 @@ class PluginDatabase:
                         # 쥔 동안에만 끊을 대상이다. 풀로 돌아간 연결은 다른 호출이 쓴다.
                         held[:] = [conn]
                         try:
-                            idle = time.monotonic() - getattr(conn, "_mint_used", 0.0)
-                            if idle > _IDLE_CHECK_SECONDS:
+                            used = getattr(conn, "_mint_used", 0.0)
+                            if (
+                                time.monotonic() - used > _IDLE_CHECK_SECONDS
+                                or used < self._failed_at
+                            ):
                                 try:
                                     await conn.execute("")
                                 except OperationalError:
                                     # 나가면 풀이 끊어진 연결을 버리고, 다음에는 다른 연결을 받는다.
+                                    self._failed_at = time.monotonic()
                                     raise _StaleConnection from None
                             try:
                                 return await work(conn)
+                            except OperationalError:
+                                self._failed_at = time.monotonic()
+                                raise
                             finally:
                                 conn._mint_used = time.monotonic()
                         finally:
