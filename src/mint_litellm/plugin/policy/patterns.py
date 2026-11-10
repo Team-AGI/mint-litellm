@@ -6,6 +6,7 @@
 
 import ipaddress
 import posixpath
+import re
 import unicodedata
 from collections.abc import Collection, Iterable, Mapping
 from typing import Any
@@ -16,9 +17,15 @@ MAX_STRING_BYTES = 4 * 1024
 MAX_DEPTH = 20
 NAMES = ("url_external", "private_host", "path_traversal", "secret_like")
 
-BS = chr(92)
 _DOTS = str.maketrans({"。": ".", "｡": ".", "．": "."})
-_URL_END = " \t\r\n\"'<>"
+# 호스트가 들어 있는 권한부는 URL 끝 문자나 경로·질의·조각 구분자에서 끝난다. 역슬래시를 슬래시로
+# 읽는 쪽은 역슬래시에서도 끝난다. 본문 끝까지 자르지 않아 호출당 비용이 인자 길이에 곱으로
+# 늘지 않는다.
+_AUTHORITY_END = re.compile("[ \t\r\n\"'<>/?#]")
+_AUTHORITY_END_BS = re.compile("[ \t\r\n\"'<>/\\\\?#]")
+# 주소 리터럴(점 표기 10진·8진·16진, IPv6)에 나올 수 없는 문자. 호스트가 이 문자를 하나라도 가지면
+# 주소 해석(예외를 던지는 해석기)을 건너뛴다. 해석기가 받는 문자는 모두 이 집합 안에 있다.
+_NOT_ADDRESS = re.compile(r"[^0-9a-fxo.:_+\s-]")
 _SCHEME_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-"
 
 
@@ -53,6 +60,8 @@ def _strings(value: Any) -> Iterable[str]:
 
 
 def _normalize(text: str) -> str:
+    if text.isascii() and "%" not in text:
+        return text  # 퍼센트 디코딩·NFKC·전각 점 치환 모두 바꿀 것이 없다.
     text = unicodedata.normalize("NFKC", unquote(text))
     return text.translate(_DOTS)
 
@@ -72,26 +81,30 @@ def _urls(text: str) -> Iterable[str]:
     """``scheme:`` 뒤에 슬래시나 역슬래시가 하나 이상 오는 곳마다 호스트를 낸다.
 
     파싱 실패는 빈 문자열(알 수 없음)이다. 역슬래시는 슬래시로 읽는다. 한 글자 스킴은 드라이브
-    문자로 보고 건너뛴다.
+    문자로 보고 건너뛴다. 호스트는 권한부에서만 정해지므로 권한부까지만 파싱한다.
     """
     start = 0
     while (at := text.find(":", start)) != -1:
         start = at + 1
-        i = at
-        while i > 0 and text[i - 1] in _SCHEME_CHARS:
-            i -= 1
         end = start
         while end < len(text) and text[end] in "/\\":
             end += 1
-        if end == start or at - i < 2 or not text[i].isalpha():
+        if end == start:
             continue
-        stop = end
-        while stop < len(text) and text[stop] not in _URL_END:
-            stop += 1
-        rest = text[end:stop]
-        for variant in {rest, rest.replace(BS, "/")}:
+        i = at
+        while i > 0 and text[i - 1] in _SCHEME_CHARS:
+            i -= 1
+        if at - i < 2 or not text[i].isalpha():
+            continue
+        seen = None
+        for ending in (_AUTHORITY_END, _AUTHORITY_END_BS):
+            found = ending.search(text, end)
+            authority = text[end : found.start() if found else len(text)]
+            if authority == seen:
+                continue
+            seen = authority
             try:
-                yield (urlsplit("//" + variant).hostname or "").lower().rstrip(".")
+                yield (urlsplit("//" + authority).hostname or "").lower().rstrip(".")
             except ValueError:
                 yield ""
 
@@ -129,6 +142,8 @@ def _private_host(host: str, *, loose: bool) -> bool:
     host = host.strip().strip("[]").split("%", 1)[0].lower().rstrip(".")
     if host == "localhost" or host.endswith(".localhost"):
         return True
+    if host.isascii() and _NOT_ADDRESS.search(host):
+        return False
     try:
         return _private_ip(ipaddress.ip_address(host))
     except ValueError:
@@ -178,7 +193,8 @@ def compute_patterns(
     """``allowed_hosts``는 소문자 호스트, ``allowed_paths``는 정규화된 절대 경로 접두."""
     result = dict.fromkeys(NAMES, False)
     try:
-        for raw in _strings(arguments):
+        # 상한 검사를 모두 끝낸 뒤에 훑는다. 상한을 넘는 인자는 훑어 봐야 결과가 같다(모두 참).
+        for raw in list(_strings(arguments)):
             for text in _forms(raw):
                 for host in _urls(text):
                     if not host_allowed(host, allowed_hosts):

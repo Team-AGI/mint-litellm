@@ -41,6 +41,9 @@ def test_plain_arguments_have_no_pattern():
         ("https://a.test", set(), True),
         ("no url, only a.test", {"b.test"}, False),
         ("https://", {"a.test"}, True),
+        ("https://api.example.com?@evil.org/", {"api.example.com"}, False),
+        ("https://api.example.com#@evil.org/", {"api.example.com"}, False),
+        ("https://evil.org?u=https://api.example.com/", {"api.example.com"}, True),
     ],
 )
 def test_url_external(text, allowed, external):
