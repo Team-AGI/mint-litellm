@@ -135,7 +135,9 @@ def measure(rig, fixture):
             [rig.iid, marks],
         )
         assert len(marks) == 3200 and len(rows) >= len(marks) - len(dependency)
-        assert all(row["payload"]["state_epoch"] is not None for row in rows)
+        # 의존 장애로 막힌 호출은 스냅숏을 못 읽어 세대·정책 ID가 없을 수 있다(DS-206).
+        assert all(row["payload"]["state_epoch"] is not None for row in rows
+                   if not blocked or row["payload"]["policy_ids"])
         # 본문 미저장 계약을 지킨다. 패턴 불리언 자체는 원장에 저장되지 않는다.
         # 대형 문자열의 보수적 패턴 판정은 실제 적용된 정책 ID로 확인한다.
         if blocked:
