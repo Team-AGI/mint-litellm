@@ -17,7 +17,7 @@
   <h2>집행 상태</h2>
   {% if o.workers %}
   <table><thead><tr><th>워커</th><th>상태</th><th>마지막 전환</th></tr></thead><tbody>
-  {% for w in o.workers %}<tr><td>{{ w.worker_id }}</td><td>{{ m.badge(L.ENFORCEMENT, 'enforcement_verified' if w.passed else 'enforcement_unverified') }}</td><td>{{ w.last_transition_at | when }}</td></tr>{% endfor %}
+  {% for w in o.workers %}<tr><td>{{ w.worker_id }}</td><td>{{ m.badge(L.ENFORCEMENT, 'enforcement_verified' if w.passed else 'enforcement_unverified') }}</td><td class="nowrap">{{ w.last_transition_at | when }}</td></tr>{% endfor %}
   </tbody></table>
   {% else %}{{ m.empty('집행 상태를 보고한 워커가 없습니다', '/ledger?kind=enforcement_verified', '원장 보기') }}{% endif %}
 </section>

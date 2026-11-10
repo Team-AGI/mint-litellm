@@ -7,7 +7,7 @@
 {% for r in rows %}<tr>
 <td>{{ r.server_id }}</td><td>{{ r.org_name }}</td>
 <td>{{ L.pick(L.TRANSPORT, r.transport) }}</td><td>{{ L.pick(L.AUTH_TYPE, r.auth_type) }}</td>
-<td>{{ r.tools | join }}</td><td>{{ r.valid_until | when }}</td>
+<td>{{ r.tools | join }}</td><td class="nowrap">{{ r.valid_until | when }}</td>
 </tr>{% endfor %}
 </tbody></table>
 {% else %}{{ m.empty('쓸 수 있는 서버가 없습니다', '/staff/consents', '동의 관리') }}{% endif %}

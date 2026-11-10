@@ -3,22 +3,21 @@
 {% block body %}
 <h1>원장</h1>
 <form method="get" action="/ledger" class="filters">
-  <label>시작<input type="date" name="since" value="{{ q.since }}"></label>
-  <label>끝<input type="date" name="until" value="{{ q.until }}"></label>
+  <label>시작<input type="text" name="since" value="{{ q.since or start_day }}" inputmode="numeric" pattern="[0-9]{4}-[0-9]{2}-[0-9]{2}" placeholder="연-월-일" autocomplete="off"></label>
+  <label>끝<input type="text" name="until" value="{{ q.until }}" inputmode="numeric" pattern="[0-9]{4}-[0-9]{2}-[0-9]{2}" placeholder="연-월-일" autocomplete="off"></label>
   <label>종류<select name="kind"><option value="">전체</option>{% for k in filters.kinds %}<option value="{{ k }}"{% if q.kind == k %} selected{% endif %}>{{ L.pick(L.EVENT_KIND, k) }}</option>{% endfor %}</select></label>
-  <label>주체<select name="actor"><option value="">전체</option>{% for a in filters.actors %}<option value="{{ a }}"{% if q.actor == a %} selected{% endif %}>{{ a }}</option>{% endfor %}</select></label>
+  <label>주체<select name="actor"><option value="">전체</option>{% for a in filters.actors %}<option value="{{ a }}"{% if q.actor == a %} selected{% endif %}>{{ a | who }}</option>{% endfor %}</select></label>
   <label>서버<select name="server_id"><option value="">전체</option>{% for s in servers %}<option value="{{ s }}"{% if q.server_id == s %} selected{% endif %}>{{ s }}</option>{% endfor %}</select></label>
-  <label>결과<select name="result"><option value="">전체</option>{% for k, v in L.RESULT.items() %}<option value="{{ k }}"{% if q.result == k %} selected{% endif %}>{{ v }}</option>{% endfor %}</select></label>
+  <label>결과<select name="result"><option value="">전체</option>{% for k, v in L.RESULT_FILTER.items() %}<option value="{{ k }}"{% if q.result == k %} selected{% endif %}>{{ v }}</option>{% endfor %}</select></label>
   <button type="submit" class="primary">조회</button>
   <a class="button" href="/api/v1/ledger/export?format=csv&amp;since={{ start.isoformat() | urlencode }}" hx-boost="false">CSV 내보내기</a>
   <a class="button" href="/api/v1/ledger/export?format=json&amp;since={{ start.isoformat() | urlencode }}" hx-boost="false">JSON 내보내기</a>
 </form>
-<p class="muted">조회 범위: {{ start | when }} 이후</p>
 {% if rows %}
-<table><thead><tr><th>시각</th><th>종류</th><th>주체</th><th>서버</th><th>결과</th><th>키</th></tr></thead><tbody>
+<table><thead><tr><th>시각</th><th>종류</th><th>주체</th><th>서버</th><th>결과</th></tr></thead><tbody>
 {% for e in rows %}<tr>
-<td>{{ e.inserted_at | when }}</td><td>{{ L.pick(L.EVENT_KIND, e.kind) }}</td><td>{{ e.actor | blank }}</td>
-<td>{{ e.server_id | blank }}</td><td>{{ L.pick(L.RESULT, e.result) }}</td><td><code>{{ e.source_key }}</code></td>
+<td class="nowrap">{{ e.inserted_at | when }}</td><td class="nowrap">{{ L.pick(L.EVENT_KIND, e.kind) }}</td><td>{{ e.actor | who }}</td>
+<td>{{ e.server_id | blank }}</td><td>{{ L.pick(L.RESULT, e.result) }}</td>
 </tr>{% endfor %}
 </tbody></table>
 {{ m.pager('/ledger?since=' ~ (q.since | urlencode) ~ '&until=' ~ (q.until | urlencode) ~ '&kind=' ~ (q.kind | urlencode) ~ '&actor=' ~ (q.actor | urlencode) ~ '&server_id=' ~ (q.server_id | urlencode) ~ '&result=' ~ (q.result | urlencode), page, rows | length) }}

@@ -6,7 +6,7 @@
 <table><thead><tr><th>서버</th><th>목적</th><th>범위</th><th>등록</th><th>유효 기간</th><th>상태</th><th></th></tr></thead><tbody>
 {% for c in consents %}<tr>
 <td>{{ c.server_id }}</td><td>{{ c.purpose }}</td><td>{{ c.data_scope }}</td>
-<td>{{ c.granted_at | when }}</td><td>{{ c.valid_until | when }}</td>
+<td class="nowrap">{{ c.granted_at | when }}</td><td class="nowrap">{{ c.valid_until | when }}</td>
 <td>{{ m.badge(L.CONSENT, c.view) }}</td>
 <td>{% if c.view == 'active' %}<form method="post" action="/staff/consents/{{ c.id }}/revoke">{{ m.csrf(actor) }}<button type="submit">철회</button></form>{% endif %}</td>
 </tr>{% endfor %}
@@ -27,7 +27,7 @@
 <h2>내 기록</h2>
 {% if records %}
 <table><thead><tr><th>시각</th><th>종류</th></tr></thead><tbody>
-{% for r in records %}<tr><td>{{ r.at | when }}</td><td>{{ r.label }}</td></tr>{% endfor %}
+{% for r in records %}<tr><td class="nowrap">{{ r.at | when }}</td><td>{{ r.label }}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}<p class="muted">기록이 없습니다.</p>{% endif %}
 {% endblock %}

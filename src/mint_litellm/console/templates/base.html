@@ -10,18 +10,19 @@
 <script src="/static/echarts.min.js"></script>
 <script src="/static/console.js"></script>
 </head>
-<body hx-boost="true" hx-headers='{"X-CSRF-Token": "{{ actor.csrf }}"}'>
+<body class="shell" hx-boost="true" hx-headers='{"X-CSRF-Token": "{{ actor.csrf }}"}'>
 <header class="topbar">
   <span class="brand">MINT 관리자 콘솔</span>
   <span>
+    <span class="who">{{ zone_label }}</span>
     <span class="who">{{ actor.session.operator_name }} · {{ L.pick(L.ROLE, actor.role) }}</span>
     <form method="post" action="/logout" hx-boost="false"><input type="hidden" name="csrf" value="{{ actor.csrf }}"><button type="submit">로그아웃</button></form>
   </span>
 </header>
-<nav class="sidebar" aria-label="메뉴">
+<nav class="sidebar" aria-label="메뉴"><div class="menu">
 {% for href, text in MENU %}<a href="{{ href }}" class="{{ 'active' if (path == href or (href != '/' and path.startswith(href))) else '' }}">{{ text }}</a>
 {% endfor %}
-</nav>
+</div></nav>
 <main><div class="page">
 {% if notice %}<div class="banner ok" role="status">{{ notice }}</div>{% endif %}
 {% if error %}<div class="banner error" role="alert">{{ error }}</div>{% endif %}
