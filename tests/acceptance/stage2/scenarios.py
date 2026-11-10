@@ -206,6 +206,19 @@ def log_count(pattern, since):
     return total
 
 
+def probe_checks(since):
+    """수용검증이 서버를 직접 두드린 검사(connection·definitions) 수. LiteLLM 시험 경로 접근 로그에는
+    계약 관측 작업(contract_observe)의 주기 조회도 섞이므로, 신청 검사 기록으로 센다."""
+    return n(f"SELECT count(*) FROM mint.intake_checks WHERE instance_id={lit(iid())} "
+             "AND \"check\" IN ('connection', 'definitions') "
+             f"AND ran_at >= {lit(since.isoformat())}")
+
+
+def observer_runs(since):
+    return n(f"SELECT count(*) FROM mint.jobs WHERE instance_id={lit(iid())} "
+             f"AND kind='contract_observe' AND updated_at >= {lit(since.isoformat())}")
+
+
 def event_count(kind, since):
     return n(f"SELECT count(*) FROM mint.events WHERE instance_id={lit(iid())} "
              f"AND kind={lit(kind)} AND inserted_at >= {lit(since)}")
@@ -670,7 +683,9 @@ def negative_submission(ctx, url, allow_all_keys=False):
                         f"WHERE id={lit(intake_id)}", "mint") == "rejected", 180, "자동 거절")
     time.sleep(5)  # 뒤늦은 시험 호출·재신청이 없는지 본다
     observe(ctx, intake_id=intake_id, submitted_allow_all_keys=seen_open is True,
-            test_route_calls=log_count(r"/mcp-rest/test/", start),
+            test_route_calls=probe_checks(start),
+            test_route_log_calls=log_count(r"/mcp-rest/test/", start),
+            observer_runs=observer_runs(start),
             reject_calls=log_count(r"PUT /v1/mcp/server/\S+/reject", start),
             resubmissions=n(f"SELECT count(*) FROM mint.intakes WHERE instance_id={lit(iid())} "
                             f"AND server_id={lit(server_id)}") - 1,
@@ -729,7 +744,9 @@ def intake_private_literal(ctx):
     observe(ctx, intake_id=intake_id, litellm_accepted=status in (200, 201),
             intake_status=intake_status(intake_id), url_guard_reason=guard,
             reject_calls=log_count(r"PUT /v1/mcp/server/\S+/reject", start),
-            test_route_calls=log_count(r"/mcp-rest/test/", start),
+            test_route_calls=probe_checks(start),
+            test_route_log_calls=log_count(r"/mcp-rest/test/", start),
+            observer_runs=observer_runs(start),
             control_accepted=control_status in (200, 201), control_decision=control_decision,
             mint_intakes=new_rows - (1 if control_id else 0),
             upstream_calls=upstream() - upstream_before)
@@ -750,8 +767,7 @@ def intake_private_ip_guard(ctx):
             url_guard_reason=A.psql(
                 "SELECT reason_code FROM mint.intake_checks WHERE "
                 f"intake_id={lit(intake_id)} AND \"check\"='url_guard'", "mint"),
-            test_route_calls=log_count(
-                r"/mcp-rest/test/", datetime.now(UTC) - timedelta(minutes=3)))
+            test_route_calls=probe_checks(datetime.now(UTC) - timedelta(minutes=3)))
 
 
 @scenario("intake_allow_all_keys", undo=cleanup)
@@ -1847,6 +1863,7 @@ def auth_staff_write(ctx):
     client, reply, session = staff_login(key)
     if reply.status_code != 303 or not session:
         raise SystemExit(f"직원 로그인 실패(HTTP {reply.status_code})")
+    window = datetime.now(UTC)
     before = mutation_marks()
     accepted = 0
     for method, path, body in STAFF_FORBIDDEN_HTTP:
@@ -1858,7 +1875,14 @@ def auth_staff_write(ctx):
     refused = sum(int(A.as_role("ACC_STAFF_DATABASE_URL", statement.format(iid=iid()))[1]
                       is not None) for statement in STAFF_FORBIDDEN_SQL)
     after = mutation_marks()
+    names = ("orgs", "denials", "events", "approvals", "revoked", "epoch")
     observe(ctx, api_mutations=accepted,
+            mutation_detail={k: [a, b] for k, a, b in zip(names, before, after, strict=True)
+                             if a != b},
+            new_event_kinds=A.psql(
+                "SELECT coalesce(string_agg(kind || ':' || coalesce(source_key, ''), ' | '), '') "
+                f"FROM mint.events WHERE instance_id={lit(iid())} "
+                f"AND inserted_at >= {lit(window.isoformat())}", "mint"),
             db_mutations=sum(abs(a - b) for a, b in zip(before, after, strict=True)),
             forbidden_operations_tested=len(STAFF_FORBIDDEN_HTTP), db_refused=refused,
             db_attempted=len(STAFF_FORBIDDEN_SQL))
