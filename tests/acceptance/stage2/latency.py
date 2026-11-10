@@ -114,16 +114,21 @@ def measure(rig, fixture):
             timed_batch(rig, fixture, plain, args, 8, workers=workers)
         since = datetime.now(UTC).isoformat()
         mint_samples, plain_samples = [], []
-        upstream_before = rig.counter(fixture["server_id"]) if blocked else None
+        upstream_hits = 0  # 순정 LiteLLM 라운드는 같은 업스트림을 치므로 MINT 라운드 앞뒤로만 센다
         for index in range(4):
             order = ((bases, mint_samples), (plain, plain_samples))
             for endpoints, target in (order if index % 2 == 0 else reversed(order)):
+                mint_round = blocked and endpoints == bases
+                before = rig.counter(fixture["server_id"]) if mint_round else 0
                 target.extend(timed_batch(rig, fixture, endpoints, args, 800,
-                                          blocked=blocked and endpoints == bases))
+                                          blocked=mint_round))
+                if mint_round:
+                    time.sleep(3)  # 계수 역프록시 기록이 따라오게 한다
+                    upstream_hits += rig.counter(fixture["server_id"]) - before
         marks = [sample["mark"] for sample in mint_samples]
         dependency = [sample for sample in mint_samples if sample["by"] not in (None, "detect")]
         if blocked:  # DS-206: 보안 속성은 업스트림 0이다
-            assert rig.counter(fixture["server_id"]) == upstream_before, "막힌 호출이 업스트림에 닿음"
+            assert upstream_hits == 0, f"막힌 호출이 업스트림에 닿음: {upstream_hits}"
         rows = rig.sql(
             "SELECT payload FROM mint.events WHERE instance_id=%s "
             "AND kind='decision_evaluated' AND payload->>'litellm_call_id'=ANY(%s)",
@@ -167,7 +172,7 @@ def measure(rig, fixture):
                 "ratio": len(dependency) / len(marks),
                 "codes": sorted({sample["by"] for sample in dependency}),
                 "at": [sample["at"] for sample in dependency],
-                "upstream_calls": rig.counter(fixture["server_id"]) - upstream_before,
+                "upstream_calls": upstream_hits,
                 "log_signature": {name: raw.count(name) for name in (
                     "사건 기록 실패", "스냅숏 조회 실패", "discarding closed connection")},
                 "rtt_over_1s": sum(sample["rtt_ms"] > 1000 for sample in mint_samples)}}
