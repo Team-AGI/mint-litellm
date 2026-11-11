@@ -62,6 +62,7 @@ def config(tmp_path: Path | None = None, **override: Any) -> PluginConfig:
         buffer_dir=tmp_path if tmp_path is not None else Path("unused"),
         fingerprint_key=FP_KEY,
         decision_budget_seconds=1.0,
+        gc_freeze=False,
     )
     return replace(base, **override)
 

@@ -278,12 +278,20 @@ def test_the_snapshot_filters_by_scope_and_leaves_out_pending_approvals(scenario
     assert other.approvals == () and other.bindings == {}
 
 
-def test_the_snapshot_is_one_read_only_repeatable_read_statement(scenario, plugin_dsn, monkeypatch):
+def test_the_snapshot_is_read_by_one_statement_outside_a_transaction_block(
+    scenario, plugin_dsn, monkeypatch
+):
+    # 한 문장은 하나의 스냅숏을 본다. 트랜잭션 블록이 여러 문장을 감싸면 now()가
+    # 문장 시작과 달라진다.
     monkeypatch.setattr(
         snapshot_module,
         "SNAPSHOT_SQL",
-        "SELECT jsonb_build_object('iso', current_setting('transaction_isolation'),"
-        " 'ro', current_setting('transaction_read_only'))",
+        "SELECT jsonb_build_object('one_statement', now() = statement_timestamp())",
+    )
+    monkeypatch.setattr(
+        snapshot_module,
+        "CONFIRMATION_SNAPSHOT_SQL",
+        "SELECT jsonb_build_object('one_statement', now() = statement_timestamp())",
     )
     monkeypatch.setattr(snapshot_module, "parse_snapshot", lambda doc: doc)
 
@@ -294,7 +302,7 @@ def test_the_snapshot_is_one_read_only_repeatable_read_statement(scenario, plugi
         finally:
             await db.close()
 
-    assert run(read()) == {"iso": "repeatable read", "ro": "on"}
+    assert run(read()) == {"one_statement": True}
 
 
 def test_an_unregistered_server_yields_an_empty_server_row(scenario, plugin_dsn):

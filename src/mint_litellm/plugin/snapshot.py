@@ -1,8 +1,8 @@
 """판정 스냅숏과 플러그인의 DB 접근.
 
-스냅숏은 한 번의 읽기 전용 REPEATABLE READ 트랜잭션에서 단일 질의로 읽는다. 상태 세대와
-서버·관계·승인·거부·호출별 승인·동의·설정·정책 판본이 같은 시점의 값이다. 캐시는 없다.
-LiteLLM의 표는 읽지 않는다.
+스냅숏은 트랜잭션 블록 없이 단일 질의 한 번으로 읽는다. 한 문장은 하나의 스냅숏을 보므로 상태
+세대와 서버·관계·승인·거부·호출별 승인·동의·설정·정책 판본이 같은 시점의 값이다. 왕복을 줄이려고
+BEGIN·COMMIT을 따로 보내지 않는다. 상태 캐시는 없다. LiteLLM의 표는 읽지 않는다.
 """
 
 from __future__ import annotations
@@ -588,6 +588,8 @@ class PluginDatabase:
     _pool: Any = field(default=None, init=False, repr=False)
     # 연결 오류를 마지막으로 본 시각. 이보다 먼저 쓴 연결은 함께 끊겼을 수 있어 쓰기 전에 확인한다.
     _failed_at: float = field(default=0.0, init=False, repr=False)
+    # 2단계 표(자기 확인)가 있는 데이터베이스인지. 있다고 한 번 확인되면 다시 묻지 않는다.
+    _confirmations_table: bool = field(default=False, init=False, repr=False)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     async def _connection(self):
@@ -687,8 +689,6 @@ class PluginDatabase:
             raise
 
     async def read_snapshot(self, query: SnapshotQuery) -> Snapshot:
-        from psycopg import IsolationLevel
-
         params = {
             "iid": query.instance_id,
             "server_id": query.server_id,
@@ -700,16 +700,15 @@ class PluginDatabase:
         }
 
         async def read(conn: Any) -> Any:
-            await conn.set_isolation_level(IsolationLevel.REPEATABLE_READ)
-            await conn.set_read_only(True)
-            async with conn.transaction():
-                # v001 DB도 읽는다. 상태 값 자체는 아래 단일 질의의 같은 RR 스냅숏이다.
+            # v001 DB도 읽는다. 표가 있다고 확인된 뒤에는 질의 한 번이 전부다. 상태 값 자체는 아래
+            # 단일 질의의 같은 스냅숏이다.
+            if not self._confirmations_table:
                 probe = await conn.execute("SELECT to_regclass('mint.self_confirmations')")
-                stage2 = (await probe.fetchone())[0] is not None
-                cursor = await conn.execute(
-                    CONFIRMATION_SNAPSHOT_SQL if stage2 else SNAPSHOT_SQL, params
-                )
-                return await cursor.fetchone()
+                self._confirmations_table = (await probe.fetchone())[0] is not None
+            cursor = await conn.execute(
+                CONFIRMATION_SNAPSHOT_SQL if self._confirmations_table else SNAPSHOT_SQL, params
+            )
+            return await cursor.fetchone()
 
         row = await self._run(read)
         if row is None:
@@ -719,25 +718,31 @@ class PluginDatabase:
     async def insert_event(self, event: Event, consume: ConsumeRequest | None = None) -> bool:
         from psycopg.types.json import Jsonb
 
+        row = (
+            event.event_id,
+            event.instance_id,
+            event.inserted_at,
+            event.kind.value,
+            event.source_key,
+            event.invocation_id,
+            event.attempt_id,
+            event.actor,
+            None if event.subject is None else Jsonb(event.subject),
+            Jsonb(event.payload),
+        )
+        consumes = consume is not None and (
+            consume.call_approval_id is not None or consume.confirmation is not None
+        )
+
         async def write(conn: Any) -> bool:
+            if not consumes:
+                # 소비할 것이 없으면 삽입 한 문장이 곧 원자 단위다. 트랜잭션 블록을 열지 않는다.
+                cursor = await conn.execute(INSERT_EVENT_SQL, row)
+                return cursor.rowcount == 1
             await conn.set_isolation_level(None)
             await conn.set_read_only(False)
             async with conn.transaction():
-                cursor = await conn.execute(
-                    INSERT_EVENT_SQL,
-                    (
-                        event.event_id,
-                        event.instance_id,
-                        event.inserted_at,
-                        event.kind.value,
-                        event.source_key,
-                        event.invocation_id,
-                        event.attempt_id,
-                        event.actor,
-                        None if event.subject is None else Jsonb(event.subject),
-                        Jsonb(event.payload),
-                    ),
-                )
+                cursor = await conn.execute(INSERT_EVENT_SQL, row)
                 inserted = cursor.rowcount == 1
                 if consume is not None and consume.call_approval_id is not None:
                     cursor = await conn.execute(

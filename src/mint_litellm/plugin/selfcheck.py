@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import gc
 import logging
 import multiprocessing
 import os
@@ -39,6 +40,7 @@ from mint_litellm.plugin.policy.opa_client import Evaluation, OPAClient
 from mint_litellm.plugin.restore_watch import RestoreWatch
 from mint_litellm.plugin.result import ResultDeps
 from mint_litellm.plugin.snapshot import PluginDatabase, RegisteredServer
+from mint_litellm.plugin.timing import OFF, StageClock
 from mint_litellm.types.canonical import sha256
 from mint_litellm.types.decision import OperationType, StageResult
 from mint_litellm.types.events import Event, EventKind
@@ -359,7 +361,10 @@ class PluginRuntime:
     def result_deps(self) -> ResultDeps:
         return ResultDeps(config=self.config, database=self.database, recorder=self.recorder)
 
-    async def judge_call(self, data: Mapping[str, Any], auth: Any) -> Outcome:
+    async def judge_call(
+        self, data: Mapping[str, Any], auth: Any, timing: StageClock = OFF
+    ) -> Outcome:
+        started = timing.now()
         request = build_request(
             data,
             auth,
@@ -369,7 +374,8 @@ class PluginRuntime:
             resolver=compat.resolve_server,
             principal_factory=compat.principal_from_auth,
         )
-        return await evaluate_request(request, self.deps)
+        timing.since("hook", started)
+        return await evaluate_request(request, self.deps, timing)
 
     async def judge_refused_request(
         self, data: Mapping[str, Any], auth: Any, reason: Reason, kind: str
@@ -526,6 +532,8 @@ class PluginRuntime:
             if ready:
                 if self.verified and loop.time() < deadline:
                     log.info("MINT 자가 점검 통과")
+                    if self.config.gc_freeze:
+                        freeze_collector()
                     await self._report_mismatches()
                     await self._report_verified()
                     return
@@ -596,6 +604,17 @@ class PluginRuntime:
             ", ".join(f"{SELF_CHECK_DESCRIPTIONS[r.item]}" for r in self.last_results if not r.ok)
             or (error or "unknown"),
         )
+
+
+def freeze_collector() -> None:
+    """기동까지 만들어진 객체를 가비지 수거 대상에서 뺀다.
+
+    LiteLLM은 기동하며 수백만 개의 객체를 만든다. 가장 오래된 세대를 수거할 때마다 그 객체를 모두
+    훑느라 이벤트 루프가 0.5~1초 멈추고, 그동안 판정이 예산을 넘겨 차단된다. 기동 직후 한 번 수거한
+    뒤 얼려 두면 이후 수거는 얼린 뒤에 만들어진 객체만 훑는다. 얼린 객체는 이후 수거되지 않는다.
+    """
+    gc.collect()
+    gc.freeze()
 
 
 def worker_id() -> str:
