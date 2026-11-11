@@ -145,7 +145,9 @@ def test_client_cancel_during_decision_records_one_cancelled_decision(world, evi
 
     async def cancelled_call():
         async with mcp_session(subject.key) as session:
-            toxics["postgres"].add("latency", stream="downstream", latency=400)
+            # 취소(1초)가 판정의 첫 DB 읽기(스냅숏) 도중에 오도록 응답 한 번을 취소 시각보다
+            # 오래 걸리게 한다. 판정의 DB 왕복 횟수에 기대지 않는다.
+            toxics["postgres"].add("latency", stream="downstream", latency=1500)
             with anyio.move_on_after(1.0) as scope:
                 await session.call_tool("mcp_a-echo", {"text": "x", "marker": mark})
             assert scope.cancelled_caught
