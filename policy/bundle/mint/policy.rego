@@ -100,11 +100,17 @@ valid_sizes(values) if {
 
 pattern_names := {"url_external", "private_host", "path_traversal", "secret_like"}
 
-# 값이 있을 때만 쓴다(1단계 서버는 계약·패턴 값이 없어도 전면 차단되지 않는다).
+# 계약 관리 서버는 패턴이 없거나 깨지면 오류다(패턴 규칙이 조용히 평가되지 않아 허용되지 않게).
+# 1단계 서버는 패턴 값이 없어도 전면 차단되지 않는다.
 missing contains "arguments.patterns" if {
 	managed
-	"patterns" in object.keys(input.arguments)
 	not valid_patterns
+}
+
+# 패턴 규칙이 기대는 서버 종류. 빠지면 계약 관리 서버의 패턴 규칙이 건너뛰어지므로 오류다.
+missing contains "server.contract_status" if {
+	kind := object.get(input, ["server", "contract_status"], null)
+	not kind in {"none", "managed"}
 }
 
 valid_patterns if {

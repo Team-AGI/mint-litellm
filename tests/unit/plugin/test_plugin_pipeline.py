@@ -303,6 +303,7 @@ class TestStateStage:
             "auth_type": "none",
             "provider_allowed": False,
             "auth_server_allowed": False,
+            "contract_status": "none",
         }
 
     def test_unregistered_server_is_allowed_in_observe_mode_with_findings_recorded(self, tmp_path):
@@ -1569,7 +1570,9 @@ class TestPolicyInput:
             "auth_type",
             "provider_allowed",
             "auth_server_allowed",
+            "contract_status",
         }
+        assert doc["server"]["contract_status"] == "none"
         assert doc["tool"] == {"name": "search"}
         assert doc["settings"] == {"high_risk_tools": ["a", "b"]}
         assert doc["mode"] == "enforce" and doc["operation"] == "tool_call"
@@ -1851,6 +1854,13 @@ class TestUnregisteredServer:
         assert doc["server"]["status"] == "suspended"
         assert doc["server"]["provider_allowed"] is True
         assert doc["server"]["auth_server_allowed"] is True
+
+    def test_a_contract_managed_server_reports_its_kind_and_every_pattern(self):
+        server = server_row(contract_status="managed", approved_contracts=1)
+        doc = TestPolicyInput().build(snap=snapshot(server=server))
+        assert doc["server"]["contract_status"] == "managed"
+        assert set(doc["arguments"]["patterns"]) == {
+            "url_external", "private_host", "path_traversal", "secret_like"}
 
     def test_a_lifted_allowlist_entry_does_not_count(self):
         server = server_row(basis_allowlist_ids=("al1",))

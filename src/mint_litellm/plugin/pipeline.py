@@ -477,8 +477,7 @@ def build_policy_input(
         "auth_server_allowed": "auth_server" in allowed_kinds,
     }
     managed = server is not None and server.contract_status == "managed"
-    if managed:
-        server_doc["contract_status"] = "managed"
+    server_doc["contract_status"] = "managed" if managed else "none"
     # 승인된 계약의 위험 등급. 승인이 어떤 경로로 만들어졌든 정책이 같은 등급을 본다.
     tool_doc: dict[str, Any] = {"name": tool}
     contract = current_contract(snapshot, tool)

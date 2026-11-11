@@ -10,6 +10,7 @@ patterns(overrides) := object.union(
 managed := object.union(sample, {
 	"server": object.union(sample.server, {"contract_status": "managed"}),
 	"tool": {"name": "read", "risk_grade": "low"},
+	"arguments": {"keys": [], "sizes": {}, "patterns": patterns({})},
 })
 
 with_patterns(overrides) := object.union(managed, {"arguments": {"keys": [], "sizes": {}, "patterns": patterns(overrides)}})
@@ -112,9 +113,9 @@ test_pol_e08_e15_without_allowed_keys_is_not_applied if {
 }
 
 test_pol_malformed_patterns_are_missing_inputs if {
-	bad := object.union(managed, {"arguments": {"keys": [], "sizes": {}, "patterns": {"url_external": "yes"}}})
+	bad := replace(managed, {"arguments": {"keys": [], "sizes": {}, "patterns": {"url_external": "yes"}}})
 	"arguments.patterns" in evaluate(bad).missing_inputs
-	partial := object.union(managed, {"arguments": {"keys": [], "sizes": {}, "patterns": {"url_external": true}}})
+	partial := replace(managed, {"arguments": {"keys": [], "sizes": {}, "patterns": {"url_external": true}}})
 	"arguments.patterns" in evaluate(partial).missing_inputs
 }
 
@@ -173,4 +174,91 @@ test_a_tool_without_a_contract_has_no_grade_to_check if {
 test_the_grade_adds_to_approval_conditions_and_never_removes_them if {
 	value := with_conditions(with_grade(managed, "low"), {"high_risk_tools": ["read"]})
 	evaluate(value).decision == "RequireApproval"
+}
+
+# 차단 규칙이 기대는 입력이 빠지거나 깨지면 규칙이 조용히 건너뛰어져 허용되는 일이 없어야 한다.
+# 결정이 허용이 아니거나, 필수 입력 오류(missing_inputs)로 호출이 오류 처리되어야 한다.
+fails_closed(d) if d.decision != "Allow"
+
+fails_closed(d) if count(d.missing_inputs) > 0
+
+drop(value, path) := json.remove(value, [path])
+
+corrupt(value, path, bad) := json.patch(value, [{"op": "replace", "path": path, "value": bad}])
+
+unmanaged_firing := {
+	"R1": replace(sample, {"approval": {"present": false}}),
+	"R2": object.union(sample, {"settings": {"high_risk_tools": ["read"]}}),
+	"R3": with_conditions(
+		object.union(sample, {"time": {"iso": "instant", "ns": 378000000000000}}),
+		{"business_hours_only": true},
+	),
+}
+
+managed_firing := {
+	"POL-E-07": with_patterns({"url_external": true}),
+	"POL-E-09": with_patterns({"path_traversal": true}),
+	"POL-E-14": with_patterns({"private_host": true}),
+	"POL-E-08": with_conditions(
+		object.union(with_patterns({}), {"arguments": {"keys": ["extra"], "sizes": {"extra": 1}}}),
+		{"allowed_arg_keys": ["repo"]},
+	),
+	"R2": with_grade(managed, "high"),
+}
+
+all_firing := object.union(unmanaged_firing, managed_firing)
+
+test_each_block_rule_fires_on_its_own_input if {
+	every id, value in all_firing { id in evaluate(value).policy_ids }
+}
+
+test_the_block_rule_ids_are_all_covered_by_the_firing_inputs if {
+	covered := {id | some id, _ in all_firing} | {"POL-E-15"}
+	covered == data.mint.policy.block_ids | {"R2"}
+}
+
+dependencies := {
+	"R1": ["/approval", "/approval/present"],
+	"R2": ["/settings", "/settings/high_risk_tools", "/tool", "/tool/name"],
+	"R3": ["/approval/conditions", "/time", "/time/ns"],
+	"POL-E-07": ["/arguments", "/arguments/patterns", "/arguments/patterns/url_external", "/server/contract_status"],
+	"POL-E-09": ["/arguments", "/arguments/patterns", "/arguments/patterns/path_traversal", "/server/contract_status"],
+	"POL-E-14": ["/arguments", "/arguments/patterns", "/arguments/patterns/private_host", "/server/contract_status"],
+	"POL-E-08": ["/arguments/keys", "/arguments/patterns", "/server/contract_status"],
+}
+
+test_a_missing_dependency_of_a_block_rule_never_allows if {
+	every id, paths in dependencies {
+		every path in paths { fails_closed(evaluate(drop(all_firing[id], path))) }
+	}
+}
+
+broken_values := {
+	"R1": [["/approval/present", "false"]],
+	"R2": [["/settings/high_risk_tools", "read"], ["/tool/name", 5]],
+	"R3": [["/approval/conditions/business_hours_only", "true"], ["/time/ns", "x"]],
+	"POL-E-07": [["/arguments/patterns/url_external", "true"], ["/arguments/patterns", []], ["/server/contract_status", "unknown"]],
+	"POL-E-09": [["/arguments/patterns/path_traversal", 1], ["/arguments/patterns", "x"]],
+	"POL-E-14": [["/arguments/patterns/private_host", null], ["/arguments/keys", "x"]],
+	"POL-E-08": [["/approval/conditions/allowed_arg_keys", "repo"], ["/arguments/keys", "extra"]],
+}
+
+test_a_broken_dependency_of_a_block_rule_never_allows if {
+	every id, cases in broken_values {
+		every case in cases { fails_closed(evaluate(corrupt(all_firing[id], case[0], case[1]))) }
+	}
+}
+
+test_a_lost_business_hours_table_never_allows_the_default_hours if {
+	value := with_conditions(
+		object.union(sample, {"time": {"iso": "instant", "ns": 378000000000000}}),
+		{"business_hours_only": true},
+	)
+	d := data.mint.decision with input as value with data.mint.business_hours as null with data.mint.meta as meta
+	fails_closed(d)
+}
+
+test_the_server_kind_is_required_for_every_input if {
+	evaluate(drop(sample, "/server/contract_status")).missing_inputs == ["server.contract_status"]
+	evaluate(drop(managed, "/arguments/patterns")).missing_inputs == ["arguments.patterns"]
 }
