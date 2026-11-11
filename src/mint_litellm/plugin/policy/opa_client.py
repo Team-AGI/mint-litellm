@@ -1,11 +1,12 @@
 """OPA 판정 요청과 활성 판본 확인."""
 
 import asyncio
+import json
 import os
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
+import aiohttp
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from mint_litellm.plugin.obligations import normalize_policy_output
@@ -32,8 +33,14 @@ class Evaluation:
     failure: StageResult | None = None
 
 
+_JSON = {"Content-Type": "application/json"}
+
+
 class OPAClient:
     """OPA 판정 클라이언트. 연결을 재사용하고 시간 제한은 호출마다 받는다.
+
+    HTTP 클라이언트는 aiohttp이다. 호출 한 번에 이벤트 루프를 깨우는 횟수와 CPU가 httpx보다 적어서,
+    처리 흐름이 가득 찬 복제본에서 판정이 기다리는 시간이 줄어든다.
 
     연결이 끊기거나 OPA가 재시작되어 요청이 실패하면 그 호출은 ``DEPENDENCY_FAILURE``로
     차단되며, 끊어진 연결은 풀에서 제거되어 다음 호출이 새로 연결한다.
@@ -50,18 +57,20 @@ class OPAClient:
         self._context_url = base_url.rstrip("/") + "/v1/data/mint/context"
         self._markers: tuple[tuple[str, str], tuple[str, ...]] | None = None
         self._timeout = timeout_seconds
-        self._client: httpx.AsyncClient | None = None
+        self._client: aiohttp.ClientSession | None = None
         self._owner: tuple[int, asyncio.AbstractEventLoop] | None = None
 
     async def aclose(self) -> None:
         client, self._client, self._owner = self._client, None, None
         if client is not None:
-            await client.aclose()
+            await client.close()
 
-    def _http(self) -> httpx.AsyncClient:
+    def _http(self) -> aiohttp.ClientSession:
         owner = (os.getpid(), asyncio.get_running_loop())
         if self._client is None:
-            self._client = httpx.AsyncClient(follow_redirects=False, trust_env=False)
+            self._client = aiohttp.ClientSession(
+                trust_env=False, cookie_jar=aiohttp.DummyCookieJar()
+            )
             self._owner = owner
         elif self._owner != owner:
             raise RuntimeError("OPAClient is bound to the process and event loop that created it")
@@ -78,12 +87,16 @@ class OPAClient:
         if budget <= 0:
             return None
         try:
-            response = await self._http().get(self._context_url, timeout=budget)
-            response.raise_for_status()
-            result = response.json()["result"]
+            async with self._http().get(
+                self._context_url,
+                timeout=aiohttp.ClientTimeout(total=budget),
+                allow_redirects=False,
+            ) as response:
+                response.raise_for_status()
+                result = json.loads(await response.read())["result"]
             meta = (result["bundle"]["policy_version_id"], result["bundle"]["bundle_sha256"])
             markers = tuple(result["secret_markers"])
-        except (KeyError, TypeError, ValueError, httpx.HTTPError):
+        except (KeyError, TypeError, ValueError, aiohttp.ClientError, TimeoutError):
             return None
         if meta != version or not all(isinstance(m, str) and m for m in markers):
             return None
@@ -105,17 +118,25 @@ class OPAClient:
         if budget <= 0:
             return Evaluation(failure=StageResult.stop(Reason.DEPENDENCY_FAILURE))
         deadline = asyncio.get_running_loop().time() + budget
+        body = json.dumps(
+            {"input": policy_input}, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        ).encode()
         try:
             async with asyncio.timeout_at(deadline):
                 client = self._http()
                 for _ in range(2):
                     remaining = deadline - asyncio.get_running_loop().time()
-                    response = await client.post(
-                        self._url, json={"input": policy_input}, timeout=max(remaining, 0.001)
-                    )
-                    response.raise_for_status()
+                    async with client.post(
+                        self._url,
+                        data=body,
+                        headers=_JSON,
+                        timeout=aiohttp.ClientTimeout(total=max(remaining, 0.001)),
+                        allow_redirects=False,
+                    ) as response:
+                        response.raise_for_status()
+                        payload = await response.read()
                     try:
-                        result = response.json()["result"]
+                        result = json.loads(payload)["result"]
                         output = PolicyOutput.model_validate(result)
                     except (KeyError, TypeError, ValueError, ValidationError):
                         return Evaluation(failure=StageResult.stop(Reason.SCHEMA_ERROR))
@@ -136,5 +157,5 @@ class OPAClient:
                             return Evaluation(failure=normalized.failure)
                         return Evaluation(output=output)
                 return Evaluation(failure=StageResult.stop(Reason.POLICY_VERSION_MISMATCH))
-        except (TimeoutError, httpx.HTTPError):
+        except (TimeoutError, aiohttp.ClientError):
             return Evaluation(failure=StageResult.stop(Reason.DEPENDENCY_FAILURE))

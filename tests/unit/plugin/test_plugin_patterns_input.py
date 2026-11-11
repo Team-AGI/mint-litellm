@@ -1,7 +1,7 @@
 import asyncio
+import json
 from dataclasses import replace
 
-import httpx
 from plugin_helpers import (
     NOW,
     approval,
@@ -132,15 +132,37 @@ def test_stage1_input_without_patterns_is_still_accepted():
 
 
 def _markers_client(handler):
-    client = OPAClient("http://opa", 1.0)
+    """``handler(path) -> (상태 코드, JSON 값)``을 돌려주는 로컬 서버에 비밀 표지를 세 번 묻는다."""
+
+    async def serve(reader, writer):
+        try:
+            while True:
+                head = await reader.readuntil(b"\r\n\r\n")
+                status, value = handler(head.split(b" ")[1].decode())
+                body = json.dumps(value).encode()
+                writer.write(
+                    b"HTTP/1.1 %d X\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n"
+                    % (status, len(body))
+                    + body
+                )
+                await writer.drain()
+        except (asyncio.IncompleteReadError, ConnectionError):
+            pass
+        finally:
+            writer.close()
 
     async def go():
-        client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        client._owner = (__import__("os").getpid(), asyncio.get_running_loop())
-        first = await client.secret_markers(policy_version_id="v", bundle_sha256="h")
-        second = await client.secret_markers(policy_version_id="v", bundle_sha256="h")
-        other = await client.secret_markers(policy_version_id="w", bundle_sha256="h")
-        await client.aclose()
+        server = await asyncio.start_server(serve, "localhost", 0, family=2)
+        host, port = server.sockets[0].getsockname()[:2]
+        client = OPAClient(f"http://{host}:{port}", 1.0)
+        try:
+            first = await client.secret_markers(policy_version_id="v", bundle_sha256="h")
+            second = await client.secret_markers(policy_version_id="v", bundle_sha256="h")
+            other = await client.secret_markers(policy_version_id="w", bundle_sha256="h")
+        finally:
+            await client.aclose()
+            server.close()
+            await server.wait_closed()
         return first, second, other
 
     return asyncio.run(go())
@@ -149,17 +171,14 @@ def _markers_client(handler):
 def test_markers_are_read_once_per_version_and_must_match_the_active_bundle():
     hits = []
 
-    def handler(request):
-        hits.append(request.url.path)
-        return httpx.Response(
-            200,
-            json={
-                "result": {
-                    "bundle": {"policy_version_id": "v", "bundle_sha256": "h"},
-                    "secret_markers": ["AKIA"],
-                }
-            },
-        )
+    def handler(path):
+        hits.append(path)
+        return 200, {
+            "result": {
+                "bundle": {"policy_version_id": "v", "bundle_sha256": "h"},
+                "secret_markers": ["AKIA"],
+            }
+        }
 
     first, second, other = _markers_client(handler)
     assert first == second == ("AKIA",)
@@ -168,8 +187,8 @@ def test_markers_are_read_once_per_version_and_must_match_the_active_bundle():
 
 
 def test_marker_errors_are_none():
-    assert _markers_client(lambda r: httpx.Response(500)) == (None, None, None)
-    assert _markers_client(lambda r: httpx.Response(200, json={"result": {}})) == (None, None, None)
+    assert _markers_client(lambda path: (500, {})) == (None, None, None)
+    assert _markers_client(lambda path: (200, {"result": {}})) == (None, None, None)
 
 
 def test_stage1_servers_get_no_patterns_and_are_not_blocked_by_url_arguments(tmp_path):

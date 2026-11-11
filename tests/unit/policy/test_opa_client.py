@@ -120,3 +120,43 @@ def test_connection_failure_stops_as_dependency_failure():
         )
 
     assert asyncio.run(run()).failure.reason_code == Reason.DEPENDENCY_FAILURE
+
+
+def test_the_request_is_compact_utf8_json():
+    seen = []
+
+    async def go():
+        async def handler(reader, writer):
+            headers = await reader.readuntil(b"\r\n\r\n")
+            length = next(
+                int(line.split(b":", 1)[1])
+                for line in headers.split(b"\r\n")
+                if line.lower().startswith(b"content-length:")
+            )
+            seen.append((headers.lower(), await reader.readexactly(length)))
+            body = json.dumps({"result": output()}).encode()
+            writer.write(
+                b"HTTP/1.1 200 OK\r\nContent-Length: "
+                + str(len(body)).encode()
+                + b"\r\nConnection: close\r\n\r\n"
+                + body
+            )
+            await writer.drain()
+            writer.close()
+
+        server = await asyncio.start_server(handler, "localhost", 0, family=2)
+        host, port = server.sockets[0].getsockname()[:2]
+        client = OPAClient(f"http://{host}:{port}", 1)
+        try:
+            await client.evaluate(
+                {"tool": {"name": "한글"}}, policy_version_id="active", bundle_sha256=HASH
+            )
+        finally:
+            await client.aclose()
+            server.close()
+            await server.wait_closed()
+
+    asyncio.run(go())
+    ((headers, body),) = seen
+    assert b"content-type: application/json" in headers
+    assert body == '{"input":{"tool":{"name":"한글"}}}'.encode()

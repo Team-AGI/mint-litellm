@@ -23,7 +23,7 @@ def test_defaults():
     assert config.buffer_max_bytes == 50 * 1024 * 1024
     assert config.decision_budget_seconds == 0.3
     assert config.fingerprint_key is None and config.opa_url == "http://opa:8181"
-    assert config.selfcheck_grace_seconds == 120.0
+    assert config.selfcheck_grace_seconds == 120.0 and config.gc_freeze is True
 
 
 def test_every_setting_can_be_given():
@@ -41,9 +41,10 @@ def test_every_setting_can_be_given():
         "MINT_READINESS_URL": "http://localhost:4000/health/readiness",
         "MINT_SELFCHECK_GRACE_SECONDS": "30",
         "MINT_LOG_LEVEL": " debug ",
+        "MINT_GC_FREEZE": "false",
     }
     config = PluginConfig.from_env(env)
-    assert config.log_level == "DEBUG"
+    assert config.log_level == "DEBUG" and config.gc_freeze is False
     assert config.mode_ceiling is Mode.OBSERVE and config.required is False
     assert config.high_risk_tools == {"delete_repo", "drop_table"}
     assert config.buffer_dir == Path("/data/buf") and config.buffer_max_bytes == 2048

@@ -34,6 +34,7 @@ from mint_litellm.plugin.selfcheck import (
     get_runtime,
     leave_startup_failure_marker,
 )
+from mint_litellm.plugin.timing import OFF, StageClock, stage_fields
 from mint_litellm.types.decision import MINT_CTX_KEY
 from mint_litellm.types.reason_codes import Reason
 
@@ -143,15 +144,17 @@ class MintGuardrail(CustomGuardrail):
         """도구 호출을 판정한다. 차단은 예외이고, 병렬 단계가 돌려주는 값은 버려진다.
 
         DEBUG 로그가 켜져 있을 때만 판정 진입부터 반환까지의 시간(선기록 포함)을 재서 한 줄 남긴다.
-        꺼져 있으면 시간을 재지 않는다.
+        줄 뒤에는 단계별 시간(``*_ms``)과 입출력 대기 횟수(``awaits``)가 붙는다. 꺼져 있으면 줄을
+        만들지 않는다.
         """
         timed = log.isEnabledFor(logging.DEBUG)
         started = time.perf_counter() if timed else 0.0
         reference = None
         allowed = False
+        timing = StageClock() if timed else OFF
         try:
             try:
-                outcome = await self._runtime.judge_call(data, user_api_key_dict)
+                outcome = await self._runtime.judge_call(data, user_api_key_dict, timing)
             except Exception as exc:
                 log.error("도구 호출 판정 오류: %s", type(exc).__name__)
                 raise internal_block() from exc
@@ -166,8 +169,9 @@ class MintGuardrail(CustomGuardrail):
         finally:
             if timed:
                 log.debug(
-                    "decision_ms=%.3f ref=%s allowed=%s",
+                    "decision_ms=%.3f ref=%s allowed=%s %s",
                     (time.perf_counter() - started) * 1000,
                     reference,
                     str(allowed).lower(),
+                    stage_fields(timing.seconds, timing.awaits),
                 )

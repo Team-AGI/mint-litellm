@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -23,6 +25,8 @@ from mint_litellm.types.events import (
     ResponseObservation,
     call_source_key,
 )
+
+log = logging.getLogger("mint_litellm.result")
 
 
 class RevocationSource(Protocol):
@@ -90,7 +94,10 @@ async def observe_response(
 ) -> None:
     if not ctx.get("allowed"):
         return
+    timed = log.isEnabledFor(logging.DEBUG)
+    started = time.perf_counter() if timed else 0.0
     check, current, revoked = await check_revocation(ctx, deps)
+    checked = time.perf_counter() if timed else 0.0
     observation = ResponseObservation(
         is_error=is_error,
         size_bytes=size_bytes,
@@ -101,6 +108,15 @@ async def observe_response(
     )
     event = _event(ctx, EventKind.CALL_RESPONSE_RECEIVED, observation.model_dump(mode="json"), deps)
     await deps.recorder.record(event)
+    if timed:
+        done = time.perf_counter()
+        log.debug(
+            "response_ms=%.3f ref=%s revocation_ms=%.3f event_ms=%.3f",
+            (done - started) * 1000,
+            ctx.get("decision_ref"),
+            (checked - started) * 1000,
+            (done - checked) * 1000,
+        )
 
 
 async def observe_unknown_outcome(
