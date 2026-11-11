@@ -8,6 +8,7 @@ import pytest
 from plugin_helpers import FakeStore, config
 
 from mint_litellm.compat.litellm_1_106 import RegistryEntry
+from mint_litellm.plugin import selfcheck
 from mint_litellm.plugin.buffer import EvidenceRecorder, LocalBuffer, SystemEventKeys
 from mint_litellm.plugin.selfcheck import (
     LiteLLMView,
@@ -424,6 +425,33 @@ def test_a_passing_startup_verifies_without_stopping(tmp_path):
     runtime, store, stopped, _ = make_runtime(tmp_path)
     asyncio.run(runtime._startup())
     assert runtime.verified and stopped == [] and event_kinds(store) == ["enforcement_verified"]
+
+
+def test_a_passing_startup_freezes_the_collector_only_when_asked_to(tmp_path, monkeypatch):
+    frozen = []
+    monkeypatch.setattr(selfcheck, "freeze_collector", lambda: frozen.append(1))
+    runtime, _, _, _ = make_runtime(tmp_path)
+    asyncio.run(runtime._startup())
+    assert frozen == []
+    runtime, _, _, _ = make_runtime(tmp_path)
+    runtime.config = replace(runtime.config, gc_freeze=True)
+    asyncio.run(runtime._startup())
+    assert frozen == [1]
+    runtime, _, _, _ = make_runtime(tmp_path, v=view(callbacks=[GUARDRAIL]))
+    runtime.config = replace(runtime.config, gc_freeze=True)
+    asyncio.run(runtime._startup())
+    assert frozen == [1]
+
+
+def test_freezing_the_collector_moves_live_objects_out_of_collection():
+    import gc
+
+    gc.unfreeze()
+    selfcheck.freeze_collector()
+    try:
+        assert gc.get_freeze_count() > 0
+    finally:
+        gc.unfreeze()
 
 
 def test_a_failing_startup_records_the_failure_and_stops_the_process(tmp_path):
