@@ -116,6 +116,19 @@ def plain(stack):
     return port
 
 
+@pytest.fixture(scope="session")
+def multiworker(stack):
+    """워커가 둘인 복제본(litellm-mw)의 포트. 떠 있지 않으면 CI에서는 실패, 로컬에서는 건너뛴다."""
+    port = support.MULTIWORKER_PORT
+    try:
+        ready = httpx.get(support.url(port, "/health/readiness"), timeout=3).status_code == 200
+    except httpx.HTTPError:
+        ready = False
+    if not ready:
+        _unready("워커가 둘인 LiteLLM 복제본(litellm-mw)이 떠 있지 않음")
+    return port
+
+
 def _bootstrap(mint, helper) -> None:
     """제어 평면 키, 첫 관리자, 첫 정책 판본, 서버 a·b의 첫 승인을 만든다."""
     suffix = uuid.uuid4().hex[:8]

@@ -58,6 +58,8 @@ x-testserver: &testserver
 services:
   postgres:
     image: postgres:16@sha256:5db6dac2ef5dcff512f4f00a009c3c332b9f2f28f24277175bf3e4a3d02ef83a
+    # LiteLLM 복제본 셋(워커 넷 이상)이 연결을 워커마다 잡으므로 기본 상한(100)을 넉넉히 늘린다.
+    command: ["postgres", "-c", "max_connections=300"]
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${MINT_E_DB_PASSWORD:-integration-db}
@@ -262,6 +264,25 @@ services:
       litellm1:
         condition: service_healthy
 
+  # 워커가 둘인 복제본. 배포 기본값과 같은 구성이며, 어느 워커도 목록화하지 않은 도구를 직접 호출하는
+  # 경로를 시험한다. 설정 파일은 다른 시험이 바꾸는 변수를 따르지 않고 기본 설정에 고정한다.
+  litellm-mw:
+    <<: *litellm
+    environment:
+      <<: *litellm-env
+      NUM_WORKERS: "2"
+      MINT_DB_POOL_SIZE: "4"
+    ports:
+      - "${MINT_E_PORT_PREFIX:-}4104:4000"
+    volumes:
+      - ./config/litellm.mint.yaml:/app/config/litellm.config.yaml:ro
+      - ./guardrails/it_guardrails.py:/app/config/it_guardrails.py:ro
+      - buffer3:/var/lib/mint/buffer
+      - export:/var/lib/mint/export:ro
+    depends_on:
+      litellm1:
+        condition: service_healthy
+
   # 플러그인이 없는 순정 이미지. 기반 동작 시험과 순정 구성 점검에 쓴다.
   litellm-plain:
     image: ghcr.io/berriai/litellm-database:v1.106.6@sha256:7ef0e78fe00ad5ea7ea45666cc1d1f02cb7076aee69091543bf397de52db33ce
@@ -294,4 +315,5 @@ volumes:
   bundles:
   buffer1:
   buffer2:
+  buffer3:
   export:
