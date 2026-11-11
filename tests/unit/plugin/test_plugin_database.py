@@ -940,9 +940,6 @@ def test_the_loser_of_a_concurrent_consumption_is_always_blocked_as_already_cons
 ):
     """복제본 둘이 같은 호출별 승인을 동시에 소비하면 진 쪽은 승인 요구로 막힌다."""
     rounds = 20
-    approvals = [uuid.uuid4() for _ in range(rounds)]
-    for call_id in approvals:
-        scenario.add_call_approval(call_id)
 
     def replica(name):
         live = database(plugin_dsn, max_size=4, acquire_timeout=0.5)
@@ -970,6 +967,8 @@ def test_the_loser_of_a_concurrent_consumption_is_always_blocked_as_already_cons
         outcomes = []
         try:
             for _ in range(rounds):
+                # 회차마다 승인 하나만 둔다. 한쪽이 먼저 끝나도 다른 쪽이 다음 승인을 고르지 못한다.
+                scenario.add_call_approval(uuid.uuid4())
                 outcomes.append(
                     await asyncio.gather(
                         evaluate_request(request(principal), deps_first),
