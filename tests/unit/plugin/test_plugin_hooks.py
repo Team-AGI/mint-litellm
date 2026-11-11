@@ -306,8 +306,16 @@ class TestGuardrailJudgment:
         with caplog.at_level(logging.DEBUG, logger="mint_litellm.guardrail"):
             pre(runtime.guardrail, synthesized(logging_obj()))
         (line,) = self.timing_lines(caplog)
-        found = re.fullmatch(r"decision_ms=(\d+\.\d{3}) ref=(\S+) allowed=true", line)
+        found = re.fullmatch(r"decision_ms=(\d+\.\d{3}) ref=(\S+) allowed=true (.*)", line)
         assert found and float(found[1]) >= 0
+        fields = dict(part.split("=") for part in found[3].split())
+        assert list(fields) == [
+            "hook_ms", "snapshot_ms", "markers_ms", "input_ms", "patterns_ms",
+            "fingerprint_ms", "policy_ms", "event_ms", "awaits",
+        ]
+        # 스냅숏 조회·정책 엔진·사건 기록 세 번의 입출력 대기. 단계 시간의 합은 전체를 넘지 않는다.
+        assert fields["awaits"] == "3"
+        assert sum(float(v) for k, v in fields.items() if k.endswith("_ms")) <= float(found[1]) + 1
         (event,) = store.of_kind("decision_evaluated")
         assert found[2] == event.payload["decision_ref"]
 
@@ -334,14 +342,14 @@ class TestGuardrailJudgment:
     ):
         runtime, _, _ = build_runtime(tmp_path, contract_snapshot)
 
-        async def explode(data, auth):
+        async def explode(data, auth, timing):
             raise RuntimeError("boom")
 
         runtime.judge_call = explode
         with caplog.at_level(logging.DEBUG, logger="mint_litellm.guardrail"):
             blocked(lambda: pre(runtime.guardrail, synthesized(logging_obj())))
         (line,) = self.timing_lines(caplog)
-        assert line.endswith("ref=None allowed=false")
+        assert " ref=None allowed=false " in line
 
     def test_without_debug_nothing_is_timed_or_logged(
         self, tmp_path, contract_snapshot, caplog, monkeypatch

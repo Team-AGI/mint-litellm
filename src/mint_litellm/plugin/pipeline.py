@@ -39,6 +39,7 @@ from mint_litellm.plugin.snapshot import (
     Snapshot,
     SnapshotQuery,
 )
+from mint_litellm.plugin.timing import OFF, StageClock
 from mint_litellm.types.canonical import credential_scope
 from mint_litellm.types.decision import (
     UNSUPPORTED_STAGE,
@@ -129,6 +130,7 @@ class Outcome:
     error: MintError | None
     evidence: Evidence
     context: dict[str, Any]
+    timing: StageClock = OFF
 
 
 def scope_matches(scope_type: str, scope_id: str, principal: Principal, server_id: str) -> bool:
@@ -402,17 +404,22 @@ def _argument_patterns(
     conditions: Mapping[str, Any],
     arguments: Mapping[str, Any],
     secret_markers: Sequence[str],
+    timing: StageClock = OFF,
 ) -> dict[str, bool]:
     hosts = {_host_of(h) for h in _condition_list(conditions, "allowed_hosts")}
     hosts |= {_host_of(v) for v, org in snapshot.egress_targets if org in (None, principal.org_id)}
     raw_paths = _condition_list(conditions, "allowed_paths")
     paths = [posixpath.normpath(p.replace("\\", "/")) for p in raw_paths]
-    return compute_patterns(
-        arguments,
-        allowed_hosts={h for h in hosts if h},
-        allowed_paths=paths,
-        secret_markers=secret_markers,
-    )
+    started = timing.now()
+    try:
+        return compute_patterns(
+            arguments,
+            allowed_hosts={h for h in hosts if h},
+            allowed_paths=paths,
+            secret_markers=secret_markers,
+        )
+    finally:
+        timing.since("patterns", started)
 
 
 def build_policy_input(
@@ -427,6 +434,7 @@ def build_policy_input(
     operation: OperationType,
     high_risk_tools: frozenset[str],
     secret_markers: Sequence[str] = (),
+    timing: StageClock = OFF,
 ) -> dict[str, Any]:
     """정책 입력. 인자 원문은 넣지 않고(패턴 불리언만), 값이 없는 입력은 키를 만들지 않는다."""
     now = snapshot.now
@@ -490,7 +498,12 @@ def build_policy_input(
         # 인자 패턴 정책은 계약 관리 서버에만 판정한다. 1단계 서버는 입력도 만들지 않는다.
         argument_patterns=(
             _argument_patterns(
-                snapshot, principal, approval.get("conditions", {}), arguments, secret_markers
+                snapshot,
+                principal,
+                approval.get("conditions", {}),
+                arguments,
+                secret_markers,
+                timing,
             )
             if managed
             else None
@@ -778,6 +791,7 @@ class _Run:
     # 이 호출에서 기록을 시작한 가장 큰 시도 번호. 취소 사건은 그보다 큰 번호를 쓴다.
     last_attempt: int = 0
     control_listing: bool = False
+    timing: StageClock = OFF
 
 
 def _decision_snapshot(
@@ -902,10 +916,16 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         team_id=principal.team_id,
     )
     snapshot: Snapshot | None = None
+    timing = run.timing
     for attempt in (1, 2):
+        started = timing.now()
+        timing.wait()
         try:
-            async with asyncio.timeout(run.deadline.remaining()):
-                snapshot = await deps.snapshots.read_snapshot(query)
+            try:
+                async with asyncio.timeout(run.deadline.remaining()):
+                    snapshot = await deps.snapshots.read_snapshot(query)
+            finally:
+                timing.since("snapshot", started)
             break
         except Exception as exc:
             log.debug(
@@ -987,6 +1007,8 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         and snapshot.server is not None
         and snapshot.server.contract_status == "managed"
     ):
+        started = timing.now()
+        timing.wait()
         try:
             fetched = await deps.secret_markers(
                 policy_version_id=snapshot.policy_version.id,
@@ -995,11 +1017,13 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
             )
         except Exception:
             fetched = None
+        timing.since("markers", started)
         if fetched is None:
             stages.add(Stage.POLICY, StageResult.stop(Reason.DEPENDENCY_FAILURE))
             stages.dependency = Dependency.OPA
             return
         markers = fetched
+    started = timing.now()
     try:
         policy_input = build_policy_input(
             snapshot=snapshot,
@@ -1012,11 +1036,18 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
             operation=req.operation,
             high_risk_tools=config.high_risk_tools,
             secret_markers=markers,
+            timing=timing,
         )
     except InputError as exc:
         stages.add(Stage.POLICY, StageResult.stop(Reason.SCHEMA_ERROR, detail=str(exc)[:200]))
         return
+    # 패턴 계산은 따로 재므로 입력 단계에서 뺀다.
+    timing.since("input", started + timing.seconds.get("patterns", 0.0))
+    started = timing.now()
+    if snapshot.policy_version is not None and deps.evaluate is not None:
+        timing.wait()
     run.policy = await policy_stage(deps, snapshot, policy_input, run.deadline.remaining())
+    timing.since("policy", started)
     stages.dependency = run.policy.dependency
     for stage, result in run.policy.results:
         stages.add(stage, result)
@@ -1024,6 +1055,7 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         return
 
     run.current = Stage.OBLIGATIONS
+    started = timing.now()
     check = obligation_check(
         snapshot,
         run.principal,
@@ -1034,6 +1066,7 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         config,
         req.invocation_id,
     )
+    timing.since("fingerprint", started)
     for result in check.results:
         stages.add(Stage.OBLIGATIONS, result)
     if not check.results:
@@ -1082,7 +1115,9 @@ def _block_with(conclusion: Conclusion, stop: StageResult) -> Conclusion:
     )
 
 
-async def evaluate_request(req: CallRequest, deps: PipelineDeps) -> Outcome:
+async def evaluate_request(
+    req: CallRequest, deps: PipelineDeps, timing: StageClock = OFF
+) -> Outcome:
     """한 호출(또는 목록의 도구 하나)을 판정하고 증거를 남긴다.
 
     허용 경로에서 DB 선기록이 실패하면 호출은 ``AUDIT_FAILURE``로 차단된다. 차단 경로의 기록
@@ -1096,6 +1131,7 @@ async def evaluate_request(req: CallRequest, deps: PipelineDeps) -> Outcome:
         mode=effective_mode(deps.config.mode_ceiling, Mode.ENFORCE),
         evaluated_at=deps.clock(),
         deadline=Deadline(deps.config.decision_budget_seconds),
+        timing=timing,
     )
     try:
         return await _evaluate(run, deps)
@@ -1160,12 +1196,20 @@ async def _evaluate(run: _Run, deps: PipelineDeps) -> Outcome:
     if run.control_listing:
         document = _decision_snapshot(run, conclusion, None)
         return Outcome(
-            True, document, None, Evidence.DB, _context_document(run, document, True, None)
+            True,
+            document,
+            None,
+            Evidence.DB,
+            _context_document(run, document, True, None),
+            run.timing,
         )
     event = decision_event(_decision_snapshot(run, conclusion, consume))
     run.event_started = True
     run.last_attempt = req.attempt_id
+    started = run.timing.now()
+    run.timing.wait()
     stored = await deps.recorder.try_database(event, consume, timeout=run.deadline.remaining())
+    run.timing.since("event", started)
     evidence = Evidence.DB
     attempt: int | None = None
     if stored.stored:
@@ -1212,6 +1256,7 @@ async def _evaluate(run: _Run, deps: PipelineDeps) -> Outcome:
         error=error,
         evidence=evidence,
         context=_context_document(run, snapshot_doc, allowed, consume),
+        timing=run.timing,
     )
 
 
