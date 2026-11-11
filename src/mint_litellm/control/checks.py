@@ -247,7 +247,7 @@ def _check_file_rows(judge, config, general, lsettings, servers_cfg, env, replic
           "issuer가 없는 발견형 인증 서버: " + ", ".join(no_issuer))
     judge("enable_redis_auth_cache",
           replicas < 2 or _truthy(lsettings.get("enable_redis_auth_cache")),
-          "복제본이 둘 이상이면 enable_redis_auth_cache와 공유 Redis를 설정하십시오.")
+          "복제본 × 워커가 둘 이상이면 enable_redis_auth_cache와 공유 Redis를 설정하십시오.")
     not_enforced = [n for n, s in servers_cfg.items()
                     if str((s or {}).get("auth_type", "")).lower() in _DISCOVERY_AUTH
                     and ((s or {}).get("oauth_identity_binding") or {}).get("mode") != "enforce"]

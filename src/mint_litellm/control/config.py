@@ -42,7 +42,9 @@ class ControlConfig:
             litellm_key=env.get("MINT_LITELLM_KEY"),
             litellm_config=Path(config_path) if config_path else None,
             mode_ceiling=ceiling,
-            replicas=int(env.get("MINT_REPLICAS", "1")),
+            # 캐시를 따로 가지는 프로세스 수: 복제본 × 컨테이너당 워커
+            replicas=int(env.get("MINT_REPLICAS", "1"))
+            * int(env.get("MINT_LITELLM_WORKERS", "1")),
         )
 
     def require_database(self) -> str:

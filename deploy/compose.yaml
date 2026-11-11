@@ -49,7 +49,9 @@ services:
       MINT_OPA_URL: http://opa:8181
       MINT_BUFFER_DIR: /var/lib/mint/buffer
       MINT_BUFFER_MAX_BYTES: ${MINT_BUFFER_MAX_BYTES:-52428800}
-      MINT_DB_POOL_SIZE: ${MINT_DB_POOL_SIZE:-8}
+      MINT_DB_POOL_SIZE: ${MINT_DB_POOL_SIZE:-4}
+      # 컨테이너당 LiteLLM 워커 프로세스 수. 워커마다 이벤트 루프가 따로라 동시 호출이 서로를 기다리지 않는다.
+      NUM_WORKERS: ${MINT_LITELLM_WORKERS:-2}
       MINT_DECISION_BUDGET_MS: ${MINT_DECISION_BUDGET_MS:-300}
       MINT_READINESS_URL: http://localhost:4000/health/readiness
       MINT_SELFCHECK_GRACE_SECONDS: ${MINT_SELFCHECK_GRACE_SECONDS:-30}
@@ -95,6 +97,7 @@ services:
       MINT_LITELLM_CONFIG: /app/config/litellm.config.yaml
       MINT_OPERATOR_TOKEN: ${MINT_OPERATOR_TOKEN:-}
       MINT_OPA_URL: http://opa:8181
+      MINT_LITELLM_WORKERS: ${MINT_LITELLM_WORKERS:-2}
       MINT_POLICY_ROOT: /opt/mint
       MINT_OPA_BUNDLE_PATH: /bundles/mint.tar.gz
       MINT_EXPORT_DIR: /var/lib/mint/export

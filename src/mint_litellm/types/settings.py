@@ -372,10 +372,10 @@ SETTINGS_TABLE: tuple[SettingRow, ...] = (
     SettingRow(
         key="enable_redis_auth_cache",
         location=SettingLocation.LITELLM_SETTINGS,
-        value="복제본이 둘 이상이면 설정 (공유 Redis 필요)",
+        value="복제본 × 워커가 둘 이상이면 설정 (공유 Redis 필요)",
         grade=SettingGrade.RECOMMENDED,
         observation_item="auth_cache_shared",
-        reason="Redis가 없으면 키·팀 권한 캐시 무효화가 복제본 사이에 전파되지 않는다.",
+        reason="Redis가 없으면 키·팀 권한 캐시 무효화가 복제본과 워커 사이에 전파되지 않는다.",
     ),
     SettingRow(
         key="사용자·팀에 결속되지 않은 키",

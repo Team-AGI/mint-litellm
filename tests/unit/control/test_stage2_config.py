@@ -98,3 +98,10 @@ def test_the_control_instance_id_follows_the_plugin_identifier_rule():
     for bad in ("../x", "a/b", "a b", "-x", ""):
         with _pytest.raises(ControlError):
             ControlConfig.from_env({"MINT_INSTANCE_ID": bad})
+
+
+def test_the_cache_sharing_check_counts_workers_as_well_as_replicas():
+    from mint_litellm.control.config import ControlConfig
+
+    assert ControlConfig.from_env({}).replicas == 1
+    assert ControlConfig.from_env({"MINT_REPLICAS": "2", "MINT_LITELLM_WORKERS": "3"}).replicas == 6
