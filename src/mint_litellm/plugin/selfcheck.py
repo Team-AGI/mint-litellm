@@ -39,6 +39,7 @@ from mint_litellm.plugin.policy.opa_client import Evaluation, OPAClient
 from mint_litellm.plugin.restore_watch import RestoreWatch
 from mint_litellm.plugin.result import ResultDeps
 from mint_litellm.plugin.snapshot import PluginDatabase, RegisteredServer
+from mint_litellm.plugin.timing import OFF, StageClock
 from mint_litellm.types.canonical import sha256
 from mint_litellm.types.decision import OperationType, StageResult
 from mint_litellm.types.events import Event, EventKind
@@ -359,7 +360,10 @@ class PluginRuntime:
     def result_deps(self) -> ResultDeps:
         return ResultDeps(config=self.config, database=self.database, recorder=self.recorder)
 
-    async def judge_call(self, data: Mapping[str, Any], auth: Any) -> Outcome:
+    async def judge_call(
+        self, data: Mapping[str, Any], auth: Any, timing: StageClock = OFF
+    ) -> Outcome:
+        started = timing.now()
         request = build_request(
             data,
             auth,
@@ -369,7 +373,8 @@ class PluginRuntime:
             resolver=compat.resolve_server,
             principal_factory=compat.principal_from_auth,
         )
-        return await evaluate_request(request, self.deps)
+        timing.since("hook", started)
+        return await evaluate_request(request, self.deps, timing)
 
     async def judge_refused_request(
         self, data: Mapping[str, Any], auth: Any, reason: Reason, kind: str

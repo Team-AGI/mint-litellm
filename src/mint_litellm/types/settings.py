@@ -108,8 +108,11 @@ MINT_SETTINGS: tuple[MintSettingRow, ...] = (
             "플러그인 로그 수준(DEBUG, INFO, WARNING, ERROR). 정하지 않으면 로그 설정을 "
             "바꾸지 않는다. DEBUG이면 도구 호출 판정마다 "
             "`decision_ms=<밀리초> ref=<판정 참조> allowed=<true|false>` 한 줄을 표준 오류에 "
-            "남긴다. 시간은 판정 진입부터 반환까지이고 선기록을 포함한다. "
-            "DEBUG가 아니면 시간을 재지 않는다."
+            "남기고, 그 뒤에 단계별 시간(`hook_ms`, `snapshot_ms`, `markers_ms`, `input_ms`, "
+            "`patterns_ms`, `fingerprint_ms`, `policy_ms`, `event_ms`)과 입출력 대기 횟수"
+            "(`awaits`)가 붙는다. 시간은 판정 진입부터 반환까지이고 선기록을 포함한다. "
+            "응답을 받은 호출은 `response_ms=<밀리초> ref=<판정 참조> revocation_ms=<밀리초> "
+            "event_ms=<밀리초>` 한 줄도 남긴다. DEBUG가 아니면 시간을 재지 않는다."
         ),
     ),
     MintSettingRow(
