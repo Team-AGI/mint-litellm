@@ -281,7 +281,8 @@ def test_the_snapshot_filters_by_scope_and_leaves_out_pending_approvals(scenario
 def test_the_snapshot_is_read_by_one_statement_outside_a_transaction_block(
     scenario, plugin_dsn, monkeypatch
 ):
-    # 한 문장은 하나의 스냅숏을 본다. 트랜잭션 블록이 여러 문장을 감싸면 now()가 문장 시작과 달라진다.
+    # 한 문장은 하나의 스냅숏을 본다. 트랜잭션 블록이 여러 문장을 감싸면 now()가
+    # 문장 시작과 달라진다.
     monkeypatch.setattr(
         snapshot_module,
         "SNAPSHOT_SQL",
