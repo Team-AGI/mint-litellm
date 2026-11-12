@@ -19,6 +19,7 @@ from mint_litellm.control.errors import (
     separation_of_duties,
     stale_evidence,
 )
+from mint_litellm.control.services import evidence
 from mint_litellm.control.services.base import (
     Prefetched,
     enqueue_job,
@@ -908,6 +909,8 @@ def decide(
         ):
             raise conflict("모든 검사가 통과해야 승인할 수 있습니다.")
         _require_fresh_evidence(ctx, row)
+        if decision == "approve":  # 사람이 확인하는 증빙이 없으면 일반 승인을 하지 않는다
+            evidence.require(ctx, "approve", "intake", str(row["id"]))
         now = datetime.now(UTC)
         if valid_until is not None:
             if valid_until <= now:

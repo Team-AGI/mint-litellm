@@ -4,3 +4,22 @@
 {% macro pager(base, page, count) %}
 <div class="pager">{% if page > 1 %}<a class="button" href="{{ base }}{{ '&' if '?' in base else '?' }}page={{ page - 1 }}">이전</a>{% endif %}{% if count >= 50 %}<a class="button" href="{{ base }}{{ '&' if '?' in base else '?' }}page={{ page + 1 }}">다음</a>{% endif %}</div>
 {% endmacro %}
+{% macro evidence_panel(items, action, actor) %}
+<h2>필수 증빙</h2>
+<table><thead><tr><th>증빙</th><th>필요한 때</th><th>상태</th><th>유효 기한</th><th>확인한 사람</th></tr></thead><tbody>
+{% for e in items %}<tr><td>{{ e.label }}</td><td>{{ L.pick(L.EVIDENCE_GATE, e.gate) }}</td><td>{{ badge(L.EVIDENCE, e.state) }}</td><td class="nowrap">{{ e.row.valid_until | when if e.row and e.row.valid_until else '—' }}</td><td>{{ (e.row.attached_by | who) if e.row else '—' }}</td></tr>{% endfor %}
+</tbody></table>
+{% if actor.role != 'viewer' and items %}
+<form method="post" action="{{ action }}" class="form">
+  {{ csrf(actor) }}
+  <div class="row">
+    <label>증빙 종류<select name="kind">{% for e in items %}<option value="{{ e.key }}">{{ e.label }}</option>{% endfor %}</select></label>
+    <label>문서 위치(선택)<input name="ref"></label>
+    <label>유효 기간(일, 비우면 기본 기간)<input type="number" name="valid_days" min="1"></label>
+  </div>
+  <label>확인한 내용<textarea name="summary" required></textarea></label>
+  <label><input type="checkbox" name="not_applicable" value="1"> 해당 없음으로 확인(해당 없음 가능한 증빙만, 확인한 내용에 사유를 적습니다)</label>
+  <div class="actions"><button type="submit" class="primary">증빙 첨부</button></div>
+</form>
+{% endif %}
+{% endmacro %}

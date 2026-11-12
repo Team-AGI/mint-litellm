@@ -14,6 +14,7 @@ from mint_litellm.control.errors import (
     separation_of_duties,
     stale_evidence,
 )
+from mint_litellm.control.services import evidence
 from mint_litellm.control.services.base import enqueue_job, service
 from mint_litellm.types.canonical import (
     canonical_text,
@@ -420,6 +421,8 @@ def reapprove(
     """
     plan = _plan(ctx, server_id, intake_id, candidate_ids, deployment_id, expected_version,
                  second)
+    if plan["deployment"]:  # 배포 계약(판본·실행 위치)이 바뀌는 재승인은 판본 확인 증빙이 먼저다
+        evidence.require(ctx, "reapprove", "server", server_id)
     fields = set(plan["server"]["deployment_drift_fields"] or ())
     if plan["server"]["deployment_drift"] and not fields:
         fields.add("unknown")

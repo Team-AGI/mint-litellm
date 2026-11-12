@@ -19,7 +19,7 @@ def test_applies_once_and_is_a_no_op_the_second_time(fresh_db):
             "011_reapproval_plan_cancelled", "012_staff_records", "013_stage2_hardening",
             "014_operator_negative", "015_deployment_proposer",
             "016_intake_address_reject", "017_approval_contract_binding",
-            "018_exec_contract_fields",
+            "018_exec_contract_fields", "019_policy_evidence",
         ]
 
 
@@ -40,7 +40,7 @@ def test_first_run_on_an_empty_database_applies_everything(fresh_db):
                 "011_reapproval_plan_cancelled", "012_staff_records", "013_stage2_hardening",
                 "014_operator_negative", "015_deployment_proposer",
             "016_intake_address_reject", "017_approval_contract_binding",
-                "018_exec_contract_fields",
+                "018_exec_contract_fields", "019_policy_evidence",
             ]
             assert conn.execute("SELECT count(*) FROM mint.orgs").fetchone()[0] == 0
     finally:
@@ -94,7 +94,7 @@ def test_a_database_with_only_the_first_migration_is_upgraded(fresh_db):
                 "011_reapproval_plan_cancelled", "012_staff_records", "013_stage2_hardening",
                 "014_operator_negative", "015_deployment_proposer",
             "016_intake_address_reject", "017_approval_contract_binding",
-                "018_exec_contract_fields",
+                "018_exec_contract_fields", "019_policy_evidence",
             ]
             assert conn.execute("SELECT count(*) FROM mint.intakes").fetchone()[0] == 0
             row = conn.execute(

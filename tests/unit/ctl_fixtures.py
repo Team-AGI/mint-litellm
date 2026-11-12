@@ -88,3 +88,16 @@ def login_roles(fresh_db: str) -> Iterator[list[str]]:
         for login in LOGIN_ROLES.values():
             conn.execute(f'DROP OWNED BY "{login}"')
             conn.execute(f'DROP ROLE IF EXISTS "{login}"')
+
+
+def seed_approval_evidence(conn, intake_id) -> None:
+    """신청 승인에 필요한 사람 확인 증빙을 모두 유효하게 넣는다(승인 시험의 준비 단계)."""
+    from mint_litellm.control.services.evidence import KINDS
+
+    names = [k.key for k in KINDS.values() if k.gate == "approve"]
+    conn.execute(
+        "INSERT INTO mint.policy_evidence (id, instance_id, kind, subject_kind, subject_id,"
+        " summary, attached_by, valid_until) SELECT gen_random_uuid(), %s, k, 'intake', %s,"
+        " '시험', 'root', now() + interval '30 days' FROM unnest(%s::text[]) AS k",
+        (INSTANCE, str(intake_id), names),
+    )

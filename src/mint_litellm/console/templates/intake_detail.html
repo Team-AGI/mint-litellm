@@ -32,6 +32,8 @@
 </tbody></table>
 {% else %}<p class="muted">산정된 도구가 없습니다.</p>{% endif %}
 
+{{ m.evidence_panel(evidence, '/intakes/' ~ i.id ~ '/evidence', actor) }}
+
 {% if actor.role == 'admin' and i.status == 'received' and not i.requested_by %}
 <h2>신청자 지정</h2>
 {% if can_assign %}
