@@ -154,6 +154,15 @@ def principal_from_auth(
     )
 
 
+def key_auth_dependency() -> Any:
+    """호출자 키를 검증하는 LiteLLM의 인증 의존성. 경로의 허용 목록 검사도 이 안에서 일어난다."""
+    return importlib.import_module("litellm.proxy.auth.user_api_key_auth").user_api_key_auth
+
+
+def proxy_app() -> Any:
+    return importlib.import_module("litellm.proxy.proxy_server").app
+
+
 def global_manager() -> Any:
     return importlib.import_module(_MANAGER_MODULE).global_mcp_server_manager
 
@@ -179,7 +188,8 @@ def _matching_servers(manager: Any, server_name: str) -> list[Any]:
 
 def _to_resolved(server: Any, candidates: int) -> ResolvedServer:
     if not getattr(server, "url", None):
-        # 로컬 실행(stdio)·OpenAPI 서버는 계약 URL 해시를 만들 수 없어 1단계가 지원하지 않는다.
+        # 레지스트리의 로컬 실행(stdio)·OpenAPI 서버는 URL 해시도 실행 계약도 만들 수 없어 막는다.
+        # 승인된 로컬 서버는 레지스트리가 아니라 MINT 표에서 ``ExecContract.resolved``로 해석한다.
         raise ServerResolutionError(Reason.UNSUPPORTED, "server_without_url")
     return ResolvedServer(
         server_id=server.server_id,

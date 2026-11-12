@@ -10,7 +10,7 @@ from fastapi.responses import RedirectResponse, Response
 from mint_litellm.console import api, compare
 from mint_litellm.console.core import STATUS, Actor, page_actor, require_csrf
 from mint_litellm.console.templating import render
-from mint_litellm.control import jobs
+from mint_litellm.control import endpoint_kits, jobs
 from mint_litellm.control import status as control_status
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import allowlists as allowlist_service
@@ -73,6 +73,15 @@ def overview(request: Request, actor: Actor = Depends(page_actor)):
         "blocked": [d["blocked"] for d in data["decisions_by_day"]],
     }
     return render(request, "overview.html", {"o": data, "chart": chart}, actor=actor)
+
+
+# --- 단말 설치 -------------------------------------------------------------------------------
+
+
+@router.get("/endpoints")
+def endpoints(request: Request, actor: Actor = Depends(page_actor)):
+    rows = endpoint_kits.installs(actor.conn, actor.instance)
+    return render(request, "endpoints.html", {"rows": rows}, actor=actor)
 
 
 # --- MCP 서버 -------------------------------------------------------------------------------

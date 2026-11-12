@@ -170,3 +170,54 @@ def test_upgrade_stops_before_starting_litellm_when_init_cannot_fix_the_config(t
     assert result.returncode != 0
     log = (tmp_path / "docker.log").read_text(encoding="utf-8")
     assert "up -d litellm" not in log
+
+
+ISSUER_DOCKER = (
+    'case "$*" in\n'
+    '  *"key/generate"*) echo "noise"; echo sk-issued-1;;\n'
+    '  *"up -d console"*) echo "console-sees:$MINT_KIT_ISSUER_KEY" >> "$FAKE_DOCKER_LOG";;\n'
+    "esac\n"
+)
+
+
+def up_with_issuer(tmp_path, command="up", docker_tail=ISSUER_DOCKER, existing=None):
+    deploy = tmp_path / "deploy"
+    deploy.mkdir(parents=True, exist_ok=True)
+    (deploy / "litellm.config.example.yaml").write_text("{}\n", encoding="utf-8")
+    secrets = tmp_path / "secrets"
+    secrets.mkdir(parents=True, exist_ok=True)
+    if existing:
+        (secrets / "kit_issuer.key").write_text(existing + "\n", encoding="utf-8")
+    env = f"POSTGRES_PASSWORD=x\nLITELLM_MASTER_KEY=sk-master\nMINT_SECRETS_DIR={secrets}\n"
+    result, _, _ = run(tmp_path, env, command, docker_tail=docker_tail)
+    log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+    return result, log, secrets / "kit_issuer.key"
+
+
+@pytest.mark.parametrize("command", ["up", "upgrade"])
+def test_up_and_upgrade_make_the_kit_issuer_key_once_and_hand_it_to_the_console(
+    tmp_path, command
+):
+    result, log, key_file = up_with_issuer(tmp_path, command)
+    assert result.returncode == 0, result.stderr
+    assert key_file.read_text(encoding="utf-8") == "sk-issued-1\n"
+    if os.name != "nt":
+        assert stat.S_IMODE(key_file.stat().st_mode) == 0o600
+    assert "console-sees:sk-issued-1" in log
+    # 마스터 키는 인자가 아니라 환경으로 가고, 만드는 키는 두 경로만 연다.
+    assert "sk-master" not in log and "-e LITELLM_MASTER_KEY" in log
+    script = SCRIPT.read_text(encoding="utf-8")
+    assert '"allowed_routes": ["/key/generate", "/key/delete"]' in script
+    # 이미 있으면 다시 만들지 않고 그대로 넘긴다.
+    again, second_log, _ = up_with_issuer(
+        tmp_path / "again", command, existing="sk-existing"
+    )
+    assert again.returncode == 0, again.stderr
+    assert "key/generate" not in second_log and "console-sees:sk-existing" in second_log
+
+
+def test_a_failed_issuer_key_does_not_stop_the_stack_and_leaves_no_file(tmp_path):
+    result, log, key_file = up_with_issuer(tmp_path, docker_tail="")
+    assert result.returncode == 0, result.stderr
+    assert not key_file.exists() and "다시 시도합니다" in result.stderr
+    assert "--profile console up -d console" in log

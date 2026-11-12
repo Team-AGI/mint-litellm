@@ -489,3 +489,13 @@ def test_a_secret_file_with_invalid_utf8_is_unverified_not_a_crash(tmp_path):
         path.chmod(0o600)
     report, found = fingerprint_message({"MINT_SECRETS_FILE": str(path)})
     assert found.level is Level.SKIP and "MINT_FINGERPRINT_KEY" in report.incomplete
+
+
+def test_registered_local_servers_are_not_compared_with_the_registry(healthy):
+    local = {"server_id": "local-1", "url_sha256": None, "transport": "stdio",
+             "auth_type": "none", "identity_kind": "stdio", "status": "approved"}
+    assert Level.OK in levels(run(good_config(), healthy, registered_servers=[local]))[
+        "등록 서버의 계약 값"]
+    clash = {**local, "server_id": "ctl-everything"}
+    assert Level.FAIL in levels(run(good_config(), healthy, registered_servers=[clash]))[
+        "등록 서버의 계약 값"]
