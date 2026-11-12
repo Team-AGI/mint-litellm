@@ -27,6 +27,7 @@ from mint_litellm.control.services import approvals as approval_service
 from mint_litellm.control.services import call_approvals as call_approval_service
 from mint_litellm.control.services import contracts as contract_service
 from mint_litellm.control.services import denials as denial_service
+from mint_litellm.control.services import evidence as evidence_service
 from mint_litellm.control.services import intakes as intake_service
 from mint_litellm.control.services import operators as operator_service
 from mint_litellm.control.services import orgs as org_service
@@ -404,6 +405,53 @@ def add_relation(body: RelationBody, actor: Actor = Depends(api_actor)):
 def terminate_relation(relation_id: str, body: Versioned, actor: Actor = Depends(api_actor)):
     relation_service.terminate(actor.ctx, relation_id, expected_version=body.state_version)
     return done(actor, id=relation_id)
+
+
+@router.post("/relations/{relation_id}/finish")
+def finish_relation(relation_id: str, body: Versioned, actor: Actor = Depends(api_actor)):
+    relation_service.finish(actor.ctx, relation_id, expected_version=body.state_version)
+    return done(actor, id=relation_id)
+
+
+# --- 증빙 ---------------------------------------------------------------------------------------
+
+
+class EvidenceBody(BaseModel):
+    kind: str
+    subject_id: str
+    summary: str
+    ref: str | None = None
+    sha256: str | None = None
+    valid_days: int | None = Field(None, ge=1)
+    not_applicable: bool = False
+
+
+def attach_evidence(actor: Actor, body: EvidenceBody) -> str:
+    valid_until = (
+        None if body.valid_days is None else datetime.now(UTC) + timedelta(days=body.valid_days)
+    )
+    return evidence_service.attach(
+        actor.ctx, body.kind, body.subject_id, summary=body.summary, ref=body.ref or None,
+        sha256=body.sha256 or None, valid_until=valid_until, not_applicable=body.not_applicable,
+    )
+
+
+@router.get("/evidence")
+def list_evidence(
+    subject_kind: Literal["intake", "server", "relation"], subject_id: str,
+    actor: Actor = Depends(api_actor),
+):
+    items = evidence_service.show(actor.ctx, subject_kind, subject_id)
+    return {"items": public([
+        {"kind": i["key"], "label": i["label"], "gate": i["gate"], "state": i["state"],
+         "valid_until": i["row"]["valid_until"] if i["row"] else None}
+        for i in items
+    ])}
+
+
+@router.post("/evidence")
+def create_evidence(body: EvidenceBody, actor: Actor = Depends(api_actor)):
+    return done(actor, id=attach_evidence(actor, body))
 
 
 @router.post("/approvals")

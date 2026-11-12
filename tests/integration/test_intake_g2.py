@@ -37,7 +37,7 @@ pytestmark = pytest.mark.skipif(
     "MINT_G2_OPA_URL, MINT_TEST_DATABASE_URL이 필요합니다",
 )
 
-from ctl_fixtures import INSTANCE, LOGIN_PASSWORDS, make_ctx  # noqa: E402
+from ctl_fixtures import INSTANCE, LOGIN_PASSWORDS, make_ctx, seed_approval_evidence  # noqa: E402
 
 pytest_plugins = ("ctl_fixtures",)  # fresh_db, login_roles 고정 장치
 
@@ -211,6 +211,7 @@ def test_submission_to_checks_to_approval_against_real_litellm(world):
     tools = fetchall(admin, "SELECT tool FROM mint.tool_contracts ORDER BY tool")
     assert [t["tool"] for t in tools] == ["echo", "mutable", "slow"]
     with psycopg.connect(world["url"]) as conn:
+        seed_approval_evidence(conn, intake["id"])
         ctx = make_ctx(conn, "boss", "approver", "boss-1")
         result = svc.decide(
             ctx,

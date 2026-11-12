@@ -204,6 +204,12 @@ def test_intake_to_revoke_in_one_flow(world, evidence, upstreams, flow, multiwor
 
     # 3. 승인: 신청자와 다른 사용자의 승인자가 결정하면 대기 승인이 만들어지고, 작업 실행기가
     # 고정·권한 동기화·활성화를 끝내면 승인이 활성이 된다.
+    for kind in ("trial_call", "provider_terms", "least_privilege", "prompt_review",
+                 "transfer_approval"):
+        world.mint.data(
+            "evidence", "attach", kind, intake_id, "--summary", "통합 시험",
+            token=flow.approver_token,
+        )
     decided = world.mint.data(
         "intake", "approve", intake_id,
         "--scope", "key",

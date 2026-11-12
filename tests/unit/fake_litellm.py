@@ -86,7 +86,8 @@ class FakeLiteLLM:
     ) -> dict:
         server = {"tools": tools or {}, "pinned": False, "server_id": server_id,
                   "server_name": server_id, "approval_status": status, "url": None,
-                  "pinned_tools": None, "allow_all_keys": False, "credentials": {"secret": "x"}}
+                  "pinned_tools": None, "allow_all_keys": False, "credentials": {"secret": "x"},
+                  "rpm": 600, "max_concurrent_requests": 8}
         self.servers[server_id] = server
         return server
 

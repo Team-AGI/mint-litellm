@@ -7,6 +7,7 @@ general_settings:
   require_key_mcp_access_defined: true
   mcp_allow_all_keys_respects_mcp_scope: true
   store_prompts_in_spend_logs: false
+  disable_env_credential_login: true
 
 guardrails:
   - guardrail_name: mint
@@ -28,22 +29,30 @@ mcp_servers:
     url: http://counting-proxy:8080/a/mcp
     transport: http
     allow_all_keys: false
+    rpm: 600
+    max_concurrent_requests: 8
     description: Integration test upstream A
   mcp_b:
     server_id: e1000000000000000000000000000002
     url: http://counting-proxy:8080/b/mcp
     transport: http
     allow_all_keys: false
+    rpm: 600
+    max_concurrent_requests: 8
     description: Integration test upstream B
   mcp_c:
     server_id: e1000000000000000000000000000003
     url: http://counting-proxy:8080/c/mcp
     transport: http
     allow_all_keys: false
+    rpm: 600
+    max_concurrent_requests: 8
     description: Integration test upstream C (same server as B)
   mcp_d:
     server_id: e1000000000000000000000000000004
     url: http://counting-proxy:8080/d/mcp
     transport: http
     allow_all_keys: false
+    rpm: 600
+    max_concurrent_requests: 8
     description: Integration test upstream D (same server as A)

@@ -45,7 +45,8 @@ from mint_litellm.types.canonical import sha256
 from mint_litellm.types.decision import OperationType, StageResult
 from mint_litellm.types.events import Event, EventKind
 from mint_litellm.types.reason_codes import Reason
-from mint_litellm.types.settings import SELF_CHECK_DESCRIPTIONS, SelfCheckItem
+from mint_litellm.types.reuse_policy import DEFAULT_TOOL_TIMEOUT_SECONDS, reuse_violations
+from mint_litellm.types.settings import SELF_CHECK_DESCRIPTIONS, SelfCheckItem, policies_of
 
 log = logging.getLogger("mint_litellm.selfcheck")
 
@@ -74,6 +75,11 @@ class LiteLLMView:
     user_url_validation: bool
     registry: Sequence[RegistryEntry]
     missing_symbols: Sequence[str]
+    # LiteLLM 재사용 정책 점검이 읽는 값
+    ssl_verify: bool = True
+    allowed_hosts: Sequence[str] = ()
+    default_timeout: float = DEFAULT_TOOL_TIMEOUT_SECONDS
+    env: Mapping[str, str] = field(default_factory=dict, repr=False)
 
 
 def collect_view(env: Mapping[str, str] | None = None) -> LiteLLMView:
@@ -83,16 +89,19 @@ def collect_view(env: Mapping[str, str] | None = None) -> LiteLLMView:
         missing = [witness] if witness else []
     if missing:
         return LiteLLMView((), {}, True, False, True, (), missing)
+    env = os.environ if env is None else env
     return LiteLLMView(
         callbacks=compat.litellm_callbacks(),
         general_settings=compat.general_settings(),
-        strict_guardrail_modes=compat.strict_guardrail_modes_enabled(
-            os.environ if env is None else env
-        ),
+        strict_guardrail_modes=compat.strict_guardrail_modes_enabled(env),
         store_prompts_in_spend_logs=compat.spend_logs_store_prompts(),
         user_url_validation=compat.litellm_attribute("user_url_validation", True) is not False,
         registry=compat.registry_entries(),
         missing_symbols=(),
+        ssl_verify=compat.ssl_verification_enabled(env),
+        allowed_hosts=tuple(compat.litellm_attribute("user_url_allowed_hosts", None) or ()),
+        default_timeout=compat.mcp_default_timeout(),
+        env=dict(env),
     )
 
 
@@ -230,6 +239,17 @@ def check_items(
     # LiteLLM의 OpenAI WebSocket 패스스루는 사전 훅을 거치지 않으므로 실시간 허용을 명시해야 한다.
     if _ws_passthrough_on(view.general_settings) and not allow_realtime:
         problems.append("enable_openai_websocket_passthrough needs MINT_ALLOW_REALTIME=true")
+    # LiteLLM이 구현하는 정책은 통제 서버와 전역 설정이 요구 값과 같을 때만 이행으로 센다.
+    active = {s.server_id for s in controlled or () if s.status in CONTROLLED_SERVER_STATUSES}
+    for violation in reuse_violations(
+        general=view.general_settings,
+        allowed_hosts=view.allowed_hosts,
+        ssl_verify=view.ssl_verify,
+        env=view.env,
+        servers=[e.facts() for e in view.registry if e.server_id in active],
+        default_timeout=view.default_timeout,
+    ):
+        problems.append(f"{', '.join(policies_of(violation.key))}: {violation.message}")
     add(SelfCheckItem.REQUIRED_SETTINGS, not problems, "; ".join(problems))
     return results
 

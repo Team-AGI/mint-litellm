@@ -28,6 +28,7 @@
 {% for a in s.approvals %}<tr><td>{{ L.pick(L.SCOPE, a.scope_type) }} {{ a.scope_id }}</td><td>{{ a.tools | join }}</td><td>{{ L.pick(L.APPROVAL_CLASS, a.class) }}</td><td>{{ a.valid_from | when }} ~ {{ a.valid_until | when }}</td><td>{{ m.badge(L.APPROVAL, a.status) }}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}<p class="muted">승인이 없습니다.</p>{% endif %}
+{{ m.evidence_panel(evidence, '/servers/' ~ (s.server_id | urlencode) ~ '/evidence', actor) }}
 {% if actor.role == 'admin' and s.status in ('approved', 'suspended') %}
 <div class="danger-zone">
   {% if s.status == 'approved' %}

@@ -85,6 +85,7 @@ def server(
         transport=kw.get("transport", Transport.http),
         auth_type=kw.get("auth_type"),
         allow_all_keys=kw.get("allow_all_keys", False),
+        **{k: v for k, v in kw.items() if k not in ("transport", "auth_type", "allow_all_keys")},
     )
 
 
@@ -373,6 +374,29 @@ class TestServerResolution:
         assert entry.names == ("ms", "mslearn") and entry.allow_all_keys is True
         assert entry.auth_type == "bearer_token" and entry.transport == "http"
         assert entry.url_sha256 == url_sha256("https://x.test/mcp")
+
+    def test_registry_entries_expose_the_values_policy_checks_read(self):
+        oauth = server(
+            auth_type="oauth2",
+            needs_user_oauth_token=True,
+            delegate_auth_to_upstream=False,
+            oauth_identity_binding=SimpleNamespace(mode="enforce"),
+            issuer="https://issuer.test",
+            timeout=30.0,
+            authentication_token="secret-token",
+        )
+        (entry,) = compat.registry_entries(manager=Manager([oauth]))
+        assert entry.discovery_oauth and entry.per_user_oauth and entry.binding_mode == "enforce"
+        assert entry.timeout == 30.0 and entry.facts().issuer == "https://issuer.test"
+        assert entry.credential and "secret-token" not in entry.credential
+        assert entry.in_database  # 대역 관리자의 registry에 있는 서버는 DB 서버이다
+
+    def test_config_servers_are_not_database_servers(self):
+        manager = Manager([server()])
+        manager.config_mcp_servers = {"srv-1": manager.registry.pop("srv-1")}
+        manager.get_registry = lambda: manager.config_mcp_servers
+        (entry,) = compat.registry_entries(manager=manager)
+        assert not entry.in_database
 
 
 class TestResultHelpers:

@@ -1,9 +1,11 @@
 """이용 관계."""
 
+from collections.abc import Callable
+
 from mint_litellm.control import approvals, orgs
 from mint_litellm.control.context import Context
 from mint_litellm.control.db.connection import fetchall, fetchone
-from mint_litellm.control.errors import ControlError, not_found
+from mint_litellm.control.errors import ControlError, conflict, not_found
 from mint_litellm.control.services import base
 from mint_litellm.types.events import EventKind
 from mint_litellm.types.ids import new_uuid7
@@ -54,8 +56,8 @@ def add(ctx: Context, org_id: str, server_id: str, purpose: str, team_id: str | 
 def terminate(ctx: Context, relation_id: str) -> None:
     """관계를 종료 중으로 바꾸고, 그 관계의 활성 승인을 바로 철회한다.
 
-    LiteLLM의 권한을 거둔 것을 읽어 확인하고 ``terminated``로 마무리하는 일은
-    ``relation_finalize`` 작업이 한다(``sync_jobs``).
+    LiteLLM의 권한을 거둔 것을 읽어 확인하고 결과를 기록하는 일은 ``relation_finalize`` 작업이
+    한다(``sync_jobs``). ``terminated``로 닫는 일은 증빙을 확인하는 ``finish``가 한다.
     """
     row = fetchone(
         ctx.conn,
@@ -84,3 +86,29 @@ def terminate(ctx: Context, relation_id: str) -> None:
     ):
         approvals.revoke(ctx, str(approval["id"]), "이용 관계 종료", False)
     base.enqueue_job(ctx, "relation_finalize", relation_id)
+
+
+def finish(ctx: Context, relation_id: str, require: Callable[[], None]) -> None:
+    """``require``(필요한 증빙 확인)는 관계 행을 잠그고 상태를 본 뒤에 부른다."""
+    row = fetchone(
+        ctx.conn,
+        "SELECT status FROM mint.usage_relations WHERE instance_id = %s AND id = %s FOR UPDATE",
+        (ctx.instance_id, relation_id),
+    )
+    if row is None:
+        raise not_found(f"이용 관계 {relation_id}이(가) 없습니다.")
+    if row["status"] != "terminating":
+        raise conflict("종료 중인 이용 관계만 종료를 완료할 수 있습니다.")
+    require()
+    done = fetchone(
+        ctx.conn,
+        "UPDATE mint.usage_relations SET status = 'terminated' WHERE instance_id = %s AND id = %s"
+        " RETURNING state_version, org_id, server_id",
+        (ctx.instance_id, relation_id),
+    )
+    ctx.emit(
+        EventKind.RELATION_TERMINATED,
+        relation_id,
+        done["state_version"],
+        {"relation_id": relation_id, "org_id": done["org_id"], "server_id": done["server_id"]},
+    )

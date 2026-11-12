@@ -52,8 +52,8 @@ def test_only_required_rows_map_to_self_checks_and_file_checks():
 def test_row_counts_by_grade():
     counts = {g: sum(r.grade is g for r in SETTINGS_TABLE) for g in SettingGrade}
     assert counts == {
-        SettingGrade.REQUIRED: 11,
-        SettingGrade.RECOMMENDED: 10,
+        SettingGrade.REQUIRED: 21,
+        SettingGrade.RECOMMENDED: 8,
         SettingGrade.OBSERVATION: 1,
     }
 

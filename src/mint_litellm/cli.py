@@ -18,7 +18,7 @@ from uuid import UUID
 
 import psycopg
 
-from mint_litellm import cli_restore
+from mint_litellm import cli_evidence, cli_restore
 from mint_litellm.control import (
     allowlists,
     approvals,
@@ -133,6 +133,9 @@ def _init(run: Run) -> None:
         if not sep or not name or not url:
             raise ControlError(f"--mcp-server는 이름=URL 형식이어야 합니다: {item}")
         servers_arg[name] = (name, url)
+    added_flags = (
+        litellm_config.ensure_required_flags(Path(args.fix_config)) if args.fix_config else []
+    )
     applied = apply_migrations(run.conn)
     passwords = {
         group: run.environ[var]
@@ -171,6 +174,12 @@ def _init(run: Run) -> None:
     if added_modes:
         print(
             f"{args.fix_config}의 MINT 가드레일 mode에 {', '.join(added_modes)}을(를) 더했습니다"
+            "(바꾸기 전 사본: 같은 폴더의 .bak-* 파일).",
+            file=log,
+        )
+    if added_flags:
+        print(
+            f"{args.fix_config}에 필수 설정 {', '.join(added_flags)}을(를) 더했습니다"
             "(바꾸기 전 사본: 같은 폴더의 .bak-* 파일).",
             file=log,
         )
@@ -778,7 +787,7 @@ ARGUMENTS: dict[str, list[Any]] = {
         _a("--no-spend-logs", action="store_true",
            help="disable_spend_logs: true를 설정 조각에 포함"),
         _a("--fix-config",
-           help="이 LiteLLM 설정 파일의 MINT 가드레일 mode에 빠진 모드를 더한다(사본을 남긴다)"),
+           help="이 LiteLLM 설정 파일에 MINT 가드레일 mode와 빠진 필수 설정을 더한다(사본 보존)"),
     ],
     "check": [_CONFIG, _ENV_FILE],
     "status": [_CONFIG, _ENV_FILE],
@@ -979,7 +988,7 @@ ARGUMENTS.update(INTAKE_ARGUMENTS)
 
 
 def _add_arguments(parser: argparse.ArgumentParser, name: str) -> None:
-    for spec in {**ARGUMENTS, **cli_restore.ARGUMENTS}.get(name, []):
+    for spec in {**ARGUMENTS, **cli_restore.ARGUMENTS, **cli_evidence.ARGUMENTS}.get(name, []):
         if spec == "SUBJECT":
             group = parser.add_mutually_exclusive_group(required=True)
             group.add_argument("--team")
@@ -1004,7 +1013,7 @@ def build_parser() -> argparse.ArgumentParser:
     root.add_argument("--json", action="store_true", help="결과를 JSON 한 개로 출력")
     tree: dict[tuple[str, ...], argparse._SubParsersAction] = {(): root.add_subparsers(
         dest="group0", metavar="명령", required=True)}
-    for command in [*COMMANDS, *cli_restore.COMMANDS]:
+    for command in [*COMMANDS, *cli_restore.COMMANDS, *cli_evidence.COMMANDS]:
         for depth in range(1, len(command.path)):
             prefix = command.path[:depth]
             if prefix not in tree:
@@ -1031,7 +1040,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 COMMAND_INDEX: dict[str, CliCommand] = {
-    c.name: c for c in [*COMMANDS, *cli_restore.COMMANDS]
+    c.name: c for c in [*COMMANDS, *cli_restore.COMMANDS, *cli_evidence.COMMANDS]
 }
 
 
@@ -1083,7 +1092,8 @@ def run_command(args: argparse.Namespace, environ: dict[str, str]) -> None:
                 raise AuthError(f"{command.name}은(는) {operator.role} 역할로 실행할 수 없습니다.")
             ctx = Context(conn, cfg.instance_id, operator)
         run = Run(args, cfg, environ, conn, ctx)
-        (HANDLERS.get(command.name) or cli_restore.HANDLERS[command.name])(run)
+        extra = {**cli_restore.HANDLERS, **cli_evidence.HANDLERS}
+        (HANDLERS.get(command.name) or extra[command.name])(run)
     if args.json:
         print(json.dumps(_result(run, command), ensure_ascii=False, default=str))
     else:

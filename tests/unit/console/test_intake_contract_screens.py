@@ -52,6 +52,14 @@ def add_intake(world, *, requested_by="human-9", status="passed", result="pass",
         " url, url_sha256, transport, auth_type, status) VALUES (%s, %s, %s, 'x', %s,"
         " 'http://c.example', %s, 'http', 'none', 'candidate')",
         uuid.uuid4(), INSTANCE, server, HEX, HEX)
+    if status != "received":
+        world.query(
+            "INSERT INTO mint.policy_evidence (id, instance_id, kind, subject_kind, subject_id,"
+            " summary, attached_by, valid_until) SELECT gen_random_uuid(), %s, k, 'intake', %s,"
+            " '시험', 'root', now() + interval '30 days' FROM unnest(%s::text[]) AS k",
+            INSTANCE, intake_id,
+            ["trial_call", "provider_terms", "least_privilege", "prompt_review",
+             "transfer_approval"])
     return intake_id
 
 

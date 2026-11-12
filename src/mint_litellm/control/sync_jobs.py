@@ -20,6 +20,7 @@ from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import AdminError, ControlError
 from mint_litellm.control.jobs import JobContext, PermanentFailure, WaitForOperator
+from mint_litellm.control.litellm_config import SERVER_LIMITS
 from mint_litellm.control.litellm_write import (
     LiteLLMForbidden,
     LiteLLMHttpError,
@@ -292,7 +293,8 @@ def relation_finalize(ctx: JobContext) -> None:
     """종료 중인 이용 관계의 권한 회수를 확인하고 결과를 남긴다.
 
     관계의 철회·만료된 승인이 가리키던 키·팀마다 LiteLLM 값을 읽어, MINT가 넣은 서버 권한이 모두
-    거두어졌을 때만 관계를 ``terminated``로 바꾸고 결과(대상과 남은 권한)를 사건으로 적는다.
+    거두어졌을 때 결과(대상과 남은 권한)를 사건으로 한 번 적는다. 관계를 ``terminated``로 닫는 일은
+    증빙을 확인하는 ``finish``의 몫이다.
     거두지 못한 항목이 있는데 그 대상의 동기화가 진행 중이 아니면 동기화를 다시 요청하고 경보
     ``termination_unconfirmed``를 연다. 주기 조정(``sync_reconcile``)이 종료 중인 관계마다 이
     작업을 다시 등록하므로 확인은 조정 주기 안에 끝난다.
@@ -339,14 +341,23 @@ def relation_finalize(ctx: JobContext) -> None:
                              "pending": pending})
         return
     with conn.transaction():
+        resolve_alert(conn, inst, key)
+        if fetchone(
+            conn,
+            "SELECT 1 AS x FROM mint.events WHERE instance_id = %s AND kind = 'relation_terminating'"
+            " AND payload ->> 'relation_id' = %s AND payload ->> 'phase' = 'revocation_confirmed'",
+            (inst, relation_id),
+        ):
+            return  # 이미 기록했다
+        # 사건 키는 관계의 상태 버전을 쓰므로 상태를 바꾸지 않는 갱신으로 버전만 올린다.
         row = fetchone(
             conn,
-            "UPDATE mint.usage_relations SET status = 'terminated' WHERE instance_id = %s"
+            "UPDATE mint.usage_relations SET status = status WHERE instance_id = %s"
             " AND id = %s AND status = 'terminating' RETURNING state_version",
             (inst, relation_id),
         )
         if row is None:
-            return  # 그 사이 다른 작업이 마무리했다
+            return  # 그 사이 다른 작업이 관계를 닫았다
         ledger.record(
             conn, inst, EventKind.RELATION_TERMINATING, entity_id=relation_id,
             state_version=row["state_version"], actor=ACTOR,
@@ -355,7 +366,6 @@ def relation_finalize(ctx: JobContext) -> None:
                      "targets": [target_ref(t["kind"], t["id"]) for t in targets],
                      "retained": retained},
         )
-        resolve_alert(conn, inst, key)
 
 
 def _finalize_terminating(ctx: JobContext) -> None:
@@ -427,6 +437,7 @@ def sync_server(ctx: JobContext) -> None:
     pinned = False
     if active:
         resolve_alert(conn, inst, key)
+        fill_call_limits(ctx, client, server_id, client.get_server(server_id) or server)
         pinned = _pin_step(ctx, client, server_id)
     else:
         raise_alert(conn, inst, kind="sync_divergence", severity="high", dedup_key=key,
@@ -906,6 +917,40 @@ def _close_allow_all_keys(
                     subject={"server_id": server_id, "reason": f"allow_all_keys_{reason}"})
 
 
+def fill_call_limits(ctx: JobContext, client: LiteLLMSync, server_id: str, server: dict) -> None:
+    """비어 있는 호출 한도에만 기본값을 쓰고 사건으로 남긴다. 운영자가 적은 값은 덮지 않는다.
+
+    쓰기가 실패하거나 다시 읽어도 비어 있으면 경보를 올린다(다음 동기화 때 다시 시도한다).
+    """
+    conn, inst = ctx.conn, ctx.instance_id
+    key = f"sync_divergence:call_limits:{server_id}"
+    wanted = {name: value for name, value in SERVER_LIMITS.items() if server.get(name) is None}
+    if not wanted:
+        resolve_alert(conn, inst, key)
+        return
+    reason = None
+    try:
+        client.set_server_limits(server_id, wanted)
+        reread = client.get_server(server_id) or {}
+        if any(reread.get(name) is None for name in wanted):
+            reason = "still_empty"
+    except LiteLLMHttpError:
+        reason = "write_failed"
+    if reason is not None:
+        raise_alert(conn, inst, kind="sync_divergence", severity="medium", dedup_key=key,
+                    subject={"server_id": server_id, "reason": f"call_limits_{reason}"})
+        return
+    with conn.transaction():
+        ledger.record(
+            conn, inst, EventKind.SYNC_APPLIED, entity_id=str(new_uuid7()), state_version=0,
+            actor=ACTOR,
+            payload={"target_type": "server", "target_id": server_id, "item": "call_limits",
+                     "server_id": server_id, "tools": None, "preexisting": False,
+                     "action": "grant", "limits": wanted},
+        )
+    resolve_alert(conn, inst, key)
+
+
 def _reconcile_server(ctx: JobContext, client: LiteLLMSync, server_id: str) -> None:
     conn, inst = ctx.conn, ctx.instance_id
     key = f"sync_divergence:server:{server_id}"
@@ -915,6 +960,7 @@ def _reconcile_server(ctx: JobContext, client: LiteLLMSync, server_id: str) -> N
                     subject={"server_id": server_id, "reason": "registry_missing"})
         return
     _close_allow_all_keys(ctx, client, server_id, server)
+    fill_call_limits(ctx, client, server_id, server)
     status = server.get("approval_status")
     grant = fetchone(
         conn,

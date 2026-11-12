@@ -839,6 +839,41 @@ def test_an_allow_all_keys_that_cannot_be_closed_raises_a_divergence(admin, fake
     assert alerts(admin, "sync_divergence")[0]["status"] == "resolved"
 
 
+def test_empty_call_limits_are_filled_and_operator_values_are_kept(admin, fake, worker):
+    add_server(admin)
+    fake.add_server("srv-1")
+    fake.servers["srv-1"].update(rpm=30, max_concurrent_requests=None)
+    add_approval(admin, "user", "u1")
+    reconcile(admin)
+    drain(worker)
+    assert fake.servers["srv-1"]["rpm"] == 30  # 운영자 값은 덮지 않는다
+    assert fake.servers["srv-1"]["max_concurrent_requests"] == 8
+    assert fake.writes() == [("PUT", "/v1/mcp/server",
+                              {"server_id": "srv-1", "max_concurrent_requests": 8})]
+    reconcile(admin)
+    drain(worker)
+    assert len(fake.writes()) == 1  # 채워진 뒤에는 쓰지 않는다
+
+
+def test_call_limits_that_cannot_be_filled_raise_a_divergence_without_blocking(
+    admin, fake, worker
+):
+    add_server(admin)
+    fake.add_server("srv-1")
+    fake.servers["srv-1"].update(rpm=None, max_concurrent_requests=None)
+    add_approval(admin, "user", "u1")
+    fake.fail_writes["/v1/mcp/server"] = 403
+    reconcile(admin)
+    drain(worker)
+    [alert] = alerts(admin, "sync_divergence")
+    assert alert["subject"] == {"server_id": "srv-1", "reason": "call_limits_write_failed"}
+    fake.fail_writes.clear()
+    reconcile(admin)
+    drain(worker)
+    assert fake.servers["srv-1"]["rpm"] == 600
+    assert alerts(admin, "sync_divergence")[0]["status"] == "resolved"
+
+
 def test_an_uncontrolled_server_with_allow_all_keys_is_left_alone(admin, fake, worker):
     add_server(admin)
     fake.add_server("srv-1")
@@ -934,7 +969,7 @@ def test_terminating_a_relation_revokes_withdraws_confirms_and_records(admin, fa
     drain(worker)
     servers, tools = fake.permission("key", "k1")
     assert "srv-1" not in servers and not tools.get("srv-1")
-    assert relation_row(admin)["status"] == "terminated"
+    assert relation_row(admin)["status"] == "terminating"  # 닫기는 증빙을 확인하는 finish의 몫
     (done,) = termination_done(admin)
     assert done["targets"] == ["key:k1"] and done["retained"] == []
     assert alerts(admin, "termination_unconfirmed") == []
@@ -951,7 +986,7 @@ def test_access_that_mint_did_not_grant_is_reported_as_retained_not_withdrawn(
     reconcile(admin)
     drain(worker)
     assert "srv-1" in fake.permission("key", "k1")[0]
-    assert relation_row(admin)["status"] == "terminated"
+    assert relation_row(admin)["status"] == "terminating"  # 닫기는 증빙을 확인하는 finish의 몫
     (done,) = termination_done(admin)
     assert done["retained"] == [{"target": "key:k1", "item": "mcp_server"}]
 
@@ -969,6 +1004,5 @@ def test_unwithdrawn_grants_keep_the_relation_terminating_until_the_sync_confirm
     assert relation_row(admin)["status"] == "terminating"
     reconcile(admin)
     drain(worker)
-    assert relation_row(admin)["status"] == "terminated"
     assert [a["status"] for a in alerts(admin, "termination_unconfirmed")] == ["resolved"]
     assert len(termination_done(admin)) == 1
