@@ -56,3 +56,18 @@ def test_input_keeps_the_contract_grade_of_the_tool_and_the_engine_client_accept
     result = make_input(tool={"name": "read", "risk_grade": "high", "raw_arguments": "secret"})
     assert result["tool"] == {"name": "read", "risk_grade": "high"}
     assert has_only_policy_fields(result)
+
+
+def test_input_keeps_the_identity_kind_and_execution_contract_of_the_server():
+    from mint_litellm.plugin.policy.input import has_only_policy_fields
+
+    server = {
+        "id": "s", "identity_kind": "stdio", "exec_contract_sha256": "e" * 64,
+        "exec_contract_version": 1, "url_sha256": "a" * 64, "credentials": "secret",
+    }
+    result = make_input(server=server)
+    assert result["server"] == {
+        "id": "s", "identity_kind": "stdio", "exec_contract_sha256": "e" * 64,
+        "exec_contract_version": 1,
+    }
+    assert has_only_policy_fields(result)

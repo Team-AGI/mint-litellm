@@ -241,7 +241,7 @@ class ServerRow:
     id: str
     server_id: str
     status: str
-    url_sha256: str
+    url_sha256: str | None  # 로컬 실행(stdio) 서버는 없다
     transport: str
     auth_type: str
     basis_allowlist_ids: tuple[str, ...]
@@ -251,6 +251,9 @@ class ServerRow:
     deployment_drift: bool = False
     pin_blocked: bool = False  # 고정 불일치·해제 미완료 표지(관측 모드로 풀 수 없다)
     approved_contracts: int | None = None  # 승인 계약 수. None은 알 수 없음(1단계 스키마)
+    identity_kind: str = "remote"
+    exec_contract_sha256: str | None = None
+    exec_contract_version: int | None = None
 
 
 @dataclass(frozen=True)
@@ -416,6 +419,9 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
             deployment_drift=server.get("deployment_drift", False),
             pin_blocked="pin_reapproval" in (server.get("deployment_drift_fields") or ()),
             approved_contracts=doc.get("approved_contracts"),
+            identity_kind=server.get("identity_kind", "remote"),
+            exec_contract_sha256=server.get("exec_contract_sha256"),
+            exec_contract_version=server.get("exec_contract_version"),
         ),
         allowlists={
             a["id"]: AllowlistRow(
@@ -535,11 +541,14 @@ class NegativeStateQuery:
 class RegisteredServer:
     server_id: str
     status: str
-    url_sha256: str
+    url_sha256: str | None
     transport: str
     auth_type: str
     issuer: str | None = None
     contract_status: str = "none"
+    identity_kind: str = "remote"
+    exec_contract_sha256: str | None = None
+    exec_contract_version: int | None = None
 
 
 # 이 시간(초) 넘게 쓰지 않은 연결은 쓰기 전에 확인한다. 풀의 확인 기능은 실패마다 1초 넘게
@@ -851,7 +860,11 @@ class PluginDatabase:
         async def read(conn: Any) -> Any:
             probe = await conn.execute("SELECT to_regclass('mint.tool_contracts')")
             stage2 = (await probe.fetchone())[0] is not None
-            columns = "issuer, contract_status" if stage2 else "NULL, 'none'"
+            columns = (
+                "issuer, contract_status, identity_kind, exec_contract_sha256,"
+                " exec_contract_version"
+                if stage2 else "NULL, 'none', 'remote', NULL, NULL"
+            )
             cursor = await conn.execute(
                 "SELECT server_id, status, url_sha256, transport, auth_type, " + columns +
                 " FROM mint.servers WHERE instance_id = %s ORDER BY server_id",

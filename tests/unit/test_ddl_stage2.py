@@ -9,6 +9,7 @@ import pytest
 psycopg = pytest.importorskip("psycopg")
 import test_ddl  # noqa: E402
 from psycopg import errors  # noqa: E402
+from psycopg.types.json import Jsonb  # noqa: E402
 from test_ddl import (  # noqa: E402
     ENFORCEMENT_TABLES,
     HEX,
@@ -1527,3 +1528,80 @@ def test_other_roles_cannot_raise_the_epoch(db, base, role):
 def test_the_epoch_trigger_still_forbids_lowering_by_update(db, base):
     with fails(db, errors.CheckViolation):
         db.execute("UPDATE mint.state_epoch SET epoch = epoch - 1")
+
+
+def add_stdio_server(conn, server_id="stdio-1", **cols):
+    row = {"id": new_uuid7(), "instance_id": I, "server_id": server_id, "status": "pending",
+           "identity_kind": "stdio", "url_sha256": None, "exec_contract_sha256": HEX,
+           "exec_contract_version": 1, "transport": "stdio", "auth_type": "none",
+           "registered_by": "alice", **cols}  # fmt: skip
+    insert(conn, "servers", **row)
+    return row["id"]
+
+
+def test_server_identity_fields_are_separate_and_default_to_remote(db, base):
+    kind = scalar(db, "SELECT identity_kind FROM mint.servers WHERE server_id = 'srv-1'")
+    assert kind == "remote"
+    add_stdio_server(db)
+    assert db.execute(
+        "SELECT url_sha256, exec_contract_sha256, exec_contract_version FROM mint.servers"
+        " WHERE server_id = 'stdio-1'"
+    ).fetchone() == (None, HEX, 1)
+
+
+@pytest.mark.parametrize(
+    "cols",
+    [
+        {"url_sha256": HEX},  # 로컬 서버에 URL 해시 자리 값
+        {"exec_contract_sha256": None},
+        {"exec_contract_version": None},
+        {"exec_contract_version": 0},
+        {"exec_contract_sha256": "XYZ"},
+        {"identity_kind": "ftp"},
+        {"identity_kind": "remote"},  # URL 해시 없는 원격 서버
+    ],
+)
+def test_server_identity_shape_is_enforced(db, base, cols):
+    with fails(db, errors.CheckViolation):
+        add_stdio_server(db, **cols)
+
+
+def test_remote_server_cannot_carry_an_execution_contract_and_kind_is_frozen(db, base):
+    sid = base["server"]
+    with fails(db, errors.CheckViolation):
+        db.execute(
+            "UPDATE mint.servers SET exec_contract_sha256 = %s, exec_contract_version = 1"
+            " WHERE id = %s", (HEX, sid))
+    stdio = add_stdio_server(db)
+    with fails(db, errors.CheckViolation):
+        db.execute("UPDATE mint.servers SET identity_kind = 'remote', url_sha256 = %s,"
+                   " exec_contract_sha256 = NULL, exec_contract_version = NULL WHERE id = %s",
+                   (HEX, stdio))
+
+
+def test_deployment_contract_identity_shape_and_extension_fields(db, base):
+    remote = add_deployment(db)
+    assert db.execute(
+        "SELECT identity_kind, exec_contract_sha256, exec_location, artifact_source, permissions"
+        " FROM mint.deployment_contracts WHERE id = %s", (remote,)).fetchone() == (
+        "remote", None, None, None, None)
+    local = {"url": None, "url_sha256": None, "identity_kind": "stdio", "transport": "stdio",
+             "exec_contract_sha256": HEX, "exec_contract_version": 1}  # fmt: skip
+    add_stdio_server(db)
+    permissions = Jsonb({"network": "none"})
+    stdio = add_deployment(db, server="stdio-1", exec_location="local",
+                           artifact_source="oci", permissions=permissions, **local)  # fmt: skip
+    bad = [{"url": "https://mcp.example/x"}, {"url_sha256": HEX},
+           {"exec_contract_sha256": None}, {"exec_contract_version": None},
+           {"exec_location": ""}, {"artifact_source": ""}, {"permissions": Jsonb([])}]  # fmt: skip
+    for cols in bad:
+        with fails(db, errors.CheckViolation):
+            add_deployment(db, server="stdio-1", **{"exec_location": "local", **local, **cols})
+    with fails(db, errors.CheckViolation):
+        add_deployment(db, url=None)  # 원격 계약에 URL이 없음
+    with fails(db, errors.CheckViolation):
+        add_deployment(db, exec_contract_sha256=HEX, exec_contract_version=1)
+    for column, value in [("exec_contract_sha256", H2), ("exec_location", "remote"),
+                          ("artifact_source", "npm"), ("identity_kind", "remote")]:  # fmt: skip
+        with fails(db, errors.CheckViolation):
+            update(db, "deployment_contracts", f"id = '{stdio}'", **{column: value})

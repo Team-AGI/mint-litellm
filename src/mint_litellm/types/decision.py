@@ -8,7 +8,7 @@ import hashlib
 import re
 from collections.abc import Iterable
 from enum import Enum, StrEnum
-from typing import Self
+from typing import Literal, Self
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -393,26 +393,67 @@ def normalize_auth_type(value: str | Enum | None) -> str:
     return text
 
 
+IdentityKind = Literal["remote", "stdio"]
+"""서버를 식별하는 방식. 원격(URL)과 로컬 실행(stdio)이며, 값은 DB의 CHECK 목록과 함께 늘린다."""
+
+_SHA256_PATTERN = r"^[0-9a-f]{64}$"
+
+
 class ResolvedServer(BaseModel):
     """호환 계층이 실행 단계와 같은 해석 함수로 얻은 서버.
 
     ``candidates_with_same_name``이 2 이상이면 같은 이름·별칭의 서버가 여럿이라는 뜻이다.
     ``url_sha256``은 ``url_sha256()``, ``auth_type``은 ``normalize_auth_type()``의 결과이고
-    ``transport``는 LiteLLM 값 그대로이다.
+    ``transport``는 LiteLLM 값 그대로이다. 원격 서버는 URL 해시만, 로컬 실행 서버는 URL 해시 없이
+    실행 계약 해시와 판본만 가진다.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     server_id: str = Field(min_length=1)
-    url_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    identity_kind: IdentityKind = "remote"
+    url_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
+    exec_contract_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
+    exec_contract_version: int | None = Field(default=None, ge=1)
     transport: str = Field(min_length=1)
     auth_type: str = Field(min_length=1)
     candidates_with_same_name: int = Field(ge=1)
 
-    def matches_contract(self, *, url_sha256: str, transport: str, auth_type: str) -> bool:
-        """저장된 계약 값과 세 값이 모두 같은지. 하나라도 다르면 서버 식별 불일치이다."""
-        return (self.url_sha256, self.transport, self.auth_type) == (
+    @model_validator(mode="after")
+    def _identity_shape(self) -> Self:
+        has_exec = self.exec_contract_sha256 is not None and self.exec_contract_version is not None
+        no_exec = self.exec_contract_sha256 is None and self.exec_contract_version is None
+        if self.identity_kind == "remote":
+            ok = self.url_sha256 is not None and no_exec
+        else:
+            ok = self.url_sha256 is None and has_exec
+        if not ok:
+            raise ValueError(f"identity fields do not fit identity_kind {self.identity_kind}")
+        return self
+
+    def matches_contract(
+        self,
+        *,
+        transport: str,
+        auth_type: str,
+        url_sha256: str | None = None,
+        identity_kind: str = "remote",
+        exec_contract_sha256: str | None = None,
+        exec_contract_version: int | None = None,
+    ) -> bool:
+        """저장된 계약 값과 모두 같은지. 하나라도 다르면 서버 식별 불일치이다."""
+        return (
+            self.identity_kind,
+            self.url_sha256,
+            self.exec_contract_sha256,
+            self.exec_contract_version,
+            self.transport,
+            self.auth_type,
+        ) == (
+            identity_kind,
             url_sha256,
+            exec_contract_sha256,
+            exec_contract_version,
             transport,
             auth_type,
         )
@@ -475,6 +516,9 @@ class DecisionSnapshot(BaseModel):
     tool: str | None = None
     resolved_server_id: str | None = None
     resolved_url_sha256: str | None = None
+    resolved_identity_kind: IdentityKind | None = None
+    resolved_exec_contract_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
+    resolved_exec_contract_version: int | None = Field(default=None, ge=1)
     resolved_transport: str | None = None
     resolved_auth_type: str | None = None
     candidates_with_same_name: int | None = Field(default=None, ge=1)

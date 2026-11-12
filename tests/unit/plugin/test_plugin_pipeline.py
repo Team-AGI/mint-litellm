@@ -304,6 +304,7 @@ class TestStateStage:
             "provider_allowed": False,
             "auth_server_allowed": False,
             "contract_status": "none",
+            "identity_kind": "remote",
         }
 
     def test_unregistered_server_is_allowed_in_observe_mode_with_findings_recorded(self, tmp_path):
@@ -1571,6 +1572,7 @@ class TestPolicyInput:
             "provider_allowed",
             "auth_server_allowed",
             "contract_status",
+            "identity_kind",
         }
         assert doc["server"]["contract_status"] == "none"
         assert doc["tool"] == {"name": "search"}

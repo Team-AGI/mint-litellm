@@ -208,7 +208,12 @@ def state_results(
         results.append(state)
     if server is not None and state.status is not StageStatus.STOP:
         if not resolved.matches_contract(
-            url_sha256=server.url_sha256, transport=server.transport, auth_type=server.auth_type
+            url_sha256=server.url_sha256,
+            transport=server.transport,
+            auth_type=server.auth_type,
+            identity_kind=server.identity_kind,
+            exec_contract_sha256=server.exec_contract_sha256,
+            exec_contract_version=server.exec_contract_version,
         ):
             results.append(StageResult.stop(Reason.SERVER_IDENTITY_MISMATCH))
     return results
@@ -473,9 +478,13 @@ def build_policy_input(
         "status": server.status if server is not None else "unregistered",
         "transport": resolved.transport,
         "auth_type": resolved.auth_type,
+        "identity_kind": resolved.identity_kind,
         "provider_allowed": "provider" in allowed_kinds,
         "auth_server_allowed": "auth_server" in allowed_kinds,
     }
+    if resolved.exec_contract_sha256 is not None:
+        server_doc["exec_contract_sha256"] = resolved.exec_contract_sha256
+        server_doc["exec_contract_version"] = resolved.exec_contract_version
     managed = server is not None and server.contract_status == "managed"
     server_doc["contract_status"] = "managed" if managed else "none"
     # 승인된 계약의 위험 등급. 승인이 어떤 경로로 만들어졌든 정책이 같은 등급을 본다.
@@ -852,6 +861,12 @@ def _decision_snapshot(
         ),
     }
     reasons = {k: _MISSING[k] for k, v in values.items() if v is None}
+    if resolved is not None and resolved.url_sha256 is None:
+        reasons["resolved_url_sha256"] = "not_applicable"  # 로컬 실행 서버는 URL이 없다
+    # 식별 방식과 실행 계약은 해석된 서버가 있을 때만 값이 있고, 없는 이유를 따로 적지 않는다.
+    values["resolved_identity_kind"] = resolved.identity_kind if resolved else None
+    values["resolved_exec_contract_sha256"] = resolved.exec_contract_sha256 if resolved else None
+    values["resolved_exec_contract_version"] = resolved.exec_contract_version if resolved else None
     reasons["revoked_after_snapshot"] = _MISSING["revoked_after_snapshot"]
     reasons["revocation_check"] = _MISSING["revocation_check"]
     if snap is not None:
