@@ -154,6 +154,8 @@ services:
       MINT_STAFF_DATABASE_URL: postgresql://mint_staff_app:${MINT_STAFF_DB_PASSWORD:?MINT_STAFF_DB_PASSWORD를 .env에 설정하십시오}@postgres:5432/mint
       MINT_LITELLM_URL: http://litellm:4000
       MINT_LITELLM_KEY: ${MINT_LITELLM_KEY:-}
+      MINT_KIT_ISSUER_KEY: ${MINT_KIT_ISSUER_KEY:-}
+      MINT_ENDPOINT_PUBLIC_URL: ${MINT_ENDPOINT_PUBLIC_URL:-}
       MINT_EXPORT_DIR: /var/lib/mint/export
       MINT_EXPORT_HMAC_KEY: ${MINT_EXPORT_HMAC_KEY:?MINT_EXPORT_HMAC_KEY를 .env에 설정하십시오}
     ports:

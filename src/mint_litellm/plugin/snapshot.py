@@ -864,6 +864,31 @@ class PluginDatabase:
         row = await self._run(read)
         return None if row is None else row[0]
 
+    async def report_install(
+        self,
+        instance_id: str,
+        key_token: str,
+        *,
+        mode: str,
+        kit_version: str,
+        claude_version: str | None,
+        mcp_servers: Sequence[str],
+    ) -> bool:
+        """설치 묶음에 발급한 키의 설치 상태 보고를 남긴다. 해제되었거나 발급하지 않은 키면 거짓."""
+        from psycopg.types.json import Jsonb
+
+        async def write(conn: Any) -> Any:
+            cursor = await conn.execute(
+                "UPDATE mint.endpoint_installs SET install_mode = %s, kit_version = %s,"
+                " claude_version = %s, mcp_servers = %s, reported_at = clock_timestamp()"
+                " WHERE instance_id = %s AND key_token = %s AND revoked_at IS NULL",
+                (mode, kit_version, claude_version, Jsonb(list(mcp_servers)), instance_id,
+                 key_token),
+            )
+            return cursor.rowcount
+
+        return bool(await self._run(write))
+
     async def read_epoch(self, instance_id: str) -> int | None:
         async def read(conn: Any) -> Any:
             cursor = await conn.execute(

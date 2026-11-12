@@ -1,0 +1,295 @@
+"""단말 에이전트: 호출 전 판정, 호출 뒤 결과 보고, 승인된 계약만 시작하는 서버 실행기."""
+
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import time
+
+import pytest
+from kit_loader import KIT, load
+
+agent = load("mint_agent")
+LINUX = sys.platform.startswith("linux")
+
+
+def sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+class World:
+    """승인된 서버 하나(실행 파일과 스크립트가 디스크에 있다)와 그 목록 파일."""
+
+    def __init__(self, tmp):
+        self.tmp = tmp
+        self.exe = tmp / "srv-bin"
+        self.exe.write_bytes(b"binary-v1")
+        self.script = tmp / "index.js"
+        self.script.write_bytes(b"script-v1")
+        self.doc = {
+            "schema_version": 1, "identity_kind": "stdio", "executable": str(self.exe),
+            "argv": [str(self.script)], "cwd": None, "executable_sha256": sha(b"binary-v1"),
+            "script_sha256": sha(b"script-v1"), "env": {"MODE": "ro"}, "secret_refs": {},
+        }  # fmt: skip
+        self.listing = self.write_listing("contracts.json", self.doc)
+        self.state = str(tmp / "state")
+
+    def write_listing(self, name, doc):
+        path = self.tmp / name
+        path.write_text(json.dumps({"servers": {"srv-1": doc}}))
+        return str(path)
+
+
+@pytest.fixture
+def world(tmp_path):
+    return World(tmp_path)
+
+
+class Wire:
+    """결정·결과 경로 대역. 요청을 모으고 정해 둔 답을 준다."""
+
+    def __init__(self, answer=None, status=200):
+        self.answer = {"decision": "allow", "reference": "ref-1"} if answer is None else answer
+        self.status = status
+        self.requests = []
+
+    def __call__(self, url, headers, body, timeout):
+        self.requests.append((url, headers, json.loads(body)))
+        raw = self.answer if isinstance(self.answer, bytes) else json.dumps(self.answer).encode()
+        return self.status, raw
+
+
+def event(**override):
+    base = {"tool_name": "mcp__srv-1__search", "mcp_server": {"name": "srv-1"},
+            "tool_input": {"q": "x"}, "tool_use_id": "toolu_1"}  # fmt: skip
+    return base | override
+
+
+def decide(world, wire, **override):
+    agent.decide(
+        event(**override), url="https://mint.test", key="sk-k", contracts=world.listing,
+        state_dir=world.state, post=wire,
+    )
+
+
+def test_the_hook_reports_the_hashes_on_disk_and_no_identity_kind(world):
+    wire = Wire()
+    decide(world, wire)
+    ((url, headers, body),) = wire.requests
+    assert url == "https://mint.test/mint/v1/decide"
+    assert headers["Authorization"] == "Bearer sk-k"
+    assert (body["server"], body["tool"], body["tool_use_id"]) == ("srv-1", "search", "toolu_1")
+    contract = body["contract"]
+    assert "identity_kind" not in contract
+    assert contract["executable_sha256"] == sha(b"binary-v1")
+    assert contract["script_sha256"] == sha(b"script-v1")
+    assert contract["env"] == {"MODE": "ro"} and contract["argv"] == [str(world.script)]
+
+
+def test_a_server_file_that_changed_after_approval_is_reported_as_changed(world):
+    world.script.write_bytes(b"script-v2")
+    wire = Wire()
+    decide(world, wire)
+    assert wire.requests[0][2]["contract"]["script_sha256"] == sha(b"script-v2")
+    world.exe.unlink()
+    with pytest.raises(agent.Refuse, match="cannot be read"):
+        decide(world, Wire())
+
+
+def test_an_allowed_call_leaves_a_reference_for_the_result_hook(world):
+    decide(world, Wire())
+    path = os.path.join(world.state, "pending", "toolu_1")
+    assert open(path).read() == "ref-1"
+    if os.name == "posix":
+        assert os.stat(path).st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"decision": "deny", "reference": "r:1", "error": {"code": "MINT-APPROVAL-ABSENT"}},
+        {"decision": "maybe"},
+        b"not json",
+        b"x" * (agent.MAX_RESPONSE + 1),
+        [],
+    ],
+)
+def test_a_refusal_or_an_unreadable_answer_blocks_the_call(world, answer):
+    with pytest.raises(agent.Refuse):
+        decide(world, Wire(answer))
+    assert not os.path.exists(os.path.join(world.state, "pending", "toolu_1"))
+
+
+def test_an_error_status_or_an_unreachable_service_blocks_the_call(world):
+    with pytest.raises(agent.Refuse, match="HTTP 503"):
+        decide(world, Wire(status=503))
+
+    def down(*args):
+        raise OSError("refused")
+
+    with pytest.raises(agent.Refuse, match="unreachable"):
+        decide(world, down)
+
+
+def test_a_server_that_is_not_approved_is_blocked_without_a_request(world):
+    wire = Wire()
+    with pytest.raises(agent.Refuse, match="not an approved"):
+        decide(world, wire, tool_name="mcp__other__x", mcp_server={"name": "other"})
+    assert wire.requests == []
+
+
+def test_calls_that_are_not_mcp_tools_pass_without_a_request(world):
+    wire = Wire()
+    decide(world, wire, tool_name="Bash")
+    assert wire.requests == []
+
+
+def report(world, wire, failed=False, **override):
+    return agent.report_result(
+        event(**override), failed=failed, url="https://mint.test", key="sk-k",
+        state_dir=world.state, post=wire,
+    )
+
+
+def test_the_call_identifier_is_never_used_as_a_path(world):
+    decide(world, Wire(), tool_use_id="../escape")
+    assert not os.path.exists(os.path.join(world.state, "pending"))
+    assert report(world, Wire(), tool_use_id="../escape") is False
+
+
+def test_the_result_hook_sends_the_reference_back_and_forgets_it(world):
+    decide(world, Wire())
+    wire = Wire({"recorded": True})
+    assert report(world, wire, tool_response={"content": "ok"}) is True
+    ((url, _, body),) = wire.requests
+    assert url == "https://mint.test/mint/v1/result"
+    size = len(json.dumps({"content": "ok"}))
+    assert body == {"reference": "ref-1", "outcome": "success", "size_bytes": size}
+    assert report(world, Wire()) is False  # 두 번 보고하지 않는다.
+
+
+@pytest.mark.parametrize(
+    ("extra", "outcome"), [({}, "error"), ({"is_interrupt": True}, "unknown")]
+)
+def test_a_failed_call_is_reported_as_an_error_or_an_unknown_outcome(world, extra, outcome):
+    decide(world, Wire())
+    wire = Wire({"recorded": True})
+    assert report(world, wire, failed=True, **extra) is True
+    assert wire.requests[0][2] == {"reference": "ref-1", "outcome": outcome}
+
+
+def test_a_report_that_fails_keeps_the_reference_and_no_reference_sends_nothing(world):
+    decide(world, Wire())
+    assert report(world, Wire(status=500)) is False
+    assert os.path.exists(os.path.join(world.state, "pending", "toolu_1"))
+    wire = Wire()
+    assert report(world, wire, tool_use_id="toolu_unknown") is False
+    assert wire.requests == []
+
+
+def test_references_older_than_a_day_are_removed_on_the_next_call(world):
+    decide(world, Wire())
+    old = os.path.join(world.state, "pending", "toolu_1")
+    long_ago = time.time() - agent.PENDING_MAX_AGE - 60
+    os.utime(old, (long_ago, long_ago))
+    decide(world, Wire(), tool_use_id="toolu_2")
+    assert sorted(os.listdir(os.path.join(world.state, "pending"))) == ["toolu_2"]
+
+
+# --- 서버 실행기 -------------------------------------------------------------------------------
+
+
+class Exec:
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, target, argv, env):
+        self.calls.append((target, argv, env))
+
+
+def launch(world, environ=None):
+    started = Exec()
+    agent.run_server("srv-1", world.listing, environ or {}, execve=started)
+    return started.calls
+
+
+def test_the_launcher_starts_the_approved_server_with_a_clean_environment(world):
+    environ = {
+        "PATH": "/usr/bin", "LD_PRELOAD": "/tmp/x.so", "NODE_OPTIONS": "--inspect",
+        "PYTHONPATH": "/tmp", "MODE": "rw",
+    }  # fmt: skip
+    ((target, argv, env),) = launch(world, environ)
+    assert argv == [str(world.exe), str(world.script)]
+    assert env == {"PATH": "/usr/bin", "MODE": "ro"}  # 승인된 값이 이긴다.
+    assert isinstance(target, int)
+
+
+def test_the_launcher_does_not_start_a_changed_executable_or_script(world):
+    world.script.write_bytes(b"script-v2")
+    with pytest.raises(agent.Refuse, match="script differs"):
+        launch(world)
+    world.script.write_bytes(b"script-v1")
+    world.exe.write_bytes(b"binary-v2")
+    with pytest.raises(agent.Refuse, match="executable differs"):
+        launch(world)
+
+
+def test_the_launcher_does_not_start_an_unknown_server_or_a_missing_list(world, tmp_path):
+    with pytest.raises(agent.Refuse, match="not an approved"):
+        agent.run_server("other", world.listing, {}, execve=Exec())
+    with pytest.raises(agent.Refuse, match="cannot be read"):
+        agent.run_server("srv-1", str(tmp_path / "none.json"), {}, execve=Exec())
+
+
+def run_agent(*args, stdin=""):
+    return subprocess.run(
+        [sys.executable, str(KIT / "mint_agent.py"), *args],
+        input=stdin, capture_output=True, text=True, timeout=30,
+    )  # fmt: skip
+
+
+def script_server(world, body: bytes, approved: bytes):
+    """셸 스크립트 서버를 만들고, ``approved``의 해시로 승인한 목록 파일 경로를 돌려준다."""
+    tool = world.tmp / "tool"
+    tool.write_bytes(body)
+    tool.chmod(0o755)
+    doc = {**world.doc, "executable": str(tool), "argv": [], "script_sha256": None,
+           "executable_sha256": sha(approved)}  # fmt: skip
+    return tool, world.write_listing("tool.json", doc)
+
+
+def test_a_refused_launch_exits_without_starting_anything(world):
+    marker = world.tmp / "started"
+    body = f"#!/bin/sh\necho started > '{marker}'\n".encode()
+    _, listing = script_server(world, body, approved=b"something else")
+    done = run_agent("run", "--contracts", listing, "--server", "srv-1")
+    assert done.returncode == agent.REFUSED and not marker.exists()
+    assert done.stdout == "" and "differs" in done.stderr
+
+
+@pytest.mark.skipif(not LINUX, reason="executes a shell script")
+def test_an_approved_script_server_really_starts_and_a_replaced_one_does_not(world):
+    marker = world.tmp / "started"
+    body = f"#!/bin/sh\necho started:$MODE > '{marker}'\n".encode()
+    tool, listing = script_server(world, body, approved=body)
+    args = ("run", "--contracts", listing, "--server", "srv-1")
+    assert run_agent(*args).returncode == 0 and marker.read_text() == "started:ro\n"
+    marker.unlink()
+    tool.write_bytes(body + b"echo replaced\n")
+    assert run_agent(*args).returncode == agent.REFUSED and not marker.exists()
+
+
+def test_the_command_line_hook_blocks_on_bad_input_and_an_unreachable_service(world):
+    key = world.tmp / "key"
+    key.write_text("sk-k")
+    base = (
+        "--url", "http://localhost:9", "--key-file", str(key), "--contracts", world.listing,
+        "--state-dir", world.state,
+    )  # fmt: skip
+    assert run_agent("pre", *base, stdin="not json").returncode == 2
+    assert run_agent("pre", *base, stdin=json.dumps(event())).returncode == 2
+    assert run_agent("pre", *base, stdin=json.dumps(event(tool_name="Bash"))).returncode == 0
+    # 호출 뒤 훅은 어떤 경우에도 호출을 막지 않는다.
+    assert run_agent("post", *base, stdin="not json").returncode == 0
+    assert run_agent("post-failure", *base, stdin=json.dumps(event())).returncode == 0

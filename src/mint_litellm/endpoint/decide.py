@@ -14,13 +14,14 @@ import json
 import logging
 import re
 from collections.abc import Callable, Mapping
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from mint_litellm.compat.litellm_1_106 import HookData
+from mint_litellm.endpoint.routes import DECIDE_PATH, REPORT_PATH, RESULT_PATH
 from mint_litellm.plugin.pipeline import CallRequest, build_request, evaluate_request
 from mint_litellm.plugin.result import observe_response, observe_unknown_outcome
 from mint_litellm.types.decision import OperationType
@@ -29,8 +30,6 @@ from mint_litellm.types.identity import Principal
 
 log = logging.getLogger("mint_litellm.endpoint")
 
-DECIDE_PATH = "/mint/v1/decide"
-RESULT_PATH = "/mint/v1/result"
 MAX_BODY_BYTES = 64 * 1024
 _REFERENCE = re.compile(r"^([0-9a-f-]{36}):([1-9][0-9]{0,8})$")
 
@@ -56,6 +55,29 @@ class ResultBody(BaseModel):
     # unknown: 훅이 도구가 실행됐는지 모른다고 보고(중단·시간 초과 등)
     outcome: Literal["success", "error", "unknown"]
     size_bytes: int | None = Field(default=None, ge=0, le=2**40)
+
+
+class ReportBody(BaseModel):
+    """설치 묶음이 설치·제거를 마치고 보내는 상태 보고. 파일 경로나 키는 받지 않는다."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kit_version: str = Field(min_length=1, max_length=128)
+    action: Literal["installed", "removed"]
+    mode: Literal["managed", "user", "none"]
+    claude_version: str | None = Field(default=None, max_length=64)
+    mcp_servers: list[Annotated[str, Field(min_length=1, max_length=128)]] = Field(
+        default_factory=list, max_length=64
+    )
+
+    @model_validator(mode="after")
+    def _mode_matches_action(self) -> ReportBody:
+        if (self.action == "installed") == (self.mode == "none"):
+            raise ValueError("mode does not match the action")
+        return self
+
+    def install_mode(self) -> str:
+        return "removed" if self.action == "removed" else self.mode
 
 
 def strict_json(raw: bytes) -> Any:
@@ -209,6 +231,27 @@ def make_router(
                 size_bytes=body.size_bytes,
                 deps=runtime.result_deps,
             )
+        return {"recorded": True}
+
+    @router.post(REPORT_PATH)
+    async def report(request: Request, auth: Any = Depends(auth_dependency)) -> dict[str, Any]:
+        runtime = ready()
+        body = await _body(request, ReportBody)
+        who = principal_factory(auth, instance_id=runtime.config.instance_id)
+        try:
+            # 설치 묶음에 발급한 키(해제되지 않은 것)의 보고만 받는다.
+            found = who.key_id is not None and await runtime.database.report_install(
+                runtime.config.instance_id,
+                who.key_id,
+                mode=body.install_mode(),
+                kit_version=body.kit_version,
+                claude_version=body.claude_version,
+                mcp_servers=body.mcp_servers,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="install store is not ready") from exc
+        if not found:
+            raise HTTPException(status_code=404, detail="no such kit key")
         return {"recorded": True}
 
     return router
