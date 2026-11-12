@@ -125,6 +125,20 @@ missing contains "approval.conditions.allowed_arg_keys" if {
 	not valid_strings(conditions.allowed_arg_keys)
 }
 
+# 서버 식별 방식. 로컬 실행(stdio) 서버 규칙(POL-R-18·POL-R-20)이 기대는 입력이라 빠지면 오류다.
+missing contains "server.identity_kind" if not input.server.identity_kind in {"remote", "stdio"}
+
+# 로컬 실행 서버는 보고된 실행 계약 해시가 있어야 승인본과 대조할 수 있다.
+missing contains "server.exec_contract_sha256" if {
+	stdio_server
+	not valid_sha256(object.get(input.server, "exec_contract_sha256", null))
+}
+
+valid_sha256(value) if {
+	is_string(value)
+	regex.match(`^[0-9a-f]{64}$`, value)
+}
+
 missing contains "server.provider_allowed" if not is_boolean(input.server.provider_allowed)
 missing contains "server.auth_server_allowed" if not is_boolean(input.server.auth_server_allowed)
 missing contains "principal.type" if not input.principal.type in {"user", "team_key", "service_account"}
@@ -278,6 +292,29 @@ applied contains id if {
 	count({key | some key in input.arguments.keys} - allowed) > 0
 }
 
+# POL-R-18·POL-R-20(로컬 실행 서버). 호출 때 실행 정의를 승인본과 대조하며 서버 시작은 통제하지 않는다.
+# exec_approved_sha256은 서버 행의 승인된 실행 계약 해시, exec_contract_sha256은 단말이 보고한 계약을
+# MINT가 계산한 해시이다. 일치 여부는 두 해시를 여기서 비교하고 단말의 참/거짓은 받지 않는다.
+stdio_server if input.server.identity_kind == "stdio"
+
+# 승인된 실행 계약이 없는 로컬 서버는 어떤 실행 정의로도 호출할 수 없다(POL-R-18).
+exec_approved if {
+	input.server.status == "approved"
+	valid_sha256(object.get(input.server, "exec_approved_sha256", null))
+}
+
+applied contains "POL-R-18" if {
+	stdio_server
+	not exec_approved
+}
+
+# 실행 파일 위치·인자·작업 디렉터리·환경 값이 승인된 실행 계약과 다르면 막는다(POL-R-20).
+applied contains "POL-R-20" if {
+	stdio_server
+	exec_approved
+	input.server.exec_contract_sha256 != input.server.exec_approved_sha256
+}
+
 hours := object.get(conditions, "business_hours", data.mint.business_hours)
 
 within_business_hours if {
@@ -295,7 +332,7 @@ within_business_hours if {
 	current < (to_number(end[0]) * 60) + to_number(end[1])
 }
 
-block_ids := {"R1", "R3", "POL-E-07", "POL-E-08", "POL-E-09", "POL-E-14", "POL-E-15"}
+block_ids := {"R1", "R3", "POL-E-07", "POL-E-08", "POL-E-09", "POL-E-14", "POL-E-15", "POL-R-18", "POL-R-20"}
 block_observable := {id: true | some id in block_ids}
 block_rules := {id | some id in block_ids; id in applied}
 

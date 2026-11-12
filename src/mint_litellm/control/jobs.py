@@ -145,10 +145,11 @@ def _approval_expiry_scan(job: JobContext) -> None:
 
 
 def _endpoint_result_scan(job: JobContext) -> None:
-    from mint_litellm.control import endpoint_results
+    from mint_litellm.control import endpoint_posture, endpoint_results
 
     with job.conn.transaction():
         endpoint_results.scan(job.conn, job.instance_id)
+        endpoint_posture.scan(job.conn, job.instance_id)
 
 
 def _alert_deliver(job: JobContext) -> None:

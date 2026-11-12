@@ -112,6 +112,8 @@ def test_a_stdio_call_carries_the_contract_to_the_policy_input_and_the_event(tmp
     server = calls[0]["server"]
     assert server["identity_kind"] == "stdio"
     assert (server["exec_contract_sha256"], server["exec_contract_version"]) == (EXEC, 1)
+    # 승인된 계약은 서버 행의 값이고 보고된 계약은 단말이 보낸 값에서 MINT가 계산한 해시이다.
+    assert server["exec_approved_sha256"] == EXEC
     assert "url_sha256" not in server
     assert has_only_policy_fields(calls[0])
 
@@ -128,7 +130,9 @@ def test_a_remote_call_keeps_its_url_hash_and_sends_no_execution_contract(tmp_pa
     outcome = decide(harness(tmp_path, evaluate=evaluator(calls=calls)))
     assert outcome.allowed
     assert calls[0]["server"]["identity_kind"] == "remote"
-    assert not {"exec_contract_sha256", "exec_contract_version"} & set(calls[0]["server"])
+    assert not {"exec_contract_sha256", "exec_contract_version", "exec_approved_sha256"} & set(
+        calls[0]["server"]
+    )
     event = outcome.snapshot
     assert event.resolved_url_sha256 == resolved_server().url_sha256
     assert event.resolved_identity_kind == "remote"

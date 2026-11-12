@@ -311,3 +311,5 @@ class ResponseObservation(BaseModel):
 class AlertKind(StrEnum):
     SERVER_IDENTITY_CONFLICT = "server_identity_conflict"
     APPROVAL_EXPIRING = "approval_expiring"
+    ENDPOINT_STALE_SERVER = "endpoint_stale_server"
+    ENDPOINT_UNMANAGED = "endpoint_unmanaged"

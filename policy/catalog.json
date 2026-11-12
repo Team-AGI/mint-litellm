@@ -1,13 +1,19 @@
 {
   "rules": [
     {"id":"R1","description":"승인 범위 밖 호출","observable":true,"output":"Block","reference_policies":["POL-I-03","POL-E-01","POL-E-03"]},
-    {"id":"R2","description":"고위험 도구 호출","observable":false,"output":"RequireApproval","reference_policies":["POL-E-07","POL-O-15"]},
+    {"id":"R2","description":"고위험 도구 호출","observable":false,"output":"RequireApproval","reference_policies":["POL-I-02","POL-I-10"]},
     {"id":"R3","description":"업무 시간 밖 호출","observable":true,"output":"Block","reference_policies":["POL-E-01"]},
-    {"id":"R4","description":"동의 확인","observable":false,"output":"require_consent","reference_policies":["POL-R-15","POL-E-08"]},
+    {"id":"R4","description":"동의 확인","observable":false,"output":"require_consent","reference_policies":["POL-R-21","POL-R-22"]},
     {"id":"POL-E-07","description":"허용 목적지 밖 URL 인자","observable":true,"output":"Block","reference_policies":["POL-E-07"]},
     {"id":"POL-E-08","description":"승인된 인자 키 밖 호출","observable":true,"output":"Block","reference_policies":["POL-E-08"]},
     {"id":"POL-E-09","description":"승인 폴더 밖 경로 인자","observable":true,"output":"Block","reference_policies":["POL-E-09"]},
     {"id":"POL-E-14","description":"사설·내부 주소 인자","observable":true,"output":"Block","reference_policies":["POL-E-14"]},
-    {"id":"POL-E-15","description":"정의되지 않은 인자 항목","observable":true,"output":"Block","reference_policies":["POL-E-15"]}
+    {"id":"POL-E-15","description":"정의되지 않은 인자 항목","observable":true,"output":"Block","reference_policies":["POL-E-15"]},
+    {"id":"POL-R-18","description":"승인된 실행 계약이 없는 로컬 서버 호출","observable":true,"output":"Block","reference_policies":["POL-R-18"]},
+    {"id":"POL-R-20","description":"승인된 실행 계약과 다른 로컬 서버 호출","observable":true,"output":"Block","reference_policies":["POL-R-20"]}
+  ],
+  "checks": [
+    {"id":"endpoint_stale_server","description":"설치 보고에 폐기된 서버 항목이 남음","output":"alert","reference_policies":["POL-D-02"]},
+    {"id":"endpoint_unmanaged","description":"관리되지 않는 단말 설치(관리형에서만 게이트웨이 밖 MCP를 막음)","output":"alert","reference_policies":["POL-E-06"]}
   ]
 }

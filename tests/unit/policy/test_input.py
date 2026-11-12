@@ -63,11 +63,12 @@ def test_input_keeps_the_identity_kind_and_execution_contract_of_the_server():
 
     server = {
         "id": "s", "identity_kind": "stdio", "exec_contract_sha256": "e" * 64,
-        "exec_contract_version": 1, "url_sha256": "a" * 64, "credentials": "secret",
+        "exec_contract_version": 1, "exec_approved_sha256": "f" * 64, "url_sha256": "a" * 64,
+        "credentials": "secret",
     }
     result = make_input(server=server)
     assert result["server"] == {
         "id": "s", "identity_kind": "stdio", "exec_contract_sha256": "e" * 64,
-        "exec_contract_version": 1,
+        "exec_contract_version": 1, "exec_approved_sha256": "f" * 64,
     }
     assert has_only_policy_fields(result)

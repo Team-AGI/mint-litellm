@@ -176,6 +176,73 @@ test_the_grade_adds_to_approval_conditions_and_never_removes_them if {
 	evaluate(value).decision == "RequireApproval"
 }
 
+sha_a := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+sha_b := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+local_server(fields) := object.union(sample, {"server": object.union(
+	sample.server,
+	object.union({"identity_kind": "stdio", "transport": "stdio"}, fields),
+)})
+
+approved_local(reported, approved) := local_server({"exec_contract_sha256": reported, "exec_approved_sha256": approved})
+
+test_pol_r18_r20_matching_execution_contract_is_allowed if {
+	d := evaluate(approved_local(sha_a, sha_a))
+	d.decision == "Allow"
+	d.missing_inputs == []
+}
+
+test_pol_r20_changed_execution_contract_is_blocked if {
+	d := evaluate(approved_local(sha_b, sha_a))
+	d.decision == "Block"
+	d.policy_ids == ["POL-R-20"]
+	d.observable
+}
+
+test_pol_r18_local_server_without_approved_contract_is_blocked if {
+	d := evaluate(local_server({"exec_contract_sha256": sha_a}))
+	d.decision == "Block"
+	d.policy_ids == ["POL-R-18"]
+	d.observable
+}
+
+test_pol_r18_local_server_not_approved_is_blocked_even_with_matching_hashes if {
+	value := local_server({"status": "suspended", "exec_contract_sha256": sha_a, "exec_approved_sha256": sha_a})
+	d := evaluate(value)
+	d.decision == "Block"
+	d.policy_ids == ["POL-R-18"]
+}
+
+test_pol_r18_malformed_approved_hash_counts_as_not_approved if {
+	d := evaluate(approved_local(sha_a, "not-a-hash"))
+	d.decision == "Block"
+	d.policy_ids == ["POL-R-18"]
+}
+
+test_pol_r18_r20_do_not_apply_to_remote_servers if {
+	remote := object.union(sample, {"server": object.union(
+		sample.server,
+		{"exec_contract_sha256": sha_a, "exec_approved_sha256": sha_b},
+	)})
+	d := evaluate(remote)
+	d.decision == "Allow"
+	d.missing_inputs == []
+}
+
+test_pol_r18_r20_missing_reported_contract_is_an_input_error if {
+	value := local_server({"exec_approved_sha256": sha_a})
+	"server.exec_contract_sha256" in evaluate(value).missing_inputs
+	bad := approved_local("short", sha_a)
+	"server.exec_contract_sha256" in evaluate(bad).missing_inputs
+}
+
+test_pol_unknown_identity_kind_is_an_input_error if {
+	value := object.union(sample, {"server": object.union(sample.server, {"identity_kind": "container"})})
+	evaluate(value).missing_inputs == ["server.identity_kind"]
+	evaluate(drop(sample, "/server/identity_kind")).missing_inputs == ["server.identity_kind"]
+}
+
 # 차단 규칙이 기대는 입력이 빠지거나 깨지면 규칙이 조용히 건너뛰어져 허용되는 일이 없어야 한다.
 # 결정이 허용이 아니거나, 필수 입력 오류(missing_inputs)로 호출이 오류 처리되어야 한다.
 fails_closed(d) if d.decision != "Allow"
@@ -206,7 +273,12 @@ managed_firing := {
 	"R2": with_grade(managed, "high"),
 }
 
-all_firing := object.union(unmanaged_firing, managed_firing)
+local_firing := {
+	"POL-R-18": local_server({"exec_contract_sha256": sha_a}),
+	"POL-R-20": approved_local(sha_b, sha_a),
+}
+
+all_firing := object.union(object.union(unmanaged_firing, managed_firing), local_firing)
 
 test_each_block_rule_fires_on_its_own_input if {
 	every id, value in all_firing { id in evaluate(value).policy_ids }
@@ -225,6 +297,11 @@ dependencies := {
 	"POL-E-09": ["/arguments", "/arguments/patterns", "/arguments/patterns/path_traversal", "/server/contract_status"],
 	"POL-E-14": ["/arguments", "/arguments/patterns", "/arguments/patterns/private_host", "/server/contract_status"],
 	"POL-E-08": ["/arguments/keys", "/arguments/patterns", "/server/contract_status"],
+	"POL-R-18": ["/server", "/server/identity_kind", "/server/status", "/server/exec_contract_sha256"],
+	"POL-R-20": [
+		"/server/identity_kind", "/server/status", "/server/exec_contract_sha256",
+		"/server/exec_approved_sha256",
+	],
 }
 
 test_a_missing_dependency_of_a_block_rule_never_allows if {
@@ -241,6 +318,11 @@ broken_values := {
 	"POL-E-09": [["/arguments/patterns/path_traversal", 1], ["/arguments/patterns", "x"]],
 	"POL-E-14": [["/arguments/patterns/private_host", null], ["/arguments/keys", "x"]],
 	"POL-E-08": [["/approval/conditions/allowed_arg_keys", "repo"], ["/arguments/keys", "extra"]],
+	"POL-R-18": [["/server/identity_kind", "container"], ["/server/exec_contract_sha256", null]],
+	"POL-R-20": [
+		["/server/identity_kind", 5], ["/server/exec_contract_sha256", 5],
+		["/server/exec_approved_sha256", "zz"],
+	],
 }
 
 test_a_broken_dependency_of_a_block_rule_never_allows if {
