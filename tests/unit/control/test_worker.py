@@ -147,9 +147,10 @@ def test_the_worker_login_creates_the_schedules_it_has_handlers_for(make_worker,
 
 
 def test_job_kinds_follow_the_registration_rules(url, all_handlers):
-    assert len(jobs.KINDS) == 15  # 14종 + 해제 경로의 restore_publish
+    assert len(jobs.KINDS) == 16  # 15종 + 해제 경로의 restore_publish
     assert {k for k, v in jobs.KINDS.items() if v.convergent} == {
-        "contract_observe", "sync_server", "sync_target", "activation_finalize"}
+        "contract_observe", "sync_server", "sync_target", "activation_finalize",
+        "relation_finalize"}
     with psycopg.connect(url) as conn:
         ensure(conn, INSTANCE)
         ctx = make_ctx(conn)
