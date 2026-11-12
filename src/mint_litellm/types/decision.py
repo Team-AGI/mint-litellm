@@ -418,6 +418,9 @@ class ResolvedServer(BaseModel):
     transport: str = Field(min_length=1)
     auth_type: str = Field(min_length=1)
     candidates_with_same_name: int = Field(ge=1)
+    # 레지스트리가 알려 주는 원격 자격의 주체(고정 토큰의 지문 또는 OAuth 클라이언트). 호출자별
+    # 자격은 훅에서 보이지 않으므로 없다. 토큰 원문은 담지 않는다.
+    credential_ref: str | None = Field(default=None, max_length=96)
 
     @model_validator(mode="after")
     def _identity_shape(self) -> Self:
@@ -521,6 +524,9 @@ class DecisionSnapshot(BaseModel):
     resolved_exec_contract_version: int | None = Field(default=None, ge=1)
     resolved_transport: str | None = None
     resolved_auth_type: str | None = None
+    resolved_credential_ref: str | None = None
+    bound_target: str | None = None
+    bound_action: str | None = None
     candidates_with_same_name: int | None = Field(default=None, ge=1)
     mode: Mode
     state_epoch: int | None = Field(default=None, ge=0)

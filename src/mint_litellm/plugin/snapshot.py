@@ -194,6 +194,11 @@ CONSUME_BOUND_SQL = CONSUME_SQL.replace(
     " WHERE t.instance_id = %(iid)s AND t.id = %(contract_id)s::uuid AND t.status = 'approved')",
 )
 
+# 프로필이 있는 서버의 호출별 승인: 받은 때의 대상·행위와 같을 때만 소비한다.
+CONSUME_TARGET_SQL = (
+    " AND target IS NOT DISTINCT FROM %(target)s::text AND action = %(action)s::text"
+)
+
 NEGATIVE_STATE_SQL = """
 SELECT
     coalesce((SELECT status = 'revoked' FROM mint.approvals
@@ -311,6 +316,8 @@ class CallApprovalRow:
     expires_at: datetime
     state_version: int
     contract_id: str | None = None
+    target: str | None = None
+    action: str | None = None
 
 
 @dataclass(frozen=True)
@@ -476,6 +483,8 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
                 expires_at=_time(c["expires_at"]),
                 state_version=c["state_version"],
                 contract_id=c.get("contract_id"),
+                target=c.get("target"),
+                action=c.get("action"),
             )
             for c in doc["call_approvals"]
         ),
@@ -755,7 +764,8 @@ class PluginDatabase:
                 inserted = cursor.rowcount == 1
                 if consume is not None and consume.call_approval_id is not None:
                     cursor = await conn.execute(
-                        CONSUME_SQL if consume.contract_id is None else CONSUME_BOUND_SQL,
+                        (CONSUME_SQL if consume.contract_id is None else CONSUME_BOUND_SQL)
+                        + (CONSUME_TARGET_SQL if consume.action is not None else ""),
                         {
                             "iid": event.instance_id,
                             "id": consume.call_approval_id,
@@ -768,6 +778,8 @@ class PluginDatabase:
                             "policy_version_id": consume.policy_version_id,
                             "state_version": consume.state_version,
                             "contract_id": consume.contract_id,
+                            "target": consume.target,
+                            "action": consume.action,
                         },
                     )
                     if cursor.rowcount != 1:

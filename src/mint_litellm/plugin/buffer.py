@@ -92,6 +92,9 @@ class ConsumeRequest:
     confirmation: ConfirmationConsume | None = None
     # 계약 관리 서버에서 승인이 묶인 도구 계약. 소비 때 지금도 승인된 계약이어야 한다.
     contract_id: str | None = None
+    # 프로필이 있는 서버에서 승인이 묶인 대상·행위. 소비 때 승인 행의 값과 같아야 한다.
+    target: str | None = None
+    action: str | None = None
 
 
 class EventStore(Protocol):

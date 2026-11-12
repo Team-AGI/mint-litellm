@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import importlib
 import importlib.metadata
 import time
@@ -177,6 +178,19 @@ def _matching_servers(manager: Any, server_name: str) -> list[Any]:
     return matches
 
 
+def _credential_ref(server: Any) -> str | None:
+    """레지스트리가 가진 원격 자격의 주체. 고정 토큰은 지문만, OAuth는 클라이언트 식별자만 쓴다."""
+    token = getattr(server, "authentication_token", None)
+    if token is not None and hasattr(token, "get_secret_value"):
+        token = token.get_secret_value()
+    if isinstance(token, str) and token:
+        return "static:" + hashlib.sha256(b"mint-credential:" + token.encode()).hexdigest()[:16]
+    client_id = getattr(server, "client_id", None)
+    if isinstance(client_id, str) and client_id:
+        return "oauth2-client:" + client_id[:64]
+    return None
+
+
 def _to_resolved(server: Any, candidates: int) -> ResolvedServer:
     if not getattr(server, "url", None):
         # 로컬 실행(stdio)·OpenAPI 서버는 계약 URL 해시를 만들 수 없어 1단계가 지원하지 않는다.
@@ -187,6 +201,7 @@ def _to_resolved(server: Any, candidates: int) -> ResolvedServer:
         transport=_enum_text(server.transport),
         auth_type=normalize_auth_type(server.auth_type),
         candidates_with_same_name=max(candidates, 1),
+        credential_ref=_credential_ref(server),
     )
 
 

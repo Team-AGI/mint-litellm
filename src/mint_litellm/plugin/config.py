@@ -9,11 +9,12 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from mint_litellm.types.fingerprint import decode_fingerprint_key
 from mint_litellm.types.settings import Mode
+from mint_litellm.types.target import parse_profile_map
 
 _IDENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _TRUE = frozenset({"1", "true", "yes", "on"})
@@ -35,6 +36,8 @@ class PluginConfig:
     mode_ceiling: Mode = Mode.ENFORCE
     required: bool = True
     high_risk_tools: frozenset[str] = frozenset()
+    # 서버 식별자 -> 대상·행위 프로필 이름. 여기 없는 서버는 대상을 따로 묶지 않는다.
+    target_profiles: dict[str, str] = field(default_factory=dict)
     buffer_dir: Path = Path(DEFAULT_BUFFER_DIR)
     buffer_max_bytes: int = DEFAULT_BUFFER_MAX_BYTES
     db_pool_size: int = 8
@@ -76,6 +79,7 @@ class PluginConfig:
             high_risk_tools=frozenset(
                 t.strip() for t in env.get("MINT_HIGH_RISK_TOOLS", "").split(",") if t.strip()
             ),
+            target_profiles=_target_profiles(env.get("MINT_TARGET_PROFILES", "")),
             buffer_dir=Path(env.get("MINT_BUFFER_DIR", DEFAULT_BUFFER_DIR)),
             buffer_max_bytes=_integer(env, "MINT_BUFFER_MAX_BYTES", DEFAULT_BUFFER_MAX_BYTES, 1024),
             db_pool_size=_integer(env, "MINT_DB_POOL_SIZE", 8, 1),
@@ -103,6 +107,13 @@ class PluginConfig:
                 )
             ),
         )
+
+
+def _target_profiles(raw: str) -> dict[str, str]:
+    try:
+        return parse_profile_map(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"MINT_TARGET_PROFILES is invalid: {exc}") from None
 
 
 def _log_level(raw: str | None) -> str | None:

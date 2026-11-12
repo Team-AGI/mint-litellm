@@ -514,6 +514,8 @@ def call_request(
     policy_version_id: str | None,
     expires_in_minutes: int,
     requested_by: str,
+    target: str | None = None,
+    action: str | None = None,
 ) -> str:
     if principal_type not in PRINCIPAL_TYPES:
         raise ControlError(f"principal-type은 {', '.join(PRINCIPAL_TYPES)} 중 하나여야 합니다.")
@@ -535,13 +537,13 @@ def call_request(
         ctx.conn,
         "INSERT INTO mint.call_approvals (id, instance_id, org_id, principal_type, principal_id,"
         " server_id, tool, args_fp, fp_key_version, policy_version_id, status, requested_by,"
-        " expires_at, contract_id)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s)"
+        " expires_at, contract_id, target, action)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s)"
         " RETURNING state_version",
         (call_id, ctx.instance_id, org_id, principal_type, principal_id, server_id, tool, args_fp,
          fp_key_version, policy_version_id, requested_by,
          datetime.now(UTC) + timedelta(minutes=expires_in_minutes),
-         _approved_contract_id(ctx, server_id, tool)),
+         _approved_contract_id(ctx, server_id, tool), target, action),
     )
     ctx.emit(
         EventKind.CALL_APPROVAL_REQUESTED,
@@ -549,7 +551,8 @@ def call_request(
         row["state_version"],
         {"call_approval_id": str(call_id), "org_id": org_id, "principal_type": principal_type,
          "principal_id": principal_id, "server_id": server_id, "tool": tool,
-         "policy_version_id": policy_version_id, "requested_by": requested_by},
+         "policy_version_id": policy_version_id, "requested_by": requested_by,
+         **({"target": target, "action": action} if action is not None else {})},
     )
     return str(call_id)
 

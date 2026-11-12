@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- 원격 서버 호출의 대상·행위 결속을 더했다. `MINT_TARGET_PROFILES`로 서버에 프로필(`github`: `owner/repo`와 `method`, `n8n`: 인스턴스·워크플로 ID와 실행 여부)을 지정하면 호출 인자에서 대상과 행위를 구조적으로 뽑고(빠진 인자에는 서버의 실제 기본값을 적용), 변경·실행 호출에는 그 대상·행위에 묶인 호출별 승인을 요구한다. 승인 행에 `target`·`action`이 기록되고 매칭과 소비가 모두 완전 일치를 본다. 프로필에 없는 도구나 대상을 정할 수 없는 변경·실행 호출은 `CALL_APPROVAL_REQUIRED`로 차단한다. 판정 사건에 `bound_target`·`bound_action`과 레지스트리가 아는 원격 자격 주체 `resolved_credential_ref`를 남긴다. 프로필이 없는 서버의 동작은 바뀌지 않는다(마이그레이션 `019_approval_target_binding`).
 - 서버 식별 방식(`identity_kind`: `remote`·`stdio`)과 실행 계약(`exec_contract_sha256`·`exec_contract_version`)을 `servers`·배포 계약·판정 사건(`resolved_identity_kind` 등)·정책 입력의 URL 해시와 따로 둔 필드로 추가했다. 로컬 실행 서버는 URL 해시를 갖지 않고, 배포 계약은 실행 위치·실행물 출처·권한을 위한 별개 열(`exec_location`·`artifact_source`·`permissions`)을 비워 둔다. 원격 서버의 동작은 바뀌지 않는다. 정책 입력에 `server.identity_kind`(항상)와 `server.exec_contract_*`(`stdio`만)가 더해지며 번들 규칙은 아직 읽지 않는다(마이그레이션 `018_exec_contract_fields`).
 - 정책 입력의 `server.contract_status`(`none`·`managed`)를 항상 보내고, 계약 관리 서버의 `arguments.patterns`를 필수로 한다. 차단 규칙이 기대는 입력이 빠지거나 깨지면 규칙이 조용히 평가되지 않아 허용되는 대신 입력 오류로 차단한다. 새 번들은 이 항목을 필수로 보므로 플러그인을 먼저 올린 뒤 번들을 활성화한다.
 - 계약 관리 서버의 도구는 승인된 도구 계약의 위험 등급이 `high`·`critical`이면, 승인이 어떤 경로로 만들어졌는지와 무관하게 호출별 승인을 요구한다(정책 입력 `tool.risk_grade`, 규칙 R2). 승인 조건의 `high_risk_tools`는 요구를 더하기만 하고, 계약이 있는데 등급이 없으면 입력 오류로 차단한다. 이 규칙은 새 정책 번들을 `policy activate`로 활성화해야 적용된다.
