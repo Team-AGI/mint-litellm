@@ -104,7 +104,8 @@ def _restore_operator(conn: psycopg.Connection, instance_id: str, item: dict[str
     """운영자는 부정 방향으로만 되돌린다(권한을 늘리는 값은 파일에서 가져오지 않는다).
 
     행을 잠근 뒤 역할은 파일·DB 중 낮은 쪽, 만료는 이른 쪽으로만 바꾼다(순위는 UPDATE 안에서
-    잠근 행의 값으로 다시 판단하므로 동시 강등을 되돌리지 않는다). 토큰이 파일의 지문과 다르면
+    잠근 행의 값으로 다시 판단하므로 동시 강등을 되돌리지 않는다). 강등 표지는 비어 있을 때만 파일의
+    값으로 채운다(표지는 권한을 늘리지 않는다). 토큰이 파일의 지문과 다르면
     새 토큰을 알 수 없으므로 만료시킨다. DB에 없는 운영자는 파일에서 삭제된 경우에만 만료된 상태와
     쓸 수 없는 토큰으로 넣고, 활성 운영자는 만들지 않는다.
     """
@@ -134,12 +135,15 @@ def _restore_operator(conn: psycopg.Connection, instance_id: str, item: dict[str
         "             THEN %(role)s ELSE role END,"
         " expires_at = CASE WHEN %(exp)s::timestamptz IS NOT NULL AND (expires_at IS NULL"
         "                        OR expires_at > %(exp)s::timestamptz)"
-        "                   THEN %(exp)s::timestamptz ELSE expires_at END"
+        "                   THEN %(exp)s::timestamptz ELSE expires_at END,"
+        " demoted_at = COALESCE(demoted_at, %(dem)s::timestamptz)"
         " WHERE instance_id = %(i)s AND name = %(name)s"
         " AND (mint.operator_rank(%(role)s) < mint.operator_rank(role)"
+        "      OR (%(dem)s::timestamptz IS NOT NULL AND demoted_at IS NULL)"
         "      OR (%(exp)s::timestamptz IS NOT NULL AND (expires_at IS NULL"
         "          OR expires_at > %(exp)s::timestamptz)))",
-        {"role": role, "exp": expires, "i": instance_id, "name": name},
+        {"role": role, "exp": expires, "dem": snap.get("demoted_at"), "i": instance_id,
+         "name": name},
     ).rowcount > 0
     fingerprint = snap.get("token_fp")
     if (

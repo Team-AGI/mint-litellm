@@ -2,8 +2,11 @@
 쓰기 직전 경계, 쓰기 뒤 DB 실패 수렴, 배포 후보 기록(작업 실행기 경로).
 """
 
+import hashlib
+
 import pytest
 from ctl_fixtures import INSTANCE, as_login
+from fake_litellm import CONTROL_KEY
 
 psycopg = pytest.importorskip("psycopg")
 
@@ -30,6 +33,8 @@ from .test_sync import (  # noqa: E402
     job_rows,
     past,
 )
+
+KEY_TOKEN = hashlib.sha256(CONTROL_KEY.encode()).hexdigest()
 
 url = test_sync.url
 admin = test_sync.admin
@@ -60,7 +65,7 @@ def add_contract(
 def make_managed(admin) -> None:
     """계약을 관리하는 서버. 도구 고정은 제어 평면 키 토큰이 저장돼 있어야 한다."""
     admin.execute("UPDATE mint.servers SET contract_status = 'managed'")
-    admin.execute("UPDATE mint.settings SET control_key_token = repeat('c', 64)")
+    admin.execute("UPDATE mint.settings SET control_key_token = %s", (KEY_TOKEN,))
 
 
 def managed_world(admin, fake, *, tools=None, approval_scope="user", status="pending"):
@@ -534,9 +539,30 @@ def test_a_missing_control_key_token_alerts_with_the_cause_and_the_next_run_pins
                    " WHERE kind = 'sync_server' AND target_ref = 'srv-1' ORDER BY created_at DESC")
     assert (job["status"], job["attempts"], job["last_error_code"]) == (
         "pending", 0, "control_key_not_set")
-    admin.execute("UPDATE mint.settings SET control_key_token = repeat('c', 64)")
+    admin.execute("UPDATE mint.settings SET control_key_token = %s", (KEY_TOKEN,))
     admin.execute("UPDATE mint.jobs SET run_after = now() WHERE status = 'pending'")
     drain(worker)
     assert pin_calls(fake)
     assert not [a for a in alerts(admin)
                 if a["kind"] == "sync_divergence" and a["status"] != "resolved"]
+
+
+def test_a_control_key_that_differs_from_the_workers_key_alerts_and_waits(admin, fake, worker):
+    approval = managed_world(admin, fake)
+    admin.execute("UPDATE mint.settings SET control_key_token = repeat('c', 64)")
+    enqueue(admin, "sync_server", "srv-1")
+    drain(worker)
+    assert not pin_calls(fake)
+    [row] = [a for a in alerts(admin) if a["kind"] == "control_key_mismatch"]
+    assert row["severity"] == "high" and row["status"] == "open"
+    assert approval_status(admin, approval) == "pending"
+    job = fetchone(admin, "SELECT status, attempts, last_error_code FROM mint.jobs"
+                   " WHERE kind = 'sync_server' AND target_ref = 'srv-1' ORDER BY created_at DESC")
+    assert (job["status"], job["attempts"], job["last_error_code"]) == (
+        "pending", 0, "control_key_mismatch")
+    admin.execute("UPDATE mint.settings SET control_key_token = %s", (KEY_TOKEN,))
+    admin.execute("UPDATE mint.jobs SET run_after = now() WHERE status = 'pending'")
+    drain(worker)
+    assert pin_calls(fake)
+    assert not [a for a in alerts(admin)
+                if a["kind"] == "control_key_mismatch" and a["status"] != "resolved"]
