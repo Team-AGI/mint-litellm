@@ -167,12 +167,13 @@ def _is_absolute(text: str) -> bool:
     return text[:1] in ("/", "\\") or (len(text) > 2 and text[1] == ":" and text[2] in ("/", "\\"))
 
 
-def _traversal(text: str, allowed_paths: Collection[str]) -> bool:
+def _traversal(text: str, allowed_paths: Collection[str], unrestricted: bool) -> bool:
     for variant in (text,):
         flat = variant.replace("\\", "/")
         if ".." in flat.split("/"):
             return True
-        if allowed_paths and _is_absolute(variant) and "://" not in variant:
+        # 허용 경로가 없으면 절대 경로는 모두 범위 밖이다. 제한 없음은 승인에 명시한 경우뿐이다.
+        if not unrestricted and _is_absolute(variant) and "://" not in variant:
             path = posixpath.normpath(flat)
             if not any(path == a or path.startswith(a.rstrip("/") + "/") for a in allowed_paths):
                 return True
@@ -188,6 +189,7 @@ def compute_patterns(
     *,
     allowed_hosts: Collection[str] = (),
     allowed_paths: Collection[str] = (),
+    paths_unrestricted: bool = False,
     secret_markers: Collection[str] = (),
 ) -> dict[str, bool]:
     """``allowed_hosts``는 소문자 호스트, ``allowed_paths``는 정규화된 절대 경로 접두."""
@@ -203,7 +205,7 @@ def compute_patterns(
                         result["private_host"] = True
                 if _private_host(_bare_host(text), loose=False):
                     result["private_host"] = True
-                if _traversal(text, allowed_paths):
+                if _traversal(text, allowed_paths, paths_unrestricted):
                     result["path_traversal"] = True
                 if any(marker in text for marker in secret_markers):
                     result["secret_like"] = True

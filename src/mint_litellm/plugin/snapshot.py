@@ -63,7 +63,8 @@ SELECT jsonb_build_object(
     'tool_contracts', (
         SELECT coalesce(jsonb_agg(jsonb_build_object(
             'id', t.id, 'credential_scope', t.credential_scope, 'tool', t.tool,
-            'drift', t.drift, 'version', t.version, 'risk_grade', t.risk_grade)), '[]'::jsonb)
+            'drift', t.drift, 'version', t.version, 'risk_grade', t.risk_grade,
+            'action_type', t.action_type, 'input_keys', to_jsonb(t.input_keys))), '[]'::jsonb)
         FROM mint.tool_contracts t
         WHERE t.instance_id = %(iid)s AND t.server_id = %(server_id)s
           AND t.tool = %(tool)s AND t.status = 'approved'
@@ -296,6 +297,7 @@ class AllowlistRow:
 class RelationRow:
     id: str
     status: str
+    purpose: str | None = None
 
 
 @dataclass(frozen=True)
@@ -387,6 +389,9 @@ class ToolContractRow:
     drift: str
     version: int
     risk_grade: str | None = None
+    action_type: str | None = None
+    # 계약의 입력 정의에 있는 항목 이름. 알 수 없으면 None이다.
+    input_keys: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -411,6 +416,8 @@ class Snapshot:
     egress_targets: tuple[tuple[str, str | None], ...] = ()
     # 서버의 승인된 배포 계약에서 고른 대상·행위 프로필(근거가 없으면 None).
     auto_profile: str | None = None
+    # 서버의 마지막 승인된 수용 신청이 적은 자료 등급. 수용 신청 없이 등록된 서버는 None.
+    data_grade: str | None = None
 
 
 def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
@@ -467,7 +474,10 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
             )
             for a in doc["allowlists"]
         },
-        relations={r["id"]: RelationRow(id=r["id"], status=r["status"]) for r in doc["relations"]},
+        relations={
+            r["id"]: RelationRow(id=r["id"], status=r["status"], purpose=r.get("purpose"))
+            for r in doc["relations"]
+        },
         approvals=tuple(
             ApprovalRow(
                 id=a["id"],
@@ -534,7 +544,8 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
         tool_contracts=tuple(
             ToolContractRow(
                 c["id"], c["credential_scope"], c["tool"], c["drift"], c["version"],
-                c.get("risk_grade"),
+                c.get("risk_grade"), c.get("action_type"),
+                None if c.get("input_keys") is None else tuple(c["input_keys"]),
             )
             for c in doc.get("tool_contracts", ())
         ),
@@ -550,6 +561,7 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
         ),
         egress_targets=tuple((e["value"], e["org_id"]) for e in doc.get("egress_targets", [])),
         auto_profile=select_profile(basis.get("url"), basis.get("tools") or ()),
+        data_grade=None if server is None else server.get("data_grade"),
     )
 
 

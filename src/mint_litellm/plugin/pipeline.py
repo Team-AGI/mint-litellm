@@ -30,6 +30,7 @@ from mint_litellm.plugin.obligations import (
     RequireUserConfirmation,
     normalize_policy_output,
 )
+from mint_litellm.plugin.policy.defaults import effective_conditions
 from mint_litellm.plugin.policy.input import policy_input as make_policy_input
 from mint_litellm.plugin.policy.opa_client import Evaluation
 from mint_litellm.plugin.policy.patterns import compute_patterns
@@ -472,6 +473,7 @@ def _argument_patterns(
             arguments,
             allowed_hosts={h for h in hosts if h},
             allowed_paths=paths,
+            paths_unrestricted=conditions.get("allowed_paths_unrestricted") is True,
             secret_markers=secret_markers,
         )
     finally:
@@ -528,6 +530,8 @@ def build_policy_input(
     contract = current_contract(snapshot, tool)
     if contract is not None:
         tool_doc["risk_grade"] = contract.risk_grade
+        if contract.action_type is not None:
+            tool_doc["action_type"] = contract.action_type
 
     if selected is None:
         approval: dict[str, Any] = {"present": False}
@@ -539,13 +543,20 @@ def build_policy_input(
             "class": selected.approval_class,
             "scope_type": selected.scope_type,
             "expires_in_days": max(0, (selected.valid_until - now).days),
-            "conditions": dict(selected.conditions),
+            "conditions": effective_conditions(
+                selected.conditions,
+                tool=tool,
+                action_type=None if contract is None else contract.action_type,
+                input_keys=None if contract is None else contract.input_keys,
+                data_grade=snapshot.data_grade,
+                purpose=getattr(snapshot.relations.get(selected.relation_id), "purpose", None),
+            ),
         }
         # 결과 상한은 호출 뒤에 쓰이지만 형식 오류는 호출 전에 막는다.
         for limit_key in RESULT_LIMIT_KEYS:
             _condition_limit(selected.conditions, limit_key)
         _response_scan_mode(selected.conditions)
-        purpose = selected.conditions.get("require_consent")
+        purpose = approval["conditions"].get("require_consent")
         if purpose is None:
             consent = {"status": "not_applicable", "source": None}
         elif isinstance(purpose, str) and purpose:

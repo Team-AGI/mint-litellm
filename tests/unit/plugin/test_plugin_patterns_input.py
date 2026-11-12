@@ -81,7 +81,9 @@ def test_allowed_hosts_come_from_the_approval_and_from_egress_targets(tmp_path):
 
 def test_allowed_paths_come_from_the_approval(tmp_path):
     args = {"p": "/etc/passwd"}
-    assert sent_patterns(tmp_path, args)["path_traversal"] is False
+    assert sent_patterns(tmp_path, args)["path_traversal"] is True
+    unrestricted = {"allowed_paths_unrestricted": True}
+    assert sent_patterns(tmp_path, args, conditions=unrestricted)["path_traversal"] is False
     assert (
         sent_patterns(tmp_path, args, conditions={"allowed_paths": ["/srv/docs"]})["path_traversal"]
         is True

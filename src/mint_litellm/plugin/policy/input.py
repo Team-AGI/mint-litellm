@@ -14,7 +14,8 @@ _FIELDS = {
         "exec_approved_sha256",
     ),
     # risk_grade: 계약 관리 서버에서 지금 승인된 도구 계약의 위험 등급(계약이 없으면 키가 없다).
-    "tool": ("name", "risk_grade"),
+    # action_type: 같은 계약의 행위 유형(읽기·쓰기·삭제·외부 전송·자격 접근).
+    "tool": ("name", "risk_grade", "action_type"),
     "arguments": ("keys", "sizes", "patterns"),
     "approval": ("present", "id", "class", "scope_type", "expires_in_days", "conditions"),
     "consent": ("status", "source"),

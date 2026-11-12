@@ -208,10 +208,10 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 | `--high-risk-tools a,b` | `high_risk_tools` | 나열한 도구는 호출별 승인을 요구한다. 계약 관리 서버의 도구는 승인된 계약의 위험 등급이 `high`·`critical`이면 이 옵션 없이도 요구하므로, 이 옵션은 요구를 더하기만 한다. |
 | `--business-hours-only` | `business_hours_only` | 업무 시간 밖의 호출을 차단한다. 업무 시간은 정책 번들의 값이다. |
 | `--business-hours 시간대,요일,시작,끝` | `business_hours` | 이 승인의 업무 시간을 재정의한다(예: `Asia/Seoul,1-5,09:00,18:00`, 요일은 1=월 ~ 7=일). `--business-hours-only`와 함께 쓴다. |
-| `--require-consent 목적` | `require_consent` | 그 목적의 동의가 있어야 호출을 허용한다. |
+| `--require-consent 목적` | `require_consent` | 그 목적의 동의가 있어야 호출을 허용한다. 서버의 수용 신청 자료 등급이 `confidential`·`restricted`이면 이 옵션 없이도 이용 목적을 동의 목적으로 요구한다. |
 | `--allowed-host 호스트` (반복) | `allowed_hosts` | 인자의 URL이 향할 수 있는 호스트(하위 도메인 포함). 계약 관리 서버에만 적용한다. |
-| `--allowed-path 경로` (반복) | `allowed_paths` | 인자의 절대 경로가 있어야 하는 폴더. 계약 관리 서버에만 적용한다. |
-| `--allowed-arg-key 이름` (반복) | `allowed_arg_keys` | 호출이 쓸 수 있는 인자 이름. 이 밖의 이름이 있으면 차단한다. 계약 관리 서버에만 적용한다. |
+| `--allowed-path 경로` (반복) | `allowed_paths` | 인자의 절대 경로가 있어야 하는 폴더. 계약 관리 서버에만 적용한다. 허용 경로가 없으면 모든 절대 경로를 차단하며, 제한을 두지 않으려면 승인에 `allowed_paths_unrestricted`를 명시한다(콘솔의 「제한 없음」). |
+| `--allowed-arg-key 이름` (반복) | `allowed_arg_keys` | 호출이 쓸 수 있는 인자 이름. 이 밖의 이름이 있으면 차단한다. 계약 관리 서버에만 적용한다. 지정하지 않으면 승인된 도구 계약의 입력 정의에 있는 이름만 허용한다. |
 | `--max-result-bytes 수` | `max_result_bytes` | 도구 결과 한 건의 크기 상한(바이트). 넘으면 결과 대신 `MINT-OUTPUT-BLOCKED`를 돌려주고 응답 사건의 `output_findings`에 `POL-E-16`을 남긴다. |
 | `--max-result-items 수` | `max_result_items` | 도구 결과 한 건의 내용 블록 수 상한. 넘으면 위와 같이 막는다. |
 | `--no-result-scan` | `scan_result` | 결과 본문의 지시문 표지 검사를 끈다. 계약 관리 서버는 이 옵션이 없으면 검사하며, 표지가 있으면 결과를 `MINT-OUTPUT-BLOCKED`로 막고 `output_findings`에 `POL-E-04`를 남긴다. 관측 모드에서는 막지 않고 응답 사건에만 남긴다. |
@@ -303,7 +303,7 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 - 헤더 `X-MINT-Delivery`는 전송 식별자이며 수신 쪽이 중복을 거를 때 쓴다. 재시도는 같은 식별자로 새 서명을 붙여 보낸다.
 - 수신 쪽은 `t`와 현재 시각의 차이가 5분을 넘으면 거부하고, 서명을 상수 시간 비교로 확인한다. 구현 예시는 `mint_litellm.control.webhook.verify`다.
 
-본문 `console_url`은 `MINT_CONSOLE_URL`(선택)을 그대로 쓰며, 설정이 없으면 `null`이다.
+본문 `console_url`은 `MINT_CONSOLE_URL`(선택)을 그대로 쓰며, 설정이 없으면 `null`이다. 본문 `summary`는 위험 요지, `action`은 담당자가 취할 조치 절차이며 경보 종류마다 정해진 문구다(알 수 없는 종류는 일반 문구).
 
 ## 원장 조회
 

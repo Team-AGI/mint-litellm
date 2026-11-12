@@ -553,6 +553,19 @@ class TestResponseAndFailureEvents:
         assert event.payload["cause"] == "timeout" and event.payload["http_status"] == 504
         assert event.payload["exception_type"] == "HTTPException"
 
+    def test_upstream_error_text_never_reaches_the_recorded_events(self, tmp_path, caplog):
+        hook, store = self.hook(tmp_path)
+        text = "upstream said token=ghp_SECRET and /srv/private/file"
+        kwargs = {
+            MINT_CTX_KEY: self.context(),
+            "exception": HTTPException(502, {"error": text}),
+        }
+        with caplog.at_level("DEBUG"):
+            run(hook.async_log_failure_event(kwargs, None, None, None))
+        recorded = json.dumps([e.payload for e in store.of_kind("call_outcome_unknown")])
+        assert "ghp_SECRET" not in recorded and "/srv/private" not in recorded
+        assert "ghp_SECRET" not in caplog.text
+
     def test_a_consumed_call_approval_is_linked_to_the_unknown_outcome(self, tmp_path):
         hook, store = self.hook(tmp_path)
         consumed = {"id": "00000000-0000-0000-0000-0000000000c1", "state_version": 2}
