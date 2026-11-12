@@ -90,6 +90,8 @@ class ConsumeRequest:
     policy_version_id: str
     state_version: int
     confirmation: ConfirmationConsume | None = None
+    # 계약 관리 서버에서 승인이 묶인 도구 계약. 소비 때 지금도 승인된 계약이어야 한다.
+    contract_id: str | None = None
 
 
 class EventStore(Protocol):

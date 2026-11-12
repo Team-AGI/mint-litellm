@@ -45,6 +45,7 @@ def _port(base: int) -> int:
 
 LITELLM_PORTS = (_port(4101), _port(4102))
 PLAIN_PORT = _port(4103)
+MULTIWORKER_PORT = _port(4104)
 DB_PROXY_PORT = _port(4176)
 CONTROL_ROUTES = [
     "/v1/mcp/server",

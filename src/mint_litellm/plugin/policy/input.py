@@ -12,7 +12,8 @@ _FIELDS = {
         "id", "status", "transport", "auth_type", "provider_allowed", "auth_server_allowed",
         "contract_status",
     ),
-    "tool": ("name",),
+    # risk_grade: 계약 관리 서버에서 지금 승인된 도구 계약의 위험 등급(계약이 없으면 키가 없다).
+    "tool": ("name", "risk_grade"),
     "arguments": ("keys", "sizes", "patterns"),
     "approval": ("present", "id", "class", "scope_type", "expires_in_days", "conditions"),
     "consent": ("status", "source"),

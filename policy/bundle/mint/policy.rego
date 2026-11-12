@@ -78,6 +78,13 @@ valid_ns if {
 }
 
 missing contains "settings.high_risk_tools" if not valid_strings(input.settings.high_risk_tools)
+
+# 계약이 있는 도구(키가 있을 때)는 등급이 네 값 중 하나여야 한다. 등급 없는 계약은 오류다.
+missing contains "tool.risk_grade" if {
+	managed
+	"risk_grade" in object.keys(input.tool)
+	not input.tool.risk_grade in {"low", "medium", "high", "critical"}
+}
 missing contains "arguments.keys" if not valid_strings(input.arguments.keys)
 missing contains "arguments.sizes" if not valid_sizes(input.arguments.sizes)
 
@@ -93,11 +100,17 @@ valid_sizes(values) if {
 
 pattern_names := {"url_external", "private_host", "path_traversal", "secret_like"}
 
-# 값이 있을 때만 쓴다(1단계 서버는 계약·패턴 값이 없어도 전면 차단되지 않는다).
+# 계약 관리 서버는 패턴이 없거나 깨지면 오류다(패턴 규칙이 조용히 평가되지 않아 허용되지 않게).
+# 1단계 서버는 패턴 값이 없어도 전면 차단되지 않는다.
 missing contains "arguments.patterns" if {
 	managed
-	"patterns" in object.keys(input.arguments)
 	not valid_patterns
+}
+
+# 패턴 규칙이 기대는 서버 종류. 빠지면 계약 관리 서버의 패턴 규칙이 건너뛰어지므로 오류다.
+missing contains "server.contract_status" if {
+	kind := object.get(input, ["server", "contract_status"], null)
+	not kind in {"none", "managed"}
 }
 
 valid_patterns if {
@@ -223,6 +236,10 @@ conditions := object.get(object.get(input, "approval", {}), "conditions", {})
 applied contains "R1" if input.approval.present == false
 applied contains "R2" if input.tool.name in input.settings.high_risk_tools
 applied contains "R2" if input.tool.name in object.get(conditions, "high_risk_tools", [])
+
+# 승인된 도구 계약의 위험 등급(정책 입력 tool.risk_grade)이 높으면 승인 조건과 무관하게 건다.
+# 승인 조건의 high_risk_tools는 의무를 더하기만 한다.
+applied contains "R2" if object.get(input.tool, "risk_grade", null) in {"high", "critical"}
 
 applied contains "R3" if {
 	object.get(conditions, "business_hours_only", false) == true

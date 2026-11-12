@@ -12,6 +12,7 @@ from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import ControlError, forbidden, not_found, separation_of_duties
 from mint_litellm.control.litellm_admin import LiteLLMAdmin
 from mint_litellm.control.services import base
+from mint_litellm.types.canonical import credential_scope
 from mint_litellm.types.events import EventKind
 from mint_litellm.types.ids import new_uuid7
 
@@ -479,6 +480,27 @@ def lift_denial(ctx: Context, denial_id: str) -> None:
 PRINCIPAL_TYPES = ("user", "team_key", "service_account")
 
 
+def _approved_contract_id(ctx: Context, server_id: str, tool: str):
+    """계약 관리 서버의 도구에 지금 승인된 계약. 호출별 승인은 이 계약에 묶인다(아니면 None)."""
+    server = fetchone(
+        ctx.conn,
+        "SELECT auth_type, contract_status FROM mint.servers WHERE instance_id = %s"
+        " AND server_id = %s",
+        (ctx.instance_id, server_id),
+    )
+    if server is None or server["contract_status"] != "managed":
+        return None
+    contract = fetchone(
+        ctx.conn,
+        "SELECT id FROM mint.tool_contracts WHERE instance_id = %s AND server_id = %s"
+        " AND tool = %s AND credential_scope = %s AND status = 'approved' FOR SHARE",
+        (ctx.instance_id, server_id, tool, credential_scope(server["auth_type"])),
+    )
+    if contract is None:
+        raise ControlError(f"도구 {tool}에 승인된 계약이 없어 호출별 승인을 요청할 수 없습니다.")
+    return contract["id"]
+
+
 def call_request(
     ctx: Context,
     *,
@@ -513,11 +535,13 @@ def call_request(
         ctx.conn,
         "INSERT INTO mint.call_approvals (id, instance_id, org_id, principal_type, principal_id,"
         " server_id, tool, args_fp, fp_key_version, policy_version_id, status, requested_by,"
-        " expires_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s)"
+        " expires_at, contract_id)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s)"
         " RETURNING state_version",
         (call_id, ctx.instance_id, org_id, principal_type, principal_id, server_id, tool, args_fp,
          fp_key_version, policy_version_id, requested_by,
-         datetime.now(UTC) + timedelta(minutes=expires_in_minutes)),
+         datetime.now(UTC) + timedelta(minutes=expires_in_minutes),
+         _approved_contract_id(ctx, server_id, tool)),
     )
     ctx.emit(
         EventKind.CALL_APPROVAL_REQUESTED,

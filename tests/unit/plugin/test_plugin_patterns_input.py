@@ -197,7 +197,7 @@ def test_stage1_servers_get_no_patterns_and_are_not_blocked_by_url_arguments(tmp
     outcome = decide(h, arguments={"u": "http://10" + D + "0.0.1/", "p": "../x"})
     assert outcome.allowed
     assert "patterns" not in calls[0]["arguments"]
-    assert "contract_status" not in calls[0]["server"]
+    assert calls[0]["server"]["contract_status"] == "none"
     assert calls[0]["server"].keys() >= {"id", "status"}
 
 

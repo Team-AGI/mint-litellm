@@ -146,16 +146,17 @@ def flow(stack, world):
 # --- 한 흐름 -------------------------------------------------------------------------------
 
 
-def test_intake_to_revoke_in_one_flow(world, evidence, upstreams, flow):
+def test_intake_to_revoke_in_one_flow(world, evidence, upstreams, flow, multiworker):
     evidence.positive_control()
     subject, server_id = flow.subject, flow.server_id
     since = world.now()
 
-    def call(mark: str, tool: str = "mutable", **arguments):
+    def call(mark: str, tool: str = "mutable", port: int | None = None, **arguments):
         return world.call(
             subject,
             server_id,
             tool,
+            port=port,
             mark=mark,
             arguments={"text": "x", "marker": mark, **arguments},
         )
@@ -246,6 +247,16 @@ def test_intake_to_revoke_in_one_flow(world, evidence, upstreams, flow):
     assert (blocked.code or "").upper().startswith("MINT-CONTRACT-DRIFT"), blocked.body
     judged(world, blocked, "block", "block", "CONTRACT_DRIFT")
     evidence.assert_calls(blocked.mark, 0, "a")
+
+    # 워커가 둘인 다른 복제본은 이 서버의 도구를 한 번도 목록화하지 않았다. 변경된 도구는 목록에서
+    # 숨겨지지만, 어느 워커가 받아도 같은 판정과 사건이 남아야 한다.
+    for outcome in world.call_concurrently(
+        subject, 8, server=server_id, tool="mutable", port=multiworker
+    ):
+        assert outcome.status == 403, outcome.body
+        assert (outcome.code or "").upper().startswith("MINT-CONTRACT-DRIFT"), outcome.body
+        judged(world, outcome, "block", "block", "CONTRACT_DRIFT")
+        evidence.assert_calls(outcome.mark, 0, "a", settle=0)
 
     # 6. 자동 재검사: 드리프트가 등록한 재검사 작업이 끝나 후보 계약과 후보에 결속된 증거가 생긴다.
     evidence_job = f"{intake_id}/evidence"
@@ -412,15 +423,6 @@ def after_db_outage(cold_subject, world, after_restart):
     return down, outcomes
 
 
-# 제품 결함: 복구 직후 첫 동시 호출 8건 중 1~2건이 MINT-DEPENDENCY-DB로 막힌다(풀에 남은 끊어진
-# 연결로 보인다). 이 변경은 제품 코드를 바꾸지 않으므로 결함이 고쳐질 때까지 표시만 해 둔다.
-RECOVERY_DEFECT = pytest.mark.xfail(
-    reason="product defect: calls sent right after the database recovers are still blocked "
-    "with MINT-DEPENDENCY-DB (1-2 of 8)",
-    strict=False,
-)
-
-
 def test_no_dependency_failure_right_after_a_replica_starts(after_restart):
     assert len(after_restart) == BURST
     assert dependency_codes(after_restart) == []
@@ -435,14 +437,12 @@ def test_the_outage_is_visible_to_a_call(after_db_outage):
     assert down.code == "MINT-DEPENDENCY-DB", down.body
 
 
-@RECOVERY_DEFECT
 def test_no_dependency_failure_right_after_the_database_recovers(after_db_outage):
     _, outcomes = after_db_outage
     assert len(outcomes) == BURST
     assert dependency_codes(outcomes) == []
 
 
-@RECOVERY_DEFECT
 def test_every_call_is_allowed_right_after_the_database_recovers(world, after_db_outage):
     _, outcomes = after_db_outage
     assert not_allowed(world, outcomes) == []

@@ -3,10 +3,12 @@
 CLI는 스택의 ``control`` 컨테이너 안에서 실행한다(정책 번들 볼륨과 데이터베이스 역할이 배포와 같다).
 """
 
+import concurrent.futures
 import contextlib
 import hashlib
 import json
 import sys
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -249,6 +251,20 @@ class World:
         )
         code, reference = _error(reply)
         return Outcome(reply.status_code, code, mark, reply.text, reference)
+
+    def call_concurrently(self, subject: Subject, count: int, **kwargs) -> list[Outcome]:
+        """같은 호출을 ``count``건 한꺼번에 보낸다(호출마다 새 연결, 표식은 호출마다 다르다).
+
+        한 복제본의 워커가 여럿일 때 호출이 워커 모두에 닿게 하려는 용도이다.
+        """
+        gate = threading.Barrier(count)
+
+        def one(_):
+            gate.wait(timeout=30)
+            return self.call(subject, **kwargs)
+
+        with concurrent.futures.ThreadPoolExecutor(count) as pool:
+            return list(pool.map(one, range(count)))
 
     def events(self, mark: str, kind: str = "decision_evaluated", wait: float = 5.0) -> list[dict]:
         """호출 식별자가 ``mark``인 사건. 하나 이상 보일 때까지 ``wait``초 기다린다."""
