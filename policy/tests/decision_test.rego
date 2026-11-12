@@ -4,7 +4,7 @@ import rego.v1
 
 sample := {
 	"principal": {"type": "user", "id": "u", "key_id": "k", "org_id": "o", "org_source": "user", "team_id": null, "claimed_end_user_id": null},
-	"server": {"id": "s", "status": "approved", "transport": "http", "auth_type": "none", "provider_allowed": true, "auth_server_allowed": true, "contract_status": "none"},
+	"server": {"id": "s", "status": "approved", "transport": "http", "auth_type": "none", "provider_allowed": true, "auth_server_allowed": true, "contract_status": "none", "identity_kind": "remote"},
 	"tool": {"name": "read"}, "arguments": {"keys": [], "sizes": {}},
 	"approval": {"present": true, "id": "a", "class": "standard", "scope_type": "user", "expires_in_days": 1, "conditions": {}},
 	"consent": {"status": "not_applicable", "source": null},

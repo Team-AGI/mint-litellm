@@ -485,6 +485,9 @@ def build_policy_input(
     if resolved.exec_contract_sha256 is not None:
         server_doc["exec_contract_sha256"] = resolved.exec_contract_sha256
         server_doc["exec_contract_version"] = resolved.exec_contract_version
+    if server is not None and server.exec_contract_sha256 is not None:
+        # 서버 행에 등록된 승인 대상 실행 계약. 보고된 계약과의 대조는 정책 규칙이 한다.
+        server_doc["exec_approved_sha256"] = server.exec_contract_sha256
     managed = server is not None and server.contract_status == "managed"
     server_doc["contract_status"] = "managed" if managed else "none"
     # 승인된 계약의 위험 등급. 승인이 어떤 경로로 만들어졌든 정책이 같은 등급을 본다.

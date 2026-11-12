@@ -27,6 +27,7 @@ POLICY_INPUT = {
     "server": {
         "id": "s", "status": "approved", "transport": "http", "auth_type": "none",
         "provider_allowed": True, "auth_server_allowed": True, "contract_status": "none",
+        "identity_kind": "remote",
     },
     "tool": {"name": "read"},
     "arguments": {"keys": [], "sizes": {}},
