@@ -154,6 +154,9 @@ def seen(upstream, label: str) -> dict:
 @pytest.mark.parametrize("path", PATHS)
 def test_each_path_blocks_without_approval_and_allows_with_it(world, evidence, path):
     ingress, server = PATHS[path]
+    # 서버의 첫 승인이 서버를 승인됨으로 만든다. 그 전에는 승인이 없다는 판정이 아니라 서버 미승인이 된다.
+    seed = world.subject((server,))
+    world.approve(seed, world.prepare(seed, server), tools="echo")
     subject = world.subject((server,))
     relation = world.prepare(subject, server)
 
@@ -162,9 +165,7 @@ def test_each_path_blocks_without_approval_and_allows_with_it(world, evidence, p
     text = invoke(ingress, subject.key, server, blocked)
     assert BLOCK in text, text
     (event,) = decisions_of(world, subject, since, 1)
-    payload = event["payload"]
-    assert (payload["evaluated_decision"], payload["enforced_action"]) == ("block", "block")
-    assert payload["stop"]["reason_code"] == "APPROVAL_ABSENT"
+    assert decision(event) == ("block", "block", "APPROVAL_ABSENT")
     evidence.assert_calls(blocked, 0, server)
 
     world.approve(subject, relation, tools="echo")
