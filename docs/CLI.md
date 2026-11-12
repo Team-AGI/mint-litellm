@@ -125,6 +125,31 @@
 | `mint-litellm restore attest --reason <사유>` | admin | 파일에 담긴 부정 상태 행 전체 스냅숏으로 복구 DB를 되돌리고(없는 행은 같은 식별자로 다시 넣고, 뒤처진 행은 파일 내용으로 되돌린다), DB 세대를 파일 세대 + 1로 올리고, 복원 요청과 `restore_attested`를 커밋한다. 부모 행이 없어 되돌릴 수 없는 항목이 있으면 목록과 함께 거부한다. 반복해도 같은 결과다. 명령은 파일을 쓰지 않는다. |
 | `mint-litellm restore accept-stale --reason <사유> --second-approver <토큰>` | admin 2인 | 파일이 없거나 검증되지 않을 때 복원 요청과 `restore_stale_accepted`를 커밋한다. 명령은 파일을 쓰지 않는다. |
 
+## 증빙 첨부와 이용 관계 종료 완료
+
+사람이 확인하는 정책의 증빙을 대상에 붙인다. 증빙의 원문은 저장하지 않고 요약, 문서 위치, 문서 해시값, 유효 기한만 남긴다. 같은 대상·종류에서는 가장 최근에 붙인 증빙이 현재 증빙이다.
+
+| 증빙 종류 | 대상 | 필수 자리 | 기본 유효 기간 |
+| --- | --- | --- | --- |
+| `trial_call` 시험 호출 결과 | 신청 | 신청 승인 | 90일 |
+| `provider_terms` 제공자 자료 처리 조건 확인 | 신청 | 신청 승인 | 365일 |
+| `least_privilege` 서버 계정 최소 권한 확인 | 신청 | 신청 승인 | 180일 |
+| `prompt_review` 제공 지시문 검토 (해당 없음 가능) | 신청 | 신청 승인 | 90일 |
+| `transfer_approval` 서버 간 전달 승인 (해당 없음 가능) | 신청 | 신청 승인 | 365일 |
+| `version_review` 되돌릴 판본의 보안 문제 확인 | 서버 | 배포 계약이 바뀌는 재승인 | 30일 |
+| `deletion_proof` 자료 삭제·반환 증빙 | 이용 관계 | 관계 종료 완료 | 없음 |
+| `access_recheck` 변경된 자료의 접근 권한 재확인 (해당 없음 가능) | 서버 | 주기 확인 | 90일 |
+| `source_review` 변경된 자료의 출처 확인 (해당 없음 가능) | 서버 | 주기 확인 | 90일 |
+| `instruction_review` 바뀐 지시문 재심사 (해당 없음 가능) | 서버 | 주기 확인 | 90일 |
+
+필수 자리(신청 승인·재승인·관계 종료 완료)는 증빙이 없거나 기한이 지났으면 거절한다. 신청 승인은 일반 승인(`intake approve`)에만 적용하고 거절과 예외 승인은 막지 않는다. 증빙 없이 예외 승인하면 누락된 증빙 종류가 `intake_decided` 사건과 승인 근거의 `missing_evidence`에 남고, 콘솔 신청 화면에 「증빙 누락」으로 표시된다. 증빙 확인 작업은 1시간마다 승인된 신청, 승인된 관리 서버, 종료 중인 이용 관계를 훑어 증빙이 없거나 만료됐거나 7일 안에 끝나면 경보 `evidence_missing`·`evidence_expiring`을 연다. 경보는 서버마다 한 건(이용 관계는 관계마다 한 건)이고 정책별 누락은 경보 본문의 `items`에 담긴다. 증빙을 붙이면 그 묶음 경보가 닫히고, 남은 누락이 있으면 다음 확인 작업이 최신 목록으로 다시 연다.
+
+| 명령 | 역할 | 설명 |
+| --- | --- | --- |
+| `mint-litellm evidence attach <종류> <대상 식별자> --summary <요약> [--ref <문서 위치>] [--sha256 <해시값>] [--valid-until <기한>] [--not-applicable]` | admin·approver | 증빙을 붙이고 `evidence_attached`를 남긴다. 유효 기한은 종류별 기본 기간을 넘을 수 없다. `--not-applicable`은 해당 없음 가능 종류에만 쓰고 요약에 사유를 적는다. |
+| `mint-litellm evidence show <intake\|server\|relation> <대상 식별자>` | 전부 | 대상에 붙일 수 있는 증빙 종류마다 현재 상태를 보인다. |
+| `mint-litellm relation finish <이용 관계>` | admin | 종료 중인 이용 관계를 종료됨으로 닫고 `relation_terminated`를 남긴다. 자료 삭제·반환 증빙이 있어야 한다. |
+
 복원 요청은 작업 `restore_publish`를 등록하고, 작업 실행기는 되돌림 차단 상태에서도 이 작업만은 실행한다. 순서는 기존 파일을 `restored/<요청>/`로 옮겨 보관, DB 기준 새 부정 상태·체크포인트·`latest.json` 게시, 다시 읽어 서명·내용 검증, `exports` 행 확정이다. 중간에 중단되면 차단이 유지되고 작업이 이어서 끝낸다.
 
 봉인 해시·HMAC·내용 해시가 쓰는 정규 JSON은 `json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=False)`를 UTF-8로 인코딩한 것이며(코드의 `restore.files.canonical_json` 한 곳), 실수 값은 거부한다. 서명 입력은 `hmac` 필드를 뺀 본문 전체(`key_id` 포함), 배열은 저장 순서이며 시각은 UTC ISO 8601 초 단위 `Z`다. 허용 자료형은 문자열·정수·참거짓·null·배열·객체뿐이고 사건 본문에도 실수를 넣을 수 없다. 시험 벡터는 `tests/unit/control/test_export.py`에 있다.

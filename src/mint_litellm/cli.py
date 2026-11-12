@@ -18,7 +18,7 @@ from uuid import UUID
 
 import psycopg
 
-from mint_litellm import cli_restore
+from mint_litellm import cli_evidence, cli_restore
 from mint_litellm.control import (
     allowlists,
     approvals,
@@ -971,7 +971,7 @@ ARGUMENTS.update(INTAKE_ARGUMENTS)
 
 
 def _add_arguments(parser: argparse.ArgumentParser, name: str) -> None:
-    for spec in {**ARGUMENTS, **cli_restore.ARGUMENTS}.get(name, []):
+    for spec in {**ARGUMENTS, **cli_restore.ARGUMENTS, **cli_evidence.ARGUMENTS}.get(name, []):
         if spec == "SUBJECT":
             group = parser.add_mutually_exclusive_group(required=True)
             group.add_argument("--team")
@@ -996,7 +996,7 @@ def build_parser() -> argparse.ArgumentParser:
     root.add_argument("--json", action="store_true", help="결과를 JSON 한 개로 출력")
     tree: dict[tuple[str, ...], argparse._SubParsersAction] = {(): root.add_subparsers(
         dest="group0", metavar="명령", required=True)}
-    for command in [*COMMANDS, *cli_restore.COMMANDS]:
+    for command in [*COMMANDS, *cli_restore.COMMANDS, *cli_evidence.COMMANDS]:
         for depth in range(1, len(command.path)):
             prefix = command.path[:depth]
             if prefix not in tree:
@@ -1023,7 +1023,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 COMMAND_INDEX: dict[str, CliCommand] = {
-    c.name: c for c in [*COMMANDS, *cli_restore.COMMANDS]
+    c.name: c for c in [*COMMANDS, *cli_restore.COMMANDS, *cli_evidence.COMMANDS]
 }
 
 
@@ -1075,7 +1075,8 @@ def run_command(args: argparse.Namespace, environ: dict[str, str]) -> None:
                 raise AuthError(f"{command.name}은(는) {operator.role} 역할로 실행할 수 없습니다.")
             ctx = Context(conn, cfg.instance_id, operator)
         run = Run(args, cfg, environ, conn, ctx)
-        (HANDLERS.get(command.name) or cli_restore.HANDLERS[command.name])(run)
+        extra = {**cli_restore.HANDLERS, **cli_evidence.HANDLERS}
+        (HANDLERS.get(command.name) or extra[command.name])(run)
     if args.json:
         print(json.dumps(_result(run, command), ensure_ascii=False, default=str))
     else:

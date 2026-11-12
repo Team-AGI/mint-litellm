@@ -41,6 +41,8 @@ class EventKind(StrEnum):
     SERVER_RESUMED = "server_resumed"
     RELATION_CREATED = "relation_created"
     RELATION_TERMINATING = "relation_terminating"
+    RELATION_TERMINATED = "relation_terminated"
+    EVIDENCE_ATTACHED = "evidence_attached"
     APPROVAL_GRANTED = "approval_granted"
     APPROVAL_REVOKED = "approval_revoked"
     DENIAL_CREATED = "denial_created"
@@ -120,6 +122,8 @@ CONTROL_ENTITY: dict[EventKind, str] = {
     EventKind.SERVER_RESUMED: "server",
     EventKind.RELATION_CREATED: "relation",
     EventKind.RELATION_TERMINATING: "relation",
+    EventKind.RELATION_TERMINATED: "relation",
+    EventKind.EVIDENCE_ATTACHED: "evidence",
     EventKind.APPROVAL_GRANTED: "approval",
     EventKind.APPROVAL_REVOKED: "approval",
     EventKind.DENIAL_CREATED: "denial",

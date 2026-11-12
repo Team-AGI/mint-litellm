@@ -18,6 +18,7 @@ from mint_litellm.control.services import approvals as approval_service
 from mint_litellm.control.services import call_approvals as call_approval_service
 from mint_litellm.control.services import contracts as contract_service
 from mint_litellm.control.services import denials as denial_service
+from mint_litellm.control.services import evidence as evidence_service
 from mint_litellm.control.services import intakes as intake_service
 from mint_litellm.control.services import operators as operator_service
 from mint_litellm.control.services import orgs as org_service
@@ -97,14 +98,43 @@ def server_page(request: Request, actor: Actor, server_id: str, error=None, stat
     row = reads.server(actor.conn, actor.instance, server_id)
     if row is None:
         raise AdminError(AdminCode.NOT_FOUND, f"서버 {server_id}을(를) 찾을 수 없습니다.")
-    return render(
-        request, "server_detail.html", {"s": row, "error": error}, actor=actor, status=status
-    )
+    ctx = {"s": row, "error": error,
+           "evidence": evidence_service.show(actor.ctx, "server", server_id)}
+    return render(request, "server_detail.html", ctx, actor=actor, status=status)
 
 
 @router.get("/servers/{server_id}")
 def server_detail(server_id: str, request: Request, actor: Actor = Depends(page_actor)):
     return server_page(request, actor, server_id)
+
+
+def evidence_form(
+    actor: Actor, subject_id: str, kind: str, summary: str, ref: str, valid_days: int | None,
+    not_applicable: str,
+) -> Callable[[], None]:
+    def action():
+        api.attach_evidence(actor, api.EvidenceBody(
+            kind=kind, subject_id=subject_id, summary=summary, ref=ref.strip() or None,
+            valid_days=valid_days, not_applicable=bool(not_applicable)))
+
+    return action
+
+
+@router.post("/servers/{server_id}/evidence")
+def attach_server_evidence(
+    server_id: str,
+    request: Request,
+    kind: str = Form(...),
+    summary: str = Form(...),
+    ref: str = Form(""),
+    valid_days: int | None = Form(None),
+    not_applicable: str = Form(""),
+    actor: Actor = Depends(page_actor),
+):
+    return act(actor, evidence_form(actor, server_id, kind, summary, ref, valid_days,
+                                    not_applicable),
+               "evidence_attached", f"/servers/{server_id}",
+               lambda **kw: server_page(request, actor, server_id, **kw))
 
 
 @router.post("/servers/{server_id}/suspend")
@@ -564,7 +594,12 @@ def intake_page(request: Request, actor: Actor, intake_id: str, error=None, stat
         "days": api.STRICT_DAYS if strict else api.STANDARD_DAYS,
         "strict_days": api.STRICT_DAYS, "max_exception_days": api.EXCEPTION_MAX_DAYS,
         "can_assign": actor.config.litellm_admin is not None, "error": error,
+        "evidence": evidence_service.show(actor.ctx, "intake", intake_id),
     }
+    ctx["lacking"] = [
+        e["label"] for e in ctx["evidence"]
+        if e["gate"] == "approve" and e["state"] in ("missing", "expired")
+    ]
     return render(request, "intake_detail.html", ctx, actor=actor, status=status)
 
 
@@ -589,6 +624,23 @@ def assign_requester(
         "requester_assigned", f"/intakes/{intake_id}",
         lambda **kw: intake_page(request, actor, intake_id, **kw),
     )
+
+
+@router.post("/intakes/{intake_id}/evidence")
+def attach_intake_evidence(
+    intake_id: str,
+    request: Request,
+    kind: str = Form(...),
+    summary: str = Form(...),
+    ref: str = Form(""),
+    valid_days: int | None = Form(None),
+    not_applicable: str = Form(""),
+    actor: Actor = Depends(page_actor),
+):
+    return act(actor, evidence_form(actor, intake_id, kind, summary, ref, valid_days,
+                                    not_applicable),
+               "evidence_attached", f"/intakes/{intake_id}",
+               lambda **kw: intake_page(request, actor, intake_id, **kw))
 
 
 @router.post("/intakes/{intake_id}/recheck")

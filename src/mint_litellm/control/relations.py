@@ -1,9 +1,11 @@
 """이용 관계."""
 
+from collections.abc import Callable
+
 from mint_litellm.control import orgs
 from mint_litellm.control.context import Context
 from mint_litellm.control.db.connection import fetchone
-from mint_litellm.control.errors import ControlError, not_found
+from mint_litellm.control.errors import ControlError, conflict, not_found
 from mint_litellm.types.events import EventKind
 from mint_litellm.types.ids import new_uuid7
 
@@ -64,4 +66,30 @@ def terminate(ctx: Context, relation_id: str) -> None:
         relation_id,
         row["state_version"],
         {"relation_id": relation_id, "org_id": row["org_id"], "server_id": row["server_id"]},
+    )
+
+
+def finish(ctx: Context, relation_id: str, require: Callable[[], None]) -> None:
+    """``require``(필요한 증빙 확인)는 관계 행을 잠그고 상태를 본 뒤에 부른다."""
+    row = fetchone(
+        ctx.conn,
+        "SELECT status FROM mint.usage_relations WHERE instance_id = %s AND id = %s FOR UPDATE",
+        (ctx.instance_id, relation_id),
+    )
+    if row is None:
+        raise not_found(f"이용 관계 {relation_id}이(가) 없습니다.")
+    if row["status"] != "terminating":
+        raise conflict("종료 중인 이용 관계만 종료를 완료할 수 있습니다.")
+    require()
+    done = fetchone(
+        ctx.conn,
+        "UPDATE mint.usage_relations SET status = 'terminated' WHERE instance_id = %s AND id = %s"
+        " RETURNING state_version, org_id, server_id",
+        (ctx.instance_id, relation_id),
+    )
+    ctx.emit(
+        EventKind.RELATION_TERMINATED,
+        relation_id,
+        done["state_version"],
+        {"relation_id": relation_id, "org_id": done["org_id"], "server_id": done["server_id"]},
     )
