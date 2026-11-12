@@ -19,6 +19,8 @@ def request(
     policy_version_id: str | None,
     expires_in_minutes: int,
     requested_by: str,
+    target: str | None = None,
+    action: str | None = None,
 ) -> str:
     return domain.call_request(
         ctx,
@@ -32,6 +34,8 @@ def request(
         policy_version_id=policy_version_id,
         expires_in_minutes=expires_in_minutes,
         requested_by=requested_by,
+        target=target,
+        action=action,
     )
 
 

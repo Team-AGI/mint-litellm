@@ -64,6 +64,13 @@ from mint_litellm.types.cli_commands import (
 from mint_litellm.types.exec_contract import ExecContract
 from mint_litellm.types.identity import SubjectType
 from mint_litellm.types.settings import Mode
+from mint_litellm.types.target import (
+    TargetUnresolved,
+    bind_target,
+    effective_profile,
+    parse_profile_map,
+    select_profile,
+)
 
 PROGRAM = "mint-litellm"
 
@@ -265,6 +272,7 @@ def _check(run: Run) -> None:
             run.conn, ctx.instance_id, run.environ.get("MINT_OPA_URL")
         ),
     )
+    checks.target_profile_findings(report, _deployment_basis(run), run.environ)
     run.data.update(
         findings=[
             {"item": f.item, "level": f.level.name, "message": f.message} for f in report.findings
@@ -515,14 +523,61 @@ def _denial(run: Run) -> None:
     )
 
 
+def _arguments(a: Any) -> Any:
+    text = a.arguments if a.arguments is not None else Path(a.args_file).read_text("utf-8")
+    return json.loads(text)
+
+
+def _deployment_basis(run: Run) -> list[dict]:
+    """서버별 승인된 배포 계약의 URL과 승인된 도구 이름. 프로필 자동 선택의 근거이다."""
+    return fetchall(
+        run.conn,
+        "SELECT d.server_id, d.url, coalesce(d.allowed_tools, '{}') ||"
+        " coalesce((SELECT array_agg(DISTINCT t.tool) FROM mint.tool_contracts t"
+        " WHERE t.instance_id = d.instance_id AND t.server_id = d.server_id"
+        " AND t.status = 'approved'), '{}') AS tools"
+        " FROM mint.deployment_contracts d WHERE d.instance_id = %s AND d.status = 'approved'",
+        (run.context().instance_id,),
+    )
+
+
+def _bound_target(run: Run) -> tuple[str | None, str | None]:
+    """프로필이 있는 서버의 승인은 인자 원문에서 플러그인과 같은 규칙으로 대상을 뽑아 묶는다."""
+    a = run.args
+    try:
+        overrides = parse_profile_map(run.environ.get("MINT_TARGET_PROFILES", ""))
+    except ValueError as error:
+        raise ControlError(f"MINT_TARGET_PROFILES가 올바르지 않습니다: {error}") from None
+    auto = None if a.server in overrides else next(
+        (select_profile(d["url"], d["tools"] or ())
+         for d in _deployment_basis(run) if d["server_id"] == a.server),
+        None,
+    )
+    chosen = effective_profile(overrides, a.server, auto)
+    if chosen is None:
+        return None, None
+    profile = chosen[0]
+    if a.args_fp:
+        raise ControlError(
+            "대상·행위 프로필이 있는 서버는 --arguments 또는 --args-file로 요청해야 합니다."
+        )
+    try:
+        arguments = _arguments(a)
+        if not isinstance(arguments, dict):
+            raise ValueError("인자는 JSON 객체여야 합니다")
+        bound = bind_target(profile, a.server, a.tool, arguments)
+    except (ValueError, OSError, TargetUnresolved) as error:
+        raise ControlError(f"호출 대상을 정할 수 없습니다: {error}") from None
+    return bound.target, bound.action
+
+
 def _fingerprint(run: Run) -> tuple[str, int]:
     """``--args-fp``는 그대로, 인자 원문은 플러그인과 같은 함수로 지문을 계산한다."""
     a = run.args
     if a.args_fp:
         return a.args_fp, a.fp_key_version or 1
     try:
-        text = a.arguments if a.arguments is not None else Path(a.args_file).read_text("utf-8")
-        arguments = json.loads(text)
+        arguments = _arguments(a)
         key_text, version = secrets_file.load_fingerprint_key(run.environ)
         key = fingerprint.decode_fingerprint_key(key_text)
         return fingerprint.argument_fingerprint(arguments, key), a.fp_key_version or version
@@ -533,6 +588,7 @@ def _fingerprint(run: Run) -> tuple[str, int]:
 def _call_request(run: Run) -> None:
     a, ctx = run.args, run.context()
     args_fp, fp_key_version = _fingerprint(run)
+    target, action = _bound_target(run)
     _created(
         run,
         call_approval_service.request(
@@ -547,6 +603,8 @@ def _call_request(run: Run) -> None:
             policy_version_id=a.policy_version,
             expires_in_minutes=a.expires_in_minutes,
             requested_by=a.requested_by or ctx.operator.user_id or ctx.operator.name,
+            target=target,
+            action=action,
         ),
     )
 

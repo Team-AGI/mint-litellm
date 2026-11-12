@@ -25,6 +25,7 @@ from mint_litellm.types.events import Event
 from mint_litellm.types.identity import OrgStatus, SubjectType
 from mint_litellm.types.reason_codes import OBSERVATION_CANDIDATES, Reason
 from mint_litellm.types.settings import Mode
+from mint_litellm.types.target import select_profile
 
 STAGE2_SNAPSHOT_SQL = """
 WITH
@@ -73,6 +74,14 @@ SELECT jsonb_build_object(
         WHERE t.instance_id = %(iid)s AND t.server_id = %(server_id)s AND t.status = 'approved'
           AND t.credential_scope = CASE WHEN srv.auth_type IN ('oauth_delegate',
               'true_passthrough') THEN 'per_user' ELSE 'server' END
+    ),
+    'deployment_basis', (
+        SELECT jsonb_build_object('url', d.url, 'tools', coalesce(d.allowed_tools, '{}') ||
+            coalesce((SELECT array_agg(DISTINCT t.tool) FROM mint.tool_contracts t
+                      WHERE t.instance_id = d.instance_id AND t.server_id = d.server_id
+                        AND t.status = 'approved'), '{}'))
+        FROM mint.deployment_contracts d
+        WHERE d.instance_id = %(iid)s AND d.server_id = %(server_id)s AND d.status = 'approved'
     ),
     'allowlists', (
         SELECT coalesce(jsonb_agg(to_jsonb(a)), '[]'::jsonb) FROM mint.allowlists a
@@ -207,6 +216,11 @@ CONSUME_BOUND_SQL = CONSUME_SQL.replace(
     " WHERE t.instance_id = %(iid)s AND t.id = %(contract_id)s::uuid AND t.status = 'approved')",
 )
 
+# 프로필이 있는 서버의 호출별 승인: 받은 때의 대상·행위와 같을 때만 소비한다.
+CONSUME_TARGET_SQL = (
+    " AND target IS NOT DISTINCT FROM %(target)s::text AND action = %(action)s::text"
+)
+
 NEGATIVE_STATE_SQL = """
 SELECT
     coalesce((SELECT status = 'revoked' FROM mint.approvals
@@ -324,6 +338,8 @@ class CallApprovalRow:
     expires_at: datetime
     state_version: int
     contract_id: str | None = None
+    target: str | None = None
+    action: str | None = None
     exec_contract_sha256: str | None = None
 
 
@@ -393,6 +409,8 @@ class Snapshot:
     self_confirmations: tuple[ConfirmationRow, ...] = ()
     # (값, 조직 또는 None): 지금 유효한 허용 목적지 목록. 패턴 계산의 허용 호스트에 쓴다.
     egress_targets: tuple[tuple[str, str | None], ...] = ()
+    # 서버의 승인된 배포 계약에서 고른 대상·행위 프로필(근거가 없으면 None).
+    auto_profile: str | None = None
 
 
 def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
@@ -400,6 +418,7 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
     settings = doc.get("settings")
     server = doc.get("server")
     policy = doc.get("policy_version")
+    basis = doc.get("deployment_basis") or {}
     return Snapshot(
         now=_time(doc["now"]),
         epoch=doc.get("epoch"),
@@ -491,6 +510,8 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
                 expires_at=_time(c["expires_at"]),
                 state_version=c["state_version"],
                 contract_id=c.get("contract_id"),
+                target=c.get("target"),
+                action=c.get("action"),
                 exec_contract_sha256=c.get("exec_contract_sha256"),
             )
             for c in doc["call_approvals"]
@@ -528,6 +549,7 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
             }) for c in doc.get("self_confirmations", ())
         ),
         egress_targets=tuple((e["value"], e["org_id"]) for e in doc.get("egress_targets", [])),
+        auto_profile=select_profile(basis.get("url"), basis.get("tools") or ()),
     )
 
 
@@ -773,8 +795,11 @@ class PluginDatabase:
                 inserted = cursor.rowcount == 1
                 if consume is not None and consume.call_approval_id is not None:
                     cursor = await conn.execute(
-                        CONSUME_EXEC_SQL if consume.exec_contract_sha256 is not None
-                        else CONSUME_SQL if consume.contract_id is None else CONSUME_BOUND_SQL,
+                        (
+                            CONSUME_EXEC_SQL if consume.exec_contract_sha256 is not None
+                            else CONSUME_SQL if consume.contract_id is None
+                            else CONSUME_BOUND_SQL
+                        ) + (CONSUME_TARGET_SQL if consume.action is not None else ""),
                         {
                             "iid": event.instance_id,
                             "id": consume.call_approval_id,
@@ -787,6 +812,8 @@ class PluginDatabase:
                             "policy_version_id": consume.policy_version_id,
                             "state_version": consume.state_version,
                             "contract_id": consume.contract_id,
+                            "target": consume.target,
+                            "action": consume.action,
                             "exec_contract_sha256": consume.exec_contract_sha256,
                         },
                     )

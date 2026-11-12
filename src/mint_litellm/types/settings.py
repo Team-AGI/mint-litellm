@@ -90,6 +90,15 @@ MINT_SETTINGS: tuple[MintSettingRow, ...] = (
         rule="호출별 승인을 요구할 고위험 도구 목록. 저장된 설정으로 덮지 않는다.",
     ),
     MintSettingRow(
+        key="MINT_TARGET_PROFILES",
+        source=SettingSource.ENV,
+        rule=(
+            "원격 서버의 호출 대상·행위 프로필을 덮어쓴다(`서버 식별자=프로필` 쉼표 목록, "
+            "프로필은 `github`·`n8n`·`none`). 기본은 승인된 배포 계약에서 자동으로 고른다. "
+            "저장된 설정으로 덮지 않는다."
+        ),
+    ),
+    MintSettingRow(
         key="MINT_DECISION_BUDGET_MS",
         source=SettingSource.ENV,
         rule=(

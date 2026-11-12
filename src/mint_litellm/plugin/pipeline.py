@@ -73,6 +73,13 @@ from mint_litellm.types.identity import (
 from mint_litellm.types.ids import new_uuid7
 from mint_litellm.types.reason_codes import Reason
 from mint_litellm.types.settings import Mode, ObservationSettings, effective_mode
+from mint_litellm.types.target import (
+    READ,
+    Target,
+    TargetUnresolved,
+    bind_target,
+    effective_profile,
+)
 
 log = logging.getLogger("mint_litellm.pipeline")
 
@@ -657,6 +664,22 @@ async def policy_stage(
     )
 
 
+def target_binding(
+    profile: str | None, resolved: ResolvedServer, tool: str, arguments: Mapping[str, Any]
+) -> Target | StageResult | None:
+    """프로필이 있는 서버 호출의 대상·행위. 프로필이 없으면 None, 정할 수 없으면 중단 결과.
+
+    읽기가 아닌 효과를 정하지 못하는 호출(프로필에 없는 도구, 빠지거나 모호한 대상)은 승인으로
+    풀 수 없으므로 업스트림으로 보내지 않는다.
+    """
+    if profile is None:
+        return None
+    try:
+        return bind_target(profile, resolved.server_id, tool, arguments)
+    except TargetUnresolved as exc:
+        return StageResult.stop(Reason.CALL_APPROVAL_REQUIRED, detail=f"target: {exc}"[:200])
+
+
 @dataclass(frozen=True)
 class ObligationCheck:
     results: list[StageResult]
@@ -671,11 +694,14 @@ def match_call_approval(
     arguments: Mapping[str, Any],
     config: PluginConfig,
     invocation_id: UUID,
+    binding: Target | None = None,
 ) -> tuple[StageResult | None, ConsumeRequest | None]:
     if config.fingerprint_key is None:
         return StageResult.stop(
             Reason.CALL_APPROVAL_REQUIRED, detail="fingerprint key not set"
         ), None
+    bound_target = binding.target if binding is not None else None
+    bound_action = binding.action if binding is not None else None
     version = snapshot.policy_version
     try:
         fingerprint = argument_fingerprint(arguments, config.fingerprint_key)
@@ -695,6 +721,8 @@ def match_call_approval(
             and row.fp_key_version == config.fingerprint_key_version
             and row.contract_version is None
             and bound_to_current_contract(snapshot, tool, row.contract_id)
+            and row.target == bound_target
+            and row.action == bound_action
             and row.exec_contract_sha256 == resolved.exec_contract_sha256
             and row.expires_at > snapshot.now
         )
@@ -717,6 +745,8 @@ def match_call_approval(
             policy_version_id=row.policy_version_id,
             state_version=row.state_version,
             contract_id=row.contract_id,
+            target=row.target,
+            action=row.action,
             exec_contract_sha256=row.exec_contract_sha256,
         )
     if candidates:
@@ -733,12 +763,13 @@ def obligation_check(
     obligations: Sequence[Any],
     config: PluginConfig,
     invocation_id: UUID,
+    binding: Target | None = None,
 ) -> ObligationCheck:
     consume: ConsumeRequest | None = None
     for obligation in obligations:
         if isinstance(obligation, RequireCallApproval):
             failure, consume = match_call_approval(
-                snapshot, principal, resolved, tool, arguments, config, invocation_id
+                snapshot, principal, resolved, tool, arguments, config, invocation_id, binding
             )
             if failure is not None:
                 return ObligationCheck([failure], None)
@@ -854,6 +885,9 @@ class _Run:
     snapshot: Snapshot | None = None
     selected: ApprovalRow | None = None
     consume: ConsumeRequest | None = None
+    binding: Target | None = None
+    # (프로필, 출처): 승인된 배포 계약에서 자동으로 골랐거나 환경 변수로 덮어쓴 결과.
+    profile: tuple[str, str] | None = None
     policy: PolicyStageResult | None = None
     observation: ObservationSettings = field(default_factory=ObservationSettings)
     # 판정 사건의 기록이 시작됐는지(결과가 불명일 수 있다), 어느 위치든 남겨졌는지.
@@ -903,6 +937,11 @@ def _decision_snapshot(
     values["resolved_identity_kind"] = resolved.identity_kind if resolved else None
     values["resolved_exec_contract_sha256"] = resolved.exec_contract_sha256 if resolved else None
     values["resolved_exec_contract_version"] = resolved.exec_contract_version if resolved else None
+    values["resolved_credential_ref"] = resolved.credential_ref if resolved else None
+    values["target_profile"] = run.profile[0] if run.profile else None
+    values["target_profile_source"] = run.profile[1] if run.profile else None
+    values["bound_target"] = run.binding.target if run.binding else None
+    values["bound_action"] = run.binding.action if run.binding else None
     reasons["revoked_after_snapshot"] = _MISSING["revoked_after_snapshot"]
     reasons["revocation_check"] = _MISSING["revocation_check"]
     if snap is not None:
@@ -1132,6 +1171,24 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         return
 
     run.current = Stage.OBLIGATIONS
+    run.profile = effective_profile(
+        config.target_profiles, resolved.server_id, snapshot.auto_profile
+    )
+    binding = target_binding(
+        run.profile[0] if run.profile else None, resolved, tool, hook.arguments
+    )
+    if isinstance(binding, StageResult):
+        stages.add(Stage.OBLIGATIONS, binding)
+        return
+    run.binding = binding
+    obligations = run.policy.obligations
+    # 프로필이 있는 서버의 변경·실행 호출은 정책이 요구하지 않아도 대상에 묶인 승인이 있어야 한다.
+    if (
+        binding is not None
+        and binding.effect != READ
+        and not any(isinstance(o, RequireCallApproval) for o in obligations)
+    ):
+        obligations = (*obligations, RequireCallApproval())
     started = timing.now()
     check = obligation_check(
         snapshot,
@@ -1139,9 +1196,10 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         resolved,
         tool,
         hook.arguments,
-        run.policy.obligations,
+        obligations,
         config,
         req.invocation_id,
+        binding,
     )
     timing.since("fingerprint", started)
     for result in check.results:

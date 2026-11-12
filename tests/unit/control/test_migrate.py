@@ -22,6 +22,7 @@ def test_applies_once_and_is_a_no_op_the_second_time(fresh_db):
             "018_exec_contract_fields", "019_exec_contract_approval_binding",
             "020_endpoint_installs",
             "021_policy_evidence",
+            "022_approval_target_binding",
         ]
 
 
@@ -45,6 +46,7 @@ def test_first_run_on_an_empty_database_applies_everything(fresh_db):
                 "018_exec_contract_fields", "019_exec_contract_approval_binding",
                 "020_endpoint_installs",
                 "021_policy_evidence",
+                "022_approval_target_binding",
             ]
             assert conn.execute("SELECT count(*) FROM mint.orgs").fetchone()[0] == 0
     finally:
@@ -101,6 +103,7 @@ def test_a_database_with_only_the_first_migration_is_upgraded(fresh_db):
                 "018_exec_contract_fields", "019_exec_contract_approval_binding",
                 "020_endpoint_installs",
                 "021_policy_evidence",
+                "022_approval_target_binding",
             ]
             assert conn.execute("SELECT count(*) FROM mint.intakes").fetchone()[0] == 0
             row = conn.execute(
@@ -173,7 +176,8 @@ def test_open_approvals_without_a_contract_are_closed_on_managed_servers_only(fr
             assert migrate.apply_migrations(conn) == [
                 "017_approval_contract_binding", "018_exec_contract_fields",
                 "019_exec_contract_approval_binding", "020_endpoint_installs",
-                "021_policy_evidence"]
+                "021_policy_evidence",
+                "022_approval_target_binding"]
             rows = conn.execute(
                 "SELECT server_id, status, count(*) FROM mint.call_approvals"
                 " GROUP BY server_id, status ORDER BY 1, 2"
