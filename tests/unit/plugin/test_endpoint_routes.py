@@ -203,3 +203,23 @@ def test_a_consumed_call_approval_is_not_reusable_after_a_lost_response(tmp_path
     )
     retry = post(again, "/mint/v1/decide", body()).json()
     assert retry["decision"] == "deny" and retry["error"]["code"] == "MINT-CALL-APPROVAL-REQUIRED"
+
+
+def test_both_routes_reject_bodies_over_the_limit(tmp_path):
+    client, h = build(tmp_path)
+    big = " " * (64 * 1024 + 1)
+    for path in ("/mint/v1/decide", "/mint/v1/result"):
+        assert client.post(path, content=big, headers=KEY_HEADER).status_code == 413
+    assert h.store.events == {}
+
+
+def test_the_routes_fail_closed_when_the_runtime_is_not_ready(tmp_path):
+    client, _ = build(tmp_path)
+    app = FastAPI()
+    router = make_router(
+        auth_dependency=lambda: auth(), runtime_provider=lambda: None,
+        principal_factory=principal_of,
+    )
+    install(app, router)
+    for path in ("/mint/v1/decide", "/mint/v1/result"):
+        assert TestClient(app).post(path, json=body()).status_code == 503
