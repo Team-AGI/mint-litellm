@@ -78,3 +78,33 @@ def test_what_the_hook_reports_hashes_to_what_was_approved(tmp_path):
     assert DecideBody.model_validate(
         {"server": "srv", "tool": "t", "arguments": {}, "contract": changed}
     ).contract.sha256() != approved.sha256()
+
+
+def test_a_windows_kit_is_a_zip_with_the_windows_launchers_and_the_same_version():
+    import zipfile
+
+    first = build_kit({"srv": DOC}, decide_url="https://mint.test", key="sk-a", platform="windows")
+    assert first == build_kit(
+        {"srv": DOC}, decide_url="https://mint.test", key="sk-a", platform="windows"
+    )
+    with zipfile.ZipFile(io.BytesIO(first)) as bundle:
+        names = sorted(bundle.namelist())
+        config = json.loads(bundle.read("mint-kit/kit.json"))
+        script = bundle.read("mint-kit/install.ps1")
+    assert names == [
+        "mint-kit/install.cmd", "mint-kit/install.ps1", "mint-kit/kit.json",
+        "mint-kit/mint_agent.py", "mint-kit/mint_kit.py",
+    ]  # fmt: skip
+    # 한글을 읽도록 BOM이 있고 줄바꿈은 LF이다.
+    assert script.startswith(b"\xef\xbb\xbf") and b"\r\n" not in script
+    assert config["kit_version"] == kit_version() and config["harnesses"] == ["claude"]
+
+
+def test_the_harness_choice_is_packed_and_only_known_choices_are_accepted():
+    both = build_kit(
+        {}, decide_url="https://mint.test", key="k", harnesses=("codex", "claude")
+    )
+    assert json.loads(members(both)["mint-kit/kit.json"][1])["harnesses"] == ["claude", "codex"]
+    for bad in ({"platform": "macos"}, {"harnesses": ("vim",)}, {"harnesses": ()}):
+        with pytest.raises(ValueError):
+            build_kit({}, decide_url="https://mint.test", key="k", **bad)

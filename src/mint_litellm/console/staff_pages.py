@@ -317,7 +317,12 @@ def withdraw_consent(
 
 def endpoint_page(request: Request, actor: StaffActor, error=None, status=200):
     rows = endpoint_kits.installs(actor.sctx.control, actor.sctx.instance_id, actor.user_id)
-    ctx = {"rows": rows, "active": any(r["state"] != "revoked" for r in rows), "error": error}
+    # 받는 사람의 브라우저가 Windows면 Windows 묶음을 미리 고른다.
+    windows = "windows" in request.headers.get("user-agent", "").lower()
+    ctx = {
+        "rows": rows, "active": any(r["state"] != "revoked" for r in rows), "error": error,
+        "platform": "windows" if windows else "linux",
+    }
     return render(request, "staff_endpoint.html", ctx, actor=actor, status=status)
 
 
@@ -327,9 +332,16 @@ def endpoint(request: Request, actor: StaffActor = Depends(staff_actor)):
 
 
 @router.post("/staff/endpoint/kit")
-def endpoint_kit(request: Request, actor: StaffActor = Depends(staff_actor)):
+def endpoint_kit(
+    request: Request,
+    actor: StaffActor = Depends(staff_actor),
+    platform: str = Form("linux"),
+    harness: str = Form("claude"),
+):
     """본인 키를 새로 발급해 담은 설치 묶음을 내려준다(이전 묶음의 키는 지워진다)."""
     config, sctx = actor.config, actor.sctx
+    if platform not in labels.KIT_PLATFORM or harness not in labels.KIT_HARNESS:
+        return endpoint_page(request, actor, "설치 묶음의 종류가 올바르지 않습니다.", 400)
     if config.kit_issuer is None:
         return endpoint_page(request, actor, "단말 설치 묶음을 발급할 수 없습니다.", 503)
     contracts = endpoint_kits.approved_contracts(sctx.control, sctx.instance_id)
@@ -345,11 +357,15 @@ def endpoint_kit(request: Request, actor: StaffActor = Depends(staff_actor)):
         return endpoint_page(request, actor, "설치 묶음을 발급하지 못했습니다.", 503)
     kit = build_kit(
         contracts, decide_url=config.endpoint_url or config.litellm_url, key=key,
-        ca_pem=config.endpoint_ca_pem,
+        ca_pem=config.endpoint_ca_pem, platform=platform,
+        harnesses=("claude", "codex") if harness == "all" else (harness,),
     )
+    media, name = (
+        ("application/zip", "mint-kit.zip") if platform == "windows"
+        else ("application/gzip", "mint-kit.tar.gz")
+    )  # fmt: skip
     return Response(
-        kit, media_type="application/gzip",
-        headers={"Content-Disposition": 'attachment; filename="mint-kit.tar.gz"'},
+        kit, media_type=media, headers={"Content-Disposition": f'attachment; filename="{name}"'}
     )
 
 

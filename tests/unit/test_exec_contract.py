@@ -38,6 +38,14 @@ def test_a_contract_must_be_absolute_normalized_and_closed(bad):
         contract(**bad)
 
 
+def test_a_windows_path_is_accepted_only_when_absolute_and_normalized():
+    ok = contract(executable=r"C:\Tools\node.exe", cwd=r"D:\work")
+    assert ok.executable == r"C:\Tools\node.exe"
+    for bad in (r"C:Tools\node.exe", r"C:\Tools\..\node.exe", "C:/Tools/node.exe", r"\\srv\a"):
+        with pytest.raises(ValidationError):
+            contract(executable=bad)
+
+
 def test_the_resolved_server_carries_the_hash_and_no_url_hash():
     resolved = contract().resolved("local-1")
     assert resolved.identity_kind == "stdio" and resolved.url_sha256 is None

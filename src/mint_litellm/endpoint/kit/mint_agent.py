@@ -13,6 +13,10 @@
   run   MCP 서버 실행기. 승인된 실행 계약과 디스크의 실행 파일·스크립트 해시가 모두 같을 때만
         서버를 시작하고, 아니면 시작하지 않고 종료 코드 126으로 끝난다.
 
+Claude Code와 Codex가 같은 훅 입력(도구 이름 ``mcp__서버__도구``, 호출 식별자)을 준다. Codex는
+서버 이름을 따로 주지 않아 승인 목록의 서버 이름과 도구 이름의 접두로 서버를 찾는다. Windows에서
+서버 실행기는 exec 대신 자식 프로세스로 서버를 띄우고 같은 종료 코드로 끝난다.
+
 시간 상한은 HTTP 대기 < 훅 내부 상한 < 하네스 ``timeout`` 순서여야 한다. 하네스는 시간 초과나
 시작 실패를 기본적으로 통과시키므로 관리형 설정에 ``"onFailure": "block"``을 함께 둔다.
 출력이 JSON처럼 보여도 해석되지 않으면 일반 글로 취급되어 통과하므로 허용 때는 출력하지 않는다.
@@ -36,7 +40,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 DECIDE_PATH = "/mint/v1/decide"
@@ -119,12 +123,28 @@ def load_contract(path: str, server: str) -> dict[str, Any]:
     return entry
 
 
-def server_and_tool(event: Mapping[str, Any]) -> tuple[str, str]:
-    server = (event.get("mcp_server") or {}).get("name")
+def server_prefix(server: str) -> str:
+    return "mcp__" + re.sub(r"[^a-zA-Z0-9_-]", "_", server) + "__"
+
+
+def known_servers(path: str) -> list[str]:
+    """승인 목록의 서버 이름. 목록을 읽지 못하면 비어 있다(그러면 호출은 막힌다)."""
+    try:
+        with open(os.path.expanduser(path), encoding="utf-8") as handle:
+            return [str(name) for name in (json.load(handle).get("servers") or {})]
+    except (OSError, ValueError, AttributeError):
+        return []
+
+
+def server_and_tool(event: Mapping[str, Any], known: Sequence[str] = ()) -> tuple[str, str]:
     name = event.get("tool_name")
+    server = (event.get("mcp_server") or {}).get("name")
+    if server is None and isinstance(name, str):
+        # Codex는 서버 이름을 따로 주지 않는다. 승인된 서버 중 도구 이름의 접두와 맞는 것을 쓴다.
+        server = next((s for s in known if name.startswith(server_prefix(s))), None)
     if not isinstance(server, str) or not isinstance(name, str):
         raise Refuse("hook input has no MCP server or tool name")
-    prefix = "mcp__" + re.sub(r"[^a-zA-Z0-9_-]", "_", server) + "__"
+    prefix = server_prefix(server)
     if not name.startswith(prefix) or len(name) == len(prefix):
         raise Refuse("tool name does not match the MCP server")
     return server, name[len(prefix) :]
@@ -363,7 +383,7 @@ def decide(
     name = event.get("tool_name")
     if not isinstance(name, str) or not name.startswith("mcp__"):
         return  # MCP 호출이 아니면 이 훅의 대상이 아니다.
-    server, tool = server_and_tool(event)
+    server, tool = server_and_tool(event, known_servers(contracts))
     arguments = event.get("tool_input")
     if not isinstance(arguments, dict):
         raise Refuse("tool arguments are not an object")
@@ -446,17 +466,22 @@ def verify_launch(approved: Mapping[str, Any], fd: int) -> None:
         raise Refuse("server script differs from the approved contract")
 
 
+def spawn_and_exit(path: str, argv: list[str], env: Mapping[str, str]) -> None:
+    """exec가 없는 Windows용. 자식을 띄워 표준 입출력을 그대로 잇고 같은 종료 코드로 끝난다."""
+    sys.exit(subprocess.call([path, *argv[1:]], env=dict(env)))
+
+
 def run_server(
     server: str,
     contracts: str,
     environ: Mapping[str, str],
-    execve: Callable[..., Any] = os.execve,
+    execve: Callable[..., Any] | None = None,
 ) -> None:
     """승인된 서버만 시작한다. 검증을 통과하지 못하면 ``Refuse``이고 서버는 시작되지 않는다."""
     approved = load_contract(contracts, server)
     executable = approved["executable"]
     try:
-        fd = os.open(executable, os.O_RDONLY)
+        fd = os.open(executable, os.O_RDONLY | getattr(os, "O_BINARY", 0))
     except OSError as exc:
         raise Refuse(f"server executable cannot be opened ({type(exc).__name__})") from exc
     verify_launch(approved, fd)
@@ -468,6 +493,11 @@ def run_server(
     # 실행할 수 없으면 경로 실행으로 물러나 검증과 실행 사이에 틈이 남는다. 읽는 스크립트도
     # 경로로 열린다. 관리형 설치의 쓰기 금지 경로가 틈을 줄이며, 완전히 닫으려면 검증한 사본으로
     # 실행한다.
+    if execve is None and os.name == "nt":
+        # 한계: Windows는 열어 둔 기술자로 실행할 수 없어 닫고 경로로 실행한다(검증과 실행 사이 틈).
+        os.close(fd)
+        spawn_and_exit(executable, argv, env)
+    execve = execve or os.execve
     try:
         execve(fd, argv, env)
     except OSError:
@@ -515,7 +545,7 @@ def main(argv: list[str] | None = None) -> None:
     watchdog.daemon = True
     watchdog.start()
     try:
-        event = json.loads(sys.stdin.read())
+        event = json.loads(sys.stdin.buffer.read())  # 지역 인코딩이 아니라 UTF-8 그대로
         if not isinstance(event, dict):
             raise Refuse("hook input is not an object")
         with open(os.path.expanduser(args.key_file), encoding="utf-8") as handle:
