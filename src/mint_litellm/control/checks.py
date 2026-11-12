@@ -17,9 +17,35 @@ from mint_litellm.control.litellm_config import GUARDRAIL_MODES, LOGGER_SUFFIXES
 from mint_litellm.control.policy_check import PolicyState
 from mint_litellm.types import fingerprint
 from mint_litellm.types.decision import normalize_auth_type, url_sha256
-from mint_litellm.types.settings import OBSERVATION_ITEMS, SETTINGS_TABLE, SettingGrade
+from mint_litellm.types.reuse_policy import (
+    DEFAULT_TOOL_TIMEOUT_SECONDS,
+    DISCOVERY_AUTH,
+    KEY_BINDING,
+    KEY_CONCURRENCY,
+    KEY_CREDENTIAL,
+    KEY_ENV_LOGIN,
+    KEY_ISSUER,
+    KEY_REDIRECT,
+    KEY_RPM,
+    KEY_SSL,
+    KEY_TIMEOUT,
+    KEY_URL_HOSTS,
+    ServerFacts,
+    credential_digest,
+    reuse_violations,
+    ssl_verify_on,
+)
+from mint_litellm.types.settings import (
+    OBSERVATION_ITEMS,
+    REUSE_POLICIES,
+    SETTINGS_TABLE,
+    SettingGrade,
+)
 
-_DISCOVERY_AUTH = frozenset({"oauth2", "true_passthrough", "oauth_delegate"})
+_REUSE_KEYS = (
+    KEY_ENV_LOGIN, KEY_URL_HOSTS, KEY_SSL, KEY_REDIRECT, KEY_ISSUER, KEY_BINDING, KEY_TIMEOUT,
+    KEY_CREDENTIAL, KEY_RPM, KEY_CONCURRENCY,
+)
 _ROWS = {row.key: row for row in SETTINGS_TABLE}
 _OPTOUT_KEYS = ("opted_out_global_guardrails", "disable_global_guardrails")
 
@@ -77,9 +103,27 @@ class Report:
                  or (f.item in _ROWS and _ROWS[f.item].grade is SettingGrade.REQUIRED))
         ]
 
+    def policy_status(self) -> dict[str, str]:
+        """LiteLLM 재사용 정책별 충족 여부: 충족, 미충족, 확인 불가."""
+        by_item: dict[str, list[Level]] = {}
+        for f in self.findings:
+            by_item.setdefault(f.item, []).append(f.level)
+        status = {}
+        for policy, keys in REUSE_POLICIES.items():
+            levels = [level for key in keys for level in by_item.get(key, [Level.SKIP])]
+            if any(level in (Level.FAIL, Level.WARN) for level in levels):
+                status[policy] = "미충족"
+            elif all(level in (Level.OK, Level.INFO) for level in levels):
+                status[policy] = "충족"
+            else:
+                status[policy] = "확인 불가"
+        return status
+
     def render(self) -> str:
         lines = [f"[{f.level.value}] {f.item}" + (f": {f.message}" if f.message else "")
                  for f in self.findings]
+        lines.append("정책 이행(LiteLLM 재사용)")
+        lines.extend(f"  {policy}: {state}" for policy, state in self.policy_status().items())
         lines.append("관측 항목")
         lines.extend(f"  {name}: {self.observations.get(name, '확인 불가')}"
                      for name in OBSERVATION_ITEMS)
@@ -240,19 +284,49 @@ def _check_file_rows(judge, config, general, lsettings, servers_cfg, env, replic
     judge("mcp_allow_all_keys_respects_mcp_scope",
           general.get("mcp_allow_all_keys_respects_mcp_scope") is True,
           "general_settings.mcp_allow_all_keys_respects_mcp_scope를 true로 설정하십시오.")
-    no_issuer = [n for n, s in servers_cfg.items()
-                 if str((s or {}).get("auth_type", "")).lower() in _DISCOVERY_AUTH
-                 and not (s or {}).get("issuer")]
-    judge("mcp_servers.<이름>.issuer", not no_issuer,
-          "issuer가 없는 발견형 인증 서버: " + ", ".join(no_issuer))
     judge("enable_redis_auth_cache",
           replicas < 2 or _truthy(lsettings.get("enable_redis_auth_cache")),
           "복제본 × 워커가 둘 이상이면 enable_redis_auth_cache와 공유 Redis를 설정하십시오.")
-    not_enforced = [n for n, s in servers_cfg.items()
-                    if str((s or {}).get("auth_type", "")).lower() in _DISCOVERY_AUTH
-                    and ((s or {}).get("oauth_identity_binding") or {}).get("mode") != "enforce"]
-    judge("mcp_servers.<이름>.oauth_identity_binding.mode", not not_enforced,
-          "enforce가 아닌 OAuth 서버: " + ", ".join(not_enforced))
+    _check_reuse_rows(judge, general, lsettings, servers_cfg, env)
+
+
+def _server_facts(name: str, cfg: Mapping[str, Any]) -> ServerFacts:
+    auth = str(cfg.get("auth_type", "")).lower()
+    m2m = cfg.get("oauth2_flow") == "client_credentials"
+    timeout = cfg.get("timeout")
+    return ServerFacts(
+        name=name,
+        discovery_oauth=auth in DISCOVERY_AUTH,
+        per_user_oauth=auth == "oauth2" and not m2m and not _truthy(
+            cfg.get("delegate_auth_to_upstream", False)),
+        issuer=cfg.get("issuer"),
+        binding_mode=(cfg.get("oauth_identity_binding") or {}).get("mode"),
+        timeout=float(timeout) if isinstance(timeout, (int, float)) else None,
+        rpm=cfg.get("rpm"),
+        max_concurrent=cfg.get("max_concurrent_requests"),
+        credential=(credential_digest(cfg.get("client_id"), cfg.get("client_secret")) if m2m
+                    else credential_digest(cfg.get("authentication_token"))),
+    )
+
+
+def _check_reuse_rows(judge, general, lsettings, servers_cfg, env) -> None:
+    """LiteLLM이 구현하는 정책의 설정 값. 기동 자가 점검과 같은 규칙이다."""
+    try:
+        default_timeout = float(env.get("LITELLM_MCP_CLIENT_TIMEOUT", DEFAULT_TOOL_TIMEOUT_SECONDS))
+    except ValueError:
+        default_timeout = None
+    ssl_value = env.get("SSL_VERIFY", lsettings.get("ssl_verify", True))
+    violations = reuse_violations(
+        general=general,
+        allowed_hosts=lsettings.get("user_url_allowed_hosts") or [],
+        ssl_verify=ssl_verify_on(ssl_value),
+        env=env,
+        servers=[_server_facts(n, s or {}) for n, s in servers_cfg.items()],
+        default_timeout=default_timeout,
+    )
+    for key in _REUSE_KEYS:
+        messages = [v.message for v in violations if v.key == key]
+        judge(key, not messages, " ".join(messages))
 
 
 def _check_env_rows(judge, general, env) -> None:

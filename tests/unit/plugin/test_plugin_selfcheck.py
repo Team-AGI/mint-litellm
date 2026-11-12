@@ -38,6 +38,8 @@ def entry(server_id="srv-1", names=("mslearn",), **override):
         "transport": "http",
         "auth_type": "none",
         "allow_all_keys": False,
+        "rpm": 600,
+        "max_concurrent": 8,
     }
     args.update(override)
     return RegistryEntry(**args)
@@ -75,6 +77,7 @@ def guardrail(**override):
     return FakeGuardrail(**args)
 
 
+GOOD_GENERAL = {"require_key_mcp_access_defined": True, "disable_env_credential_login": True}
 LOGGER = FakeLogger()
 GUARDRAIL = guardrail()
 
@@ -82,7 +85,7 @@ GUARDRAIL = guardrail()
 def view(**override):
     args = {
         "callbacks": [LOGGER, GUARDRAIL],
-        "general_settings": {"require_key_mcp_access_defined": True},
+        "general_settings": GOOD_GENERAL,
         "strict_guardrail_modes": True,
         "store_prompts_in_spend_logs": False,
         "user_url_validation": True,
@@ -314,7 +317,7 @@ def test_item_7_symbols():
         {"user_url_validation": False},
         {
             "general_settings": {
-                "require_key_mcp_access_defined": True,
+                **GOOD_GENERAL,
                 "supported_db_objects": ["models"],
             }
         },
@@ -322,6 +325,54 @@ def test_item_7_symbols():
 )
 def test_item_8_required_settings(override):
     assert failed(run_checks(view(**override))) == {SelfCheckItem.REQUIRED_SETTINGS}
+
+
+@pytest.mark.parametrize(
+    ("override", "policy"),
+    [
+        ({"general_settings": {"require_key_mcp_access_defined": True}}, "POL-R-13"),
+        ({"ssl_verify": False}, "POL-R-17"),
+        ({"allowed_hosts": ("internal.test",)}, "POL-R-11"),
+        ({"default_timeout": 3600.0}, "POL-E-24"),
+        ({"env": {"MCP_TRUSTED_REDIRECT_ORIGINS": "https://*"}}, "POL-R-09"),
+        ({"registry": [entry(timeout=0)]}, "POL-E-24"),
+        ({"registry": [entry(rpm=None)]}, "POL-E-17"),
+        ({"registry": [entry(rpm=0)]}, "POL-E-23"),
+        ({"registry": [entry(max_concurrent=-1)]}, "POL-E-23"),
+        ({"registry": [entry(discovery_oauth=True)]}, "POL-R-07"),
+        ({"registry": [entry(discovery_oauth=True, issuer="https://i.test")],
+          "env": {}}, "POL-R-09"),
+        ({"registry": [entry(per_user_oauth=True, binding_mode="audit")]}, "POL-R-10"),
+        ({"registry": [entry(credential="a"), entry("srv-2", ("other",), credential="a")]},
+         "POL-R-14"),
+    ],
+)
+def test_item_8_enforces_the_settings_behind_litellm_reuse_policies(override, policy):
+    v = view(**override)
+    controlled = [registered(server_id=e.server_id) for e in v.registry]
+    results = check_items(v, logger=LOGGER, guardrail=GUARDRAIL, controlled=controlled)
+    assert failed(results) == {SelfCheckItem.REQUIRED_SETTINGS}
+    (detail,) = [r.detail for r in results if not r.ok]
+    assert policy in detail
+
+
+def test_item_8_does_not_refuse_database_servers_whose_limits_are_still_empty():
+    waiting = view(registry=[entry(rpm=None, max_concurrent=None, in_database=True)])
+    assert failed(run_checks(waiting)) == set()
+    zero = view(registry=[entry(rpm=0, in_database=False)])
+    assert SelfCheckItem.REQUIRED_SETTINGS in failed(run_checks(zero))
+
+
+def test_item_8_leaves_local_stdio_servers_out_of_the_litellm_settings_check():
+    bare = view(registry=[entry(rpm=None, discovery_oauth=True)])
+    local = registered(identity_kind="stdio")
+    results = check_items(bare, logger=LOGGER, guardrail=GUARDRAIL, controlled=[local])
+    assert SelfCheckItem.REQUIRED_SETTINGS not in failed(results)
+
+
+def test_item_8_ignores_servers_mint_does_not_control():
+    stray = view(registry=[entry(), entry("srv-9", ("stray",), discovery_oauth=True)])
+    assert failed(run_checks(stray)) == set()
 
 
 def test_item_8_requires_the_fingerprint_key():
@@ -347,7 +398,7 @@ def test_a_runtime_without_the_fingerprint_key_does_not_start(tmp_path):
 
 
 def test_item_8_accepts_a_supported_db_objects_list_with_mcp():
-    settings = {"require_key_mcp_access_defined": True, "supported_db_objects": ["models", "mcp"]}
+    settings = {**GOOD_GENERAL, "supported_db_objects": ["models", "mcp"]}
     assert failed(run_checks(view(general_settings=settings))) == set()
 
 
@@ -940,15 +991,13 @@ class TestTerminateProcess:
 
 @pytest.mark.parametrize("value", [True, "true", "True"])
 def test_the_openai_websocket_passthrough_needs_the_explicit_realtime_allowance(value):
-    on = view(general_settings={"require_key_mcp_access_defined": True,
-                                "enable_openai_websocket_passthrough": value})
+    on = view(general_settings={**GOOD_GENERAL, "enable_openai_websocket_passthrough": value})
     assert SelfCheckItem.REQUIRED_SETTINGS in failed(run_checks(on))
     allowed = check_items(
         on, logger=LOGGER, guardrail=GUARDRAIL, controlled=[registered()], allow_realtime=True
     )
     assert failed(allowed) == set()
-    off = view(general_settings={"require_key_mcp_access_defined": True,
-                                 "enable_openai_websocket_passthrough": False})
+    off = view(general_settings={**GOOD_GENERAL, "enable_openai_websocket_passthrough": False})
     assert failed(run_checks(off)) == set()
 
 
