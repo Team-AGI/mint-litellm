@@ -101,3 +101,13 @@ def seed_approval_evidence(conn, intake_id) -> None:
         " '시험', 'root', now() + interval '30 days' FROM unnest(%s::text[]) AS k",
         (INSTANCE, str(intake_id), names),
     )
+
+
+def seed_version_evidence(conn, server_id, instance=INSTANCE) -> None:
+    """배포 계약이 바뀌는 재승인에 필요한 판본 확인 증빙을 유효하게 넣는다."""
+    conn.execute(
+        "INSERT INTO mint.policy_evidence (id, instance_id, kind, subject_kind, subject_id,"
+        " summary, attached_by, valid_until) VALUES (gen_random_uuid(), %s, 'version_review',"
+        " 'server', %s, '시험', 'root', now() + interval '30 days')",
+        (instance, server_id),
+    )

@@ -11,7 +11,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from ctl_fixtures import INSTANCE, LOGIN_PASSWORDS, make_ctx, seed_approval_evidence
+from ctl_fixtures import (
+    INSTANCE,
+    LOGIN_PASSWORDS,
+    make_ctx,
+    seed_approval_evidence,
+    seed_version_evidence,
+)
 from litellm_control_stub import CONTROL_KEY, TOOL, ControlStub, submission
 
 psycopg = pytest.importorskip("psycopg")
@@ -1700,6 +1706,7 @@ def test_an_oauth2_flow_drift_keeps_the_block_until_the_flow_is_fixed_and_rechec
                                                       world.intake(intake_id)["id"])}
     assert oauth["oauth_issuer_allowlist"]["result"] != "pass"
     ids = [str(t["id"]) for t in tools]
+    seed_version_evidence(world.conn, "srv-a")
     with psycopg.connect(world.url) as conn, pytest.raises(AdminError):  # 흐름이 틀리면 재승인 불가
         contracts.reapprove(make_ctx(conn, "boss", "approver", "boss-1"), "srv-a", intake_id, ids,
                             deployment_id=str(cand["id"]))
@@ -1783,6 +1790,8 @@ def test_the_operator_who_proposed_the_deployment_candidate_cannot_reapprove_it(
     assert cand["proposed_by"] == "helper-1"
     ids = [str(t["id"]) for t in fetchall(
         world.conn, "SELECT id FROM mint.tool_contracts WHERE status = 'candidate'")]
+
+    seed_version_evidence(world.conn, "srv-a")
 
     def reapprove(user, name):
         return world.call(lambda ctx: contracts.reapprove(
@@ -2103,7 +2112,13 @@ def test_a_viewer_cannot_attach_and_the_subject_must_exist(world):
 
 def test_scan_alerts_on_missing_evidence_and_attaching_closes_the_alert(world):
     intake_id = approved_world(world)
+    world.conn.execute(
+        "ALTER TABLE mint.policy_evidence DISABLE TRIGGER policy_evidence_1_append_only"
+    )
     world.conn.execute("DELETE FROM mint.policy_evidence")
+    world.conn.execute(
+        "ALTER TABLE mint.policy_evidence ENABLE TRIGGER policy_evidence_1_append_only"
+    )
     assert evidence.scan_alerts(world.conn, INSTANCE) > 0
     rows = fetchall(world.conn, "SELECT * FROM mint.alerts WHERE kind = 'evidence_missing'")
     assert len(rows) == 1  # 서버마다 한 건, 정책별 누락은 본문에
@@ -2119,7 +2134,6 @@ def test_scan_alerts_on_missing_evidence_and_attaching_closes_the_alert(world):
 
 
 def test_an_exception_approval_is_allowed_without_evidence_but_records_what_is_missing(world):
-    intake_id = passed(world)
     from mint_litellm.control.context import Operator
 
     intake_id = passed(world, readiness={**READINESS, "audit_access_days": 0})

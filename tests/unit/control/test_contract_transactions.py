@@ -5,6 +5,7 @@ from datetime import timedelta
 from uuid import uuid4
 
 import pytest
+from ctl_fixtures import seed_version_evidence
 from psycopg.types.json import Jsonb
 
 from mint_litellm.control.context import Context, Operator
@@ -348,6 +349,7 @@ def test_deployment_proposal_blocks_until_atomic_reapproval(contract_db):
     assert server(conn)["deployment_drift"]
     assert len(events(conn, "deployment_drift_detected")) == 1
     iid = evidence(conn, candidate, deployment=sha256(definition))
+    seed_version_evidence(conn, "s", "i")
     # 배포 후보가 있으면 도구만 고른 재승인은 증거와 맞지 않으므로 명확히 거절한다.
     with pytest.raises(AdminError, match="배포 값 후보"):
         reapprove(ctx, Pin(conn, old, candidate, {"read": NEW}), "s", iid, [str(candidate)])
