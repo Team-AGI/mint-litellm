@@ -223,7 +223,7 @@ def test_redirect_uri_outside_the_trusted_origins_is_refused(reuse, redirect_uri
 
 def test_trusted_redirect_origin_and_loopback_are_accepted(reuse):
     wait_authorize_ready("rt_oauth")
-    for redirect_uri in (TRUSTED, "http://127.0.0.1:8123/cb"):
+    for redirect_uri in (TRUSTED, "http://localhost:8123/cb"):
         reply = authorize("rt_oauth", redirect_uri)
         assert reply.status_code in (302, 307), reply.text
         # 상류 인가 서버에는 LiteLLM 자신의 콜백만 알리고 클라이언트 주소는 상태에 봉인한다.
