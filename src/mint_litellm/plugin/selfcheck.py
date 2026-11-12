@@ -429,6 +429,7 @@ class PluginRuntime:
         except Exception:
             controlled = None
         view = self.view_collector()
+        await self._register_contract_tools(view)
         results = check_items(
             view,
             logger=self.logger,
@@ -464,6 +465,22 @@ class PluginRuntime:
             value = getattr(entry, name, None) if entry else None
             self._observed_hashes.setdefault(server_id, {})[name] = sha256(value)
         return results
+
+    async def _register_contract_tools(self, view: LiteLLMView) -> None:
+        """계약 도구를 이 워커의 도구 경로표에 올린다. 숨긴 도구의 직접 호출도 판정에 닿게 한다.
+
+        기동 점검과 주기 관측이 돌 때마다 한다. 실패하면 이전 등록을 유지하고 다음 주기에 다시 한다.
+        """
+        if view.missing_symbols:
+            return
+        try:
+            tools = await asyncio.wait_for(
+                self.database.contract_tools(self.config.instance_id),
+                self.config.decision_budget_seconds * 10,
+            )
+            compat.register_contract_tools(tools)
+        except Exception as exc:
+            log.warning("계약 도구 경로 등록 실패: %s", type(exc).__name__)
 
     async def verify(self) -> bool:
         # 기동 점검의 재시도(30초)가 판정 주기(60초)를 앞지르지 않도록 첫 판정만 여기서 한다.

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.metadata
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -221,6 +221,40 @@ def resolve_listed_server(hook: HookData, *, manager: Any = None) -> ResolvedSer
     return _to_resolved(matches[0], len(matches))
 
 
+def register_contract_tools(
+    tools_by_server: Mapping[str, Sequence[str]], *, manager: Any = None
+) -> int:
+    """관리 중인 서버의 계약 도구 이름을 이 워커의 도구 경로표에 올린다.
+
+    LiteLLM은 호출 때 MINT 훅보다 먼저 경로표로 서버를 풀고, 경로표는 그 워커가 목록으로 읽은
+    도구로만 채워진다. MINT가 목록에서 숨긴 도구는 어느 워커에도 올라가지 못해 호출이 판정에
+    닿기 전에 「찾을 수 없음」으로 끝난다. 목록 노출은 바꾸지 않고, 계약에 있는 이름만 목록
+    등록과 같은 철자·접두사 규칙으로 올린다. 이미 있는 항목은 다시 쓰지 않고, 다른 서버가
+    가진 철자는 건드리지 않는다. 새로 올린 철자 수를 돌려준다.
+    """
+    mgr = manager if manager is not None else global_manager()
+    utils = importlib.import_module(_UTILS_MODULE)
+    registry = importlib.import_module(
+        "litellm.proxy._experimental.mcp_server.tool_registry"
+    ).global_mcp_tool_registry
+    mapping = mgr.tool_name_to_mcp_server_name_mapping
+    added = 0
+    for server in mgr.get_registry().values():
+        prefix = utils.get_server_prefix(server)
+        for tool in tools_by_server.get(server.server_id, ()):
+            for spelling in utils.iter_known_tool_name_spellings(tool, server):
+                owner = mgr.server_owning_tool_name_prefix(spelling)
+                if owner is not None and owner.server_id != server.server_id:
+                    continue
+                if owner is None and registry.get_tool(spelling) is not None:
+                    continue
+                if spelling in mapping:
+                    continue  # 이미 올라가 있다: 같은 서버면 그대로, 다른 서버면 건드리지 않는다
+                mapping[spelling] = prefix
+                added += 1
+    return added
+
+
 @dataclass(frozen=True)
 class RegistryEntry:
     server_id: str
@@ -339,6 +373,14 @@ _REQUIRED_SYMBOLS: tuple[tuple[str, str], ...] = (
     (_MANAGER_MODULE, "global_mcp_server_manager._resolve_mcp_server_for_tool_call"),
     (_MANAGER_MODULE, "global_mcp_server_manager.get_registry"),
     (_MANAGER_MODULE, "global_mcp_server_manager.catalog"),
+    (_MANAGER_MODULE, "global_mcp_server_manager.tool_name_to_mcp_server_name_mapping"),
+    (_MANAGER_MODULE, "global_mcp_server_manager.server_owning_tool_name_prefix"),
+    (_UTILS_MODULE, "get_server_prefix"),
+    (_UTILS_MODULE, "iter_known_tool_name_spellings"),
+    (
+        "litellm.proxy._experimental.mcp_server.tool_registry",
+        "global_mcp_tool_registry.get_tool",
+    ),
     (_UTILS_MODULE, "normalize_server_name"),
     ("litellm.constants", "LITELLM_PROXY_MASTER_KEY_ALIAS"),
     ("litellm.secret_managers.main", "str_to_bool"),

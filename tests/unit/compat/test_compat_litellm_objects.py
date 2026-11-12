@@ -10,7 +10,10 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa:
     MCPServerManager,
     global_mcp_server_manager,
 )
-from litellm.proxy._experimental.mcp_server.utils import normalize_server_name  # noqa: E402
+from litellm.proxy._experimental.mcp_server.utils import (  # noqa: E402
+    add_server_prefix_to_name,
+    normalize_server_name,
+)
 from litellm.proxy._types import UserAPIKeyAuth  # noqa: E402
 from litellm.types.mcp import MCPAuth, MCPTransport  # noqa: E402
 from litellm.types.mcp_server.mcp_server_manager import MCPServer  # noqa: E402
@@ -142,3 +145,47 @@ def test_the_judgment_hook_is_defined_on_the_guardrail_class_and_not_on_the_logg
 
     assert "async_pre_call_hook" in vars(MintGuardrail)
     assert "async_pre_call_hook" not in vars(MintLogger)
+
+
+class TestRegisterContractTools:
+    def manager(self, *servers):
+        manager = MCPServerManager()
+        for server in servers:
+            manager.registry[server.server_id] = server
+        return manager
+
+    def test_contract_tools_are_mapped_to_their_server_and_nothing_else(self):
+        a = mcp_server("sa", "alpha", alias="alpha")
+        manager = self.manager(a)
+        added = compat.register_contract_tools({"sa": ("read", "wipe")}, manager=manager)
+        mapping = manager.tool_name_to_mcp_server_name_mapping
+        assert added > 0
+        assert mapping[add_server_prefix_to_name("wipe", "alpha")] == "alpha"
+        assert mapping[add_server_prefix_to_name("read", "alpha")] == "alpha"
+        assert not any("other" in spelling for spelling in mapping)
+        assert manager.server_exposes_tool(a, "wipe")
+        assert manager._resolve_mcp_server_for_tool_call("alpha", "wipe") is a
+
+    def test_a_second_run_changes_nothing(self):
+        manager = self.manager(mcp_server("sa", "alpha", alias="alpha"))
+        compat.register_contract_tools({"sa": ("read",)}, manager=manager)
+        before = dict(manager.tool_name_to_mcp_server_name_mapping)
+        assert compat.register_contract_tools({"sa": ("read",)}, manager=manager) == 0
+        assert manager.tool_name_to_mcp_server_name_mapping == before
+
+    def test_a_spelling_owned_by_another_server_is_left_alone(self):
+        manager = self.manager(
+            mcp_server("sa", "alpha", alias="alpha"), mcp_server("sb", "beta", alias="beta")
+        )
+        manager.tool_name_to_mcp_server_name_mapping["read"] = "beta"
+        compat.register_contract_tools({"sa": ("read",)}, manager=manager)
+        mapping = manager.tool_name_to_mcp_server_name_mapping
+        assert mapping["read"] == "beta"
+        assert mapping[add_server_prefix_to_name("read", "alpha")] == "alpha"
+
+    def test_servers_without_contract_names_add_nothing(self):
+        manager = self.manager(mcp_server("sa", "alpha", alias="alpha"))
+        assert compat.register_contract_tools({"unknown": ("read",)}, manager=manager) == 0
+        assert manager.tool_name_to_mcp_server_name_mapping == {}
+        with pytest.raises(ValueError, match="not found"):
+            manager._resolve_mcp_server_for_tool_call("alpha", "wipe")
