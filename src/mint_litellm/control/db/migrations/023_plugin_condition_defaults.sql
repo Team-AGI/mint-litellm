@@ -13,6 +13,7 @@ BEGIN
 EXCEPTION WHEN others THEN
     RETURN NULL;
 END $$;
+REVOKE ALL ON FUNCTION mint.contract_input_keys(text) FROM PUBLIC;
 
 ALTER TABLE mint.tool_contracts
     ADD COLUMN input_keys text[] GENERATED ALWAYS AS (mint.contract_input_keys(canonical_text)) STORED;
