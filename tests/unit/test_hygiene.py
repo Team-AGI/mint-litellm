@@ -57,6 +57,10 @@ FORBIDDEN = {
 }
 
 
+# MCP 프로토콜 판본 문자열은 날짜 꼴이지만 작업 흔적이 아니다.
+PROTOCOL_VERSIONS = re.compile(r"\b20(?:24-11-05|25-03-26|25-06-18|25-11-25|26-07-28)\b")
+
+
 def repo_files():
     for path in ROOT.rglob("*"):
         if any(part in SKIP_DIRS for part in path.relative_to(ROOT).parts):
@@ -76,7 +80,7 @@ def test_no_internal_traces(label):
         f"{path.relative_to(ROOT)}:{n}"
         for path in repo_files()
         for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
-        if pattern.search(line)
+        if pattern.search(PROTOCOL_VERSIONS.sub("", line) if label == "dated trace" else line)
     ]
     assert not hits, hits
 
