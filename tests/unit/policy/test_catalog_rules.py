@@ -39,3 +39,76 @@ def test_endpoint_policies_are_counted_only_where_a_rule_or_a_check_backs_them()
     # 실행 계약에 마운트·권한 필드가 없고 프로세스 점검이 없어 아직 세지 않는다.
     assert not {"POL-I-08", "POL-D-04"} & counted
     assert all(check["output"] == "alert" for check in catalog["checks"])
+
+
+# --- 구현 상태 집계(집계 원천은 이 카탈로그의 policies 절) -----------------------------
+
+CLASSES = {"unconditional", "conditional", "partial", "semi_auto_evidence"}
+
+
+def _policies():
+    return _catalog()["policies"]
+
+
+def _count(cls):
+    return sum(1 for p in _policies() if p["class"] == cls)
+
+
+def test_every_counted_policy_is_listed_once_with_a_known_class():
+    ids = [p["id"] for p in _policies()]
+    assert len(ids) == len(set(ids))
+    assert all(re.fullmatch(r"POL-[IREOD]-\d\d", i) for i in ids)
+    assert {p["class"] for p in _policies()} <= CLASSES
+    # 셌다고 하면서 집행 위치를 대지 못하는 항목은 없다.
+    assert all(p["enforced_by"] for p in _policies())
+    # 부분·조건부는 어디까지만 되는지 적어야 한다.
+    assert all(p.get("limit") for p in _policies() if p["class"] in {"conditional", "partial"})
+
+
+def test_enforcing_locations_point_inside_files_that_exist():
+    for policy in _policies():
+        for ref in policy["enforced_by"]:
+            path, _, line = ref.rpartition(":")
+            lines = (ROOT / path).read_text(encoding="utf-8").splitlines()
+            assert 1 <= int(line) <= len(lines), (policy["id"], ref)
+
+
+def test_the_five_class_count_is_pinned():
+    auto = _count("unconditional") + _count("conditional") + _count("partial")
+    # 2단계 완료 기준 42(확인 26·조건부 10·부분 6)에서 엔드포인트 4, 재사용 설정 점검 13,
+    # 3단계로 미룬 집행 4를 더한 값이다.
+    assert (_count("unconditional"), _count("conditional"), _count("partial")) == (34, 15, 14)
+    assert auto == 63
+    # 목표(90개 중 72개 이상) 산정은 반자동 수동 증거를 함께 센다.
+    assert _count("semi_auto_evidence") == 10
+    assert auto + _count("semi_auto_evidence") == 73
+
+
+def test_policies_that_are_not_counted_stay_out_of_the_count():
+    counted = {p["id"] for p in _policies()}
+    not_counted = {p["id"]: p["reason"] for p in _catalog()["not_counted"]}
+    assert not counted & set(not_counted)
+    # E-05는 도구 결과를 가리는 검사(#69)뿐이라 입력 쪽 정책을 집행한다고 세지 않는다.
+    assert {"POL-E-05", "POL-D-03", "POL-I-08", "POL-D-04"} == set(not_counted)
+    assert all(not_counted.values())
+
+
+def test_every_policy_backed_by_a_rule_or_a_check_is_counted():
+    catalog = _catalog()
+    refs = {p for e in catalog["rules"] + catalog["checks"] for p in e["reference_policies"]}
+    counted = {p["id"] for p in _policies()}
+    assert {r for r in refs if r.startswith("POL-")} <= counted
+
+
+def test_the_reuse_policies_counted_are_the_ones_the_self_check_maps():
+    from mint_litellm.types.settings import REUSE_POLICIES
+
+    reuse = {p["id"] for p in _policies() if p["pr"] == 65}
+    assert reuse == set(REUSE_POLICIES)
+
+
+def test_the_semi_automated_evidence_policies_are_the_evidence_kinds():
+    from mint_litellm.control.services.evidence import KINDS
+
+    evidence = {p["id"] for p in _policies() if p["class"] == "semi_auto_evidence"}
+    assert evidence == {kind.policy for kind in KINDS.values()}
