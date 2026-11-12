@@ -78,7 +78,7 @@ def test_init_creates_the_default_org_settings_and_prints_the_snippet(mint):
     path = mint.tmp / "snippet.yaml"
     code, out, err = mint.run("init", "--mcp-server", "docs=http://u.test/mcp",
                               "--out", str(path))
-    assert code == 0 and "마이그레이션 적용" in err and "allowed_routes" in err
+    assert code == 0 and "마이그레이션 적용" in err and "제어 평면 키 저장됨" in err
     assert "server_id: docs" in path.read_text(encoding="utf-8")
     again, _, err = mint.run("init")
     assert again == 0 and "이미 최신" in err

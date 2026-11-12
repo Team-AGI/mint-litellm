@@ -12,5 +12,5 @@
 <td>{% if s.deployment_drift or s.drifted %}<span class="badge error"><span class="icon" aria-hidden="true">▲</span>변경됨</span>{% elif s.contract_status == 'managed' %}<span class="badge ok"><span class="icon" aria-hidden="true">✓</span>일치</span>{% else %}—{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
-{% else %}{{ m.empty('등록된 MCP 서버가 없습니다', '/', '개요로 이동') }}{% endif %}
+{% else %}{{ m.empty('등록된 MCP 서버가 없습니다', '/intakes', '신청 목록 보기') }}{% endif %}
 {% endblock %}

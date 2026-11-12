@@ -113,7 +113,8 @@ def test_command_table_is_unique_and_documented():
 
 
 def test_only_first_setup_commands_run_without_a_token():
-    assert [c.name for c in COMMANDS if c.unauthenticated] == ["init", "operator bootstrap"]
+    names = [c.name for c in COMMANDS if c.unauthenticated]
+    assert names == ["init", "doctor", "operator bootstrap"]
     for command in COMMANDS:
         assert command.unauthenticated == (not command.roles)
 

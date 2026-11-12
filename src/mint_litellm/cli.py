@@ -8,6 +8,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -30,6 +31,7 @@ from mint_litellm.control import (
     policy_versions,
     secrets_file,
     status,
+    todo,
     worker,
 )
 from mint_litellm.control.config import ControlConfig
@@ -39,6 +41,7 @@ from mint_litellm.control.db.migrate import apply_migrations
 from mint_litellm.control.db.roles import LOGIN_PASSWORD_VARIABLES, LOGIN_ROLES, ensure_login_roles
 from mint_litellm.control.errors import AuthError, ControlError
 from mint_litellm.control.litellm_admin import LiteLLMAdmin
+from mint_litellm.control.litellm_control import STAGE2_ALLOWED_ROUTES
 from mint_litellm.control.services import alerts as alert_service
 from mint_litellm.control.services import allowlists as allowlist_service
 from mint_litellm.control.services import approvals as approval_service
@@ -187,14 +190,15 @@ def _init(run: Run) -> None:
             "역할을 쓰도록 MINT_PLUGIN_DB_PASSWORD·MINT_CONTROL_DB_PASSWORD를 지정하십시오.",
             file=log,
         )
-    print(
-        "제어 평면 LiteLLM 키는 proxy_admin 사용자 키로 발급하고 allowed_routes를 다음으로 "
-        "제한하십시오:\n  "
-        + ", ".join(CONTROL_PLANE_ALLOWED_ROUTES)
-        + "\n그 값을 MINT_LITELLM_KEY로 설정한 뒤 init을 다시 실행하면 이 키가 도구 목록 면제 "
-        "키로 저장됩니다(바꿀 때는 settings control-key).",
-        file=log,
-    )
+    if not run.cfg.litellm_key:
+        print(
+            "제어 평면 LiteLLM 키가 없습니다. deploy/mint.sh up이 자동으로 만들어 넣습니다. "
+            "직접 발급하려면 proxy_admin 사용자 키에 allowed_routes를 다음으로 제한하십시오:\n  "
+            + ", ".join([*CONTROL_PLANE_ALLOWED_ROUTES, *STAGE2_ALLOWED_ROUTES])
+            + "\n그 값을 MINT_LITELLM_KEY로 설정한 뒤 init을 다시 실행하면 이 키가 도구 목록 면제 "
+            "키로 저장됩니다(바꿀 때는 settings control-key).",
+            file=log,
+        )
     notes = {
         "set": "제어 평면 키 저장됨: 서버 승인 때 도구 고정이 이 키로 동작합니다.",
         "differs": "저장된 제어 평면 키와 MINT_LITELLM_KEY가 다릅니다. 바꾸려면 settings "
@@ -292,24 +296,60 @@ def _status(run: Run) -> None:
         run.failure_code = 3
 
 
-def _issued(run: Run, token: str) -> None:
+def _issue_token(run: Run, issue: Callable[[], str]) -> None:
+    """토큰을 발급해 알린다. ``--save-token``이면 화면에 보이지 않고 0600 파일로만 받는다.
+
+    파일은 운영자를 등록하기 전에 만들어 두므로 경로가 막혀 있으면 운영자를 만들지 않는다.
+    """
+    given = getattr(run.args, "save_token", None)
+    path = Path(given) if given else None
+    if path:
+        secrets_file.reserve_private(path)
+    try:
+        token = issue()
+        if path:
+            secrets_file.fill_private(path, token)
+    except BaseException:
+        if path:
+            path.unlink(missing_ok=True)
+        raise
+    if path:
+        run.data["token_file"] = given
+        run.say(f"토큰을 {given}에 저장했습니다. 이 파일을 --token-file로 주면 인증됩니다.")
+        return
     run.data["token"] = token
     run.say(f"발급된 토큰(다시 표시되지 않습니다): {token}")
 
 
+def _doctor(run: Run) -> None:
+    items = todo.collect(run.conn, run.cfg.instance_id)
+    if not (run.cfg.litellm_url and run.cfg.litellm_key):
+        what = "이 환경에 MINT_LITELLM_URL·MINT_LITELLM_KEY가 없어 LiteLLM 읽기 명령이 실패합니다"
+        fix = "deploy/mint.sh cli ... 로 실행하거나 두 환경 변수를 설정하십시오"
+        items.insert(0, {"what": what, "next": fix})
+    run.data["todo"] = items
+    run.say(todo.render(items))
+
+
 def _operator_add(run: Run) -> None:
     a = run.args
-    token = operator_service.add(
-        run.context(), run.litellm(), a.name, OperatorRole(a.role), a.user_id, a.expires_in_days
+    _issue_token(
+        run,
+        lambda: operator_service.add(
+            run.context(), run.litellm(), a.name, OperatorRole(a.role), a.user_id,
+            a.expires_in_days,
+        ),
     )
-    _issued(run, token)
 
 
 def _operator_bootstrap(run: Run) -> None:
-    token = operator_service.bootstrap(
-        run.conn, run.cfg.instance_id, run.litellm(), run.args.name, run.args.user_id, run.emitted
+    _issue_token(
+        run,
+        lambda: operator_service.bootstrap(
+            run.conn, run.cfg.instance_id, run.litellm(), run.args.name, run.args.user_id,
+            run.emitted,
+        ),
     )
-    _issued(run, token)
 
 
 def _second(run: Run) -> Operator | None:
@@ -658,6 +698,7 @@ HANDLERS: dict[str, Handler] = {
     "init": _init,
     "check": _check,
     "status": _status,
+    "doctor": _doctor,
     "operator add": _operator_add,
     "operator bootstrap": _operator_bootstrap,
     "operator remove": _done(operator_service.remove, "name"),
@@ -745,6 +786,7 @@ _ENV_FILE = _a("--env-file", help="LiteLLM 환경 파일(KEY=VALUE)")
 _SECOND = _a("--second-approver", help="요청자와 다른 사용자의 운영자 토큰(또는 @파일)")
 _SERVER_ID = _a("server_id", help="LiteLLM 서버 식별자")
 _ALERT_ID = _a("alert_id", help="경보 식별자")
+_SAVE_TOKEN = _a("--save-token", help="토큰을 화면에 보이지 않고 이 경로에 0600 파일로 저장")
 
 
 ARGUMENTS: dict[str, list[Any]] = {
@@ -779,13 +821,17 @@ ARGUMENTS: dict[str, list[Any]] = {
     ],
     "check": [_CONFIG, _ENV_FILE],
     "status": [_CONFIG, _ENV_FILE],
+    "doctor": [],
     "operator add": [
         _a("name"),
         _a("--role", required=True, choices=[r.value for r in OperatorRole]),
         _a("--user-id", help="LiteLLM 사용자 식별자(admin·approver 필수)"),
         _a("--expires-in-days", type=int),
+        _SAVE_TOKEN,
     ],
-    "operator bootstrap": [_a("--name", required=True), _a("--user-id", required=True)],
+    "operator bootstrap": [
+        _a("--name", required=True), _a("--user-id", required=True), _SAVE_TOKEN,
+    ],
     "operator remove": [_a("name")],
     "operator set-role": [
         _a("name"), _a("--role", required=True, choices=[r.value for r in OperatorRole])
@@ -1062,6 +1108,61 @@ def _result(run: Run, command: CliCommand) -> dict[str, Any]:
     return result
 
 
+# 목록에 나온 식별자를 끝 8자리(또는 앞부분)만으로 가리킬 수 있는 인자. 인자 이름 -> 표
+ID_ARGUMENTS = {
+    "alert_id": "alerts",
+    "intake_id": "intakes",
+    "call_approval_id": "call_approvals",
+    "grant_id": "litellm_grants",
+    "approval_id": "approvals",
+    "denial_id": "denials",
+    "consent_id": "consents",
+    "allowlist_id": "allowlists",
+}
+_SHORT_ID = re.compile(r"[0-9a-fA-F-]{6,35}")
+
+
+def expand_ids(run: Run) -> None:
+    """식별자 인자가 전체 형식이 아니면 이 배치에서 앞이나 끝이 일치하는 한 건으로 바꾼다.
+
+    일치하는 것이 없으면 그대로 두어 서비스가 없다고 알리고, 둘 이상이면 더 길게 입력하라고 한다.
+    """
+    for name, table in ID_ARGUMENTS.items():
+        value = getattr(run.args, name, None)
+        if not isinstance(value, str) or not _SHORT_ID.fullmatch(value):
+            continue
+        found = fetchall(
+            run.conn,
+            f"SELECT id::text AS id FROM mint.{table} WHERE instance_id = %s"
+            " AND (id::text LIKE %s OR id::text LIKE %s) LIMIT 2",
+            (run.cfg.instance_id, value.lower() + "%", "%" + value.lower()),
+        )
+        if len(found) > 1:
+            raise ControlError(f"{value}과(와) 일치하는 식별자가 둘 이상입니다. 더 길게 쓰십시오.")
+        if found:
+            setattr(run.args, name, found[0]["id"])
+
+
+def _missing_token_message(conn: psycopg.Connection, instance_id: str) -> str:
+    """토큰이 없을 때 다음에 할 일까지 알린다. 운영자가 없으면 첫 관리자를 만드는 명령을 낸다."""
+    try:
+        has_operator = fetchall(
+            conn, "SELECT 1 AS x FROM mint.operators WHERE instance_id = %s LIMIT 1", (instance_id,)
+        )
+    except psycopg.errors.UndefinedTable:
+        conn.rollback()
+        return "데이터베이스가 준비되지 않았습니다. 먼저 mint-litellm init을 실행하십시오."
+    if not has_operator:
+        return (
+            "운영자가 아직 없습니다. 첫 관리자를 만드십시오: mint-litellm operator bootstrap "
+            "--name <이름> --user-id <LiteLLM 사용자> --save-token <파일>"
+        )
+    return (
+        "운영자 토큰이 필요합니다(MINT_OPERATOR_TOKEN 또는 --token-file). "
+        "토큰은 관리자가 operator add로 발급합니다."
+    )
+
+
 def run_command(args: argparse.Namespace, environ: dict[str, str]) -> None:
     command = COMMAND_INDEX[args.command_name]
     cfg = ControlConfig.from_env(environ)
@@ -1070,11 +1171,16 @@ def run_command(args: argparse.Namespace, environ: dict[str, str]) -> None:
         if command.name == "init":
             ctx = Context(conn, cfg.instance_id, Operator("init", "admin", None))
         elif not command.unauthenticated:
-            operator = operators.authenticate(conn, cfg.instance_id, _token(args, environ))
+            token = _token(args, environ)
+            if not token:
+                raise AuthError(_missing_token_message(conn, cfg.instance_id))
+            operator = operators.authenticate(conn, cfg.instance_id, token)
             if OperatorRole(operator.role) not in command.roles:
                 raise AuthError(f"{command.name}은(는) {operator.role} 역할로 실행할 수 없습니다.")
             ctx = Context(conn, cfg.instance_id, operator)
         run = Run(args, cfg, environ, conn, ctx)
+        if ctx is not None:
+            expand_ids(run)
         extra = {**cli_restore.HANDLERS, **cli_evidence.HANDLERS}
         (HANDLERS.get(command.name) or extra[command.name])(run)
     if args.json:
