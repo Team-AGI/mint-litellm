@@ -587,6 +587,10 @@ def intake_page(request: Request, actor: Actor, intake_id: str, error=None, stat
         "can_assign": actor.config.litellm_admin is not None, "error": error,
         "evidence": evidence_service.show(actor.ctx, "intake", intake_id),
     }
+    ctx["lacking"] = [
+        e["label"] for e in ctx["evidence"]
+        if e["gate"] == "approve" and e["state"] in ("missing", "expired")
+    ]
     return render(request, "intake_detail.html", ctx, actor=actor, status=status)
 
 

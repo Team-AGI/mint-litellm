@@ -65,8 +65,11 @@ def kind_of(key: str) -> Kind:
         raise ControlError(f"알 수 없는 증빙 종류입니다: {key}") from None
 
 
-def dedup_key(kind: str, subject_id: str) -> str:
-    return f"evidence:{kind}:{subject_id}"[:512]
+def group_key(subject_kind: str, subject_id: str, server_id: str) -> str:
+    """경보 묶음 키. 신청·서버 증빙은 서버마다 한 건, 이용 관계는 관계마다 한 건이다."""
+    if subject_kind == "relation":
+        return f"evidence:relation:{subject_id}"[:512]
+    return f"evidence:server:{server_id}"[:512]
 
 
 def state_of(row: dict | None, now: datetime) -> str:
@@ -122,15 +125,17 @@ def require(ctx: Context, gate: str, subject_kind: str, subject_id: str) -> None
         )
 
 
-def _check_subject(ctx: Context, kind: Kind, subject_id: str) -> None:
+def _check_subject(ctx: Context, kind: Kind, subject_id: str) -> str:
+    """대상이 있는지 확인하고 그 대상의 서버 식별자를 돌려준다."""
     table, column = _SUBJECT_TABLE[kind.subject]
     row = fetchone(
         ctx.conn,
-        f"SELECT 1 AS x FROM mint.{table} WHERE instance_id = %s AND {column} = %s",
+        f"SELECT server_id FROM mint.{table} WHERE instance_id = %s AND {column} = %s",
         (ctx.instance_id, subject_id),
     )
     if row is None:
         raise not_found(f"{subject_id} 대상이 없습니다.")
+    return row["server_id"]
 
 
 def attach(
@@ -166,7 +171,7 @@ def attach(
         raise ControlError(f"{kind.label}의 유효 기한은 {kind.days}일을 넘을 수 없습니다.")
     row_id = new_uuid7()
     with transact(ctx):
-        _check_subject(ctx, kind, subject_id)
+        server_id = _check_subject(ctx, kind, subject_id)
         ctx.conn.execute(
             "INSERT INTO mint.policy_evidence (id, instance_id, kind, subject_kind, subject_id,"
             " result, summary, document_ref, document_sha256, attached_by, valid_until)"
@@ -175,7 +180,8 @@ def attach(
              "not_applicable" if not_applicable else "confirmed", summary, ref, sha256,
              ctx.operator.name, valid_until),
         )
-        alerts.resolve(ctx.conn, ctx.instance_id, dedup_key(kind.key, subject_id))
+        # 묶음 경보는 닫고, 남은 누락은 다음 확인 작업이 최신 목록으로 다시 연다
+        alerts.resolve(ctx.conn, ctx.instance_id, group_key(kind.subject, subject_id, server_id))
         ctx.emit(
             EventKind.EVIDENCE_ATTACHED, row_id, 1,
             {"kind": kind.key, "policy": kind.policy, "subject_kind": kind.subject,
@@ -224,11 +230,11 @@ def _subjects(conn: Any, instance_id: str) -> list[tuple[str, str, str, str]]:
 def scan_alerts(conn: Any, instance_id: str) -> int:
     """필수 자리의 증빙이 없거나 기한이 지났거나 7일 안에 끝나면 경보를 연다. 새로 연 수를 돌려준다.
 
-    대상은 승인된 신청, 승인된 관리 서버(주기 확인 증빙), 종료 중인 이용 관계다. 증빙을 붙이면
-    ``attach``가 경보를 닫는다.
+    대상은 승인된 신청, 승인된 관리 서버(주기 확인 증빙), 종료 중인 이용 관계다. 경보는 서버마다
+    한 건(이용 관계는 관계마다 한 건)이고, 정책별 누락은 경보 본문의 ``items``에 담긴다.
     """
     now = datetime.now(UTC)
-    opened = 0
+    groups: dict[str, dict[str, Any]] = {}
     for subject_kind, subject_id, server_id, gate in _subjects(conn, instance_id):
         rows = current(conn, instance_id, subject_kind, subject_id)
         for kind in _KIND_LIST:
@@ -237,15 +243,21 @@ def scan_alerts(conn: Any, instance_id: str) -> int:
             state = state_of(rows.get(kind.key), now)
             if state in ("valid", "not_applicable"):
                 continue
-            with conn.transaction():
-                opened += alerts.raise_alert(
-                    conn, instance_id,
-                    kind="evidence_missing" if state == "missing" else "evidence_expiring",
-                    severity="medium", dedup_key=dedup_key(kind.key, subject_id),
-                    subject={"evidence": kind.key, "label": kind.label,
-                             "subject_kind": subject_kind, "subject_id": subject_id,
-                             "server_id": server_id, "state": state,
-                             "valid_until": rows[kind.key]["valid_until"].isoformat()
-                             if kind.key in rows and rows[kind.key]["valid_until"] else None},
-                )
+            until = rows[kind.key]["valid_until"] if kind.key in rows else None
+            key = group_key(subject_kind, subject_id, server_id)
+            group = groups.setdefault(key, {"server_id": server_id, "items": []})
+            group["items"].append(
+                {"evidence": kind.key, "label": kind.label, "subject_kind": subject_kind,
+                 "subject_id": subject_id, "state": state,
+                 "valid_until": until.isoformat() if until else None}
+            )
+    opened = 0
+    for key, group in groups.items():
+        missing_any = any(i["state"] == "missing" for i in group["items"])
+        with conn.transaction():
+            opened += alerts.raise_alert(
+                conn, instance_id,
+                kind="evidence_missing" if missing_any else "evidence_expiring",
+                severity="medium", dedup_key=key, subject=group,
+            )
     return opened

@@ -2106,12 +2106,29 @@ def test_scan_alerts_on_missing_evidence_and_attaching_closes_the_alert(world):
     world.conn.execute("DELETE FROM mint.policy_evidence")
     assert evidence.scan_alerts(world.conn, INSTANCE) > 0
     rows = fetchall(world.conn, "SELECT * FROM mint.alerts WHERE kind = 'evidence_missing'")
-    assert {r["subject"]["evidence"] for r in rows} >= {"trial_call", "access_recheck"}
+    assert len(rows) == 1  # 서버마다 한 건, 정책별 누락은 본문에
+    assert {i["evidence"] for i in rows[0]["subject"]["items"]} >= {"trial_call", "access_recheck"}
     assert evidence.scan_alerts(world.conn, INSTANCE) == 0  # 같은 경보는 다시 열지 않는다
     attach(world, "trial_call", intake_id)
-    closed = fetchone(world.conn, "SELECT status FROM mint.alerts WHERE dedup_key = %s",
-                      (evidence.dedup_key("trial_call", intake_id),))
-    assert closed["status"] == "resolved"
+    assert rows[0]["status"] != "resolved"
+    assert fetchone(world.conn, "SELECT status FROM mint.alerts WHERE id = %s",
+                    (rows[0]["id"],))["status"] == "resolved"
+    assert evidence.scan_alerts(world.conn, INSTANCE) == 1  # 남은 누락으로 다시 열린다
+    again = fetchone(world.conn, "SELECT subject FROM mint.alerts WHERE status <> 'resolved'")
+    assert "trial_call" not in {i["evidence"] for i in again["subject"]["items"]}
+
+
+def test_an_exception_approval_is_allowed_without_evidence_but_records_what_is_missing(world):
+    intake_id = passed(world)
+    from mint_litellm.control.context import Operator
+
+    intake_id = passed(world, readiness={**READINESS, "audit_access_days": 0})
+    second = Operator("boss2", "approver", "boss-2")
+    world.decide(intake_id, "except", reason="일시 허용", second=second)
+    approval = fetchone(world.conn, "SELECT basis FROM mint.approvals")
+    assert "trial_call" in approval["basis"]["missing_evidence"]
+    event = world.events("intake_decided")[0]
+    assert "trial_call" in event["payload"]["missing_evidence"]
 
 
 def test_a_relation_cannot_finish_termination_without_deletion_proof(world):

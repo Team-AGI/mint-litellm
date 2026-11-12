@@ -966,10 +966,14 @@ def _approve(
     allowlist_ids = sorted(
         {a for c in checks for a in (c["inputs"] or {}).get("allowlist_ids", [])}
     )
+    # 예외 승인은 증빙이 없어도 막지 않되, 누락을 결정 기록에 남긴다
+    lacking = ([e["key"] for e in evidence.missing(ctx, "approve", "intake", str(row["id"]))]
+               if decision == "except" else [])
     updated = _decided(
         ctx, row, "exception" if decision == "except" else "approved",
         reason or "수용검증 통과",
-        {"second_approver": None if second_info is None else second_info["name"]},
+        {"second_approver": None if second_info is None else second_info["name"],
+         **({"missing_evidence": lacking} if lacking else {})},
     )
     # 후보 계약 승인
     for tool in tools:
@@ -1019,6 +1023,8 @@ def _approve(
              "allowlist_ids": allowlist_ids}
     if second_info:
         basis["second_approver"] = second_info["name"]
+    if lacking:
+        basis["missing_evidence"] = lacking
     approval_id = new_uuid7()
     ctx.conn.execute(
         "INSERT INTO mint.approvals (id, instance_id, org_id, relation_id, class, server_id, tools,"
