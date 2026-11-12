@@ -61,6 +61,27 @@ def _read_private(path: Path) -> str:
         raise ControlError(f"비밀 파일 {path}을(를) 읽을 수 없습니다: {error}") from None
 
 
+def reserve_private(path: Path) -> None:
+    """없는 파일을 0600으로 비워 둔 채 만든다. 이미 있으면 덮어쓰지 않고 거부한다."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+    except FileExistsError:
+        raise ControlError(
+            f"{path}이(가) 이미 있어 덮어쓰지 않습니다. 다른 경로를 쓰십시오."
+        ) from None
+    except OSError as error:
+        raise ControlError(f"{path}을(를) 만들 수 없습니다: {error}") from None
+
+
+def fill_private(path: Path, text: str) -> None:
+    """``reserve_private``로 만든 파일에 한 줄을 쓴다."""
+    try:
+        path.write_text(text + "\n", encoding="utf-8", newline="\n")
+    except OSError as error:
+        raise ControlError(f"{path}을(를) 쓸 수 없습니다: {error}") from None
+
+
 def _parse(text: str) -> dict[str, str]:
     found: dict[str, str] = {}
     for line in text.splitlines():

@@ -92,6 +92,12 @@ COMMANDS: tuple[CliCommand, ...] = (
         litellm_reads=("/v1/mcp/server", "/key/list", "/team/list"),
     ),
     CliCommand(
+        path=("doctor",),
+        summary="비어 있거나 기다리는 일과 다음에 실행할 명령을 보인다(토큰 불필요, 읽기 전용).",
+        roles=frozenset(),
+        unauthenticated=True,
+    ),
+    CliCommand(
         path=("operator", "add"),
         summary="운영자를 등록하고 토큰을 발급한다. `admin`·`approver`는 LiteLLM 사용자 식별자 "
         "(`--user-id`) 결속이 필수이다.",

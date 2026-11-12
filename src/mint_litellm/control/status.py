@@ -3,7 +3,7 @@
 from datetime import timedelta
 from typing import Any
 
-from mint_litellm.control import approvals, checks, settings_store
+from mint_litellm.control import approvals, checks, settings_store, todo
 from mint_litellm.control.config import ControlConfig
 from mint_litellm.control.context import Context
 from mint_litellm.control.db.connection import fetchall, fetchone
@@ -81,6 +81,7 @@ def collect(
         "servers": servers,
         "enforcement": enforcement_states(ctx),
         "alerts": alerts,
+        "todo": todo.collect(ctx.conn, ctx.instance_id),
         "observations": {name: observations.get(name, "확인 불가") for name in OBSERVATION_ITEMS},
     }
 
@@ -197,4 +198,6 @@ def render(info: dict[str, Any]) -> str:
             )
     lines.append("관측 항목")
     lines.extend(f"  {k}: {v}" for k, v in info["observations"].items())
+    if info.get("todo"):
+        lines.append(todo.render(info["todo"]))
     return "\n".join(lines)

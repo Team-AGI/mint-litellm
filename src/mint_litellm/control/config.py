@@ -10,6 +10,10 @@ from mint_litellm.control.litellm_admin import LiteLLMAdmin
 from mint_litellm.control.litellm_control import LiteLLMControl
 from mint_litellm.types.settings import Mode
 
+_LITELLM_NEEDED = (
+    "MINT_LITELLM_URL과 MINT_LITELLM_KEY가 필요합니다. deploy/mint.sh up이 제어 평면 키를 "
+    "만들어 넣으므로 deploy/mint.sh cli로 실행하거나, 직접 실행하면 두 환경 변수를 설정하십시오."
+)
 _IDENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
@@ -49,15 +53,18 @@ class ControlConfig:
 
     def require_database(self) -> str:
         if not self.database_url:
-            raise ControlError("MINT_DATABASE_URL이 설정되어 있지 않습니다.")
+            raise ControlError(
+                "MINT_DATABASE_URL이 설정되어 있지 않습니다. 배포 환경에서는 deploy/mint.sh cli로 "
+                "실행하면 접속 정보가 채워집니다."
+            )
         return self.database_url
 
     def litellm_control(self) -> LiteLLMControl:
         if not self.litellm_url or not self.litellm_key:
-            raise ControlError("MINT_LITELLM_URL과 MINT_LITELLM_KEY가 필요합니다.")
+            raise ControlError(_LITELLM_NEEDED)
         return LiteLLMControl(self.litellm_url, self.litellm_key)
 
     def litellm(self) -> LiteLLMAdmin:
         if not self.litellm_url or not self.litellm_key:
-            raise ControlError("MINT_LITELLM_URL과 MINT_LITELLM_KEY가 필요합니다.")
+            raise ControlError(_LITELLM_NEEDED)
         return LiteLLMAdmin(self.litellm_url, self.litellm_key)

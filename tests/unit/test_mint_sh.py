@@ -180,7 +180,9 @@ ISSUER_DOCKER = (
 )
 
 
-def up_with_issuer(tmp_path, command="up", docker_tail=ISSUER_DOCKER, existing=None):
+def up_with_issuer(
+    tmp_path, command="up", docker_tail=ISSUER_DOCKER, existing=None, existing_control=None
+):
     deploy = tmp_path / "deploy"
     deploy.mkdir(parents=True, exist_ok=True)
     (deploy / "litellm.config.example.yaml").write_text("{}\n", encoding="utf-8")
@@ -188,6 +190,8 @@ def up_with_issuer(tmp_path, command="up", docker_tail=ISSUER_DOCKER, existing=N
     secrets.mkdir(parents=True, exist_ok=True)
     if existing:
         (secrets / "kit_issuer.key").write_text(existing + "\n", encoding="utf-8")
+    if existing_control:
+        (secrets / "control.key").write_text(existing_control + "\n", encoding="utf-8")
     env = f"POSTGRES_PASSWORD=x\nLITELLM_MASTER_KEY=sk-master\nMINT_SECRETS_DIR={secrets}\n"
     result, _, _ = run(tmp_path, env, command, docker_tail=docker_tail)
     log = (tmp_path / "docker.log").read_text(encoding="utf-8")
@@ -207,10 +211,10 @@ def test_up_and_upgrade_make_the_kit_issuer_key_once_and_hand_it_to_the_console(
     # 마스터 키는 인자가 아니라 환경으로 가고, 만드는 키는 두 경로만 연다.
     assert "sk-master" not in log and "-e LITELLM_MASTER_KEY" in log
     script = SCRIPT.read_text(encoding="utf-8")
-    assert '"allowed_routes": ["/key/generate", "/key/delete"]' in script
+    assert 'routes = ["/key/generate", "/key/delete"]' in script
     # 이미 있으면 다시 만들지 않고 그대로 넘긴다.
     again, second_log, _ = up_with_issuer(
-        tmp_path / "again", command, existing="sk-existing"
+        tmp_path / "again", command, existing="sk-existing", existing_control="sk-control"
     )
     assert again.returncode == 0, again.stderr
     assert "key/generate" not in second_log and "console-sees:sk-existing" in second_log
@@ -221,3 +225,101 @@ def test_a_failed_issuer_key_does_not_stop_the_stack_and_leaves_no_file(tmp_path
     assert result.returncode == 0, result.stderr
     assert not key_file.exists() and "다시 시도합니다" in result.stderr
     assert "--profile console up -d console" in log
+
+
+CONTROL_DOCKER = (
+    'case "$*" in\n'
+    '  *"key/generate"*) all="$*"; rest="${all#*KEY_KIND=}"; echo "sk-issued-${rest%% *}";;\n'
+    '  *"up -d worker"*) echo "worker-sees:$MINT_LITELLM_KEY" >> "$FAKE_DOCKER_LOG";;\n'
+    "esac\n"
+)
+
+
+@pytest.mark.parametrize("command", ["up", "upgrade"])
+def test_up_and_upgrade_make_the_control_key_once_store_it_and_hand_it_to_the_worker(
+    tmp_path, command
+):
+    result, log, _ = up_with_issuer(tmp_path, command, docker_tail=CONTROL_DOCKER)
+    assert result.returncode == 0, result.stderr
+    key_file = tmp_path / "secrets" / "control.key"
+    assert key_file.read_text(encoding="utf-8") == "sk-issued-control\n"
+    if os.name != "nt":
+        assert stat.S_IMODE(key_file.stat().st_mode) == 0o600
+    assert "worker-sees:sk-issued-control" in log
+    assert "KEY_KIND=control" in log and "KEY_KIND=kit" in log
+    assert "sk-issued-control" not in log.replace("worker-sees:sk-issued-control", "")
+    # 키를 만든 뒤 init을 다시 실행해 면제 키로 저장하고, 키 값은 인자가 아니라 환경으로 간다.
+    assert log.count("init --out") == 2 and "-e MINT_LITELLM_KEY" in log
+    # 이미 있으면 다시 만들지 않는다.
+    again, second, _ = up_with_issuer(
+        tmp_path / "again", command, docker_tail=CONTROL_DOCKER,
+        existing="sk-kit", existing_control="sk-existing-control",
+    )
+    assert again.returncode == 0, again.stderr
+    assert "KEY_KIND" not in second and second.count("init --out") == 1
+    assert "worker-sees:sk-existing-control" in second
+
+
+def test_a_key_in_the_env_file_wins_over_the_stored_control_key(tmp_path):
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    (secrets / "control.key").write_text("sk-stored\n", encoding="utf-8")
+    (secrets / "kit_issuer.key").write_text("sk-kit\n", encoding="utf-8")
+    (tmp_path / "deploy").mkdir()
+    (tmp_path / "deploy" / "litellm.config.example.yaml").write_text("{}\n", encoding="utf-8")
+    env = (f"POSTGRES_PASSWORD=x\nMINT_SECRETS_DIR={secrets}\nMINT_LITELLM_KEY=sk-from-env\n")
+    result, _, _ = run(tmp_path, env, "up", docker_tail=CONTROL_DOCKER)
+    assert result.returncode == 0, result.stderr
+    log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+    assert "worker-sees:sk-stored" not in log
+    assert "KEY_KIND" not in log
+
+
+BOOTSTRAP_DOCKER = (
+    'case "$*" in\n'
+    '  *"operator bootstrap"*) echo \'{"ok": true, "token": "mint_op-1_x", "id": "boss"}\';;\n'
+    '  *"cli-token-sees"*) ;;\n'
+    '  *" status"*) echo "status-token:$MINT_OPERATOR_TOKEN" >> "$FAKE_DOCKER_LOG";;\n'
+    '  *" doctor"*) echo "doctor-ran" >> "$FAKE_DOCKER_LOG";;\n'
+    "esac\n"
+)
+
+
+def test_bootstrap_stores_the_first_admin_token_and_later_commands_use_it(tmp_path):
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    env = f"POSTGRES_PASSWORD=x\nMINT_SECRETS_DIR={secrets}\n"
+    before, _, _ = run(tmp_path, env, "status", docker_tail=BOOTSTRAP_DOCKER)
+    assert before.returncode == 0, before.stderr
+    assert "doctor-ran" in (tmp_path / "docker.log").read_text(encoding="utf-8")
+    result, _, _ = run(tmp_path, env, "bootstrap", "boss", "human-1", docker_tail=BOOTSTRAP_DOCKER)
+    assert result.returncode == 0, result.stderr
+    token_file = secrets / "operator.token"
+    assert token_file.read_text(encoding="utf-8") == "mint_op-1_x\n"
+    if os.name != "nt":
+        assert stat.S_IMODE(token_file.stat().st_mode) == 0o600
+    assert "mint_op-1_x" not in result.stdout + result.stderr
+    log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+    assert "--json operator bootstrap --name boss --user-id human-1" in log
+    assert "policy activate initial" in log
+    run(tmp_path, env, "status", docker_tail=BOOTSTRAP_DOCKER)
+    assert "status-token:mint_op-1_x" in (tmp_path / "docker.log").read_text(encoding="utf-8")
+
+
+def test_bootstrap_refuses_a_second_time_and_without_arguments(tmp_path):
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    (secrets / "operator.token").write_text("mint_old\n", encoding="utf-8")
+    env = f"POSTGRES_PASSWORD=x\nMINT_SECRETS_DIR={secrets}\n"
+    again, _, _ = run(tmp_path, env, "bootstrap", "boss", "human-1")
+    assert again.returncode != 0 and "이미 있습니다" in again.stderr
+    assert (secrets / "operator.token").read_text(encoding="utf-8") == "mint_old\n"
+    (tmp_path / "other").mkdir()
+    usage, _, _ = run(tmp_path / "other", env, "bootstrap")
+    assert usage.returncode != 0 and "사용법" in usage.stderr
+
+
+def test_up_tells_the_next_step_for_a_first_install(tmp_path):
+    result, _, _ = up_with_issuer(tmp_path, docker_tail="")
+    assert result.returncode == 0, result.stderr
+    assert "./mint.sh bootstrap <이름>" in result.stdout

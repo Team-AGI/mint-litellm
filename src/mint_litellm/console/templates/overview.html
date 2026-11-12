@@ -3,9 +3,10 @@
 {% block body %}
 <h1>개요</h1>
 <div class="cards">
-  <div class="card"><div class="value">{{ o.pending_servers }}</div><div class="label">승인 대기 서버</div></div>
-  <div class="card"><div class="value">{{ o.pending_calls }}</div><div class="label">응답 대기 호출별 승인</div></div>
-  <div class="card"><div class="value">{{ o.reapproval }}</div><div class="label">재승인 필요 서버</div></div>
+  <a class="card" href="/intakes?status=passed"><div class="value">{{ o.pending_intakes }}</div><div class="label">결정 대기 신청</div></a>
+  <a class="card" href="/approvals"><div class="value">{{ o.pending_servers }}</div><div class="label">승인 대기 서버</div></a>
+  <a class="card" href="/call-approvals"><div class="value">{{ o.pending_calls }}</div><div class="label">응답 대기 호출별 승인</div></a>
+  <a class="card" href="/contracts"><div class="value">{{ o.reapproval }}</div><div class="label">재승인 필요 서버</div></a>
   <div class="card"><div class="value">{{ (o.alerts.values() | sum) if o.alerts else 0 }}</div><div class="label">열린 경보</div></div>
 </div>
 <div class="grid">

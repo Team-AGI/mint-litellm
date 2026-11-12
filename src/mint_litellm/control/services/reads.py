@@ -367,6 +367,9 @@ def overview(
     return {
         "unhandled_jobs": unhandled["n"],
         "unhandled_oldest_seconds": unhandled["oldest"],
+        "pending_intakes": one(
+            "SELECT count(*) FROM mint.intakes WHERE instance_id = %s AND status = 'passed'"
+        ),
         "pending_servers": one(
             "SELECT count(*) FROM mint.servers WHERE instance_id = %s"
             " AND status = 'awaiting_approval'"
