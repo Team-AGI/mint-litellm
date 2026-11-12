@@ -16,7 +16,7 @@ from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import ControlError
 from mint_litellm.control.jobs import JobContext
 from mint_litellm.control.litellm_admin import LiteLLMError
-from mint_litellm.control.services import intakes
+from mint_litellm.control.services import evidence, intakes
 from mint_litellm.control.services.base import enqueue_job
 from mint_litellm.types.jobs import intake_run_job_key
 
@@ -369,6 +369,7 @@ def evidence_expiry_scan(job: JobContext) -> None:
         " ORDER BY i.server_id, i.decided_at DESC",
         (job.instance_id,),
     )
+    evidence.scan_alerts(job.conn, job.instance_id)  # 사람이 확인하는 증빙의 없음·만료 경보
     horizon = datetime.now(UTC) + EXPIRY_WARNING
     for row in rows:
         job.checkpoint()

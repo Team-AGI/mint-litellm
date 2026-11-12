@@ -5,12 +5,19 @@ LiteLLM 응답 고정 서버로 돌린다(MINT_TEST_DATABASE_URL이 없으면 �
 """
 
 import json
+import uuid
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from ctl_fixtures import INSTANCE, LOGIN_PASSWORDS, make_ctx
+from ctl_fixtures import (
+    INSTANCE,
+    LOGIN_PASSWORDS,
+    make_ctx,
+    seed_approval_evidence,
+    seed_version_evidence,
+)
 from litellm_control_stub import CONTROL_KEY, TOOL, ControlStub, submission
 
 psycopg = pytest.importorskip("psycopg")
@@ -24,7 +31,7 @@ from mint_litellm.control.errors import AdminCode, AdminError, ControlError  # n
 from mint_litellm.control.intake_checks import PolicyDataSource  # noqa: E402
 from mint_litellm.control.litellm_admin import LiteLLMAdmin  # noqa: E402
 from mint_litellm.control.litellm_control import LiteLLMControl  # noqa: E402
-from mint_litellm.control.services import base, settings  # noqa: E402
+from mint_litellm.control.services import base, evidence, relations, settings  # noqa: E402
 from mint_litellm.control.services import intakes as svc  # noqa: E402
 from mint_litellm.control.stage2_config import Stage2Settings  # noqa: E402
 from mint_litellm.control.worker import Worker  # noqa: E402
@@ -183,6 +190,9 @@ class World:
         )
 
     def decide(self, intake_id, decision, name="boss", user="boss-1", **kwargs):
+        if decision == "approve":
+            seed_approval_evidence(self.conn, intake_id)
+
         def go(ctx):
             return svc.decide(ctx, intake_id, decision, **kwargs)
 
@@ -1696,6 +1706,7 @@ def test_an_oauth2_flow_drift_keeps_the_block_until_the_flow_is_fixed_and_rechec
                                                       world.intake(intake_id)["id"])}
     assert oauth["oauth_issuer_allowlist"]["result"] != "pass"
     ids = [str(t["id"]) for t in tools]
+    seed_version_evidence(world.conn, "srv-a")
     with psycopg.connect(world.url) as conn, pytest.raises(AdminError):  # 흐름이 틀리면 재승인 불가
         contracts.reapprove(make_ctx(conn, "boss", "approver", "boss-1"), "srv-a", intake_id, ids,
                             deployment_id=str(cand["id"]))
@@ -1779,6 +1790,8 @@ def test_the_operator_who_proposed_the_deployment_candidate_cannot_reapprove_it(
     assert cand["proposed_by"] == "helper-1"
     ids = [str(t["id"]) for t in fetchall(
         world.conn, "SELECT id FROM mint.tool_contracts WHERE status = 'candidate'")]
+
+    seed_version_evidence(world.conn, "srv-a")
 
     def reapprove(user, name):
         return world.call(lambda ctx: contracts.reapprove(
@@ -2027,3 +2040,121 @@ def test_a_manual_recheck_takes_the_server_lock_before_the_intake_lock(world):
         holder.close()
         thread.join(30)
     assert done
+
+
+# --- 사람이 확인하는 증빙 -----------------------------------------------------------------------
+
+
+def attach(world, kind, subject_id, **kwargs):
+    kwargs.setdefault("summary", "확인함")
+    return world.call(
+        lambda ctx: evidence.attach(ctx, kind, subject_id, **kwargs),
+        name="boss", user="boss-1", role="approver",
+    )
+
+
+def decide_raw(world, intake_id):
+    return world.call(
+        lambda ctx: svc.decide(ctx, intake_id, "approve", valid_until=FUTURE),
+        name="boss", user="boss-1", role="approver",
+    )
+
+
+def test_approval_is_refused_until_every_required_evidence_is_attached(world):
+    intake_id = passed(world)
+    with pytest.raises(AdminError, match="시험 호출 결과") as raised:
+        decide_raw(world, intake_id)
+    assert raised.value.code == AdminCode.CONFLICT
+    gate = [k for k in evidence.KINDS.values() if k.gate == "approve"]
+    for kind in gate[:-1]:
+        attach(world, kind.key, intake_id)
+    with pytest.raises(AdminError, match=gate[-1].label):
+        decide_raw(world, intake_id)
+    attach(world, gate[-1].key, intake_id)
+    assert decide_raw(world, intake_id)["decision"] == "approved"
+    assert len(world.events("evidence_attached")) == len(gate)
+
+
+def test_expired_evidence_blocks_approval_and_not_applicable_needs_an_allowed_kind(world):
+    intake_id = passed(world)
+    for kind in evidence.KINDS.values():
+        if kind.gate == "approve":
+            attach(world, kind.key, intake_id)
+    world.conn.execute(
+        "ALTER TABLE mint.policy_evidence DISABLE TRIGGER policy_evidence_1_append_only"
+    )
+    world.conn.execute(
+        "UPDATE mint.policy_evidence SET attached_at = now() - interval '100 days',"
+        " valid_until = now() - interval '1 day' WHERE kind = 'trial_call'"
+    )
+    world.conn.execute(
+        "ALTER TABLE mint.policy_evidence ENABLE TRIGGER policy_evidence_1_append_only"
+    )
+    with pytest.raises(AdminError, match=r"시험 호출 결과\(기한 지남\)"):
+        decide_raw(world, intake_id)
+    with pytest.raises(ControlError, match="해당 없음"):
+        attach(world, "trial_call", intake_id, not_applicable=True)
+    with pytest.raises(ControlError, match="넘을 수 없습니다"):
+        attach(world, "trial_call", intake_id, valid_until=datetime.now(UTC) + timedelta(days=400))
+    attach(world, "prompt_review", intake_id, summary="지시문 없음", not_applicable=True)
+    attach(world, "trial_call", intake_id)
+    assert decide_raw(world, intake_id)["decision"] == "approved"
+
+
+def test_a_viewer_cannot_attach_and_the_subject_must_exist(world):
+    intake_id = passed(world)
+    with pytest.raises(AdminError):
+        world.call(lambda ctx: evidence.attach(ctx, "trial_call", intake_id, summary="x"),
+                   name="v", user="v-1", role="viewer")
+    with pytest.raises(AdminError, match="대상이 없습니다"):
+        attach(world, "trial_call", str(uuid.uuid4()))
+
+
+def test_scan_alerts_on_missing_evidence_and_attaching_closes_the_alert(world):
+    intake_id = approved_world(world)
+    world.conn.execute(
+        "ALTER TABLE mint.policy_evidence DISABLE TRIGGER policy_evidence_1_append_only"
+    )
+    world.conn.execute("DELETE FROM mint.policy_evidence")
+    world.conn.execute(
+        "ALTER TABLE mint.policy_evidence ENABLE TRIGGER policy_evidence_1_append_only"
+    )
+    assert evidence.scan_alerts(world.conn, INSTANCE) > 0
+    rows = fetchall(world.conn, "SELECT * FROM mint.alerts WHERE kind = 'evidence_missing'")
+    assert len(rows) == 1  # 서버마다 한 건, 정책별 누락은 본문에
+    assert {i["evidence"] for i in rows[0]["subject"]["items"]} >= {"trial_call", "access_recheck"}
+    assert evidence.scan_alerts(world.conn, INSTANCE) == 0  # 같은 경보는 다시 열지 않는다
+    attach(world, "trial_call", intake_id)
+    assert rows[0]["status"] != "resolved"
+    assert fetchone(world.conn, "SELECT status FROM mint.alerts WHERE id = %s",
+                    (rows[0]["id"],))["status"] == "resolved"
+    assert evidence.scan_alerts(world.conn, INSTANCE) == 1  # 남은 누락으로 다시 열린다
+    again = fetchone(world.conn, "SELECT subject FROM mint.alerts WHERE status <> 'resolved'")
+    assert "trial_call" not in {i["evidence"] for i in again["subject"]["items"]}
+
+
+def test_an_exception_approval_is_allowed_without_evidence_but_records_what_is_missing(world):
+    from mint_litellm.control.context import Operator
+
+    intake_id = passed(world, readiness={**READINESS, "audit_access_days": 0})
+    second = Operator("boss2", "approver", "boss-2")
+    world.decide(intake_id, "except", reason="일시 허용", second=second)
+    approval = fetchone(world.conn, "SELECT basis FROM mint.approvals")
+    assert "trial_call" in approval["basis"]["missing_evidence"]
+    event = world.events("intake_decided")[0]
+    assert "trial_call" in event["payload"]["missing_evidence"]
+
+
+def test_a_relation_cannot_finish_termination_without_deletion_proof(world):
+    approved_world(world)
+    relation = fetchone(world.conn, "SELECT id FROM mint.usage_relations")["id"]
+    relation_id = str(relation)
+    with pytest.raises(ControlError, match="종료 중인"):
+        world.call(lambda ctx: relations.finish(ctx, relation_id))
+    world.call(lambda ctx: relations.terminate(ctx, relation_id))
+    with pytest.raises(AdminError, match="자료 삭제·반환 증빙"):
+        world.call(lambda ctx: relations.finish(ctx, relation_id))
+    attach(world, "deletion_proof", relation_id, ref="제공자 회신 문서")
+    world.call(lambda ctx: relations.finish(ctx, relation_id))
+    assert fetchone(world.conn, "SELECT status FROM mint.usage_relations")["status"] == "terminated"
+    assert len(world.events("relation_terminated")) == 1

@@ -58,6 +58,7 @@ STAGE_ONE_EVENTS = {
 }  # fmt: skip
 
 STAGE_TWO_EVENTS = {
+    "relation_terminated", "evidence_attached",
     "operator_removed", "operator_role_changed",
     "intake_received", "intake_requester_assigned", "intake_checked", "intake_decided",
     "contract_approved", "contract_drift_detected", "contract_superseded", "reapproval_requested",
@@ -81,7 +82,7 @@ STAGE_ONE_REASONS = {
 
 
 def test_event_kinds_are_the_stage_one_set_plus_exactly_the_stage_two_additions():
-    assert len(STAGE_ONE_EVENTS) == 34 and len(STAGE_TWO_EVENTS) == 25
+    assert len(STAGE_ONE_EVENTS) == 34 and len(STAGE_TWO_EVENTS) == 27
     assert {k.value for k in EventKind} == STAGE_ONE_EVENTS | STAGE_TWO_EVENTS
     assert {k.value for k in CALL_KINDS} | {k.value for k in SYSTEM_KINDS} <= STAGE_ONE_EVENTS
 
@@ -93,7 +94,7 @@ def test_every_event_kind_has_a_key_entity_and_the_new_entities_are_the_declared
     new = {CONTROL_ENTITY[EventKind(k)] for k in STAGE_TWO_EVENTS}
     assert new == {
         "intake", "intake_check", "tool_contract", "deployment_contract", "litellm_grant",
-        "export", "restore", "alert", "console_session", "operator",
+        "export", "restore", "alert", "console_session", "operator", "evidence", "relation",
     }  # fmt: skip
 
 

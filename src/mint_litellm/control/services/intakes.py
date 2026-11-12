@@ -19,6 +19,7 @@ from mint_litellm.control.errors import (
     separation_of_duties,
     stale_evidence,
 )
+from mint_litellm.control.services import evidence
 from mint_litellm.control.services.base import (
     Prefetched,
     enqueue_job,
@@ -908,6 +909,8 @@ def decide(
         ):
             raise conflict("모든 검사가 통과해야 승인할 수 있습니다.")
         _require_fresh_evidence(ctx, row)
+        if decision == "approve":  # 사람이 확인하는 증빙이 없으면 일반 승인을 하지 않는다
+            evidence.require(ctx, "approve", "intake", str(row["id"]))
         now = datetime.now(UTC)
         if valid_until is not None:
             if valid_until <= now:
@@ -963,10 +966,14 @@ def _approve(
     allowlist_ids = sorted(
         {a for c in checks for a in (c["inputs"] or {}).get("allowlist_ids", [])}
     )
+    # 예외 승인은 증빙이 없어도 막지 않되, 누락을 결정 기록에 남긴다
+    lacking = ([e["key"] for e in evidence.missing(ctx, "approve", "intake", str(row["id"]))]
+               if decision == "except" else [])
     updated = _decided(
         ctx, row, "exception" if decision == "except" else "approved",
         reason or "수용검증 통과",
-        {"second_approver": None if second_info is None else second_info["name"]},
+        {"second_approver": None if second_info is None else second_info["name"],
+         **({"missing_evidence": lacking} if lacking else {})},
     )
     # 후보 계약 승인
     for tool in tools:
@@ -1016,6 +1023,8 @@ def _approve(
              "allowlist_ids": allowlist_ids}
     if second_info:
         basis["second_approver"] = second_info["name"]
+    if lacking:
+        basis["missing_evidence"] = lacking
     approval_id = new_uuid7()
     ctx.conn.execute(
         "INSERT INTO mint.approvals (id, instance_id, org_id, relation_id, class, server_id, tools,"

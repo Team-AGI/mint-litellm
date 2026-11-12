@@ -3,6 +3,7 @@
 {% block body %}
 <h1>신청: {{ i.server_id }} {{ m.badge(L.INTAKE, i.status) }}</h1>
 {% if stale and i.status in ('passed', 'indeterminate') %}<div class="banner error" role="alert">연결·도구 정의 증거가 24시간을 넘었습니다. 재검사한 뒤 결정하십시오.</div>{% endif %}
+{% if lacking and (i.status == 'indeterminate' or i.decision == 'exception') %}<div class="banner error" role="alert">증빙 누락: {{ lacking | join(', ') }}</div>{% endif %}
 <dl class="detail">
   <dt>대상 서버</dt><dd><a href="/servers/{{ i.server_id | urlencode }}">{{ i.server_id }}</a></dd>
   <dt>출처</dt><dd>{{ L.pick(L.SOURCE, i.source) }}</dd>
@@ -31,6 +32,8 @@
 {% for t in tools %}<tr><td>{{ t.tool }}</td><td>{{ L.pick(L.RISK, t.risk_grade) }}</td><td>{{ L.pick(L.ACTION, t.action_type) }}</td><td>{{ '승인됨' if t.status == 'approved' else '후보' }}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}<p class="muted">산정된 도구가 없습니다.</p>{% endif %}
+
+{{ m.evidence_panel(evidence, '/intakes/' ~ i.id ~ '/evidence', actor) }}
 
 {% if actor.role == 'admin' and i.status == 'received' and not i.requested_by %}
 <h2>신청자 지정</h2>

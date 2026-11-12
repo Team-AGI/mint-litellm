@@ -88,6 +88,19 @@ ALERT_SEVERITY = {
     "high": Status("높음", "error"),
     "critical": Status("심각", "block"),
 }
+EVIDENCE = {
+    "valid": Status("유효", "ok"),
+    "not_applicable": Status("해당 없음", "off"),
+    "expiring": Status("만료 임박", "wait"),
+    "expired": Status("만료", "error"),
+    "missing": Status("없음", "block"),
+}
+EVIDENCE_GATE = {
+    "approve": "신청 승인",
+    "reapprove": "배포 계약 변경 재승인",
+    "finish": "이용 관계 종료 완료",
+    "periodic": "주기 확인",
+}
 ENFORCEMENT = {
     "enforcement_verified": Status("정상", "ok"),
     "enforcement_unverified": Status("확인 불가", "error"),
@@ -244,6 +257,8 @@ EVENT_KIND = {
     "server_resumed": "서버 재개",
     "relation_created": "이용 관계 생성",
     "relation_terminating": "이용 관계 종료",
+    "relation_terminated": "이용 관계 종료 완료",
+    "evidence_attached": "증빙 첨부",
     "approval_granted": "승인",
     "approval_revoked": "승인 철회",
     "denial_created": "거부 등록",
@@ -334,6 +349,7 @@ NOTICES = {
     "mode_set": "모드를 변경했습니다.",
     "operator_role": "운영자의 역할을 변경했습니다.",
     "requester_assigned": "신청자를 지정했습니다.",
+    "evidence_attached": "증빙을 첨부했습니다.",
     "rechecked": "재검사를 등록했습니다.",
     "intake_approved": "신청을 승인했습니다.",
     "intake_rejected": "신청을 거절했습니다.",
