@@ -110,7 +110,40 @@ def test_a_demotion_comes_back_as_a_demotion(seeded):
     assert authenticate(world["restored"], TOKENS["bob"]).role == "viewer"
     assert authenticate(world["restored"], TOKENS["eve"]).role == "approver"
     assert operator_row(world["restored"], "bob")["state_version"] >= 2
+    assert operator_row(world["restored"], "bob")["demoted_at"] is not None
     assert run_worker(world).state == judge.OK
+
+
+def test_the_demotion_marker_is_set_by_a_demotion_and_kept_by_a_promotion(seeded):
+    world = seeded
+    with psycopg.connect(world["live"], autocommit=True) as conn:
+        assert operator_row(world["live"], "bob")["demoted_at"] is None
+        conn.execute("UPDATE mint.operators SET role = 'viewer' WHERE name = 'bob'")
+        marked = operator_row(world["live"], "bob")["demoted_at"]
+        assert marked is not None
+        conn.execute("UPDATE mint.operators SET role = 'approver' WHERE name = 'bob'")
+        assert operator_row(world["live"], "bob")["demoted_at"] == marked
+        conn.execute("UPDATE mint.operators SET expires_at = now() WHERE name = 'eve'")
+        assert operator_row(world["live"], "eve")["demoted_at"] is None  # 삭제는 강등 표지가 아니다
+
+
+def test_a_rollback_that_erases_the_marker_at_the_same_version_is_reapplied(seeded):
+    world = seeded
+    with psycopg.connect(world["live"], autocommit=True) as conn:
+        conn.execute("UPDATE mint.operators SET role = 'viewer' WHERE name = 'bob'")
+    file_epoch = export_all(world)
+    version = operator_row(world["live"], "bob")["state_version"]
+    with psycopg.connect(world["restored"], autocommit=True) as conn:
+        # 판본과 역할은 파일과 같지만 표지가 없는 DB(표지만 지워진 되돌림)
+        conn.execute("ALTER TABLE mint.operators DISABLE TRIGGER USER")
+        conn.execute("UPDATE mint.operators SET role = 'viewer', state_version = %s"
+                     " WHERE name = 'bob'", (version,))
+        conn.execute("ALTER TABLE mint.operators ENABLE TRIGGER USER")
+    assert operator_row(world["restored"], "bob")["demoted_at"] is None
+    overtake_epoch(world["restored"], file_epoch)
+    out = attest_restored(world)
+    assert out["reapplied"] == [{"kind": "operator", "id": "bob", "was": "reapply"}]
+    assert operator_row(world["restored"], "bob")["demoted_at"] is not None
 
 
 def test_an_operator_added_after_the_backup_is_put_back_already_removed(seeded):

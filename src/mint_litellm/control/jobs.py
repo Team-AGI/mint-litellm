@@ -204,7 +204,7 @@ def _sync(name: str) -> Callable[[JobContext], None]:
 
 def _seal(job: JobContext) -> None:
     job.external_write()
-    seal.seal_once(job.conn, job.instance_id)
+    seal.seal_once(job.conn, job.instance_id, getattr(job.settings, "export_hmac_key", None))
 
 
 def _export_negative_state(job: JobContext) -> None:

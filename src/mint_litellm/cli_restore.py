@@ -61,7 +61,7 @@ def _seal_verify(run) -> None:
     except (FileNotFoundError, files.ExportUnverified):
         pass
     result = seal.verify(run.conn, run.cfg.instance_id, run.args.from_seq, run.args.to_seq,
-                         checkpoint)
+                         checkpoint, exports.keys(settings))
     run.data.update(result)
     run.say(f"봉인 배치 {result['batches']}개, 행 {result['rows']}건 검사: "
             + ("이상 없음" if result["ok"] else "연쇄가 어긋났습니다"))

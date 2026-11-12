@@ -96,7 +96,9 @@ f AS (
           OR (f.row ->> 'expires_at' IS NOT NULL AND (r.row ->> 'expires_at' IS NULL
               OR (r.row ->> 'expires_at')::timestamptz > (f.row ->> 'expires_at')::timestamptz))
           OR (r.row ->> 'expires_at' IS NULL
-              AND r.row -> 'token_fp' IS DISTINCT FROM f.row -> 'token_fp') THEN 'reapply'
+              AND r.row -> 'token_fp' IS DISTINCT FROM f.row -> 'token_fp')
+          OR (f.row ->> 'demoted_at' IS NOT NULL AND r.row ->> 'demoted_at' IS NULL)
+          THEN 'reapply'
       END
     WHEN r.state_version = f.state_version AND f.row IS NOT NULL AND
          (r.row - ARRAY(SELECT jsonb_object_keys(r.row) EXCEPT SELECT jsonb_object_keys(f.row)))

@@ -2,17 +2,20 @@
 
 ``row_hash = SHA-256(정규 JSON(가변 열 제외 행) ‖ prev)``. 정규 JSON은 키를 정렬하고 공백 없이
 UTF-8로 쓴다. 가변 열은 봉인 열 네 개(``seal_seq``·``prev_hash``·``row_hash``·``sealed_at``)다.
-최초 ``prev``는 32바이트 0이다. 봉인은 사건을 남기지 않는다(봉인 사건이 다음 봉인 대상을
-만들어 매분 반복되는 것을 막는다).
+최초 ``prev``는 32바이트 0이다. 키가 주어지면 배치 끝 해시를 내보내기 키로 서명해 배치 행에 둔다
+(DB를 쓸 수 있는 쪽이 연쇄를 통째로 다시 계산해도 키 없이는 서명을 만들 수 없다). 봉인은 사건을
+남기지 않는다(봉인 사건이 다음 봉인 대상을 만들어 매분 반복되는 것을 막는다).
 """
 
 import hashlib
+from collections.abc import Sequence
 from datetime import UTC
 from typing import Any
 
 import psycopg
 
 from mint_litellm.control.db.connection import fetchall, fetchone
+from mint_litellm.restore import files
 from mint_litellm.restore.files import canonical_json
 
 ZERO = bytes(32)
@@ -46,7 +49,17 @@ def row_hash(row: dict[str, Any], prev: bytes) -> bytes:
     return hashlib.sha256(canonical(row) + prev).digest()
 
 
-def seal_once(conn: psycopg.Connection, instance_id: str) -> tuple[int, int] | None:
+def _batch_document(
+    instance_id: str, first: int, last: int, prev_tail: bytes, tail: bytes
+) -> dict[str, Any]:
+    return {"format": files.FORMAT, "kind": "seal_batch", "instance_id": instance_id,
+            "from_seal_seq": first, "to_seal_seq": last, "prev_tail_hash": prev_tail.hex(),
+            "tail_hash": tail.hex()}
+
+
+def seal_once(
+    conn: psycopg.Connection, instance_id: str, key: bytes | None = None
+) -> tuple[int, int] | None:
     """미봉인 행이 있으면 배치 하나를 봉인하고 ``(from, to)``를 돌려준다. 없으면 None.
 
     한 트랜잭션이며 인스턴스별 자문 잠금으로 동시 봉인을 직렬화한다(순번·배치 끝의 유일성이
@@ -87,12 +100,34 @@ def seal_once(conn: psycopg.Connection, instance_id: str) -> tuple[int, int] | N
             (ids, seqs, prevs, hashes),
         )
         last_seq = first + len(rows) - 1
+        signed = (
+            files.sign(_batch_document(instance_id, first, last_seq, tail_prev, prev), key)
+            if key else None
+        )
         conn.execute(
             "INSERT INTO mint.seal_batches (instance_id, from_seal_seq, to_seal_seq,"
-            " prev_tail_hash, tail_hash) VALUES (%s, %s, %s, %s, %s)",
-            (instance_id, first, last_seq, tail_prev, prev),
+            " prev_tail_hash, tail_hash, tail_sig, sig_key_id) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (instance_id, first, last_seq, tail_prev, prev,
+             signed and bytes.fromhex(signed["hmac"]), signed and signed["key_id"]),
         )
         return first, last_seq
+
+
+def _signature_problem(
+    instance_id: str, batch: dict[str, Any], keys: Sequence[bytes], required: bool
+) -> str | None:
+    if batch["tail_sig"] is None:
+        return "서명이 없습니다." if required else None
+    document = _batch_document(
+        instance_id, batch["from_seal_seq"], batch["to_seal_seq"],
+        bytes(batch["prev_tail_hash"]), bytes(batch["tail_hash"]))
+    document["key_id"] = batch["sig_key_id"]
+    document["hmac"] = bytes(batch["tail_sig"]).hex()
+    try:
+        files.verify(document, keys)
+    except files.ExportUnverified as error:
+        return f"서명이 맞지 않습니다({error})."
+    return None
 
 
 def verify(
@@ -101,21 +136,25 @@ def verify(
     from_seq: int | None = None,
     to_seq: int | None = None,
     checkpoint: tuple[int, str] | None = None,
+    keys: Sequence[bytes] = (),
 ) -> dict[str, Any]:
     """연쇄 전체를 처음부터 다시 계산해 배치·행 해시와 맞는지 본다.
 
     ``from_seq``·``to_seq``는 보고할 구간만 좁힌다(연쇄는 언제나 처음부터 이어 확인한다).
     ``checkpoint``는 마지막 체크포인트 파일의 ``(to_seal_seq, tail_hash 16진)``이며
     ``seal_batches``의 같은 위치와 대조한다(DB 안에서 연쇄 전체를 다시 계산한 변조를 잡는다).
+    ``keys``(내보내기 키)가 주어지면 배치 끝 해시의 서명도 확인한다. 서명은 첫 서명 배치부터
+    빠짐없이 있어야 한다(서명 없는 옛 배치는 그 앞에서만 허용).
     """
     errors: list[str] = []
     batches = fetchall(
         conn,
-        "SELECT from_seal_seq, to_seal_seq, prev_tail_hash, tail_hash FROM mint.seal_batches"
+        "SELECT from_seal_seq, to_seal_seq, prev_tail_hash, tail_hash, tail_sig, sig_key_id"
+        " FROM mint.seal_batches"
         " WHERE instance_id = %s ORDER BY to_seal_seq",
         (instance_id,),
     )
-    prev, expected, rows_checked = ZERO, 1, 0
+    prev, expected, rows_checked, signing = ZERO, 1, 0, False
     for batch in batches:
         lo, hi = batch["from_seal_seq"], batch["to_seal_seq"]
 
@@ -123,6 +162,11 @@ def verify(
             if (from_seq is None or end >= from_seq) and (to_seq is None or start <= to_seq):
                 errors.append(text)
 
+        if keys:
+            signing = signing or batch["tail_sig"] is not None
+            problem = _signature_problem(instance_id, batch, keys, signing)
+            if problem:
+                report(f"배치 {lo}~{hi}: {problem}")
         if lo != expected:
             report(f"배치 {lo}~{hi}: 앞 배치와 이어지지 않습니다(기대 시작 {expected}).")
         if bytes(batch["prev_tail_hash"]) != prev:

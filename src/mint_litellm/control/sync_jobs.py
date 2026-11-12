@@ -7,6 +7,7 @@
 """
 
 import functools
+import hmac
 import json
 from collections.abc import Callable
 from typing import Any
@@ -489,6 +490,12 @@ class ControlKeyNotSet(WaitForOperator):
     code = "control_key_not_set"
 
 
+class ControlKeyMismatch(WaitForOperator):
+    """작업 실행기가 쓰는 제어 평면 키가 저장된 면제 키와 다르다(저장을 맞추면 재시도로 풀린다)."""
+
+    code = "control_key_mismatch"
+
+
 def _pin_step(ctx: JobContext, client: LiteLLMSync, server_id: str) -> bool:
     """계약을 관리하는 서버의 도구를 LiteLLM에 고정한다. 새로 맞췄으면 참.
 
@@ -520,15 +527,23 @@ def _pin_step(ctx: JobContext, client: LiteLLMSync, server_id: str) -> bool:
     if row and row["observed"] is True and row["applied_sha256"] == digest:
         return False
     key = f"sync_divergence:pin:{server_id}"
-    if not fetchone(
-        conn, "SELECT 1 AS x FROM mint.settings WHERE instance_id = %s"
-        " AND control_key_token IS NOT NULL", (inst,)
-    ):
+    stored = fetchone(
+        conn, "SELECT control_key_token FROM mint.settings WHERE instance_id = %s", (inst,)
+    )
+    if not stored or stored["control_key_token"] is None:
         # 면제 키가 없으면 LiteLLM이 숨겨진 도구를 빼고 고정할 것이 없다며 400으로 거절한다.
         raise_alert(conn, inst, kind="sync_divergence", severity="high", dedup_key=key,
                     subject={"server_id": server_id, "reason": "control_key_not_set",
                              "action": "settings control-key"})
         raise ControlKeyNotSet
+    if not hmac.compare_digest(stored["control_key_token"].encode(), client.key_token.encode()):
+        # 작업 실행기의 키가 저장된 면제 키와 다르다(키 교체 뒤 한쪽만 바뀜). 조용히 실패하지 않고
+        # 알린 뒤, 운영자가 맞출 때까지 기다린다.
+        raise_alert(conn, inst, kind="control_key_mismatch", severity="high",
+                    dedup_key="control_key_mismatch",
+                    subject={"action": "settings control-key"})
+        raise ControlKeyMismatch
+    resolve_alert(conn, inst, "control_key_mismatch")
     response = client.pin(server_id)
     different = _pin_mismatch(expected, response)
     if not different:
