@@ -1,0 +1,114 @@
+# LiteLLM 재사용 정책의 실제 동작을 재는 시험 전용 설정. 플러그인이 없는 순정 이미지가 읽는다.
+# 배포 설정의 재사용 값(disable_env_credential_login, user_url_validation)과 서버별 한도를 그대로 둔다.
+model_list: []
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  disable_env_credential_login: true
+
+litellm_settings:
+  telemetry: false
+  user_url_validation: true
+
+mcp_servers:
+  # 분당 호출 한도: 3회까지만 업스트림에 닿는다.
+  rt_rpm:
+    server_id: e2000000000000000000000000000001
+    url: http://counting-proxy:8080/a/mcp
+    transport: http
+    rpm: 3
+    max_concurrent_requests: 8
+  # 동시 실행 한도: 하나는 1, 대조용 하나는 8.
+  rt_conc1:
+    server_id: e2000000000000000000000000000002
+    url: http://counting-proxy:8080/b/mcp
+    transport: http
+    rpm: 600
+    max_concurrent_requests: 1
+  rt_conc8:
+    server_id: e2000000000000000000000000000003
+    url: http://counting-proxy:8080/b/mcp
+    transport: http
+    rpm: 600
+    max_concurrent_requests: 8
+  # 제한 시간: 짧은 것과 넉넉한 것.
+  rt_timeout_short:
+    server_id: e2000000000000000000000000000004
+    url: http://counting-proxy:8080/a/mcp
+    transport: http
+    rpm: 600
+    max_concurrent_requests: 8
+    timeout: 2
+  rt_timeout_long:
+    server_id: e2000000000000000000000000000005
+    url: http://counting-proxy:8080/a/mcp
+    transport: http
+    rpm: 600
+    max_concurrent_requests: 8
+    timeout: 30
+  # 인증서 이름 검사: 인증서는 tls-front에 발급되어 있고 tls-front-alt는 같은 서버의 다른 이름이다.
+  rt_tls_match:
+    server_id: e2000000000000000000000000000006
+    url: https://tls-front:8443/mcp
+    transport: http
+    rpm: 600
+    max_concurrent_requests: 8
+  rt_tls_mismatch:
+    server_id: e2000000000000000000000000000007
+    url: https://tls-front-alt:8443/mcp
+    transport: http
+    rpm: 600
+    max_concurrent_requests: 8
+  # 조회 주소 제한: 인증 서버 메타데이터를 발견하는 서버. 광고된 메타데이터 주소가 다른 출처이면 가져오지 않는다.
+  rt_discover_cross:
+    server_id: e2000000000000000000000000000008
+    url: http://counting-proxy:8080/oauth/cross/mcp
+    transport: http
+    auth_type: oauth2
+    oauth2_flow: authorization_code
+    rpm: 600
+    max_concurrent_requests: 8
+  rt_discover_same:
+    server_id: e2000000000000000000000000000009
+    url: http://counting-proxy:8080/oauth/same/mcp
+    transport: http
+    auth_type: oauth2
+    oauth2_flow: authorization_code
+    rpm: 600
+    max_concurrent_requests: 8
+  # 리다이렉트 출처·발급자 고정·신원 결속: 발급자를 고정하면 끝점은 그 발급자의 메타데이터에서만 온다.
+  rt_oauth:
+    server_id: e200000000000000000000000000000a
+    url: http://counting-proxy:8080/a/mcp
+    transport: http
+    auth_type: oauth2
+    oauth2_flow: authorization_code
+    client_id: it-client
+    issuer: http://counting-proxy:8080/idp
+    rpm: 600
+    max_concurrent_requests: 8
+  rt_oauth_iss:
+    server_id: e200000000000000000000000000000c
+    url: http://counting-proxy:8080/a/mcp
+    transport: http
+    auth_type: oauth2
+    oauth2_flow: authorization_code
+    client_id: it-client
+    issuer: http://counting-proxy:8080/idp2
+    rpm: 600
+    max_concurrent_requests: 8
+  rt_oauth_bound:
+    server_id: e200000000000000000000000000000b
+    url: http://counting-proxy:8080/a/mcp
+    transport: http
+    auth_type: oauth2
+    oauth2_flow: authorization_code
+    client_id: it-client
+    issuer: http://counting-proxy:8080/idp
+    oauth_identity_binding:
+      mode: enforce
+      issuer: http://counting-proxy:8080/idp
+      jwks_url: http://counting-proxy:8080/idp/jwks
+      audiences: [it-client]
+    rpm: 600
+    max_concurrent_requests: 8
