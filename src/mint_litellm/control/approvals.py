@@ -67,6 +67,7 @@ def build_conditions(
     max_result_bytes: int | None = None,
     max_result_items: int | None = None,
     scan_result: bool = True,
+    response_scan: str | None = None,
 ) -> dict:
     """정책이 읽는 승인 조건. 지정하지 않은 조건은 키를 넣지 않는다."""
     conditions: dict = {}
@@ -78,6 +79,10 @@ def build_conditions(
             conditions[name] = limit
     if not scan_result:
         conditions["scan_result"] = False
+    if response_scan is not None:
+        if response_scan not in ("block", "mask", "observe"):
+            raise ControlError("--response-scan은 block, mask, observe 중 하나여야 합니다.")
+        conditions["response_scan"] = response_scan
     if confirm_tools:
         purpose = (confirm_purpose or "").strip()
         if not 1 <= len(purpose) <= 128:

@@ -398,6 +398,10 @@ class InputError(Exception):
 # 결과 크기(바이트)와 결과 항목 수의 상한을 담는 승인 조건 이름
 RESULT_LIMIT_KEYS = ("max_result_bytes", "max_result_items")
 
+# 결과의 비밀·개인정보 검사 방식 승인 조건. 지정하지 않으면 가린다(mask).
+RESPONSE_SCAN_MODES = ("block", "mask", "observe")
+DEFAULT_RESPONSE_SCAN = "mask"
+
 
 def _argument_sizes(arguments: Mapping[str, Any]) -> dict[str, int]:
     sizes: dict[str, int] = {}
@@ -423,6 +427,14 @@ def _condition_limit(conditions: Mapping[str, Any], key: str) -> int | None:
         return None
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise InputError(f"{key} must be a positive integer")
+    return value
+
+
+def _response_scan_mode(conditions: Mapping[str, Any]) -> str:
+    """승인 조건 response_scan의 값. 없으면 기본값, 모르는 값이면 입력 오류."""
+    value = conditions.get("response_scan", DEFAULT_RESPONSE_SCAN)
+    if value not in RESPONSE_SCAN_MODES:
+        raise InputError("response_scan must be one of block, mask, observe")
     return value
 
 
@@ -522,6 +534,7 @@ def build_policy_input(
         # 결과 상한은 호출 뒤에 쓰이지만 형식 오류는 호출 전에 막는다.
         for limit_key in RESULT_LIMIT_KEYS:
             _condition_limit(selected.conditions, limit_key)
+        _response_scan_mode(selected.conditions)
         purpose = selected.conditions.get("require_consent")
         if purpose is None:
             consent = {"status": "not_applicable", "source": None}
@@ -1337,8 +1350,13 @@ def _result_policy(run: _Run) -> dict[str, Any]:
         except InputError:
             limits[key] = None
     managed = server is not None and server.contract_status == "managed"
+    try:
+        response_scan = _response_scan_mode(conditions)
+    except InputError:
+        response_scan = DEFAULT_RESPONSE_SCAN
     return {
         **limits,
+        "response_scan": response_scan,
         "scan": managed and conditions.get("scan_result") is not False,
         "enforce": run.mode is Mode.ENFORCE,
     }

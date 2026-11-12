@@ -218,6 +218,7 @@ def test_result_policy_reaches_the_call_context(tmp_path):
     assert outcome.context["result_policy"] == {
         "max_result_bytes": 100,
         "max_result_items": 2,
+        "response_scan": "mask",
         "scan": True,
         "enforce": True,
     }
@@ -238,5 +239,20 @@ def test_result_scan_is_off_for_servers_without_a_contract_and_when_the_approval
 @pytest.mark.parametrize("bad", [0, -1, "10", 1.5, True])
 def test_malformed_result_limits_are_a_schema_error(tmp_path, bad):
     snap = snapshot(approvals=(approval(conditions={"max_result_bytes": bad}),))
+    outcome = decide(harness(tmp_path, snap, evaluate=evaluator()))
+    assert not outcome.allowed and outcome.error.code == "MINT-SCHEMA-ERROR"
+
+
+def test_response_scan_defaults_to_mask_and_follows_the_approval(tmp_path):
+    plain = decide(harness(tmp_path, snapshot(), evaluate=evaluator()))
+    assert plain.context["result_policy"]["response_scan"] == "mask"
+    snap = snapshot(approvals=(approval(conditions={"response_scan": "block"}),))
+    chosen = decide(harness(tmp_path, snap, evaluate=evaluator()))
+    assert chosen.context["result_policy"]["response_scan"] == "block"
+
+
+@pytest.mark.parametrize("bad", ["off", "", 1, None, ["mask"]])
+def test_unknown_response_scan_is_a_schema_error(tmp_path, bad):
+    snap = snapshot(approvals=(approval(conditions={"response_scan": bad}),))
     outcome = decide(harness(tmp_path, snap, evaluate=evaluator()))
     assert not outcome.allowed and outcome.error.code == "MINT-SCHEMA-ERROR"

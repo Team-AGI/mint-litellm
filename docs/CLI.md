@@ -189,6 +189,7 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 | `--max-result-bytes 수` | `max_result_bytes` | 도구 결과 한 건의 크기 상한(바이트). 넘으면 결과 대신 `MINT-OUTPUT-BLOCKED`를 돌려주고 응답 사건의 `output_findings`에 `POL-E-16`을 남긴다. |
 | `--max-result-items 수` | `max_result_items` | 도구 결과 한 건의 내용 블록 수 상한. 넘으면 위와 같이 막는다. |
 | `--no-result-scan` | `scan_result` | 결과 본문의 지시문 표지 검사를 끈다. 계약 관리 서버는 이 옵션이 없으면 검사하며, 표지가 있으면 결과를 `MINT-OUTPUT-BLOCKED`로 막고 `output_findings`에 `POL-E-04`를 남긴다. 관측 모드에서는 막지 않고 응답 사건에만 남긴다. |
+| `--response-scan block\|mask\|observe` | `response_scan` | 결과 본문의 비밀(개인 키, 클라우드 접근 키, GitHub 토큰, Bearer 토큰, JWT)과 개인정보(주민등록번호, 전화번호, 이메일, 카드 번호)를 찾았을 때의 처리. `mask`(기본)는 찾은 값만 `[MASKED:종류]`로 바꿔 주고, `block`은 결과 대신 `MINT-OUTPUT-BLOCKED`를 돌려주며, `observe`는 기록만 한다. 응답 사건의 `sensitive_findings`에 종류별 건수만 남기고 값은 남기지 않으며 `output_findings`에 `POL-E-05`를 남긴다. 관측 모드에서는 어느 값이든 기록만 한다. |
 
 계약 관리 서버의 호출별 승인(`call-approval request`)과 본인 확인은 요청할 때 승인된 도구 계약에 묶인다. 계약이 교체되거나 철회되면 아직 쓰지 않은 승인은 만료되고, 승인된 계약이 없는 도구에는 호출별 승인을 요청할 수 없다.
 

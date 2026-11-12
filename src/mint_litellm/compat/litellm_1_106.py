@@ -391,6 +391,16 @@ def tool_result_size(result: object) -> int | None:
     return content_size(getattr(result, "content", None))
 
 
+def mask_tool_content(response: Any, mask: Callable[[str], str]) -> None:
+    """후처리 훅이 받은 결과의 텍스트 블록과 내장 리소스 텍스트에 ``mask``를 적용한다."""
+    for block in response.mcp_tool_call_response:
+        holder = block if isinstance(getattr(block, "text", None), str) else getattr(
+            block, "resource", None
+        )
+        if isinstance(getattr(holder, "text", None), str):
+            holder.text = mask(holder.text)
+
+
 def replace_tool_content(response: Any, text: str) -> None:
     """후처리 훅이 받은 결과 내용을 텍스트 블록 하나로 바꾼다(호출자에게 가는 값이 바뀐다)."""
     from mcp.types import TextContent
