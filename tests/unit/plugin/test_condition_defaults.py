@@ -44,8 +44,9 @@ def test_an_empty_input_definition_allows_no_key(tmp_path):
 
 
 def test_an_unknown_input_definition_adds_no_default(tmp_path):
-    doc = sent(tmp_path, contract=contract())
-    assert "allowed_arg_keys" not in doc["approval"]["conditions"]
+    # 기본값을 채우지 않는 대신 파이프라인이 호출을 막는다(test_input_fail_closed).
+    doc = sent(tmp_path, contract=contract(), conditions={"allowed_arg_keys": ["q"]})
+    assert doc["approval"]["conditions"]["allowed_arg_keys"] == ["q"]
 
 
 def test_allowed_keys_written_in_the_approval_are_kept(tmp_path):
