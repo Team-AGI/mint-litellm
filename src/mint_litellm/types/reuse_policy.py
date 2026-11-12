@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -45,6 +46,8 @@ class ServerFacts:
     credential: str | None  # 서버 고유 정적 자격의 해시. 없으면 None
     rpm: float | None = None
     max_concurrent: float | None = None
+    # 정적 헤더에 실린 자격(Authorization 등)의 해시. 인증 토큰과 같은 값을 쓰는지 서버 사이에서 비교한다.
+    header_credentials: tuple[str, ...] = ()
     # LiteLLM DB에 등록된 서버. 한도는 MINT가 승인·동기화 때 채우므로 기동을 막지 않는다.
     in_database: bool = False
 
@@ -61,6 +64,36 @@ def credential_digest(*parts: str | None) -> str | None:
     if not values:
         return None
     return hashlib.sha256("\0".join(values).encode("utf-8")).hexdigest()
+
+
+_CREDENTIAL_HEADER = ("auth", "token", "secret", "key", "cookie")
+
+
+def header_credential_digests(headers: object) -> tuple[str, ...]:
+    """정적 헤더 중 자격을 싣는 헤더(Authorization, X-API-Key 등)의 값 해시.
+
+    LiteLLM은 ``static_headers``를 업스트림 요청에 그대로 붙이므로, 인증 토큰 대신 여기에 적은 자격도
+    서버 사이 재사용 점검에 들어가야 한다. 문자열(JSON)이면 풀어서 본다.
+    """
+    if isinstance(headers, str):
+        try:
+            headers = json.loads(headers)
+        except ValueError:
+            return ()
+    if not isinstance(headers, Mapping):
+        return ()
+    found = (
+        credential_digest(_strip_scheme(value))
+        for name, value in headers.items()
+        if isinstance(value, str) and any(w in str(name).lower() for w in _CREDENTIAL_HEADER)
+    )
+    return tuple(d for d in found if d)
+
+
+def _strip_scheme(value: str) -> str:
+    """``Bearer abc``와 ``abc``를 같은 자격으로 본다."""
+    head, _, rest = value.strip().partition(" ")
+    return rest.strip() if rest and head.lower() in {"bearer", "basic", "token", "apikey"} else value
 
 
 def ssl_verify_on(value: object) -> bool:
@@ -137,8 +170,9 @@ def reuse_violations(
 
     owners: dict[str, list[str]] = {}
     for s in servers:
-        if s.credential:
-            owners.setdefault(s.credential, []).append(s.name)
+        for digest in dict.fromkeys((s.credential, *s.header_credentials)):
+            if digest:
+                owners.setdefault(digest, []).append(s.name)
     shared = sorted(", ".join(names[:5]) for names in owners.values() if len(names) > 1)
     if shared:
         add(KEY_CREDENTIAL, "한 정적 자격을 함께 쓰는 서버: " + "; ".join(shared[:3]))
