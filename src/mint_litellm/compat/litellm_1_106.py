@@ -20,6 +20,13 @@ from typing import Any
 from mint_litellm.types.decision import ResolvedServer, normalize_auth_type, url_sha256
 from mint_litellm.types.identity import Principal, classify_principal
 from mint_litellm.types.reason_codes import Reason
+from mint_litellm.types.reuse_policy import (
+    DEFAULT_TOOL_TIMEOUT_SECONDS,
+    DISCOVERY_AUTH,
+    ServerFacts,
+    credential_digest,
+    ssl_verify_on,
+)
 
 SUPPORTED_LITELLM_VERSION = "1.106.6"
 
@@ -323,6 +330,31 @@ class RegistryEntry:
     auth_type: str
     allow_all_keys: bool
     issuer: str | None = None
+    # LiteLLM 재사용 정책 점검이 읽는 값. 자격은 해시만 둔다.
+    discovery_oauth: bool = False
+    per_user_oauth: bool = False
+    binding_mode: str | None = None
+    timeout: float | None = None
+    credential: str | None = None
+
+    def facts(self) -> ServerFacts:
+        return ServerFacts(
+            self.names[0] if self.names else self.server_id,
+            self.discovery_oauth,
+            self.per_user_oauth,
+            self.issuer,
+            self.binding_mode,
+            self.timeout,
+            self.credential,
+        )
+
+
+def _credential(server: Any) -> str | None:
+    if getattr(server, "has_client_credentials", False):
+        return credential_digest(
+            getattr(server, "client_id", None), getattr(server, "client_secret", None)
+        )
+    return credential_digest(getattr(server, "authentication_token", None))
 
 
 def registry_entries(*, manager: Any = None) -> list[RegistryEntry]:
@@ -336,6 +368,14 @@ def registry_entries(*, manager: Any = None) -> list[RegistryEntry]:
             auth_type=normalize_auth_type(server.auth_type),
             allow_all_keys=bool(server.allow_all_keys),
             issuer=getattr(server, "issuer", None),
+            discovery_oauth=normalize_auth_type(server.auth_type) in DISCOVERY_AUTH,
+            per_user_oauth=bool(
+                getattr(server, "needs_user_oauth_token", False)
+                and not getattr(server, "delegate_auth_to_upstream", False)
+            ),
+            binding_mode=getattr(getattr(server, "oauth_identity_binding", None), "mode", None),
+            timeout=getattr(server, "timeout", None),
+            credential=_credential(server),
         )
         for server in mgr.get_registry().values()
     ]
@@ -412,6 +452,20 @@ def strict_guardrail_modes_enabled(env: Mapping[str, str]) -> bool:
         return True
     parsed = importlib.import_module("litellm.secret_managers.main").str_to_bool(raw)
     return True if parsed is None else parsed
+
+
+def ssl_verification_enabled(env: Mapping[str, str]) -> bool:
+    """LiteLLM이 쓰는 TLS 인증서 검증 여부. 환경 변수 ``SSL_VERIFY``가 설정 값보다 앞선다."""
+    value = env.get("SSL_VERIFY")
+    return ssl_verify_on(litellm_attribute("ssl_verify", True) if value is None else value)
+
+
+def mcp_default_timeout() -> float:
+    """서버에 제한 시간이 없을 때 LiteLLM이 쓰는 도구 호출 제한 시간(초)."""
+    try:
+        return float(importlib.import_module("litellm.constants").MCP_CLIENT_TIMEOUT)
+    except (AttributeError, TypeError, ValueError):
+        return DEFAULT_TOOL_TIMEOUT_SECONDS
 
 
 def spend_logs_store_prompts() -> bool:

@@ -15,6 +15,8 @@ GUARDRAIL_CLASS = "mint_litellm.plugin.guardrail.MintGuardrail"
 # 가드레일이 로거를 등록하므로 설정의 callbacks에는 적지 않는다. 적혀 있으면 거부한다.
 LOGGER_SUFFIXES = (".MintLogger", ".mint_logger")
 GUARDRAIL_MODES = ("pre_call", "pre_mcp_call", "post_mcp_call")
+# 없으면 init --fix-config가 더하는 필수 설정: (섹션, 키)
+REQUIRED_FLAGS = (("general_settings", "disable_env_credential_login"),)
 
 _HEADER = "# MINT 통제에 필요한 LiteLLM 설정 조각. 기존 config.yaml의 같은 키에 합친다.\n"
 
@@ -25,6 +27,7 @@ def snippet(servers: dict[str, tuple[str, str]], *, no_spend_logs: bool) -> str:
         "require_key_mcp_access_defined": True,
         "mcp_allow_all_keys_respects_mcp_scope": True,
         "store_prompts_in_spend_logs": False,
+        "disable_env_credential_login": True,
     }
     if no_spend_logs:
         general["disable_spend_logs"] = True
@@ -160,3 +163,60 @@ def ensure_guardrail_modes(path: Path) -> list[str]:
     with path.open("w", encoding="utf-8", newline="") as handle:
         handle.write(edited)
     return missing
+
+
+def ensure_required_flags(path: Path) -> list[str]:
+    """운영자 설정에 없는 필수 설정(``REQUIRED_FLAGS``)을 true로 더한다. 더한 키를 돌려준다.
+
+    이미 적힌 키는 값이 달라도 건드리지 않는다(기동 전 검사가 막는다). 섹션 머리 줄 바로 아래에
+    한 줄을 끼우고, 섹션이 없으면 파일 끝에 덧붙인다. 바꾸기 전에 ``<파일>.bak-<UTC 시각>`` 사본을
+    두며, 다시 읽은 결과가 기대와 다르면 아무것도 쓰지 않고 멈춘다.
+    """
+    if not path.is_file():
+        return []
+    raw = path.read_bytes().decode("utf-8")
+    try:
+        document = yaml.safe_load(raw) or {}
+    except yaml.YAMLError as error:
+        raise ControlError(f"설정 파일을 읽을 수 없습니다({path}): {error}") from None
+    missing = [
+        (section, key) for section, key in REQUIRED_FLAGS
+        if key not in (document.get(section) or {})
+    ]
+    if not missing:
+        return []
+    lines = raw.split("\n")
+    expected = yaml.safe_load(raw) or {}
+    for section, key in missing:
+        head = [i for i, ln in enumerate(lines) if re.match(rf"^{section}:\s*(?:#.*)?$", ln)]
+        if head:
+            body = lines[head[0] + 1:]
+            nxt = next((ln for ln in body if ln.strip() and not ln.lstrip().startswith("#")), "")
+            indent = nxt[: len(nxt) - len(nxt.lstrip())] or "  "
+            lines.insert(head[0] + 1, f"{indent}{key}: true")
+        elif section in document and document[section] is not None:
+            raise ControlError(
+                f"{path}의 {section}을(를) 자동으로 고칠 수 없습니다. "
+                f"{key}: true를 직접 더하십시오."
+            )
+        else:
+            tail = [] if not lines or lines[-1] == "" else [""]
+            lines += [*tail, f"{section}:", f"  {key}: true", ""]
+        expected.setdefault(section, {})
+        expected[section] = {**(expected[section] or {}), key: True}
+    edited = "\n".join(lines)
+    try:
+        ok = yaml.safe_load(edited) == expected
+    except yaml.YAMLError:
+        ok = False
+    if not ok:
+        raise ControlError(
+            f"필수 설정을 자동으로 더할 수 없습니다. {path}에 "
+            + ", ".join(f"{section}.{key}: true" for section, key in missing)
+            + "를 직접 더하십시오."
+        )
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    shutil.copy2(path, path.with_name(f"{path.name}.bak-{stamp}"))
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        handle.write(edited)
+    return [key for _, key in missing]

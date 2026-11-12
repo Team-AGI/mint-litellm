@@ -88,6 +88,24 @@ def test_every_settings_row_is_reported(healthy):
          "user_url_validation"),
         (lambda c: c["general_settings"].update(supported_db_objects=["guardrails"]),
          "supported_db_objects"),
+        (lambda c: c["general_settings"].pop("disable_env_credential_login"),
+         "disable_env_credential_login"),
+        (lambda c: c["litellm_settings"].update(user_url_allowed_hosts=["internal.test"]),
+         "user_url_allowed_hosts"),
+        (lambda c: c["litellm_settings"].update(ssl_verify=False), "ssl_verify"),
+        (lambda c: c["mcp_servers"]["everything"].update(timeout=3600),
+         "mcp_servers.<이름>.timeout"),
+        (lambda c: c["mcp_servers"]["everything"].update(auth_type="oauth2"),
+         "mcp_servers.<이름>.issuer"),
+        (lambda c: c["mcp_servers"]["everything"].update(
+            auth_type="oauth2", issuer="https://i.test"),
+         "mcp_servers.<이름>.oauth_identity_binding.mode"),
+        (lambda c: c["mcp_servers"].update(
+            second={**c["mcp_servers"]["everything"], "server_id": "ctl-second",
+                    "authentication_token": "os.environ/SHARED"},
+            everything={**c["mcp_servers"]["everything"],
+                        "authentication_token": "os.environ/SHARED"}),
+         "mcp_servers.<이름>.authentication_token"),
     ],
 )
 def test_required_violations_fail(healthy, mutate, item):
@@ -115,10 +133,6 @@ def test_required_environment_violation_fails(healthy):
          "mcp_allow_all_keys_respects_mcp_scope"),
         (lambda c: c["general_settings"].update(use_x_forwarded_for=True),
          "use_x_forwarded_for, mcp_trusted_proxy_ranges"),
-        (lambda c: c["mcp_servers"]["everything"].update(auth_type="oauth2"),
-         "mcp_servers.<이름>.issuer"),
-        (lambda c: c["mcp_servers"]["everything"].update(auth_type="oauth2", issuer="https://i.test"),
-         "mcp_servers.<이름>.oauth_identity_binding.mode"),
     ],
 )
 def test_recommended_violations_warn_without_failing(healthy, mutate, item):
@@ -489,3 +503,28 @@ def test_a_secret_file_with_invalid_utf8_is_unverified_not_a_crash(tmp_path):
         path.chmod(0o600)
     report, found = fingerprint_message({"MINT_SECRETS_FILE": str(path)})
     assert found.level is Level.SKIP and "MINT_FINGERPRINT_KEY" in report.incomplete
+
+
+def test_required_environment_policies_fail(healthy):
+    wide = {**ENV, "MCP_TRUSTED_REDIRECT_ORIGINS": "https://app.test, *.com"}
+    assert Level.FAIL in levels(run(good_config(), healthy, env=wide))["OAuth 리다이렉트 출처"]
+    no_tls = {**ENV, "SSL_VERIFY": "false"}
+    assert Level.FAIL in levels(run(good_config(), healthy, env=no_tls))["ssl_verify"]
+    config = good_config()
+    config["mcp_servers"]["everything"].update(auth_type="oauth2", issuer="https://i.test")
+    config["mcp_servers"]["everything"]["oauth_identity_binding"] = {"mode": "enforce"}
+    assert Level.OK in levels(run(config, healthy))["OAuth 리다이렉트 출처"]
+    assert Level.FAIL in levels(run(config, healthy, env={}))["OAuth 리다이렉트 출처"]
+
+
+def test_policy_status_lines_follow_the_settings_behind_each_policy(healthy):
+    report = run(good_config(), healthy)
+    assert set(report.policy_status().values()) == {"충족"}
+    assert "  POL-R-13: 충족" in report.render()
+    config = good_config()
+    config["general_settings"]["disable_env_credential_login"] = False
+    config["litellm_settings"]["ssl_verify"] = False
+    status = run(config, healthy).policy_status()
+    assert status["POL-R-13"] == status["POL-R-17"] == "미충족"
+    assert status["POL-R-04"] == "충족"
+    assert run(None, None).policy_status()["POL-R-17"] == "확인 불가"

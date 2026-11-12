@@ -18,6 +18,7 @@ def test_snippet_has_the_required_guardrail_callback_and_server_entries():
     assert data["guardrails"][-1]["litellm_params"]["guardrail"].endswith(".MintGuardrail")
     assert data["general_settings"]["require_key_mcp_access_defined"] is True
     assert data["general_settings"]["store_prompts_in_spend_logs"] is False
+    assert data["general_settings"]["disable_env_credential_login"] is True
     assert "disable_spend_logs" not in data["general_settings"]
     roles = data["litellm_settings"]["key_generation_settings"]["personal_key_generation"]
     assert roles["allowed_user_roles"] == ["proxy_admin"]
@@ -174,3 +175,39 @@ def test_a_shape_that_cannot_be_edited_safely_stops_with_the_line_to_fix(tmp_pat
     assert "pre_call, pre_mcp_call, post_mcp_call" in str(raised.value)
     assert path.read_text(encoding="utf-8") == text
     assert not list(tmp_path.glob("*.bak-*"))
+
+
+FLAG = "disable_env_credential_login"
+
+
+def test_a_missing_required_flag_is_added_under_its_section_with_a_copy(tmp_path):
+    path = tmp_path / "litellm.config.yaml"
+    text = "general_settings:\n    master_key: abc  # 주석\n\nlitellm_settings:\n  x: 1\n"
+    path.write_text(text, encoding="utf-8", newline="")
+    assert litellm_config.ensure_required_flags(path) == [FLAG]
+    edited = path.read_text(encoding="utf-8")
+    assert f"general_settings:\n    {FLAG}: true\n    master_key: abc  # 주석\n" in edited
+    assert yaml.safe_load(edited)["litellm_settings"] == {"x": 1}
+    (copy,) = tmp_path.glob("litellm.config.yaml.bak-*")
+    assert copy.read_text(encoding="utf-8") == text
+    assert litellm_config.ensure_required_flags(path) == []  # 두 번째는 아무것도 하지 않는다
+
+
+def test_a_missing_section_is_appended_and_a_present_flag_is_never_touched(tmp_path):
+    path = tmp_path / "a.yaml"
+    path.write_text("litellm_settings:\n  x: 1", encoding="utf-8", newline="")
+    assert litellm_config.ensure_required_flags(path) == [FLAG]
+    assert yaml.safe_load(path.read_text(encoding="utf-8"))["general_settings"] == {FLAG: True}
+    kept = tmp_path / "b.yaml"
+    kept.write_text(f"general_settings:\n  {FLAG}: false\n", encoding="utf-8", newline="")
+    assert litellm_config.ensure_required_flags(kept) == []
+    assert not list(tmp_path.glob("b.yaml.bak-*"))
+    assert litellm_config.ensure_required_flags(tmp_path / "missing.yaml") == []
+
+
+def test_an_inline_section_cannot_be_edited_safely(tmp_path):
+    path = tmp_path / "c.yaml"
+    path.write_text("general_settings: {master_key: abc}\n", encoding="utf-8", newline="")
+    with pytest.raises(ControlError, match=FLAG):
+        litellm_config.ensure_required_flags(path)
+    assert not list(tmp_path.glob("c.yaml.bak-*"))

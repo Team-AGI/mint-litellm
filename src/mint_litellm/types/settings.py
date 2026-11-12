@@ -298,6 +298,54 @@ SETTINGS_TABLE: tuple[SettingRow, ...] = (
         reason="사용자가 지정한 메타데이터 주소의 내부망 접근을 막는다.",
     ),
     SettingRow(
+        key="user_url_allowed_hosts",
+        location=SettingLocation.LITELLM_SETTINGS,
+        value="비어 있음",
+        grade=SettingGrade.REQUIRED,
+        self_checks=(SelfCheckItem.REQUIRED_SETTINGS,),
+        reason="목록의 호스트는 내부망 접근 차단을 건너뛰어 조회 목적지를 제한할 수 없다.",
+    ),
+    SettingRow(
+        key="ssl_verify",
+        location=SettingLocation.LITELLM_SETTINGS,
+        value="끄지 않음(환경 변수 SSL_VERIFY 포함)",
+        grade=SettingGrade.REQUIRED,
+        self_checks=(SelfCheckItem.REQUIRED_SETTINGS,),
+        reason="인증서 검증을 끄면 접속 주소의 서버 이름과 인증서 이름이 달라도 연결된다.",
+    ),
+    SettingRow(
+        key="disable_env_credential_login",
+        location=SettingLocation.GENERAL_SETTINGS,
+        value="true",
+        grade=SettingGrade.REQUIRED,
+        self_checks=(SelfCheckItem.REQUIRED_SETTINGS,),
+        reason="마스터 키를 비밀번호로 쓰는 환경 변수 계정 로그인을 막는다.",
+    ),
+    SettingRow(
+        key="OAuth 리다이렉트 출처",
+        location=SettingLocation.ENVIRONMENT,
+        value="허용 출처에 전체 허용 항목 없음, OAuth 서버가 있으면 PROXY_BASE_URL 설정",
+        grade=SettingGrade.REQUIRED,
+        self_checks=(SelfCheckItem.REQUIRED_SETTINGS,),
+        reason="인증 결과 수신 주소를 정한 출처로 한정한다. 기준 주소가 없으면 Host 헤더를 따른다.",
+    ),
+    SettingRow(
+        key="mcp_servers.<이름>.timeout",
+        location=SettingLocation.MCP_SERVERS,
+        value="양수이고 600초 이하(미설정이면 LiteLLM 기본값 적용)",
+        grade=SettingGrade.REQUIRED,
+        self_checks=(SelfCheckItem.REQUIRED_SETTINGS,),
+        reason="도구 호출의 대기·실행 시간에 상한이 있어야 시간을 넘긴 호출이 끝난다.",
+    ),
+    SettingRow(
+        key="mcp_servers.<이름>.authentication_token",
+        location=SettingLocation.MCP_SERVERS,
+        value="서버마다 다른 자격",
+        grade=SettingGrade.REQUIRED,
+        self_checks=(SelfCheckItem.REQUIRED_SETTINGS,),
+        reason="한 서버의 자격을 다른 서버가 함께 쓰면 한쪽 유출이 다른 쪽 침해가 된다.",
+    ),
+    SettingRow(
         key="supported_db_objects",
         location=SettingLocation.GENERAL_SETTINGS,
         value="설정한 경우 mcp 포함",
@@ -352,14 +400,16 @@ SETTINGS_TABLE: tuple[SettingRow, ...] = (
         key="mcp_servers.<이름>.issuer",
         location=SettingLocation.MCP_SERVERS,
         value="발견형 인증 서버는 명시",
-        grade=SettingGrade.RECOMMENDED,
+        grade=SettingGrade.REQUIRED,
+        self_checks=(SelfCheckItem.REQUIRED_SETTINGS,),
         reason="고정하지 않으면 첫 응답의 인가 서버를 그대로 신뢰한다.",
     ),
     SettingRow(
         key="mcp_servers.<이름>.oauth_identity_binding.mode",
         location=SettingLocation.MCP_SERVERS,
-        value="enforce",
-        grade=SettingGrade.RECOMMENDED,
+        value="사용자별 OAuth 서버는 enforce",
+        grade=SettingGrade.REQUIRED,
+        self_checks=(SelfCheckItem.REQUIRED_SETTINGS,),
         reason="nonce 대조와 주체 결속, PKCE 강제를 켠다.",
     ),
     SettingRow(
@@ -396,3 +446,24 @@ OBSERVATION_ITEMS: tuple[str, ...] = (
     "auth_cache_shared",
     "unbound_keys",
 )
+
+# LiteLLM이 구현하는 정책을 MINT가 설정 점검으로 강제하는 대응. 정책 -> 설정 표 행 이름.
+# `mint check`가 정책마다 충족 여부 한 줄을 보인다.
+REUSE_POLICIES: dict[str, tuple[str, ...]] = {
+    "POL-R-04": ("서버 이름·별칭 유일성",),
+    "POL-R-07": ("mcp_servers.<이름>.issuer", "mcp_servers.<이름>.oauth_identity_binding.mode"),
+    "POL-R-09": ("OAuth 리다이렉트 출처",),
+    "POL-R-10": ("mcp_servers.<이름>.oauth_identity_binding.mode",),
+    "POL-R-11": ("user_url_validation", "user_url_allowed_hosts"),
+    "POL-R-12": ("user_url_validation", "user_url_allowed_hosts"),
+    "POL-R-13": ("disable_env_credential_login", "store_prompts_in_spend_logs"),
+    "POL-R-14": ("mcp_servers.<이름>.authentication_token",),
+    "POL-R-17": ("ssl_verify",),
+    "POL-E-18": ("require_key_mcp_access_defined", "mcp_servers.<이름>.allow_all_keys"),
+    "POL-E-24": ("mcp_servers.<이름>.timeout",),
+}
+
+
+def policies_of(key: str) -> tuple[str, ...]:
+    """설정 표 행 이름을 근거로 삼는 LiteLLM 재사용 정책."""
+    return tuple(policy for policy, keys in REUSE_POLICIES.items() if key in keys)
