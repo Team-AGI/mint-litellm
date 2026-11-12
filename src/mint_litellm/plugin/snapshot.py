@@ -62,7 +62,8 @@ SELECT jsonb_build_object(
     'tool_contracts', (
         SELECT coalesce(jsonb_agg(jsonb_build_object(
             'id', t.id, 'credential_scope', t.credential_scope, 'tool', t.tool,
-            'drift', t.drift, 'version', t.version)), '[]'::jsonb) FROM mint.tool_contracts t
+            'drift', t.drift, 'version', t.version, 'risk_grade', t.risk_grade)), '[]'::jsonb)
+        FROM mint.tool_contracts t
         WHERE t.instance_id = %(iid)s AND t.server_id = %(server_id)s
           AND t.tool = %(tool)s AND t.status = 'approved'
           AND EXISTS (SELECT 1 FROM srv WHERE contract_status = 'managed')
@@ -161,6 +162,10 @@ WHERE instance_id = %(iid)s AND id = %(id)s AND status = 'confirmed'
   AND state_version = %(state_version)s AND expires_at > clock_timestamp()
   AND (NOT (SELECT require_separate_confirm_key FROM mint.settings WHERE instance_id = %(iid)s)
        OR confirmed_by_key_token <> requested_by_key_token)
+  AND contract_id IS NOT DISTINCT FROM %(contract_id)s::uuid
+  AND (%(contract_id)s::uuid IS NULL OR EXISTS (
+       SELECT 1 FROM mint.tool_contracts t
+       WHERE t.instance_id = %(iid)s AND t.id = %(contract_id)s::uuid AND t.status = 'approved'))
 """
 
 INSERT_EVENT_SQL = """
@@ -181,6 +186,13 @@ WHERE instance_id = %(iid)s AND id = %(id)s AND status = 'approved'
   AND policy_version_id = %(policy_version_id)s AND contract_version IS NULL
   AND state_version = %(state_version)s
 """
+
+# 계약 관리 서버의 호출별 승인: 받은 때의 계약이 지금도 승인된 계약일 때만 소비한다.
+CONSUME_BOUND_SQL = CONSUME_SQL.replace(
+    "contract_version IS NULL",
+    "contract_id = %(contract_id)s::uuid AND EXISTS (SELECT 1 FROM mint.tool_contracts t"
+    " WHERE t.instance_id = %(iid)s AND t.id = %(contract_id)s::uuid AND t.status = 'approved')",
+)
 
 NEGATIVE_STATE_SQL = """
 SELECT
@@ -295,6 +307,7 @@ class CallApprovalRow:
     contract_version: str | None
     expires_at: datetime
     state_version: int
+    contract_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -312,6 +325,7 @@ class ConfirmationRow:
     confirmed_by_user_id: str
     confirmed_by_key_token: str
     requested_by_key_token: str
+    contract_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -338,6 +352,7 @@ class ToolContractRow:
     tool: str
     drift: str
     version: int
+    risk_grade: str | None = None
 
 
 @dataclass(frozen=True)
@@ -454,6 +469,7 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
                 contract_version=c["contract_version"],
                 expires_at=_time(c["expires_at"]),
                 state_version=c["state_version"],
+                contract_id=c.get("contract_id"),
             )
             for c in doc["call_approvals"]
         ),
@@ -473,14 +489,18 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
         if policy is None
         else PolicyVersionRow(id=policy["id"], bundle_sha256=policy["bundle_sha256"]),
         tool_contracts=tuple(
-            ToolContractRow(c["id"], c["credential_scope"], c["tool"], c["drift"], c["version"])
+            ToolContractRow(
+                c["id"], c["credential_scope"], c["tool"], c["drift"], c["version"],
+                c.get("risk_grade"),
+            )
             for c in doc.get("tool_contracts", ())
         ),
         negative_relation=bool(doc.get("negative_relation", False)),
         self_confirmations=tuple(
             ConfirmationRow(**{
-                **{k: c[k] for k in ConfirmationRow.__dataclass_fields__},
+                **{k: c[k] for k in ConfirmationRow.__dataclass_fields__ if k != "contract_id"},
                 "id": UUID(c["id"]), "expires_at": _time(c["expires_at"]),
+                "contract_id": c.get("contract_id"),
             }) for c in doc.get("self_confirmations", ())
         ),
         egress_targets=tuple((e["value"], e["org_id"]) for e in doc.get("egress_targets", [])),
@@ -566,6 +586,8 @@ class PluginDatabase:
     max_size: int = 8
     acquire_timeout: float = 0.3
     _pool: Any = field(default=None, init=False, repr=False)
+    # 연결 오류를 마지막으로 본 시각. 이보다 먼저 쓴 연결은 함께 끊겼을 수 있어 쓰기 전에 확인한다.
+    _failed_at: float = field(default=0.0, init=False, repr=False)
     # 2단계 표(자기 확인)가 있는 데이터베이스인지. 있다고 한 번 확인되면 다시 묻지 않는다.
     _confirmations_table: bool = field(default=False, init=False, repr=False)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
@@ -630,15 +652,22 @@ class PluginDatabase:
                         # 쥔 동안에만 끊을 대상이다. 풀로 돌아간 연결은 다른 호출이 쓴다.
                         held[:] = [conn]
                         try:
-                            idle = time.monotonic() - getattr(conn, "_mint_used", 0.0)
-                            if idle > _IDLE_CHECK_SECONDS:
+                            used = getattr(conn, "_mint_used", 0.0)
+                            if (
+                                time.monotonic() - used > _IDLE_CHECK_SECONDS
+                                or used < self._failed_at
+                            ):
                                 try:
                                     await conn.execute("")
                                 except OperationalError:
                                     # 나가면 풀이 끊어진 연결을 버리고, 다음에는 다른 연결을 받는다.
+                                    self._failed_at = time.monotonic()
                                     raise _StaleConnection from None
                             try:
                                 return await work(conn)
+                            except OperationalError:
+                                self._failed_at = time.monotonic()
+                                raise
                             finally:
                                 conn._mint_used = time.monotonic()
                         finally:
@@ -717,7 +746,7 @@ class PluginDatabase:
                 inserted = cursor.rowcount == 1
                 if consume is not None and consume.call_approval_id is not None:
                     cursor = await conn.execute(
-                        CONSUME_SQL,
+                        CONSUME_SQL if consume.contract_id is None else CONSUME_BOUND_SQL,
                         {
                             "iid": event.instance_id,
                             "id": consume.call_approval_id,
@@ -729,6 +758,7 @@ class PluginDatabase:
                             "args_fp": consume.args_fp,
                             "policy_version_id": consume.policy_version_id,
                             "state_version": consume.state_version,
+                            "contract_id": consume.contract_id,
                         },
                     )
                     if cursor.rowcount != 1:
@@ -742,7 +772,7 @@ class PluginDatabase:
                         "tool": consume.tool, "args_fp": consume.args_fp,
                         "fp_key_version": sc.fp_key_version,
                         "policy_version_id": consume.policy_version_id,
-                        "state_version": sc.state_version,
+                        "state_version": sc.state_version, "contract_id": consume.contract_id,
                     })
                     if cursor.rowcount != 1:
                         raise ConsumptionLost("CONFIRMATION_REQUIRED")
@@ -772,13 +802,13 @@ class PluginDatabase:
                     INSERT INTO mint.self_confirmations
                         (id, instance_id, org_id, principal_id, server_id, tool, args_fp,
                          fp_key_version, policy_version_id, purpose, requested_by_key_token,
-                         display, expires_at)
+                         display, expires_at, contract_id)
                     SELECT %(id)s, %(iid)s::mint.ident, %(org_id)s::mint.ident, %(principal_id)s,
                            %(server_id)s,
                            %(tool)s, %(args_fp)s, %(fp_key_version)s,
                            %(policy_version_id)s::mint.ident, %(purpose)s, %(key_token)s,
                            %(display)s,
-                           clock_timestamp() + interval '10 minutes'
+                           clock_timestamp() + interval '10 minutes', %(contract_id)s::uuid
                     WHERE (SELECT count(*) FROM mint.self_confirmations
                            WHERE instance_id = %(iid)s AND principal_id = %(principal_id)s
                              AND status = 'pending' AND expires_at > clock_timestamp()) < 20
