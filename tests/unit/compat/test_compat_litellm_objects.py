@@ -1,5 +1,7 @@
 """고정 판본의 실제 LiteLLM 객체를 쓰는 접점 시험. LiteLLM이 설치되지 않으면 건너뛴다."""
 
+import asyncio
+
 import pytest
 
 pytest.importorskip("litellm")
@@ -189,3 +191,39 @@ class TestRegisterContractTools:
         assert manager.tool_name_to_mcp_server_name_mapping == {}
         with pytest.raises(ValueError, match="not found"):
             manager._resolve_mcp_server_for_tool_call("alpha", "wipe")
+
+    def test_a_call_to_an_unmapped_contract_tool_reads_the_names_once_and_proceeds(self):
+        manager = self.manager(mcp_server("sa", "alpha", alias="alpha"))
+        seen = []
+
+        async def original(server_name, name, **kwargs):
+            seen.append(manager._resolve_mcp_server_for_tool_call(server_name, name).server_id)
+            return "ok"
+
+        manager.call_tool = original
+        loads = []
+
+        async def load():
+            loads.append(1)
+            return {"sa": ("wipe",)}
+
+        compat.install_contract_retry(load, manager=manager)
+        compat.install_contract_retry(load, manager=manager)  # 다시 감싸지 않는다
+        for _ in range(2):
+            assert asyncio.run(manager.call_tool(server_name="alpha", name="wipe")) == "ok"
+        assert seen == ["sa", "sa"] and loads == [1]
+
+    def test_a_failed_read_leaves_litellms_own_rejection(self):
+        manager = self.manager(mcp_server("sa", "alpha", alias="alpha"))
+
+        async def original(server_name, name, **kwargs):
+            manager._resolve_mcp_server_for_tool_call(server_name, name)
+
+        manager.call_tool = original
+
+        async def load():
+            raise RuntimeError("database down")
+
+        compat.install_contract_retry(load, manager=manager)
+        with pytest.raises(ValueError, match="not found"):
+            asyncio.run(manager.call_tool(server_name="alpha", name="wipe"))

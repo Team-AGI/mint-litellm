@@ -7,9 +7,10 @@ LiteLLM을 직접 가져오지 않는다. 함수는 가져오기를 호출 시�
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import importlib.metadata
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -253,6 +254,33 @@ def register_contract_tools(
                 mapping[spelling] = prefix
                 added += 1
     return added
+
+
+def install_contract_retry(
+    load: Callable[[], Awaitable[Mapping[str, Sequence[str]]]], *, manager: Any = None
+) -> None:
+    """도구 호출이 서버를 못 풀면 계약 이름을 한 번 다시 읽어 경로표에 올린 뒤 넘긴다.
+
+    방금 승인된 서버는 다음 주기 등록 전에 호출될 수 있다. LiteLLM은 호출 진입에서 훅보다
+    먼저 서버를 풀고 그 앞에 끼어들 훅이 없으므로, 진입 함수를 감싼다. 풀이만 미리 시도해
+    실패할 때만 읽고, 도구 실행은 감싸지 않아 재시도로 부작용이 겹치지 않는다. 읽기가 실패하면
+    LiteLLM이 원래대로 거절한다. 여러 번 불러도 한 번만 감싼다.
+    """
+    mgr = manager if manager is not None else global_manager()
+    original = mgr.call_tool
+    if getattr(original, "mint_contract_retry", False):
+        return
+
+    async def call_tool(server_name: str, name: str, *args: Any, **kwargs: Any) -> Any:
+        try:
+            mgr._resolve_mcp_server_for_tool_call(server_name, name)
+        except ValueError:
+            with contextlib.suppress(Exception):
+                register_contract_tools(await load(), manager=mgr)
+        return await original(server_name, name, *args, **kwargs)
+
+    call_tool.mint_contract_retry = True  # type: ignore[attr-defined]
+    mgr.call_tool = call_tool
 
 
 @dataclass(frozen=True)

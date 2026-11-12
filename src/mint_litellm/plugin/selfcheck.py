@@ -466,19 +466,22 @@ class PluginRuntime:
             self._observed_hashes.setdefault(server_id, {})[name] = sha256(value)
         return results
 
+    async def _load_contract_tools(self) -> dict[str, tuple[str, ...]]:
+        return await asyncio.wait_for(
+            self.database.contract_tools(self.config.instance_id),
+            self.config.decision_budget_seconds * 10,
+        )
+
     async def _register_contract_tools(self, view: LiteLLMView) -> None:
         """계약 도구를 이 워커의 도구 경로표에 올린다. 숨긴 도구의 직접 호출도 판정에 닿게 한다.
 
-        기동 점검과 주기 관측이 돌 때마다 한다. 실패하면 이전 등록을 유지하고 다음 주기에 다시 한다.
+        기동 점검과 주기 관측이 돌 때마다 하고, 그 사이에 승인된 서버는 호출 진입의 재시도가 맡는다
+        (``install_contract_retry``). 실패하면 이전 등록을 유지하고 다음 주기에 다시 한다.
         """
         if view.missing_symbols:
             return
         try:
-            tools = await asyncio.wait_for(
-                self.database.contract_tools(self.config.instance_id),
-                self.config.decision_budget_seconds * 10,
-            )
-            compat.register_contract_tools(tools)
+            compat.register_contract_tools(await self._load_contract_tools())
         except Exception as exc:
             log.warning("계약 도구 경로 등록 실패: %s", type(exc).__name__)
 
@@ -494,6 +497,10 @@ class PluginRuntime:
         """실행 중인 이벤트 루프가 있으면 기동 후 점검을 예약한다(워커마다 한 번)."""
         if self._task is not None:
             return
+        try:
+            compat.install_contract_retry(self._load_contract_tools)
+        except Exception as exc:
+            log.warning("계약 도구 재시도 설치 실패: %s", type(exc).__name__)
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
