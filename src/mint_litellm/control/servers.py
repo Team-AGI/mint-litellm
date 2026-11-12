@@ -1,7 +1,8 @@
 """서버 등록과 중지·재개.
 
 서버의 계약 값(URL 해시·전송 방식·인증 방식)은 등록 시점의 LiteLLM 레지스트리 값이다.
-호출 시점의 레지스트리 값과 하나라도 다르면 플러그인이 호출을 차단한다.
+호출 시점의 레지스트리 값과 하나라도 다르면 플러그인이 호출을 차단한다. 로컬 실행(stdio) 서버는
+LiteLLM 레지스트리 없이 실행 계약 해시만 MINT 표에 등록한다.
 """
 
 from collections.abc import Mapping
@@ -13,6 +14,7 @@ from mint_litellm.control.errors import ControlError, not_found
 from mint_litellm.control.litellm_admin import LiteLLMAdmin
 from mint_litellm.types.decision import normalize_auth_type, url_sha256
 from mint_litellm.types.events import EventKind
+from mint_litellm.types.exec_contract import ExecContract
 from mint_litellm.types.ids import new_uuid7
 
 
@@ -49,7 +51,8 @@ def register(
         raise ControlError(
             "MINT-UNSUPPORTED: server_without_url — URL이 없는 서버(stdio, OpenAPI 명세 기반)는 "
             "등록할 수 없습니다. 계약 값을 URL 해시로 정하므로 HTTP URL로 연결되는 서버만 "
-            "통제할 수 있습니다."
+            "이 명령으로 통제할 수 있습니다. 로컬 실행 서버는 server register-local로 "
+            "실행 계약을 등록하십시오."
         )
     found = [
         (source, value)
@@ -86,10 +89,13 @@ def register(
     }
     existing = fetchone(
         ctx.conn,
-        "SELECT id, status FROM mint.servers WHERE instance_id = %s AND server_id = %s FOR UPDATE",
+        "SELECT id, status, identity_kind FROM mint.servers"
+        " WHERE instance_id = %s AND server_id = %s FOR UPDATE",
         (ctx.instance_id, server_id),
     )
     if existing:
+        if existing["identity_kind"] != "remote":
+            raise ControlError(f"서버 {server_id}는 로컬 실행 서버라 URL로 바꿀 수 없습니다.")
         # 이미 등록된 서버의 재등록은 계약 값을 갱신한다(URL 변경 등). 상태는 바꾸지 않는다.
         if existing["status"] in ("rejected", "terminating", "terminated"):
             raise ControlError(
@@ -111,6 +117,56 @@ def register(
         " auth_type, registered_by) VALUES (%s, %s, %s, 'awaiting_approval', %s, %s, %s, %s)"
         " RETURNING state_version",
         (row_id, ctx.instance_id, server_id, digest, transport, auth_type, ctx.operator.name),
+    )
+    ctx.emit(EventKind.SERVER_REGISTERED, row_id, row["state_version"], payload)
+
+
+def register_local(ctx: Context, server_id: str, contract: ExecContract) -> None:
+    """로컬 실행(stdio) 서버를 LiteLLM 없이 승인 대기 상태로 등록한다.
+
+    계약 값은 URL 해시가 아니라 실행 계약의 해시와 판본이다. 이미 등록된 로컬 서버에 다시
+    실행하면 계약 값을 갱신하고 상태는 바꾸지 않는다(원격 서버의 재등록과 같다).
+    """
+    digest, version = contract.sha256(), contract.schema_version
+    payload = {
+        "server_id": server_id,
+        "identity_kind": "stdio",
+        "exec_contract_sha256": digest,
+        "exec_contract_version": version,
+        "transport": "stdio",
+        "auth_type": "none",
+        "exec_contract": contract.document(),
+    }
+    existing = fetchone(
+        ctx.conn,
+        "SELECT id, status, identity_kind FROM mint.servers"
+        " WHERE instance_id = %s AND server_id = %s FOR UPDATE",
+        (ctx.instance_id, server_id),
+    )
+    if existing:
+        if existing["identity_kind"] != "stdio":
+            raise ControlError(f"서버 {server_id}는 원격 서버로 등록되어 있어 바꿀 수 없습니다.")
+        if existing["status"] in ("rejected", "terminating", "terminated"):
+            raise ControlError(
+                f"서버 {server_id}는 {existing['status']} 상태라 갱신할 수 없습니다."
+            )
+        row = fetchone(
+            ctx.conn,
+            "UPDATE mint.servers SET exec_contract_sha256 = %s, exec_contract_version = %s"
+            " WHERE id = %s RETURNING state_version",
+            (digest, version, existing["id"]),
+        )
+        ctx.emit(EventKind.SERVER_REGISTERED, existing["id"], row["state_version"],
+                 {**payload, "updated": True})
+        return
+    row_id = new_uuid7()
+    row = fetchone(
+        ctx.conn,
+        "INSERT INTO mint.servers (id, instance_id, server_id, status, identity_kind,"
+        " exec_contract_sha256, exec_contract_version, transport, auth_type, registered_by)"
+        " VALUES (%s, %s, %s, 'awaiting_approval', 'stdio', %s, %s, 'stdio', 'none', %s)"
+        " RETURNING state_version",
+        (row_id, ctx.instance_id, server_id, digest, version, ctx.operator.name),
     )
     ctx.emit(EventKind.SERVER_REGISTERED, row_id, row["state_version"], payload)
 

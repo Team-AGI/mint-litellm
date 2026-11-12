@@ -13,6 +13,7 @@ from mint_litellm.control.services.base import (
     service,
     transact,
 )
+from mint_litellm.types.exec_contract import ExecContract
 
 
 def register(
@@ -26,6 +27,12 @@ def register(
     facts = Prefetched(litellm).prefetch("get_server", server_id)
     with transact(ctx):
         domain.register(ctx, facts, server_id, url, config)  # type: ignore[arg-type]
+
+
+def register_local(ctx: Context, server_id: str, contract: ExecContract) -> None:
+    require_role(ctx, "server register-local")
+    with transact(ctx):
+        domain.register_local(ctx, server_id, contract)
 
 
 @service("server suspend")

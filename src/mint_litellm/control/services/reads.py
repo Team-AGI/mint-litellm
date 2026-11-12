@@ -57,7 +57,8 @@ def server(conn: psycopg.Connection, instance: str, server_id: str) -> dict | No
     row = fetchone(
         conn,
         "SELECT server_id, status, url_sha256, transport, auth_type, registered_by, state_version,"
-        " contract_status, deployment_drift, deployment_drift_fields, last_observed_at"
+        " identity_kind, exec_contract_sha256, contract_status, deployment_drift,"
+        " deployment_drift_fields, last_observed_at"
         " FROM mint.servers WHERE instance_id = %s AND server_id = %s",
         (instance, server_id),
     )

@@ -206,6 +206,7 @@ def check_scope_and_permission(
     ctx: Context, litellm: LiteLLMAdmin, relation: dict, scope_type: str, scope_id: str
 ) -> None:
     """승인 범위가 이용 관계에 속하고, 그 대상에 LiteLLM 서버 권한이 있는지 읽어 확인한다.
+    로컬 실행(stdio) 서버는 범위 확인만 하고 LiteLLM 서버 권한은 요구하지 않는다.
 
     ``object_permission.mcp_servers`` 항목은 서버 식별자 형식이어야 하고, 대상에 이 서버의 권한
     (직접 부여 또는 서버가 속한 접근 그룹)이 있어야 승인할 수 있다. 별칭이나 이름은 새 서버가
@@ -221,6 +222,16 @@ def check_scope_and_permission(
     if target is None:
         raise ControlError(f"LiteLLM에서 {label} {scope_id}을(를) 찾을 수 없습니다.")
     _require_scope_in_relation(ctx, relation, scope_type, scope_id, target)
+    local = fetchone(
+        ctx.conn,
+        "SELECT 1 AS x FROM mint.servers WHERE instance_id = %s AND server_id = %s"
+        " AND identity_kind = 'stdio'",
+        (ctx.instance_id, server_id),
+    )
+    if local:
+        # 로컬 실행 서버는 LiteLLM 레지스트리에 없고 LiteLLM이 키·팀에 서버 권한을 주지도 않는다.
+        # 호출 권한은 이 승인이 정하므로 LiteLLM 쪽 서버 권한은 요구하지 않는다.
+        return
     if scope_type == "key" and target.get("team_id"):
         # 팀 소속 키의 서버 권한은 팀이 허용한 서버의 부분집합이어야 한다(LiteLLM이 아니면 403).
         if not fetchone(
@@ -501,6 +512,17 @@ def _approved_contract_id(ctx: Context, server_id: str, tool: str):
     return contract["id"]
 
 
+def _exec_contract_sha256(ctx: Context, server_id: str) -> str | None:
+    """로컬 실행 서버에 지금 등록된 실행 계약 해시. 호출별 승인은 이 계약에 묶인다(아니면 None)."""
+    row = fetchone(
+        ctx.conn,
+        "SELECT exec_contract_sha256 FROM mint.servers WHERE instance_id = %s AND server_id = %s"
+        " FOR SHARE",
+        (ctx.instance_id, server_id),
+    )
+    return None if row is None else row["exec_contract_sha256"]
+
+
 def call_request(
     ctx: Context,
     *,
@@ -537,13 +559,14 @@ def call_request(
         ctx.conn,
         "INSERT INTO mint.call_approvals (id, instance_id, org_id, principal_type, principal_id,"
         " server_id, tool, args_fp, fp_key_version, policy_version_id, status, requested_by,"
-        " expires_at, contract_id, target, action)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s)"
+        " expires_at, contract_id, exec_contract_sha256, target, action)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s, %s)"
         " RETURNING state_version",
         (call_id, ctx.instance_id, org_id, principal_type, principal_id, server_id, tool, args_fp,
          fp_key_version, policy_version_id, requested_by,
          datetime.now(UTC) + timedelta(minutes=expires_in_minutes),
-         _approved_contract_id(ctx, server_id, tool), target, action),
+         _approved_contract_id(ctx, server_id, tool), _exec_contract_sha256(ctx, server_id),
+         target, action),
     )
     ctx.emit(
         EventKind.CALL_APPROVAL_REQUESTED,

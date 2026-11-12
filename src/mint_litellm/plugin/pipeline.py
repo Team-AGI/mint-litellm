@@ -690,6 +690,7 @@ def match_call_approval(
             and bound_to_current_contract(snapshot, tool, row.contract_id)
             and row.target == bound_target
             and row.action == bound_action
+            and row.exec_contract_sha256 == resolved.exec_contract_sha256
             and row.expires_at > snapshot.now
         )
 
@@ -713,6 +714,7 @@ def match_call_approval(
             contract_id=row.contract_id,
             target=row.target,
             action=row.action,
+            exec_contract_sha256=row.exec_contract_sha256,
         )
     if candidates:
         return StageResult.stop(Reason.CALL_APPROVAL_STALE), None
@@ -778,6 +780,7 @@ def match_confirmation(
         and c.server_id == resolved.server_id and c.tool == tool
         and c.args_fp == fingerprint and c.fp_key_version == config.fingerprint_key_version
         and bound_to_current_contract(snapshot, tool, c.contract_id)
+        and c.exec_contract_sha256 == resolved.exec_contract_sha256
         and c.expires_at > snapshot.now
         and (snapshot.settings is not None and (
             not snapshot.settings.require_separate_confirm_key
@@ -795,7 +798,7 @@ def match_confirmation(
             principal_id=c.principal_id, server_id=c.server_id, tool=c.tool, args_fp=c.args_fp,
             policy_version_id=c.policy_version_id, state_version=c.state_version,
             confirmation=ConfirmationConsume(c.id, c.org_id, c.fp_key_version, c.state_version),
-            contract_id=c.contract_id,
+            contract_id=c.contract_id, exec_contract_sha256=c.exec_contract_sha256,
         )
     reason = Reason.CONFIRMATION_STALE if candidates else Reason.CONFIRMATION_REQUIRED
     return StageResult.stop(reason), None
@@ -1194,6 +1197,7 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
                     "purpose": obligation.purpose, "key_token": run.principal.key_id,
                     "display": confirmation_display(hook.arguments, obligation.display_fields),
                     "contract_id": contract.id if contract is not None else None,
+                    "exec_contract_sha256": resolved.exec_contract_sha256,
                 })
         except Exception as exc:
             # 확인을 만들지 못해도 이미 stop이며, 표시 값은 다른 저장소로 보내지 않는다.

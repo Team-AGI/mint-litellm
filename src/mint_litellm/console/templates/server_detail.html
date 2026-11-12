@@ -7,7 +7,8 @@
   <dt>인증</dt><dd>{{ L.pick(L.AUTH_TYPE, s.auth_type) }}</dd>
   <dt>등록자</dt><dd>{{ s.registered_by | who }}</dd>
   <dt>마지막 관측</dt><dd>{{ s.last_observed_at | when }}</dd>
-  <dt>주소 지문</dt><dd><code>{{ s.url_sha256 }}</code></dd>
+  {% if s.identity_kind == 'stdio' %}<dt>실행 계약 지문</dt><dd><code>{{ s.exec_contract_sha256 }}</code></dd>
+  {% else %}<dt>주소 지문</dt><dd><code>{{ s.url_sha256 }}</code></dd>{% endif %}
 </dl>
 <h2>도구</h2>
 {% if s.tools %}

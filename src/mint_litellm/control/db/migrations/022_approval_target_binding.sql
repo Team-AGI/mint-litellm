@@ -11,7 +11,7 @@ CREATE TRIGGER call_approvals_2_frozen BEFORE UPDATE ON mint.call_approvals
     FOR EACH ROW EXECUTE FUNCTION mint.freeze_columns(
         'instance_id', 'org_id', 'principal_type', 'principal_id', 'server_id', 'tool',
         'args_fp', 'fp_key_version', 'policy_version_id', 'contract_version', 'contract_id',
-        'target', 'action', 'requested_by', 'expires_at');
+        'exec_contract_sha256', 'target', 'action', 'requested_by', 'expires_at');
 
 -- 플러그인은 승인된 배포 계약의 URL과 허용 도구로 서버의 대상·행위 프로필을 고른다(읽기만).
 GRANT SELECT (instance_id, server_id, url, allowed_tools, status)
