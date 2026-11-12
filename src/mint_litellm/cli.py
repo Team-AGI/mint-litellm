@@ -368,6 +368,7 @@ def _approve(run: Run) -> None:
             max_result_bytes=a.max_result_bytes,
             max_result_items=a.max_result_items,
             scan_result=not a.no_result_scan,
+            response_scan=a.response_scan,
         ),
     )
     _created(run, approval_id)
@@ -845,6 +846,9 @@ ARGUMENTS: dict[str, list[Any]] = {
         _a("--max-result-items", type=int, help="결과 한 건의 항목(내용 블록) 수 상한"),
         _a("--no-result-scan", action="store_true",
            help="결과 본문의 지시문 표지 검사를 끈다(계약 관리 서버는 기본으로 검사한다)"),
+        _a("--response-scan", choices=["block", "mask", "observe"],
+           help="결과의 비밀·개인정보 처리: block(결과를 막음), mask(찾은 값만 가림, 기본), "
+           "observe(기록만)"),
         _a("--confirm-tool", action="append",
            help="호출 때 본인 확인을 요구할 도구(반복 가능, 승인 도구 안에 있어야 한다)"),
         _a("--confirm-purpose", help="본인 확인의 목적(--confirm-tool과 함께)"),
