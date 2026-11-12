@@ -69,7 +69,7 @@ def test_each_detector_finds_its_kind(text, kind):
         "card 4111 1111 1111 1112",  # Luhn 불일치
         "order 1234567890123456",  # 발급사 접두와 Luhn이 맞지 않는 긴 숫자
         "rrn-like 991399-1234567 and 900101-9234567",  # 달·성별 자리 오류
-        "price 010 and range 2024-01-12-3456",
+        "price 010 and range 3456-7890-12",
         "",
     ],
 )
