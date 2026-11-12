@@ -6,7 +6,6 @@ import os
 import socket
 import time
 import uuid
-from pathlib import Path
 
 import pytest
 
@@ -16,7 +15,7 @@ pytest.importorskip("psycopg_pool")
 from plugin_helpers import config, evaluator, request, snapshot, user_principal  # noqa: E402
 from psycopg.conninfo import conninfo_to_dict, make_conninfo  # noqa: E402
 
-import mint_litellm  # noqa: E402
+from mint_litellm.control.db.migrate import apply_migrations  # noqa: E402
 from mint_litellm.plugin import snapshot as snapshot_module  # noqa: E402
 from mint_litellm.plugin.buffer import (  # noqa: E402
     ConsumeRequest,
@@ -47,7 +46,6 @@ FP_KEY = bytes(range(32))
 ARGS_FP = argument_fingerprint({"q": "x"}, FP_KEY)
 
 
-MIGRATION = Path(mint_litellm.__file__).parent / "control" / "db" / "migrations" / "001_initial.sql"
 ADMIN_URL = os.environ.get("MINT_TEST_DATABASE_URL")
 
 
@@ -63,7 +61,7 @@ def plugin_database():
     params["dbname"] = name
     url = make_conninfo(**params)
     with psycopg.connect(url, autocommit=True) as conn:
-        conn.execute(MIGRATION.read_text(encoding="utf-8"))
+        apply_migrations(conn)
     yield url
     with psycopg.connect(ADMIN_URL, autocommit=True) as admin:
         admin.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')

@@ -13,7 +13,7 @@ from mint_litellm.types.settings import Mode
 INSTANCE = "inst1"
 PAGES = [
     "/", "/servers", "/servers/srv-ok", "/approvals", "/revocations", "/call-approvals",
-    "/ledger", "/policy", "/admin",
+    "/endpoints", "/ledger", "/policy", "/admin",
 ]
 # 화면에 그대로 나오면 안 되는 영어 열거값(상세의 「코드」 칸과 원장의 사건 키는 예외)
 ENUMS = ["awaiting_approval", "enforce", "approver", "terminated", "suspended", "pending"]
@@ -67,7 +67,8 @@ def test_the_menu_lists_only_screens_that_exist(admin):
     labels = re.findall(r'<nav class="sidebar".*?</nav>', html, re.S)[0]
     names = re.findall(r">([^<]+)</a>", labels)
     assert names == ["개요", "MCP 서버", "신청·수용검증", "승인 대기열", "계약 변경",
-                     "거부·철회", "호출별 승인", "원장", "정책·관측 설정", "운영자·조직"]
+                     "거부·철회", "호출별 승인", "단말 설치", "원장", "정책·관측 설정",
+                     "운영자·조직"]
     for text in ("준비 중", "예정", "곧 제공", "TBD"):
         assert text not in html
 

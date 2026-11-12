@@ -8,11 +8,14 @@ from fake_litellm import CONTROL_KEY, FakeLiteLLM
 from mint_litellm.control.litellm_write import (
     LiteLLMForbidden,
     LiteLLMHttpError,
+    LiteLLMKitKeys,
     LiteLLMSync,
     LiteLLMUnreachable,
     WriteRefused,
+    check_kit_write,
     check_write,
 )
+from mint_litellm.endpoint.routes import KIT_KEY_ROUTES
 
 SRV = "srv-1"
 FULL = {"mcp_servers": [SRV], "mcp_tool_permissions": {SRV: ["a"]}}
@@ -211,3 +214,70 @@ def test_the_only_server_update_allowed_closes_allow_all_keys(fake, client):
 def test_a_server_update_with_anything_else_is_refused(body):
     with pytest.raises(WriteRefused):
         check_write("PUT", "/v1/mcp/server", body)
+
+
+# --- 단말 설치 묶음 키 -------------------------------------------------------------------------
+
+KIT_KEY = {"user_id": "u1", "team_id": "t1", "key_alias": "mint-kit-ab12",
+           "allowed_routes": list(KIT_KEY_ROUTES)}  # fmt: skip
+
+
+def test_a_kit_key_is_limited_to_the_hook_routes_and_the_workers_client_cannot_make_one(
+    fake, client
+):
+    kit = LiteLLMKitKeys(fake.url, CONTROL_KEY)
+    key = kit.generate_kit_key(user_id="u1", team_id="t1", alias="mint-kit-ab12")
+    assert key == "sk-generated-1"
+    assert fake.generated == [KIT_KEY]
+    assert fake.generated[0]["allowed_routes"] == [
+        "/mint/v1/decide", "/mint/v1/result", "/mint/v1/endpoint/report"]
+    kit.generate_kit_key(user_id="u2", team_id=None, alias="mint-kit-cd34")
+    assert "team_id" not in fake.generated[1]
+    with pytest.raises(WriteRefused):
+        client._write("POST", "/key/generate", KIT_KEY)  # 제어 평면 클라이언트는 만들지 못한다.
+    assert len(fake.generated) == 2
+
+
+@pytest.mark.parametrize("body", [
+    {**KIT_KEY, "allowed_routes": ["/mint/v1/decide", "llm_api_routes"]},
+    {**KIT_KEY, "allowed_routes": []},
+    {**KIT_KEY, "key_alias": "someone-elses"},
+    {**KIT_KEY, "models": ["gpt"]},
+    {**KIT_KEY, "user_role": "proxy_admin"},
+    {**KIT_KEY, "user_id": ""},
+    {k: v for k, v in KIT_KEY.items() if k != "user_id"},
+    None,
+])
+def test_a_kit_key_request_that_widens_the_key_is_refused_before_sending(fake, body):
+    kit = LiteLLMKitKeys(fake.url, CONTROL_KEY)
+    with pytest.raises(WriteRefused):
+        kit._write("POST", "/key/generate", body)
+    assert fake.requests == []
+
+
+def test_kit_keys_are_deleted_by_their_own_alias_only(fake):
+    kit = LiteLLMKitKeys(fake.url, CONTROL_KEY)
+    kit.delete_kit_keys(["mint-kit-ab12"])
+    assert fake.writes("/key/delete") == [
+        ("POST", "/key/delete", {"key_aliases": ["mint-kit-ab12"]})
+    ]
+    for body in (None, {"key_aliases": []}, {"key_aliases": ["prod-key"]},
+                 {"key_aliases": ["mint-kit-a"], "keys": ["sk-1"]}):  # fmt: skip
+        with pytest.raises(WriteRefused):
+            check_kit_write("POST", "/key/delete", body)
+    for method, path in (("POST", "/key/update"), ("PUT", "/key/generate"),
+                         ("POST", "/user/new"), ("POST", "/key/regenerate")):
+        with pytest.raises(WriteRefused):
+            check_kit_write(method, path, KIT_KEY)
+
+
+def test_a_key_that_is_already_gone_counts_as_deleted_but_other_failures_do_not(fake):
+    kit = LiteLLMKitKeys(fake.url, CONTROL_KEY)
+    fake.fail_writes["/key/delete"] = 404
+    kit.delete_kit_keys(["mint-kit-ab12"])
+    fake.fail_writes["/key/delete"] = 500
+    with pytest.raises(LiteLLMHttpError):
+        kit.delete_kit_keys(["mint-kit-ab12"])
+    fake.fail_writes["/key/delete"] = 403
+    with pytest.raises(LiteLLMForbidden):
+        kit.delete_kit_keys(["mint-kit-ab12"])

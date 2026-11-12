@@ -5,6 +5,7 @@ import time
 from collections import deque
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -18,6 +19,7 @@ from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import connect
 from mint_litellm.control.errors import AdminCode, AdminError, AuthError, ControlError
 from mint_litellm.control.litellm_admin import LiteLLMAdmin
+from mint_litellm.control.litellm_write import LiteLLMKitKeys
 from mint_litellm.control.services import console_sessions
 from mint_litellm.control.stage2_config import Stage2Settings
 
@@ -67,6 +69,11 @@ class ConsoleConfig:
     staff_database_url: str | None = None
     # 화면에 보이는 모든 시각의 시간대(IANA 이름). 환경 변수 MINT_CONSOLE_TIME_ZONE로 바꾼다.
     time_zone: str = DEFAULT_TIME_ZONE
+    # 단말 설치 묶음의 사용자 키를 발급하는 키로 연 클라이언트. 없으면 묶음을 내려받을 수 없다.
+    kit_issuer: LiteLLMKitKeys | None = None
+    # 단말이 판정 경로를 부르는 주소(없으면 LiteLLM 주소)와 그 서버 인증서(사설 인증 기관이면)
+    endpoint_url: str | None = None
+    endpoint_ca_pem: str | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "ConsoleConfig":
@@ -81,9 +88,18 @@ class ConsoleConfig:
             ZoneInfo(zone)
         except (ZoneInfoNotFoundError, ValueError):
             raise ControlError(f"MINT_CONSOLE_TIME_ZONE을 알 수 없습니다: {zone}") from None
+        issuer_key = (env.get("MINT_KIT_ISSUER_KEY") or "").strip()
+        ca_file = (env.get("MINT_ENDPOINT_CA_FILE") or "").strip()
+        try:
+            ca_pem = Path(ca_file).read_text(encoding="utf-8") if ca_file else None
+        except OSError:
+            raise ControlError("MINT_ENDPOINT_CA_FILE을 읽을 수 없습니다.") from None
         return cls(
             control, stage2, control.litellm_url, admin, control.require_database(), staff_url,
             zone,
+            kit_issuer=LiteLLMKitKeys(control.litellm_url, issuer_key) if issuer_key else None,
+            endpoint_url=(env.get("MINT_ENDPOINT_PUBLIC_URL") or "").strip() or None,
+            endpoint_ca_pem=ca_pem,
         )
 
     @property

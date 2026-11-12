@@ -24,6 +24,14 @@ SERVER = {
     "terminating": Status("종료 중", "wait"),
     "terminated": Status("종료됨", "off"),
 }
+# 단말 설치 묶음의 설치 상태: 관리형만 정상이고, 사용자 수준은 관리되지 않는 단말이다.
+INSTALL = {
+    "managed": Status("관리형", "ok"),
+    "user": Status("관리되지 않음", "error"),
+    "pending": Status("보고 전", "wait"),
+    "removed": Status("제거됨", "off"),
+    "revoked": Status("연결 해제", "block"),
+}
 APPROVAL = {
     "pending": Status("대기", "wait"),
     "active": Status("유효", "ok"),
@@ -171,7 +179,7 @@ ALLOWLIST_KIND = {
     "egress_target": "외부 전송 대상",
     "registry_source": "레지스트리 출처",
 }
-TRANSPORT = {"http": "HTTP", "sse": "SSE", "streamable_http": "스트리밍 HTTP"}
+TRANSPORT = {"http": "HTTP", "sse": "SSE", "streamable_http": "스트리밍 HTTP", "stdio": "로컬 실행"}
 AUTH_TYPE = {
     "none": "없음",
     "api_key": "API 키",
@@ -336,6 +344,7 @@ NOTICES = {
     "staff_cancelled": "취소했습니다.",
     "consent_given": "동의를 등록했습니다.",
     "consent_withdrawn": "동의를 철회했습니다.",
+    "kit_revoked": "단말 연결을 해제했습니다.",
 }
 
 
