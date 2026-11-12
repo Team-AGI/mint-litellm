@@ -111,10 +111,12 @@ def desired_for_target(
     """
     rows = fetchall(
         conn,
-        "SELECT id, server_id, tools, status FROM mint.approvals"
-        " WHERE instance_id = %s AND scope_type = %s AND scope_id = %s AND ("
-        " (status = 'active' AND valid_from <= now() AND valid_until > now())"
-        " OR (status = 'pending' AND valid_until > now()))",
+        "SELECT a.id, a.server_id, a.tools, a.status FROM mint.approvals a"
+        " JOIN mint.servers s ON s.instance_id = a.instance_id AND s.server_id = a.server_id"
+        " WHERE a.instance_id = %s AND a.scope_type = %s AND a.scope_id = %s"
+        " AND s.identity_kind = 'remote' AND ("  # 로컬 서버는 LiteLLM 권한으로 옮기지 않는다
+        " (a.status = 'active' AND a.valid_from <= now() AND a.valid_until > now())"
+        " OR (a.status = 'pending' AND a.valid_until > now()))",
         (instance_id, scope_type, scope_id),
     )
     servers: set[str] = set()

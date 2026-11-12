@@ -130,6 +130,12 @@ COMMANDS: tuple[CliCommand, ...] = (
         events=(EventKind.SERVER_REGISTERED,),
     ),
     CliCommand(
+        path=("server", "register-local"),
+        summary="로컬 실행(stdio) 서버를 LiteLLM 없이 실행 계약으로 승인 대기 상태로 등록한다.",
+        roles=ADMIN_ONLY,
+        events=(EventKind.SERVER_REGISTERED,),
+    ),
+    CliCommand(
         path=("server", "suspend"),
         summary="서버를 중지한다. 중지된 서버의 호출은 차단된다.",
         roles=ADMIN_ONLY,

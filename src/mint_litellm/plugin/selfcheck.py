@@ -170,6 +170,8 @@ def check_items(
     add(SelfCheckItem.GUARDRAIL_ORDER, definition_ok, definition_detail)
 
     by_id = {entry.server_id: entry for entry in view.registry}
+    if controlled is not None:
+        controlled = registry_backed(controlled)
     if controlled is None:
         add(SelfCheckItem.KEY_ACCESS_STRICT, False, "MINT database unavailable")
         add(SelfCheckItem.SERVER_REGISTRY_MATCH, False, "MINT database unavailable")
@@ -232,6 +234,11 @@ def check_items(
     return results
 
 
+def registry_backed(servers: Sequence[RegisteredServer]) -> list[RegisteredServer]:
+    """LiteLLM 레지스트리와 대조하는 서버. 로컬 실행(stdio) 서버는 MINT 표만으로 다룬다."""
+    return [s for s in servers if s.identity_kind == "remote"]
+
+
 def contract_mismatches(
     view: LiteLLMView, controlled: Sequence[RegisteredServer]
 ) -> list[tuple[str, str]]:
@@ -241,8 +248,13 @@ def contract_mismatches(
     경우는 자가 점검 5번이 기동을 막는다.
     """
     by_id = {entry.server_id: entry for entry in view.registry}
-    found = []
-    for server in controlled:
+    found = [
+        # 로컬 서버와 같은 식별자가 레지스트리에 있으면 다른 서버로 오인될 수 있다.
+        (server.server_id, "identity_kind")
+        for server in controlled
+        if server.identity_kind == "stdio" and server.server_id in by_id
+    ]
+    for server in registry_backed(controlled):
         if server.status not in CONTROLLED_SERVER_STATUSES:
             continue
         entry = by_id.get(server.server_id)
@@ -477,7 +489,7 @@ class PluginRuntime:
             self.database.registered_servers(self.config.instance_id),
             self.config.decision_budget_seconds * 10,
         )
-        return {s.server_id for s in servers if s.contract_status != "managed"}
+        return {s.server_id for s in registry_backed(servers) if s.contract_status != "managed"}
 
     async def _register_contract_tools(self, view: LiteLLMView) -> None:
         """계약 도구를 이 워커의 도구 경로표에 올린다. 숨긴 도구의 직접 호출도 판정에 닿게 한다.

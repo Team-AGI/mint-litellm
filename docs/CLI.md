@@ -27,6 +27,7 @@
 | `mint-litellm operator remove` | `admin` | 운영자를 삭제한다. 토큰이 끝나고 그 사용자의 콘솔 세션이 폐기된다. 마지막 관리자와 본인은 삭제할 수 없다. | 없음 | `operator_removed` |
 | `mint-litellm operator set-role` | `admin` | 운영자의 역할을 바꾼다(`--role`). 그 사용자의 콘솔 세션이 폐기된다. 마지막 관리자는 낮출 수 없다. | 없음 | `operator_role_changed` |
 | `mint-litellm server register` | `admin` | LiteLLM에 등록된 서버를 승인 대기 상태로 등록한다. | `/v1/mcp/server/{server_id}` | `server_registered` |
+| `mint-litellm server register-local` | `admin` | 로컬 실행(stdio) 서버를 LiteLLM 없이 실행 계약(`--contract` JSON 파일)으로 승인 대기 상태로 등록한다. | - | `server_registered` |
 | `mint-litellm server suspend` | `admin` | 서버를 중지한다. 중지된 서버의 호출은 차단된다. | - | `server_suspended` |
 | `mint-litellm server resume` | `admin` | 중지한 서버를 다시 승인 상태로 되돌린다. | - | `server_resumed` |
 | `mint-litellm relation add` | `admin` | 조직·팀·목적·서버를 묶는 이용 관계를 만든다. | - | `relation_created` |
@@ -104,7 +105,7 @@
 
 - 주기가 된 일정(`schedules`)을 한 주기에 한 번 작업으로 등록하고, 임대가 만료된 `running` 작업을 `pending`으로 되돌리고(시도 한 번으로 센다), 대기 작업을 하나씩 임대해 실행한다. 실행 중에는 임대(`MINT_WORKER_LEASE_SECONDS`, 기본 60초)를 1/3마다 연장하고, 연장에 실패하면 그 작업의 외부 호출을 멈춘다.
 - 실패한 작업은 `min(2^시도 횟수 × 5초, 10분)` 뒤에 다시 시도하고, 시도 8번째 실패에서 `failed`가 되며 경보 `job_failed`(같은 종류·대상은 한 건으로 묶고 횟수만 올린다)를 남긴다. 오류 메시지는 저장하지 않고 오류 코드만 남긴다.
-- 이 판본에서 처리기가 있는 작업은 `submission_poll`(`MINT_SUBMISSION_POLL_SECONDS`마다 LiteLLM 제출을 신청으로 만든다), `intake_run`(수용검증), `session_verify`(콘솔 세션 재확인), `evidence_expiry_scan`(1시간마다 증거 만료 7일 전 경보와 재검사 등록), `approval_expiry_scan`(1분마다 만료된 호출별 승인·본인 확인을 `expired`로 표시), `seal`(1분마다 미봉인 사건을 해시 연쇄로 봉인), `export_negative_state`(부정 상태 전이가 커밋될 때 등록), `export_checkpoint`(10분마다, 기동 직후 한 번)이다. 나머지 종류는 해당 기능이 들어올 때 붙으며, 그 전에는 등록할 수 없다.
+- 이 판본에서 처리기가 있는 작업은 `submission_poll`(`MINT_SUBMISSION_POLL_SECONDS`마다 LiteLLM 제출을 신청으로 만든다), `intake_run`(수용검증), `session_verify`(콘솔 세션 재확인), `evidence_expiry_scan`(1시간마다 증거 만료 7일 전 경보와 재검사 등록), `approval_expiry_scan`(1분마다 만료된 호출별 승인·본인 확인을 `expired`로 표시), `endpoint_result_scan`(1분마다 결과 보고 없이 5분이 지난 허용된 로컬 서버 호출에 `call_outcome_unknown`(사유 `no_report`)을 남긴다), `seal`(1분마다 미봉인 사건을 해시 연쇄로 봉인), `export_negative_state`(부정 상태 전이가 커밋될 때 등록), `export_checkpoint`(10분마다, 기동 직후 한 번)이다. 나머지 종류는 해당 기능이 들어올 때 붙으며, 그 전에는 등록할 수 없다.
 - 60초마다 내보내기 파일과 DB를 대조해 되돌림을 판정한다. 처음 어긋나면 봉인·내보내기를 보류하고, 두 번 연속 어긋나거나 파일이 없거나 검증되지 않으면 외부 쓰기를 모두 멈춘다(`restore_blocked`로 대기, 시도 횟수 불변). 외부 쓰기 직전마다 같은 판정과 임대 유효성을 다시 확인한다.
 - SIGTERM·SIGINT를 받으면 실행 중인 작업에 취소를 알린다. 작업이 그대로 끝나면 완료로 기록하고, 취소를 받아 멈추면 시도 횟수를 올리지 않고 임대를 놓은 뒤 종료한다.
 
@@ -196,7 +197,7 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 
 ## 서버 등록의 계약 URL
 
-`server register`는 서버의 URL 해시를 계약 값으로 저장한다. URL은 `--url`, LiteLLM 설정 파일(`--config` 또는 `MINT_LITELLM_CONFIG`의 `mcp_servers.<이름>.url`, `server_id`가 같은 항목), 관리 API 응답 순으로 정하며 출처는 사건의 `url_source`(`operator`, `config_file`, `registry`)에 남는다. 제어 평면 키는 제한된 키라서 관리 API가 URL을 응답하지 않는 것이 보통이다. 둘 이상의 출처가 보이면 모두 같아야 한다. URL이 없는 서버(stdio, OpenAPI 명세 기반)는 `MINT-UNSUPPORTED`(사유 `server_without_url`)로 거부한다. 이미 등록된 서버에 다시 실행하면 계약 값을 갱신한다. `status`는 플러그인이 관측한 계약 불일치(`server_identity_mismatch_observed`)를 서버를 다시 등록하기 전까지 경보로 표시한다.
+`server register`는 서버의 URL 해시를 계약 값으로 저장한다. URL은 `--url`, LiteLLM 설정 파일(`--config` 또는 `MINT_LITELLM_CONFIG`의 `mcp_servers.<이름>.url`, `server_id`가 같은 항목), 관리 API 응답 순으로 정하며 출처는 사건의 `url_source`(`operator`, `config_file`, `registry`)에 남는다. 제어 평면 키는 제한된 키라서 관리 API가 URL을 응답하지 않는 것이 보통이다. 둘 이상의 출처가 보이면 모두 같아야 한다. URL이 없는 서버(stdio, OpenAPI 명세 기반)는 `MINT-UNSUPPORTED`(사유 `server_without_url`)로 거부한다. 로컬 실행(stdio) 서버는 `server register-local <server_id> --contract <파일>`로 등록한다. 계약 파일은 실행 경로(`executable`, 절대 경로), `argv`, 작업 디렉터리(`cwd`, 선택), `executable_sha256`, `script_sha256`(선택), 비밀이 아닌 `env`, 비밀 참조 ID(`secret_refs`)를 담은 JSON이고, 서버 행에는 URL 해시 없이 계약 해시와 판본이 저장된다. 이 서버는 LiteLLM 레지스트리·접근 권한 없이 MINT 표만으로 등록·승인되며 `check`와 플러그인 자가 점검의 레지스트리 대조에서 빠진다. 이미 등록된 서버에 다시 실행하면 계약 값을 갱신한다. `status`는 플러그인이 관측한 계약 불일치(`server_identity_mismatch_observed`)를 서버를 다시 등록하기 전까지 경보로 표시한다.
 
 ## 출력 형식
 

@@ -25,6 +25,7 @@ MENU = (
     ("/contracts", "계약 변경"),
     ("/revocations", "거부·철회"),
     ("/call-approvals", "호출별 승인"),
+    ("/endpoints", "단말 설치"),
     ("/ledger", "원장"),
     ("/policy", "정책·관측 설정"),
     ("/admin", "운영자·조직"),
@@ -32,6 +33,7 @@ MENU = (
 STAFF_MENU = (
     ("/staff", "사용 가능한 서버·도구"),
     ("/staff/confirmations", "본인 확인 요청"),
+    ("/staff/endpoint", "단말 설치"),
     ("/staff/consents", "동의 관리·내 기록"),
 )
 ICONS = {"ok": "✓", "wait": "◷", "error": "▲", "block": "⊘", "off": "–"}

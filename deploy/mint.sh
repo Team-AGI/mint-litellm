@@ -34,6 +34,62 @@ ensure_secrets() {
     chmod 700 "$dir"
 }
 
+# 직원 화면의 단말 설치 묶음이 사용자 키를 발급할 때 쓰는 LiteLLM 키(/key/generate, /key/delete만 연 키).
+# 비밀 폴더에 없을 때만 마스터 키로 한 번 만들어 두고, 있으면 그대로 콘솔에 넘긴다.
+# 만들지 못해도 기동은 계속하며(묶음 내려받기만 막힌다) 다음 up·upgrade가 다시 시도한다.
+KIT_ISSUER_SCRIPT=$(cat <<'PY'
+import json, os, secrets, sys, time, urllib.error, urllib.request
+base = "http://litellm:4000"
+headers = {"Authorization": "Bearer " + os.environ["LITELLM_MASTER_KEY"],
+           "Content-Type": "application/json"}
+
+
+def post(path, body):
+    request = urllib.request.Request(base + path, json.dumps(body).encode(), headers, method="POST")
+    with urllib.request.urlopen(request, timeout=10) as reply:
+        return json.loads(reply.read() or b"{}")
+
+
+deadline = time.time() + 120
+while True:
+    try:
+        try:
+            post("/user/new", {"user_id": "mint-kit-issuer", "user_role": "proxy_admin",
+                               "auto_create_key": False})
+        except urllib.error.HTTPError:
+            pass  # 이미 있는 사용자
+        print(post("/key/generate", {
+            "user_id": "mint-kit-issuer",
+            "key_alias": "mint-kit-issuer-" + secrets.token_hex(4),
+            "allowed_routes": ["/key/generate", "/key/delete"],
+        })["key"])
+        break
+    except urllib.error.HTTPError:
+        sys.exit(1)
+    except OSError:
+        if time.time() > deadline:
+            sys.exit(1)
+        time.sleep(3)
+PY
+)
+
+ensure_kit_issuer_key() {
+    local file key
+    file="$(env_value MINT_SECRETS_DIR)/kit_issuer.key"
+    if [ ! -s "$file" ]; then
+        key="$(env "LITELLM_MASTER_KEY=$(env_value LITELLM_MASTER_KEY)"             "${COMPOSE[@]}" run --rm --no-deps -T -e LITELLM_MASTER_KEY             --entrypoint python control -c "$KIT_ISSUER_SCRIPT" | tail -n 1)" || key=""
+        if [[ "$key" =~ ^sk-[A-Za-z0-9_-]+$ ]]; then
+            (umask 077; printf '%s
+' "$key" > "$file")
+        else
+            echo "단말 설치 묶음 키를 만들지 못했습니다. 다음 up·upgrade에서 다시 시도합니다." >&2
+            return 0
+        fi
+    fi
+    MINT_KIT_ISSUER_KEY="$(head -n 1 "$file")"
+    export MINT_KIT_ISSUER_KEY
+}
+
 # 비밀값은 .env에 없거나 비어 있을 때만 새로 만든다(base64url, 무작위 32바이트). 이미 있는 값은 바꾸지 않는다.
 random_secret() {
     head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n'
@@ -109,6 +165,7 @@ cmd_up() {
         --fix-config /app/config/litellm.config.yaml >/dev/null
     ensure_bundle
     "${COMPOSE[@]}" up -d opa litellm
+    ensure_kit_issuer_key
     "${COMPOSE[@]}" --profile worker up -d worker
     "${COMPOSE[@]}" --profile console up -d console
     echo "기동했습니다. 상태: ./mint.sh status"
@@ -147,6 +204,7 @@ cmd_upgrade() {
     admin_cli init --out /app/config/litellm.mint.yaml \
         --fix-config /app/config/litellm.config.yaml >/dev/null
     "${COMPOSE[@]}" up -d litellm
+    ensure_kit_issuer_key
     "${COMPOSE[@]}" --profile worker up -d worker
     "${COMPOSE[@]}" --profile console up -d console
     echo "업그레이드했습니다."
