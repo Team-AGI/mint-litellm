@@ -336,6 +336,8 @@ class RegistryEntry:
     binding_mode: str | None = None
     timeout: float | None = None
     credential: str | None = None
+    rpm: int | None = None
+    max_concurrent: int | None = None
 
     def facts(self) -> ServerFacts:
         return ServerFacts(
@@ -346,6 +348,8 @@ class RegistryEntry:
             self.binding_mode,
             self.timeout,
             self.credential,
+            self.rpm,
+            self.max_concurrent,
         )
 
 
@@ -376,6 +380,8 @@ def registry_entries(*, manager: Any = None) -> list[RegistryEntry]:
             binding_mode=getattr(getattr(server, "oauth_identity_binding", None), "mode", None),
             timeout=getattr(server, "timeout", None),
             credential=_credential(server),
+            rpm=getattr(server, "rpm", None),
+            max_concurrent=getattr(server, "max_concurrent_requests", None),
         )
         for server in mgr.get_registry().values()
     ]

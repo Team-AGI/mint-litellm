@@ -346,6 +346,22 @@ SETTINGS_TABLE: tuple[SettingRow, ...] = (
         reason="한 서버의 자격을 다른 서버가 함께 쓰면 한쪽 유출이 다른 쪽 침해가 된다.",
     ),
     SettingRow(
+        key="mcp_servers.<이름>.rpm",
+        location=SettingLocation.MCP_SERVERS,
+        value="양수(init이 600을 채움)",
+        grade=SettingGrade.REQUIRED,
+        self_checks=(SelfCheckItem.REQUIRED_SETTINGS,),
+        reason="서버마다 분당 호출 수에 상한이 있어야 짧은 시간의 반복 조회와 대량 추출이 멈춘다.",
+    ),
+    SettingRow(
+        key="mcp_servers.<이름>.max_concurrent_requests",
+        location=SettingLocation.MCP_SERVERS,
+        value="양수(init이 8을 채움)",
+        grade=SettingGrade.REQUIRED,
+        self_checks=(SelfCheckItem.REQUIRED_SETTINGS,),
+        reason="서버마다 동시에 실행할 수 있는 호출 수에 상한이 있어야 초과 요청이 대기한다.",
+    ),
+    SettingRow(
         key="supported_db_objects",
         location=SettingLocation.GENERAL_SETTINGS,
         value="설정한 경우 mcp 포함",
@@ -459,7 +475,9 @@ REUSE_POLICIES: dict[str, tuple[str, ...]] = {
     "POL-R-13": ("disable_env_credential_login", "store_prompts_in_spend_logs"),
     "POL-R-14": ("mcp_servers.<이름>.authentication_token",),
     "POL-R-17": ("ssl_verify",),
+    "POL-E-17": ("mcp_servers.<이름>.rpm",),
     "POL-E-18": ("require_key_mcp_access_defined", "mcp_servers.<이름>.allow_all_keys"),
+    "POL-E-23": ("mcp_servers.<이름>.rpm", "mcp_servers.<이름>.max_concurrent_requests"),
     "POL-E-24": ("mcp_servers.<이름>.timeout",),
 }
 

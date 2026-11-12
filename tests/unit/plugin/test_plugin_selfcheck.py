@@ -38,6 +38,8 @@ def entry(server_id="srv-1", names=("mslearn",), **override):
         "transport": "http",
         "auth_type": "none",
         "allow_all_keys": False,
+        "rpm": 600,
+        "max_concurrent": 8,
     }
     args.update(override)
     return RegistryEntry(**args)
@@ -334,6 +336,9 @@ def test_item_8_required_settings(override):
         ({"default_timeout": 3600.0}, "POL-E-24"),
         ({"env": {"MCP_TRUSTED_REDIRECT_ORIGINS": "https://*"}}, "POL-R-09"),
         ({"registry": [entry(timeout=0)]}, "POL-E-24"),
+        ({"registry": [entry(rpm=None)]}, "POL-E-17"),
+        ({"registry": [entry(rpm=0)]}, "POL-E-23"),
+        ({"registry": [entry(max_concurrent=-1)]}, "POL-E-23"),
         ({"registry": [entry(discovery_oauth=True)]}, "POL-R-07"),
         ({"registry": [entry(discovery_oauth=True, issuer="https://i.test")],
           "env": {}}, "POL-R-09"),

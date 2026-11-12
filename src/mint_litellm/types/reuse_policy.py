@@ -13,6 +13,9 @@ from dataclasses import dataclass
 # 도구 호출 제한 시간의 상한(초). 서버 설정이나 LiteLLM 기본값이 이를 넘으면 위반이다.
 MAX_TOOL_TIMEOUT_SECONDS = 600.0
 DEFAULT_TOOL_TIMEOUT_SECONDS = 60.0
+# init이 서버마다 채우는 기본 한도: 분당 호출 수, 동시 실행 수
+DEFAULT_SERVER_RPM = 600
+DEFAULT_SERVER_CONCURRENCY = 8
 
 # 인증 서버를 발견해 쓰는 인증 방식
 DISCOVERY_AUTH = frozenset({"oauth2", "true_passthrough", "oauth_delegate"})
@@ -25,6 +28,8 @@ KEY_ISSUER = "mcp_servers.<이름>.issuer"
 KEY_BINDING = "mcp_servers.<이름>.oauth_identity_binding.mode"
 KEY_TIMEOUT = "mcp_servers.<이름>.timeout"
 KEY_CREDENTIAL = "mcp_servers.<이름>.authentication_token"
+KEY_RPM = "mcp_servers.<이름>.rpm"
+KEY_CONCURRENCY = "mcp_servers.<이름>.max_concurrent_requests"
 
 
 @dataclass(frozen=True)
@@ -38,6 +43,8 @@ class ServerFacts:
     binding_mode: str | None
     timeout: float | None
     credential: str | None  # 서버 고유 정적 자격의 해시. 없으면 None
+    rpm: float | None = None
+    max_concurrent: float | None = None
 
 
 @dataclass(frozen=True)
@@ -116,6 +123,14 @@ def reuse_violations(
     ]
     if unbounded:
         add(KEY_TIMEOUT, "도구 호출 제한 시간이 없거나 너무 깁니다: " + ", ".join(unbounded[:5]))
+
+    for key, label, values in (
+        (KEY_RPM, "분당 호출 한도", [(s.name, s.rpm) for s in servers]),
+        (KEY_CONCURRENCY, "동시 실행 한도", [(s.name, s.max_concurrent) for s in servers]),
+    ):
+        unset = [n for n, v in values if not isinstance(v, (int, float)) or v <= 0]
+        if unset:
+            add(key, f"{label}가 없거나 0 이하입니다: " + ", ".join(unset[:5]))
 
     owners: dict[str, list[str]] = {}
     for s in servers:

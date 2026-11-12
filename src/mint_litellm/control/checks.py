@@ -21,10 +21,12 @@ from mint_litellm.types.reuse_policy import (
     DEFAULT_TOOL_TIMEOUT_SECONDS,
     DISCOVERY_AUTH,
     KEY_BINDING,
+    KEY_CONCURRENCY,
     KEY_CREDENTIAL,
     KEY_ENV_LOGIN,
     KEY_ISSUER,
     KEY_REDIRECT,
+    KEY_RPM,
     KEY_SSL,
     KEY_TIMEOUT,
     KEY_URL_HOSTS,
@@ -42,7 +44,7 @@ from mint_litellm.types.settings import (
 
 _REUSE_KEYS = (
     KEY_ENV_LOGIN, KEY_URL_HOSTS, KEY_SSL, KEY_REDIRECT, KEY_ISSUER, KEY_BINDING, KEY_TIMEOUT,
-    KEY_CREDENTIAL,
+    KEY_CREDENTIAL, KEY_RPM, KEY_CONCURRENCY,
 )
 _ROWS = {row.key: row for row in SETTINGS_TABLE}
 _OPTOUT_KEYS = ("opted_out_global_guardrails", "disable_global_guardrails")
@@ -300,6 +302,8 @@ def _server_facts(name: str, cfg: Mapping[str, Any]) -> ServerFacts:
         issuer=cfg.get("issuer"),
         binding_mode=(cfg.get("oauth_identity_binding") or {}).get("mode"),
         timeout=float(timeout) if isinstance(timeout, (int, float)) else None,
+        rpm=cfg.get("rpm"),
+        max_concurrent=cfg.get("max_concurrent_requests"),
         credential=(credential_digest(cfg.get("client_id"), cfg.get("client_secret")) if m2m
                     else credential_digest(cfg.get("authentication_token"))),
     )

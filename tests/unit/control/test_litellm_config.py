@@ -24,7 +24,7 @@ def test_snippet_has_the_required_guardrail_callback_and_server_entries():
     assert roles["allowed_user_roles"] == ["proxy_admin"]
     assert data["mcp_servers"]["docs"] == {
         "server_id": "docs-id", "url": "http://u.test/mcp", "transport": "http",
-        "allow_all_keys": False,
+        "allow_all_keys": False, "rpm": 600, "max_concurrent_requests": 8,
     }
 
 
@@ -211,3 +211,26 @@ def test_an_inline_section_cannot_be_edited_safely(tmp_path):
     with pytest.raises(ControlError, match=FLAG):
         litellm_config.ensure_required_flags(path)
     assert not list(tmp_path.glob("c.yaml.bak-*"))
+
+
+def test_servers_without_limits_get_the_defaults_and_written_values_are_kept(tmp_path):
+    path = tmp_path / "s.yaml"
+    text = (
+        "general_settings:\n  disable_env_credential_login: true\n"
+        "mcp_servers:\n"
+        "  docs:  # 문서 서버\n    server_id: docs\n    url: http://u.test/mcp\n"
+        "  kept:\n    server_id: kept\n    rpm: 30\n    max_concurrent_requests: 2\n"
+        "  half:\n    server_id: half\n    max_concurrent_requests: 3\n"
+        "litellm_settings:\n  x: 1\n"
+    )
+    path.write_text(text, encoding="utf-8", newline="")
+    assert litellm_config.ensure_required_flags(path) == [
+        "mcp_servers.docs.rpm", "mcp_servers.docs.max_concurrent_requests", "mcp_servers.half.rpm",
+    ]
+    servers = yaml.safe_load(path.read_text(encoding="utf-8"))["mcp_servers"]
+    assert servers["docs"]["rpm"] == 600 and servers["docs"]["max_concurrent_requests"] == 8
+    assert servers["kept"] == {"server_id": "kept", "rpm": 30, "max_concurrent_requests": 2}
+    assert servers["half"] == {"server_id": "half", "max_concurrent_requests": 3, "rpm": 600}
+    (copy,) = tmp_path.glob("s.yaml.bak-*")
+    assert copy.read_text(encoding="utf-8") == text
+    assert litellm_config.ensure_required_flags(path) == []

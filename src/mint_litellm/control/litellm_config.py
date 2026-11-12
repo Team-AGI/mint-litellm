@@ -10,6 +10,7 @@ import yaml
 
 from mint_litellm.compat import litellm_config_loader
 from mint_litellm.control.errors import ControlError
+from mint_litellm.types.reuse_policy import DEFAULT_SERVER_CONCURRENCY, DEFAULT_SERVER_RPM
 
 GUARDRAIL_CLASS = "mint_litellm.plugin.guardrail.MintGuardrail"
 # 가드레일이 로거를 등록하므로 설정의 callbacks에는 적지 않는다. 적혀 있으면 거부한다.
@@ -17,6 +18,8 @@ LOGGER_SUFFIXES = (".MintLogger", ".mint_logger")
 GUARDRAIL_MODES = ("pre_call", "pre_mcp_call", "post_mcp_call")
 # 없으면 init --fix-config가 더하는 필수 설정: (섹션, 키)
 REQUIRED_FLAGS = (("general_settings", "disable_env_credential_login"),)
+# 서버마다 없으면 더하는 기본 한도(분당 호출 수, 동시 실행 수). 이미 적힌 값은 존중한다.
+SERVER_LIMITS = {"rpm": DEFAULT_SERVER_RPM, "max_concurrent_requests": DEFAULT_SERVER_CONCURRENCY}
 
 _HEADER = "# MINT 통제에 필요한 LiteLLM 설정 조각. 기존 config.yaml의 같은 키에 합친다.\n"
 
@@ -52,7 +55,10 @@ def snippet(servers: dict[str, tuple[str, str]], *, no_spend_logs: bool) -> str:
     }
     if servers:
         document["mcp_servers"] = {
-            name: {"server_id": server_id, "url": url, "transport": "http", "allow_all_keys": False}
+            name: {
+                "server_id": server_id, "url": url, "transport": "http", "allow_all_keys": False,
+                **SERVER_LIMITS,
+            }
             for name, (server_id, url) in servers.items()
         }
     return _HEADER + yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
@@ -165,12 +171,52 @@ def ensure_guardrail_modes(path: Path) -> list[str]:
     return missing
 
 
-def ensure_required_flags(path: Path) -> list[str]:
-    """운영자 설정에 없는 필수 설정(``REQUIRED_FLAGS``)을 true로 더한다. 더한 키를 돌려준다.
+def _add_server_limits(
+    lines: list[str], document: dict[str, Any], path: Path
+) -> list[tuple[str, str]]:
+    """``mcp_servers``의 각 서버 머리 줄 아래에 없는 기본 한도를 끼운다. 더한 (서버, 키) 목록."""
+    fail = ControlError(
+        f"{path}의 mcp_servers를 자동으로 고칠 수 없습니다. 서버마다 "
+        + ", ".join(f"{k}: {v}" for k, v in SERVER_LIMITS.items())
+        + "를 직접 더하십시오."
+    )
+    added: list[tuple[str, str]] = []
+    for name, cfg in (document.get("mcp_servers") or {}).items():
+        wanted = {k: v for k, v in SERVER_LIMITS.items() if isinstance(cfg, dict) and k not in cfg}
+        if not wanted:
+            continue
+        top = next(
+            (i for i, ln in enumerate(lines) if re.match(r"^mcp_servers:\s*(?:#.*)?$", ln)), -1
+        )
+        if top < 0:
+            raise fail
+        head = None
+        for i in range(top + 1, len(lines)):
+            if lines[i].strip() and not lines[i].startswith((" ", "#")):
+                break  # 다음 최상위 키
+            if re.match(rf"^\s+{re.escape(str(name))}:\s*(?:#.*)?$", lines[i]):
+                head = i
+                break
+        if head is None:
+            raise fail
+        outer = len(lines[head]) - len(lines[head].lstrip())
+        rest = lines[head + 1:]
+        body = next((ln for ln in rest if ln.strip() and not ln.lstrip().startswith("#")), "")
+        inner = len(body) - len(body.lstrip())
+        if inner <= outer:
+            raise fail
+        lines[head + 1:head + 1] = [f"{' ' * inner}{k}: {v}" for k, v in wanted.items()]
+        added += [(str(name), k) for k in wanted]
+    return added
 
-    이미 적힌 키는 값이 달라도 건드리지 않는다(기동 전 검사가 막는다). 섹션 머리 줄 바로 아래에
-    한 줄을 끼우고, 섹션이 없으면 파일 끝에 덧붙인다. 바꾸기 전에 ``<파일>.bak-<UTC 시각>`` 사본을
-    두며, 다시 읽은 결과가 기대와 다르면 아무것도 쓰지 않고 멈춘다.
+
+def ensure_required_flags(path: Path) -> list[str]:
+    """운영자 설정에 없는 필수 설정을 더한다. 더한 키를 돌려준다.
+
+    ``REQUIRED_FLAGS``는 true로, 서버마다 없는 ``SERVER_LIMITS``는 기본 한도로 더한다. 이미 적힌
+    키는 값이 달라도 건드리지 않는다(기동 전 검사가 막는다). 섹션 머리 줄 바로 아래에 줄을 끼우고,
+    섹션이 없으면 파일 끝에 덧붙인다. 바꾸기 전에 ``<파일>.bak-<UTC 시각>`` 사본을 두며, 다시 읽은
+    결과가 기대와 다르면 아무것도 쓰지 않고 멈춘다.
     """
     if not path.is_file():
         return []
@@ -183,8 +229,6 @@ def ensure_required_flags(path: Path) -> list[str]:
         (section, key) for section, key in REQUIRED_FLAGS
         if key not in (document.get(section) or {})
     ]
-    if not missing:
-        return []
     lines = raw.split("\n")
     expected = yaml.safe_load(raw) or {}
     for section, key in missing:
@@ -204,6 +248,12 @@ def ensure_required_flags(path: Path) -> list[str]:
             lines += [*tail, f"{section}:", f"  {key}: true", ""]
         expected.setdefault(section, {})
         expected[section] = {**(expected[section] or {}), key: True}
+    limits = _add_server_limits(lines, document, path)
+    for name, key in limits:
+        expected["mcp_servers"][name][key] = SERVER_LIMITS[key]
+    added = [key for _, key in missing] + [f"mcp_servers.{n}.{k}" for n, k in limits]
+    if not added:
+        return []
     edited = "\n".join(lines)
     try:
         ok = yaml.safe_load(edited) == expected
@@ -211,12 +261,11 @@ def ensure_required_flags(path: Path) -> list[str]:
         ok = False
     if not ok:
         raise ControlError(
-            f"필수 설정을 자동으로 더할 수 없습니다. {path}에 "
-            + ", ".join(f"{section}.{key}: true" for section, key in missing)
-            + "를 직접 더하십시오."
+            f"필수 설정을 자동으로 더할 수 없습니다. {path}에 다음을 직접 더하십시오: "
+            + ", ".join(added)
         )
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     shutil.copy2(path, path.with_name(f"{path.name}.bak-{stamp}"))
     with path.open("w", encoding="utf-8", newline="") as handle:
         handle.write(edited)
-    return [key for _, key in missing]
+    return added
