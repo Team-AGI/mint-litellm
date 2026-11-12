@@ -1,0 +1,27 @@
+{% extends "staff_base.html" %}{% import "macros.html" as m %}
+{% block title %}단말 설치 · MINT{% endblock %}
+{% block body %}
+<h1>단말 설치</h1>
+<form method="post" action="/staff/endpoint/kit" hx-boost="false" class="form">
+  {{ m.csrf(actor) }}
+  <div class="actions"><button type="submit" class="primary">{{ '다시 내려받기' if rows else '설치 묶음 내려받기' }}</button></div>
+</form>
+<p>설치: ./install.sh<br>제거: ./install.sh uninstall</p>
+{% if rows %}
+<table><thead><tr><th>설치 상태</th><th>Claude Code 판본</th><th>MCP 서버</th><th>발급</th><th>마지막 보고</th></tr></thead><tbody>
+{% for r in rows %}<tr>
+<td>{{ m.badge(L.INSTALL, r.state) }}</td>
+<td>{{ r.claude_version | blank }}</td>
+<td>{{ (r.mcp_servers or []) | join }}</td>
+<td class="nowrap">{{ r.issued_at | when }}</td>
+<td class="nowrap">{{ r.reported_at | when }}</td>
+</tr>{% endfor %}
+</tbody></table>
+{% if active %}
+<form method="post" action="/staff/endpoint/revoke" class="form">
+  {{ m.csrf(actor) }}
+  <div class="actions"><button type="submit">연결 해제</button></div>
+</form>
+{% endif %}
+{% else %}<p class="muted">발급한 설치 묶음이 없습니다.</p>{% endif %}
+{% endblock %}

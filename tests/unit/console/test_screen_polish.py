@@ -199,3 +199,19 @@ def test_the_decided_badge_is_readable():
     assert labels.INTAKE["decided"].level == "off"
     assert ".badge.off { color: var(--off); }" in css
     assert ratio(tokens["off"], tokens["bg"]) >= 4.5
+
+
+def test_the_endpoint_install_screens_show_korean_states_only():
+    rows = [
+        {"user_id": "u1", "state": state, "claude_version": None, "mcp_servers": ["srv"],
+         "issued_at": datetime(2026, 11, 3, tzinfo=UTC), "reported_at": None}
+        for state in ("managed", "user", "pending", "removed", "revoked")
+    ]  # fmt: skip
+    for name in ("endpoints.html", "staff_endpoint.html"):
+        html = render(name, rows=rows, active=True)
+        for text in ("관리형", "관리되지 않음", "보고 전", "제거됨", "연결 해제"):
+            assert text in html, (name, text)
+        for enum in ("managed", "pending", "removed", "revoked"):
+            assert enum not in html, (name, enum)
+    assert "설치 묶음 내려받기" in render("staff_endpoint.html", rows=[], active=False)
+    assert "다시 내려받기" in render("staff_endpoint.html", rows=rows, active=True)

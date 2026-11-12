@@ -1,0 +1,77 @@
+"""설치 상태 보고 경로: 설치 묶음에 발급한 키의 보고만 받고, 파일 경로나 키는 받지 않는다."""
+
+import pytest
+from plugin_helpers import KEY
+from test_endpoint_routes import KEY_HEADER, FakeDatabase, build, post
+
+REPORT = "/mint/v1/endpoint/report"
+
+
+def report(**override):
+    data = {"kit_version": "k" * 64, "action": "installed", "mode": "managed",
+            "claude_version": "2.1.0 (Claude Code)", "mcp_servers": ["srv-1"]}
+    return data | override
+
+
+@pytest.fixture
+def stored(monkeypatch):
+    """발급된 키의 행 하나만 있는 저장소 대역."""
+    calls = []
+
+    async def report_install(self, instance_id, key_token, **fields):
+        calls.append((instance_id, key_token, fields))
+        return key_token == KEY
+
+    monkeypatch.setattr(FakeDatabase, "report_install", report_install, raising=False)
+    return calls
+
+
+def test_a_managed_install_report_is_stored_for_the_calling_key(tmp_path, stored):
+    client, _ = build(tmp_path)
+    assert post(client, REPORT, report()).json() == {"recorded": True}
+    (_, key_token, fields), = stored
+    assert key_token == KEY
+    assert fields == {"mode": "managed", "kit_version": "k" * 64,
+                      "claude_version": "2.1.0 (Claude Code)", "mcp_servers": ["srv-1"]}
+
+
+@pytest.mark.parametrize(("body", "mode"), [
+    (report(mode="user"), "user"),
+    (report(action="removed", mode="none", mcp_servers=[]), "removed"),
+])
+def test_user_level_and_removal_reports_keep_their_own_state(tmp_path, stored, body, mode):
+    client, _ = build(tmp_path)
+    assert post(client, REPORT, body).status_code == 200
+    assert stored[0][2]["mode"] == mode
+
+
+def test_a_key_the_kit_did_not_issue_is_not_recorded(tmp_path, stored):
+    client, _ = build(tmp_path)
+    other = {"Authorization": "Bearer sk-other"}
+    assert post(client, REPORT, report(), headers=other).status_code == 404
+
+
+@pytest.mark.parametrize("body", [
+    report(action="installed", mode="none"),
+    report(action="removed", mode="managed"),
+    report(mode="root"),
+    report(key="sk-x"),
+    report(mcp_servers=["a"] * 65),
+])
+def test_a_report_that_does_not_fit_the_shape_is_refused(tmp_path, stored, body):
+    client, _ = build(tmp_path)
+    assert post(client, REPORT, body).status_code == 422
+    assert stored == []
+
+
+def test_the_report_route_needs_a_key_and_a_ready_store(tmp_path, monkeypatch):
+    client, _ = build(tmp_path)
+    assert post(client, REPORT, report(), headers={}).status_code == 401
+
+    async def broken(self, *args, **kwargs):
+        raise OSError("down")
+
+    monkeypatch.setattr(FakeDatabase, "report_install", broken, raising=False)
+    assert post(client, REPORT, report()).status_code == 503
+    big = " " * (64 * 1024 + 1)
+    assert client.post(REPORT, content=big, headers=KEY_HEADER).status_code == 413

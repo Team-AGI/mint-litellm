@@ -5,6 +5,7 @@
 연결(``mint_staff_app``)로 한 트랜잭션에서 한다.
 """
 
+import logging
 import secrets
 import uuid
 from collections.abc import Callable, Iterator
@@ -30,15 +31,19 @@ from mint_litellm.console.core import (
     too_many_attempts,
 )
 from mint_litellm.console.templating import render
+from mint_litellm.control import endpoint_kits
 from mint_litellm.control.db.connection import connect
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
+from mint_litellm.control.litellm_admin import LiteLLMError
 from mint_litellm.control.services import console_sessions, staff
+from mint_litellm.endpoint.kit_build import build_kit
 
 router = APIRouter(dependencies=[Depends(require_csrf)])
 # 로그인은 세션이 없을 때(또는 만료된 쿠키가 남았을 때)도 받으므로 CSRF 토큰 대신 출처만 본다.
 public = APIRouter()
 
 RECENT_RECORDS = 50
+log = logging.getLogger(__name__)
 
 
 class StaffUnauthenticated(Unauthenticated):
@@ -305,3 +310,62 @@ def withdraw_consent(
         "consent_withdrawn", "/staff/consents",
         lambda **kw: consents_page(request, actor, **kw),
     )
+
+
+# --- 14 단말 설치 -----------------------------------------------------------------------------
+
+
+def endpoint_page(request: Request, actor: StaffActor, error=None, status=200):
+    rows = endpoint_kits.installs(actor.sctx.control, actor.sctx.instance_id, actor.user_id)
+    ctx = {"rows": rows, "active": any(r["state"] != "revoked" for r in rows), "error": error}
+    return render(request, "staff_endpoint.html", ctx, actor=actor, status=status)
+
+
+@router.get("/staff/endpoint")
+def endpoint(request: Request, actor: StaffActor = Depends(staff_actor)):
+    return endpoint_page(request, actor)
+
+
+@router.post("/staff/endpoint/kit")
+def endpoint_kit(request: Request, actor: StaffActor = Depends(staff_actor)):
+    """본인 키를 새로 발급해 담은 설치 묶음을 내려준다(이전 묶음의 키는 지워진다)."""
+    config, sctx = actor.config, actor.sctx
+    if config.kit_issuer is None:
+        return endpoint_page(request, actor, "단말 설치 묶음을 발급할 수 없습니다.", 503)
+    contracts = endpoint_kits.approved_contracts(sctx.control, sctx.instance_id)
+    if not contracts:
+        return endpoint_page(request, actor, "승인된 로컬 서버가 없습니다.", 409)
+    try:
+        key = endpoint_kits.issue_key(
+            sctx.control, config.kit_issuer, sctx.instance_id, user_id=actor.user_id,
+            team_id=sctx.team_ids[0] if sctx.team_ids else None, issued_by=actor.user_id,
+        )
+    except LiteLLMError:
+        log.exception("단말 설치 묶음 키 발급 실패")
+        return endpoint_page(request, actor, "설치 묶음을 발급하지 못했습니다.", 503)
+    kit = build_kit(
+        contracts, decide_url=config.endpoint_url or config.litellm_url, key=key,
+        ca_pem=config.endpoint_ca_pem,
+    )
+    return Response(
+        kit, media_type="application/gzip",
+        headers={"Content-Disposition": 'attachment; filename="mint-kit.tar.gz"'},
+    )
+
+
+@router.post("/staff/endpoint/revoke")
+def endpoint_revoke(request: Request, actor: StaffActor = Depends(staff_actor)):
+    issuer = actor.config.kit_issuer
+    sctx = actor.sctx
+
+    def action():
+        if issuer is None:
+            raise ControlError("단말 연결을 해제할 수 없습니다.")
+        try:
+            endpoint_kits.revoke_keys(sctx.control, issuer, sctx.instance_id, actor.user_id)
+        except LiteLLMError:
+            log.exception("단말 설치 묶음 키 해제 실패")
+            raise ControlError("단말 연결을 해제하지 못했습니다.") from None
+
+    return act(actor, action, "kit_revoked", "/staff/endpoint",
+               lambda **kw: endpoint_page(request, actor, **kw))

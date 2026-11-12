@@ -623,3 +623,135 @@ def test_the_record_section_never_shows_operator_actions_with_the_same_name(swor
     for label in ("승인", "서버 중지", "동의 부여", "콘솔 로그인"):
         assert label not in records, label
     assert "직원 화면 로그인" in records
+
+
+# --- 14 단말 설치 -----------------------------------------------------------------------------
+
+
+class KitIssuer:
+    """키 발급 클라이언트 대역."""
+
+    def __init__(self):
+        self.made, self.deleted = [], []
+
+    def generate_kit_key(self, *, user_id, team_id, alias):
+        self.made.append((user_id, team_id, alias))
+        return f"sk-kit-{alias}"
+
+    def delete_kit_keys(self, aliases):
+        self.deleted.append(list(aliases))
+
+
+@pytest.fixture
+def kits(sworld):
+    """승인된 로컬 서버 하나가 있고 키 발급이 설정된 배치."""
+    import dataclasses
+
+    from ctl_fixtures import make_ctx
+
+    from mint_litellm.control import servers
+    from mint_litellm.types.exec_contract import ExecContract
+
+    contract = ExecContract(
+        executable="/usr/bin/node", argv=["/opt/srv/index.js"], executable_sha256="ab" * 32
+    )
+    with psycopg.connect(sworld.admin_url) as admin:
+        servers.register_local(make_ctx(admin), "local-1", contract)
+        admin.execute("UPDATE mint.servers SET status = 'approved' WHERE server_id = 'local-1'")
+    issuer = KitIssuer()
+    sworld.app.state.config = dataclasses.replace(
+        sworld.config, kit_issuer=issuer, endpoint_url="https://mint.test"
+    )
+    sworld.issuer = issuer
+    return sworld
+
+
+def download(client):
+    return client.post("/staff/endpoint/kit", data={"csrf": csrf(client)})
+
+
+def unpack(response):
+    import io
+    import json
+    import tarfile
+
+    with tarfile.open(fileobj=io.BytesIO(response.content), mode="r:gz") as bundle:
+        return json.loads(bundle.extractfile("mint-kit/kit.json").read())
+
+
+def test_the_download_hands_out_a_kit_with_the_users_own_key_and_the_approved_servers(kits):
+    client = logged_in(kits)
+    response = download(client)
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/gzip"
+    assert "mint-kit.tar.gz" in response.headers["content-disposition"]
+    config = unpack(response)
+    ((user, _, alias),) = kits.issuer.made
+    assert user == STAFFER and config["key"] == f"sk-kit-{alias}"
+    assert config["decide_url"] == "https://mint.test" and list(config["servers"]) == ["local-1"]
+    ((stored_token, owner, stored_alias),) = kits.query(
+        "SELECT key_token, user_id, key_alias FROM mint.endpoint_installs")
+    assert (stored_token, owner, stored_alias) == (token_of(config["key"]), STAFFER, alias)
+
+
+def test_a_second_download_replaces_the_first_key_and_other_users_are_untouched(kits):
+    first = download(logged_in(kits))
+    other = download(logged_in(kits, OTHER_KEY))
+    second = download(logged_in(kits))
+    assert first.status_code == other.status_code == second.status_code == 200
+    assert kits.issuer.deleted == [[kits.issuer.made[0][2]]]
+    rows = kits.query(
+        "SELECT user_id, revoked_at IS NOT NULL FROM mint.endpoint_installs ORDER BY issued_at")
+    assert rows == [(STAFFER, True), (OTHER, False), (STAFFER, False)]
+
+
+def test_the_page_shows_the_managed_and_the_unmanaged_state_in_korean(kits):
+    client = logged_in(kits)
+    download(client)
+    page = client.get("/staff/endpoint").text
+    assert "보고 전" in page and "다시 내려받기" in page
+    kits.query("UPDATE mint.endpoint_installs SET install_mode = 'user', kit_version = 'k',"
+               " claude_version = '2.1.0', mcp_servers = '[\"local-1\"]', reported_at = now()")
+    page = client.get("/staff/endpoint").text
+    assert "관리되지 않음" in page and "2.1.0" in page and "local-1" in page
+    for enum in ("managed", "pending", "removed", "revoked"):
+        assert enum not in page
+    admin = kits.session_client("admin")
+    table = admin.get("/endpoints").text
+    assert "관리되지 않음" in table and STAFFER in table
+    api = admin.get("/api/v1/endpoint/installs").json()["items"]
+    assert [(r["user_id"], r["state"]) for r in api] == [(STAFFER, "user")]
+
+
+def test_only_the_owner_sees_the_rows_and_revoking_disconnects_the_devices(kits):
+    client = logged_in(kits)
+    download(client)
+    assert "보고 전" not in logged_in(kits, OTHER_KEY).get("/staff/endpoint").text
+    response = client.post("/staff/endpoint/revoke", data={"csrf": csrf(client)})
+    assert response.status_code == 303 and response.headers["location"].endswith("ok=kit_revoked")
+    assert kits.issuer.deleted == [[kits.issuer.made[0][2]]]
+    assert "연결 해제" in client.get("/staff/endpoint").text
+    again = client.post("/staff/endpoint/revoke", data={"csrf": csrf(client)})
+    assert again.status_code == 400 and "해제할 단말 연결이 없습니다" in again.text
+
+
+def test_without_key_issuance_or_approved_servers_there_is_no_kit(sworld):
+    client = logged_in(sworld)
+    refused = download(client)
+    assert refused.status_code == 503 and "발급할 수 없습니다" in refused.text
+    assert sworld.query("SELECT count(*) FROM mint.endpoint_installs") == [(0,)]
+    import dataclasses
+
+    sworld.app.state.config = dataclasses.replace(sworld.config, kit_issuer=KitIssuer())
+    empty = download(client)
+    assert empty.status_code == 409 and "승인된 로컬 서버가 없습니다" in empty.text
+
+
+def test_the_download_needs_a_staff_session_and_a_csrf_token(kits):
+    client = logged_in(kits)
+    assert client.post("/staff/endpoint/kit").status_code == 403
+    anonymous = kits.client.__class__(
+        kits.app, base_url="https://testserver", follow_redirects=False
+    )
+    assert anonymous.post("/staff/endpoint/kit").status_code in (303, 403)
+    assert kits.issuer.made == []
