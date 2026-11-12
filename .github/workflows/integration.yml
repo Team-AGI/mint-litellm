@@ -59,6 +59,7 @@ jobs:
           mkdir -p integration-logs
           docker compose -p mint-e -f tests/integration/compose.yaml --profile plain ps -a > integration-logs/ps.txt
           docker compose -p mint-e -f tests/integration/compose.yaml --profile plain logs --no-color --timestamps > integration-logs/compose.log
+          docker compose -p mint-e -f tests/integration/compose.yaml --profile plain logs --no-color mint-init | tee integration-logs/mint-init.log || true
       - name: 로그 아티팩트 업로드
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
