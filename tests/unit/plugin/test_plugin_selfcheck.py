@@ -363,6 +363,13 @@ def test_item_8_does_not_refuse_database_servers_whose_limits_are_still_empty():
     assert SelfCheckItem.REQUIRED_SETTINGS in failed(run_checks(zero))
 
 
+def test_item_8_leaves_local_stdio_servers_out_of_the_litellm_settings_check():
+    bare = view(registry=[entry(rpm=None, discovery_oauth=True)])
+    local = registered(identity_kind="stdio")
+    results = check_items(bare, logger=LOGGER, guardrail=GUARDRAIL, controlled=[local])
+    assert SelfCheckItem.REQUIRED_SETTINGS not in failed(results)
+
+
 def test_item_8_ignores_servers_mint_does_not_control():
     stray = view(registry=[entry(), entry("srv-9", ("stray",), discovery_oauth=True)])
     assert failed(run_checks(stray)) == set()
@@ -1081,3 +1088,29 @@ def test_the_buffer_check_runs_off_the_event_loop_thread(tmp_path):
 
     loop_thread = asyncio.run(scenario())
     assert seen and loop_thread not in seen
+
+
+def local(**override):
+    args = {
+        "server_id": "local-1",
+        "url_sha256": None,
+        "transport": "stdio",
+        "identity_kind": "stdio",
+        "exec_contract_sha256": HASH,
+        "exec_contract_version": 1,
+    }
+    return registered(**(args | override))
+
+
+def test_a_local_server_is_checked_without_the_litellm_registry():
+    # 레지스트리에 없어도, 열린 키 접근이 없어도 승인된 로컬 서버가 기동을 막지 않는다.
+    assert failed(run_checks(controlled=[registered(), local()])) == set()
+    assert failed(run_checks(view(registry=[]), controlled=[local()])) == set()
+    assert contract_mismatches(view(), [local()]) == []
+    assert contract_mismatches(view(registry=[]), [local(status="suspended")]) == []
+
+
+def test_a_registry_entry_with_a_local_servers_identifier_is_reported_not_blocking():
+    clash = view(registry=[entry("local-1", names=("other",))])
+    assert contract_mismatches(clash, [local()]) == [("local-1", "identity_kind")]
+    assert failed(run_checks(clash, controlled=[local()])) == set()

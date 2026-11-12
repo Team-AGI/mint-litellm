@@ -369,8 +369,9 @@ def test_every_state_changing_command_has_a_service():
     from mint_litellm import cli
 
     stateful = {
-        "init", "operator add", "operator bootstrap", "server register", "server suspend",
-        "server resume", "relation add", "relation terminate", "approve", "deny", "denial lift",
+        "init", "operator add", "operator bootstrap", "server register",
+        "server register-local", "server suspend", "server resume", "relation add",
+        "relation terminate", "approve", "deny", "denial lift",
         "revoke", "call-approval request", "call-approval approve", "call-approval reject",
         "call-approval cancel", "consent add", "consent revoke", "allowlist add",
         "allowlist lift", "org add", "org close", "org bind", "org unbind",

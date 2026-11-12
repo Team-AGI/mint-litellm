@@ -61,6 +61,7 @@ from mint_litellm.types.cli_commands import (
     CliCommand,
     OperatorRole,
 )
+from mint_litellm.types.exec_contract import ExecContract
 from mint_litellm.types.identity import SubjectType
 from mint_litellm.types.settings import Mode
 
@@ -248,8 +249,8 @@ def _check(run: Run) -> None:
     ctx = run.context()
     registered = fetchall(
         run.conn,
-        "SELECT server_id, status, url_sha256, transport, auth_type FROM mint.servers"
-        " WHERE instance_id = %s",
+        "SELECT server_id, status, url_sha256, transport, auth_type, identity_kind"
+        " FROM mint.servers WHERE instance_id = %s",
         (ctx.instance_id,),
     )
     report = checks.run_checks(
@@ -479,6 +480,14 @@ def _server_register(run: Run) -> None:
     )
 
 
+def _server_register_local(run: Run) -> None:
+    try:
+        contract = ExecContract.model_validate_json(Path(run.args.contract).read_bytes())
+    except (OSError, ValueError) as exc:
+        raise ControlError(f"실행 계약 파일을 읽을 수 없습니다: {exc}") from exc
+    server_service.register_local(run.context(), run.args.server_id, contract)
+
+
 def _done(call: Callable[..., Any], *names: str) -> Handler:
     def handler(run: Run) -> None:
         call(run.context(), *[getattr(run.args, n) for n in names])
@@ -665,6 +674,7 @@ HANDLERS: dict[str, Handler] = {
         r.context(), r.args.name, OperatorRole(r.args.role)
     ),
     "server register": _server_register,
+    "server register-local": _server_register_local,
     "alert list": _alert_list,
     "alert ack": _done(alert_service.acknowledge, "alert_id"),
     "alert resolve": _done(alert_service.resolve, "alert_id"),
@@ -793,6 +803,10 @@ ARGUMENTS: dict[str, list[Any]] = {
         _SERVER_ID,
         _a("--url", help="계약 값에 쓸 서버 URL(제어 평면 키는 레지스트리 URL을 읽을 수 없다)"),
         _CONFIG,
+    ],
+    "server register-local": [
+        _SERVER_ID,
+        _a("--contract", required=True, help="실행 계약 JSON 파일 경로"),
     ],
     "server suspend": [_SERVER_ID],
     "server resume": [_SERVER_ID],

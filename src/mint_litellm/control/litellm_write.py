@@ -19,6 +19,7 @@ from collections.abc import Callable
 from typing import Any
 
 from mint_litellm.control.litellm_admin import LiteLLMAdmin, LiteLLMError, scrub
+from mint_litellm.endpoint.routes import KIT_KEY_ROUTES
 
 # 쓰기 허용 목록: (메서드, 경로 정규식). 서버 식별자 한 마디는 ``/``를 포함하지 않는다.
 _SERVER = r"/v1/mcp/server/[^/]+"
@@ -132,6 +133,8 @@ class LiteLLMSync(LiteLLMAdmin):
         super().__init__(base_url, api_key, timeout)
         self.before_write = before_write
 
+    _check = staticmethod(check_write)
+
     def with_hook(self, before_write: Callable[[], None] | None) -> "LiteLLMSync":
         """쓰기 직전 훅만 바꾼 사본(작업마다 그 작업의 임대·취소 확인을 붙인다)."""
         clone = copy.copy(self)
@@ -174,7 +177,7 @@ class LiteLLMSync(LiteLLMAdmin):
 
     def _write(self, method: str, path: str, body: Any = None) -> Any:
         """허용 목록을 확인하고 훅을 부른 뒤 보낸다. 2xx가 아니면 예외, 아니면 응답 본문."""
-        check_write(method, path, body)
+        self._check(method, path, body)
         if self.before_write is not None:
             self.before_write()
         status, parsed = self._send(method, path, body=body)
@@ -254,3 +257,67 @@ class LiteLLMSync(LiteLLMAdmin):
         return self._write(
             "PUT", f"/v1/mcp/server/{quoted}/reject", {"review_notes": notes[:500]}
         )
+
+
+KIT_ALIAS_PREFIX = "mint-kit-"
+_KIT_KEY_FIELDS = frozenset({"user_id", "team_id", "key_alias", "allowed_routes"})
+
+
+def check_kit_write(method: str, path: str, body: Any) -> None:
+    """설치 묶음 키 발급 클라이언트가 보낼 수 있는 쓰기만 통과시킨다.
+
+    생성 본문은 사용자·팀·별칭과 훅 경로만의 ``allowed_routes``뿐이고, 삭제는 설치 묶음 별칭만
+    대상으로 한다.
+    """
+    if (method, path) == ("POST", "/key/generate"):
+        if (
+            not isinstance(body, dict)
+            or not {"user_id", "key_alias", "allowed_routes"} <= set(body) <= _KIT_KEY_FIELDS
+            or not all(isinstance(body[k], str) and body[k] for k in set(body) - {"allowed_routes"})
+            or not body["key_alias"].startswith(KIT_ALIAS_PREFIX)
+            or body["allowed_routes"] != list(KIT_KEY_ROUTES)
+        ):
+            raise WriteRefused(
+                "/key/generate 본문은 사용자·팀·설치 묶음 별칭과 훅 경로만의 allowed_routes만 "
+                "보낼 수 있습니다."
+            )
+    elif (method, path) == ("POST", "/key/delete"):
+        aliases = body.get("key_aliases") if isinstance(body, dict) else None
+        if (
+            set(body or ()) != {"key_aliases"}
+            or not isinstance(aliases, list)
+            or not aliases
+            or not all(isinstance(a, str) and a.startswith(KIT_ALIAS_PREFIX) for a in aliases)
+        ):
+            raise WriteRefused("/key/delete 본문은 설치 묶음 별칭 목록만 보낼 수 있습니다.")
+    else:
+        raise WriteRefused(f"허용되지 않은 LiteLLM 쓰기 경로입니다: {method} {path}")
+
+
+class LiteLLMKitKeys(LiteLLMSync):
+    """단말 설치 묶음의 사용자 키 발급 전용 클라이언트. 키 발급 전용 LiteLLM 키로 연다."""
+
+    _check = staticmethod(check_kit_write)
+
+    def generate_kit_key(self, *, user_id: str, team_id: str | None, alias: str) -> str:
+        """사용자 한 명의 설치 묶음 키를 만든다. 이 키는 결정·결과·보고 경로만 부를 수 있다."""
+        body: dict[str, Any] = {
+            "user_id": user_id,
+            "key_alias": alias,
+            "allowed_routes": list(KIT_KEY_ROUTES),
+        }
+        if team_id:
+            body["team_id"] = team_id
+        reply = self._write("POST", "/key/generate", body)
+        key = reply.get("key") if isinstance(reply, dict) else None
+        if not isinstance(key, str) or not key:
+            raise LiteLLMError("key/generate 응답 형식이 올바르지 않습니다.")
+        return key
+
+    def delete_kit_keys(self, aliases: list[str]) -> None:
+        """설치 묶음 키를 별칭으로 지운다. 이미 없는 키는 지워진 것으로 본다."""
+        try:
+            self._write("POST", "/key/delete", {"key_aliases": list(aliases)})
+        except LiteLLMHttpError as error:
+            if error.status not in (400, 404):
+                raise

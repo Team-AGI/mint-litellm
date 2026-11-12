@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from mint_litellm.console import compare
 from mint_litellm.console.core import Actor, api_actor, public, require_csrf
-from mint_litellm.control import operators
+from mint_litellm.control import endpoint_kits, operators
 from mint_litellm.control.approvals import build_conditions
 from mint_litellm.control.context import Operator
 from mint_litellm.control.errors import AdminCode, AdminError, AuthError, ControlError
@@ -233,6 +233,11 @@ def get_overview(actor: Actor = Depends(api_actor)):
 @router.get("/servers")
 def list_servers(actor: Actor = Depends(api_actor)):
     return {"items": public(reads.servers(actor.conn, actor.instance))}
+
+
+@router.get("/endpoint/installs")
+def list_endpoint_installs(actor: Actor = Depends(api_actor)):
+    return {"items": public(endpoint_kits.installs(actor.conn, actor.instance))}
 
 
 @router.get("/servers/{server_id}")

@@ -531,3 +531,13 @@ def test_policy_status_lines_follow_the_settings_behind_each_policy(healthy):
     assert status["POL-R-13"] == status["POL-R-17"] == "미충족"
     assert status["POL-R-04"] == "충족"
     assert run(None, None).policy_status()["POL-R-17"] == "확인 불가"
+
+
+def test_registered_local_servers_are_not_compared_with_the_registry(healthy):
+    local = {"server_id": "local-1", "url_sha256": None, "transport": "stdio",
+             "auth_type": "none", "identity_kind": "stdio", "status": "approved"}
+    assert Level.OK in levels(run(good_config(), healthy, registered_servers=[local]))[
+        "등록 서버의 계약 값"]
+    clash = {**local, "server_id": "ctl-everything"}
+    assert Level.FAIL in levels(run(good_config(), healthy, registered_servers=[clash]))[
+        "등록 서버의 계약 값"]
