@@ -98,6 +98,9 @@ def approval_conditions(body: "ApprovalBody", high_risk: list[str]) -> dict[str,
             require_consent=None, allowed_paths=body.allowed_paths))
     elif body.paths_mode == "unrestricted":
         conditions["allowed_paths_unrestricted"] = True
+    for name in ("max_result_bytes", "max_result_items"):
+        if getattr(body, name) is not None:
+            conditions[name] = getattr(body, name)
     return conditions
 
 
@@ -144,9 +147,13 @@ class ApprovalBody(Versioned):
     second_approver_token: str | None = None
     allowed_hosts: list[str] = []
     allowed_arg_keys: list[str] = []
-    # unset: 경로 이탈만 막음, listed: allowed_paths만 허용, unrestricted: 제한 없음(명시 선택)
+    # unset: 허용 경로 없음(절대 경로 모두 차단), listed: allowed_paths만 허용,
+    # unrestricted: 제한 없음(명시 선택)
     paths_mode: Literal["unset", "listed", "unrestricted"] = "unset"
     allowed_paths: list[str] = []
+    # 한 번의 호출 결과에서 허용하는 크기(바이트)와 항목 수. 비우면 상한 조건을 두지 않는다.
+    max_result_bytes: int | None = Field(None, ge=1)
+    max_result_items: int | None = Field(None, ge=1)
 
     model_config = {"populate_by_name": True}
 

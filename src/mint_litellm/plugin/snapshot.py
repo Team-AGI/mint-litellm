@@ -62,7 +62,15 @@ SELECT jsonb_build_object(
     'tool_contracts', (
         SELECT coalesce(jsonb_agg(jsonb_build_object(
             'id', t.id, 'credential_scope', t.credential_scope, 'tool', t.tool,
-            'drift', t.drift, 'version', t.version, 'risk_grade', t.risk_grade)), '[]'::jsonb)
+            'drift', t.drift, 'version', t.version, 'risk_grade', t.risk_grade,
+            'action_type', t.action_type,
+            'input_keys', (
+                SELECT coalesce(jsonb_agg(k ORDER BY k), '[]'::jsonb)
+                FROM jsonb_object_keys(CASE
+                    WHEN jsonb_typeof(t.canonical_text::jsonb -> 'input_schema' -> 'properties')
+                         = 'object'
+                    THEN t.canonical_text::jsonb -> 'input_schema' -> 'properties'
+                    ELSE '{}'::jsonb END) AS k))), '[]'::jsonb)
         FROM mint.tool_contracts t
         WHERE t.instance_id = %(iid)s AND t.server_id = %(server_id)s
           AND t.tool = %(tool)s AND t.status = 'approved'
@@ -73,6 +81,12 @@ SELECT jsonb_build_object(
         WHERE t.instance_id = %(iid)s AND t.server_id = %(server_id)s AND t.status = 'approved'
           AND t.credential_scope = CASE WHEN srv.auth_type IN ('oauth_delegate',
               'true_passthrough') THEN 'per_user' ELSE 'server' END
+    ),
+    'data_grade', (
+        SELECT i.data_grade FROM mint.intakes i
+        WHERE i.instance_id = %(iid)s AND i.server_id = %(server_id)s
+          AND i.decision IN ('approved', 'exception')
+        ORDER BY i.decided_at DESC LIMIT 1
     ),
     'allowlists', (
         SELECT coalesce(jsonb_agg(to_jsonb(a)), '[]'::jsonb) FROM mint.allowlists a
@@ -269,6 +283,7 @@ class AllowlistRow:
 class RelationRow:
     id: str
     status: str
+    purpose: str | None = None
 
 
 @dataclass(frozen=True)
@@ -356,6 +371,9 @@ class ToolContractRow:
     drift: str
     version: int
     risk_grade: str | None = None
+    action_type: str | None = None
+    # 계약의 입력 정의에 있는 항목 이름. 알 수 없으면 None이다.
+    input_keys: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -378,6 +396,8 @@ class Snapshot:
     self_confirmations: tuple[ConfirmationRow, ...] = ()
     # (값, 조직 또는 None): 지금 유효한 허용 목적지 목록. 패턴 계산의 허용 호스트에 쓴다.
     egress_targets: tuple[tuple[str, str | None], ...] = ()
+    # 서버의 마지막 승인된 수용 신청이 적은 자료 등급. 신청 기록이 없으면 None.
+    data_grade: str | None = None
 
 
 def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
@@ -433,7 +453,10 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
             )
             for a in doc["allowlists"]
         },
-        relations={r["id"]: RelationRow(id=r["id"], status=r["status"]) for r in doc["relations"]},
+        relations={
+            r["id"]: RelationRow(id=r["id"], status=r["status"], purpose=r.get("purpose"))
+            for r in doc["relations"]
+        },
         approvals=tuple(
             ApprovalRow(
                 id=a["id"],
@@ -497,7 +520,8 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
         tool_contracts=tuple(
             ToolContractRow(
                 c["id"], c["credential_scope"], c["tool"], c["drift"], c["version"],
-                c.get("risk_grade"),
+                c.get("risk_grade"), c.get("action_type"),
+                None if c.get("input_keys") is None else tuple(c["input_keys"]),
             )
             for c in doc.get("tool_contracts", ())
         ),
@@ -510,6 +534,7 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
             }) for c in doc.get("self_confirmations", ())
         ),
         egress_targets=tuple((e["value"], e["org_id"]) for e in doc.get("egress_targets", [])),
+        data_grade=doc.get("data_grade"),
     )
 
 

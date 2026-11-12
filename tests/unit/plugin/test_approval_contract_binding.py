@@ -106,6 +106,51 @@ def test_the_policy_input_carries_the_contract_grade_not_only_approval_condition
     assert [c["tool"].get("risk_grade") for c in calls] == ["low", "high"]
 
 
+def test_the_policy_input_carries_defaults_filled_from_the_contract_and_the_intake(
+    world, tmp_path
+):
+    scene, dsn = world
+    scene.conn.execute(
+        "UPDATE mint.servers SET contract_status = 'managed', last_observed_at = now()"
+        " WHERE instance_id = %s", (scene.iid,))
+    contract_id = uuid4()
+    scene.conn.execute(
+        "INSERT INTO mint.tool_contracts (id, instance_id, server_id, credential_scope, tool,"
+        " canonical_text, sha256, pin_sha256, risk_grade, action_type, source, status)"
+        " VALUES (%s, %s, 'srv-1', 'server', 'search', %s, repeat('a', 64), repeat('b', 64),"
+        " 'high', 'delete', 'intake', 'candidate')",
+        (contract_id, scene.iid,
+         '{"description":"d","input_schema":{"properties":{"q":{},"limit":{}}}}'),
+    )
+    scene.conn.execute("UPDATE mint.tool_contracts SET status = 'approved' WHERE id = %s",
+                       (contract_id,))
+    scene.conn.execute(
+        "INSERT INTO mint.intakes (id, instance_id, org_id, server_id, source, status, purpose,"
+        " data_grade, allowed_resources, provider, owner_user_id, readiness, data_return_terms,"
+        " requested_by, decided_by, decision, decided_at) VALUES (%s, %s, 'org1', 'srv-1',"
+        " 'operator', 'decided', 'support', 'restricted', '[]'::jsonb, 'p', 'u1',"
+        " '{\"credential_notice\":1,\"revocation_record\":1,\"audit_access_days\":1}'::jsonb,"
+        " 'terms', 'u1', 'boss', 'approved', now())",
+        (uuid4(), scene.iid),
+    )
+    calls = []
+
+    async def go():
+        live, deps = base.replica(scene, dsn, tmp_path, calls=calls)
+        try:
+            await base.ask(scene, deps)
+        finally:
+            await live.close()
+
+    run(go())
+    (doc,) = calls
+    conditions = doc["approval"]["conditions"]
+    assert conditions["allowed_arg_keys"] == ["limit", "q"]
+    assert conditions["require_user_confirmation"]["tools"] == ["search"]
+    assert conditions["require_consent"] == "support"
+    assert doc["tool"]["action_type"] == "delete"
+
+
 def test_a_call_approval_given_under_a_replaced_contract_does_not_match(world, tmp_path):
     scene, dsn = world
     contract = make_managed(scene, "high")

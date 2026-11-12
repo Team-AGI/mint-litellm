@@ -192,6 +192,8 @@ def grant_approval(
     allowed_arg_keys: str = Form(""),
     paths_mode: str = Form("unset"),
     allowed_paths: str = Form(""),
+    max_result_bytes: int | None = Form(None),
+    max_result_items: int | None = Form(None),
     actor: Actor = Depends(page_actor),
 ):
     def action():
@@ -202,6 +204,7 @@ def grant_approval(
             valid_days=valid_days, second_approver_token=second_approver_token or None,
             allowed_hosts=lines(allowed_hosts), allowed_arg_keys=lines(allowed_arg_keys),
             paths_mode=paths_mode, allowed_paths=lines(allowed_paths),
+            max_result_bytes=max_result_bytes, max_result_items=max_result_items,
         )
         api.grant_approval(body, actor)
 

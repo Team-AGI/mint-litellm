@@ -120,7 +120,8 @@ def test_public_or_non_address_is_not_private(text):
         ("a/b/c", [], False),
         ("a..b/c", [], False),
         ("file..name", [], False),
-        ("/etc/passwd", [], False),
+        ("/etc/passwd", [], True),
+        ("C:/Users/a", [], True),
         ("/etc/passwd", ["/srv/docs"], True),
         ("/srv/docs/a.txt", ["/srv/docs"], False),
         ("/srv/docs", ["/srv/docs"], False),
@@ -133,6 +134,11 @@ def test_public_or_non_address_is_not_private(text):
 )
 def test_path_traversal(text, allowed, traversal):
     assert patterns({"p": text}, allowed_paths=allowed)["path_traversal"] is traversal
+
+
+def test_unrestricted_paths_are_an_explicit_choice():
+    assert patterns({"p": "/etc/passwd"}, paths_unrestricted=True)["path_traversal"] is False
+    assert patterns({"p": "../etc"}, paths_unrestricted=True)["path_traversal"] is True
 
 
 def test_secret_like_uses_marker_substrings():

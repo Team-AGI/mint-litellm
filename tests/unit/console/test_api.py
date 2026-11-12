@@ -357,6 +357,17 @@ def test_unrestricted_paths_are_an_explicit_choice(world):
     assert rows[0][0] == {"allowed_paths_unrestricted": True}
 
 
+def test_result_limits_are_stored_when_given_and_must_be_positive(world):
+    response, rows = approval_conditions_of(world, max_result_bytes=4096, max_result_items=20)
+    assert response.status_code == 200
+    assert rows[0][0] == {"max_result_bytes": 4096, "max_result_items": 20}
+
+
+def test_a_result_limit_of_zero_is_refused(world):
+    response, _ = approval_conditions_of(world, max_result_items=0)
+    assert response.status_code in (400, 422)
+
+
 def test_console_approval_records_the_high_risk_tools_like_the_cli_does(world):
     server = "srv-wait"
     world.query(
