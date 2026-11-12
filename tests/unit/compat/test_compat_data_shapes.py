@@ -391,6 +391,16 @@ class TestServerResolution:
         assert entry.credential and "secret-token" not in entry.credential
         assert entry.in_database  # 대역 관리자의 registry에 있는 서버는 DB 서버이다
 
+    def test_static_header_credentials_count_as_the_same_credential_as_a_token(self):
+        by_token = server(authentication_token="shared-secret")
+        by_header = server(
+            "srv-2", static_headers={"Authorization": "Bearer shared-secret", "X-Trace": "t"}
+        )
+        first, second = compat.registry_entries(manager=Manager([by_token, by_header]))
+        assert first.credential in second.header_credentials
+        assert len(second.header_credentials) == 1  # 자격을 싣지 않는 헤더는 보지 않는다
+        assert "shared-secret" not in repr(second)
+
     def test_config_servers_are_not_database_servers(self):
         manager = Manager([server()])
         manager.config_mcp_servers = {"srv-1": manager.registry.pop("srv-1")}

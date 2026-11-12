@@ -26,6 +26,7 @@ from mint_litellm.types.reuse_policy import (
     DISCOVERY_AUTH,
     ServerFacts,
     credential_digest,
+    header_credential_digests,
     ssl_verify_on,
 )
 
@@ -364,6 +365,7 @@ class RegistryEntry:
     rpm: int | None = None
     max_concurrent: int | None = None
     in_database: bool = False
+    header_credentials: tuple[str, ...] = ()
 
     def facts(self) -> ServerFacts:
         return ServerFacts(
@@ -376,6 +378,7 @@ class RegistryEntry:
             self.credential,
             self.rpm,
             self.max_concurrent,
+            self.header_credentials,
             self.in_database,
         )
 
@@ -411,6 +414,7 @@ def registry_entries(*, manager: Any = None) -> list[RegistryEntry]:
             rpm=getattr(server, "rpm", None),
             max_concurrent=getattr(server, "max_concurrent_requests", None),
             in_database=server.server_id in database_ids,
+            header_credentials=header_credential_digests(getattr(server, "static_headers", None)),
         )
         for server in mgr.get_registry().values()
     ]

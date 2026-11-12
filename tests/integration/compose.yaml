@@ -307,6 +307,69 @@ services:
         condition: service_healthy
     networks: [front]
 
+  # LiteLLM 재사용 정책 실측용(test_reuse_runtime). 인증서는 tls-front 이름 하나에만 발급한다.
+  tls-init:
+    image: ${MINT_E_IMAGE:-mint-litellm-it:local}
+    profiles: [plain]
+    user: root
+    entrypoint: ["python", "/work/make_cert.py", "/certs"]
+    volumes:
+      - ./tls/make_cert.py:/work/make_cert.py:ro
+      - tlscerts:/certs
+    depends_on:
+      mint-init:
+        condition: service_completed_successfully
+    restart: "no"
+    networks: [front]
+
+  # TLS를 끝내는 문. 같은 서버가 tls-front와 tls-front-alt 두 이름으로 보인다(인증서 이름은 앞의 것만).
+  tls-front:
+    image: nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+    profiles: [plain]
+    volumes:
+      - ./tls/nginx.conf:/etc/nginx/nginx.conf:ro
+      - tlscerts:/certs:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "--no-check-certificate", "https://localhost:8443/__health"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      tls-init:
+        condition: service_completed_successfully
+      counting-proxy:
+        condition: service_healthy
+    networks:
+      front:
+        aliases: [tls-front-alt]
+
+  # 플러그인이 없는 순정 이미지에 재사용 정책이 요구하는 설정을 넣은 복제본. 설정이 실제로 낳는 동작을 잰다.
+  litellm-reuse:
+    image: ghcr.io/berriai/litellm-database:v1.106.6@sha256:7ef0e78fe00ad5ea7ea45666cc1d1f02cb7076aee69091543bf397de52db33ce
+    profiles: [plain]
+    environment:
+      LITELLM_MASTER_KEY: ${MINT_E_MASTER_KEY:-sk-integration-master}
+      PROXY_BASE_URL: http://litellm-reuse:4000
+      MCP_TRUSTED_REDIRECT_ORIGINS: app.trusted.test
+      SSL_CERT_FILE: /certs/tls.crt
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+    volumes:
+      - ./config/litellm.reuse.yaml:/app/config.yaml:ro
+      - tlscerts:/certs:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:4000/health/readiness', timeout=3).read()"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+    ports:
+      - "${MINT_E_PORT_PREFIX:-}4105:4000"
+    depends_on:
+      tls-front:
+        condition: service_healthy
+    networks: [front]
+
 networks:
   front: {}
   back: {}
@@ -317,3 +380,4 @@ volumes:
   buffer2:
   buffer3:
   export:
+  tlscerts:
