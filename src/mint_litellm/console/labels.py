@@ -171,7 +171,7 @@ ALLOWLIST_KIND = {
     "egress_target": "외부 전송 대상",
     "registry_source": "레지스트리 출처",
 }
-TRANSPORT = {"http": "HTTP", "sse": "SSE", "streamable_http": "스트리밍 HTTP"}
+TRANSPORT = {"http": "HTTP", "sse": "SSE", "streamable_http": "스트리밍 HTTP", "stdio": "로컬 실행"}
 AUTH_TYPE = {
     "none": "없음",
     "api_key": "API 키",

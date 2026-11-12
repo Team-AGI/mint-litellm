@@ -131,3 +131,17 @@ def test_an_unresolved_server_still_reports_the_url_hash_as_unresolved(tmp_path)
     assert outcome.snapshot.missing_reasons["resolved_url_sha256"] == "server_unresolved"
     assert outcome.snapshot.resolved_identity_kind is None
 
+
+
+def test_a_contract_built_server_passes_and_a_changed_contract_is_stopped(tmp_path):
+    from mint_litellm.types.exec_contract import ExecContract
+
+    approved = ExecContract(
+        executable="/usr/bin/node", argv=["/opt/srv/index.js"], executable_sha256="a" * 64
+    )
+    row = stdio_row(exec_contract_sha256=approved.sha256())
+    same = decide(harness(tmp_path, snapshot(server=row)), resolved=approved.resolved("srv-1"))
+    assert same.allowed
+    changed = approved.model_copy(update={"argv": ("/opt/srv/evil.js",)})
+    outcome = decide(harness(tmp_path, snapshot(server=row)), resolved=changed.resolved("srv-1"))
+    assert outcome.error.code == "MINT-SERVER-IDENTITY-MISMATCH"
