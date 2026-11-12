@@ -146,16 +146,17 @@ def flow(stack, world):
 # --- 한 흐름 -------------------------------------------------------------------------------
 
 
-def test_intake_to_revoke_in_one_flow(world, evidence, upstreams, flow):
+def test_intake_to_revoke_in_one_flow(world, evidence, upstreams, flow, multiworker):
     evidence.positive_control()
     subject, server_id = flow.subject, flow.server_id
     since = world.now()
 
-    def call(mark: str, tool: str = "mutable", **arguments):
+    def call(mark: str, tool: str = "mutable", port: int | None = None, **arguments):
         return world.call(
             subject,
             server_id,
             tool,
+            port=port,
             mark=mark,
             arguments={"text": "x", "marker": mark, **arguments},
         )
@@ -246,6 +247,16 @@ def test_intake_to_revoke_in_one_flow(world, evidence, upstreams, flow):
     assert (blocked.code or "").upper().startswith("MINT-CONTRACT-DRIFT"), blocked.body
     judged(world, blocked, "block", "block", "CONTRACT_DRIFT")
     evidence.assert_calls(blocked.mark, 0, "a")
+
+    # 워커가 둘인 다른 복제본은 이 서버의 도구를 한 번도 목록화하지 않았다. 변경된 도구는 목록에서
+    # 숨겨지지만, 어느 워커가 받아도 같은 판정과 사건이 남아야 한다.
+    for outcome in world.call_concurrently(
+        subject, 8, server=server_id, tool="mutable", port=multiworker
+    ):
+        assert outcome.status == 403, outcome.body
+        assert (outcome.code or "").upper().startswith("MINT-CONTRACT-DRIFT"), outcome.body
+        judged(world, outcome, "block", "block", "CONTRACT_DRIFT")
+        evidence.assert_calls(outcome.mark, 0, "a", settle=0)
 
     # 6. 자동 재검사: 드리프트가 등록한 재검사 작업이 끝나 후보 계약과 후보에 결속된 증거가 생긴다.
     evidence_job = f"{intake_id}/evidence"

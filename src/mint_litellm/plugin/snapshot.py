@@ -861,3 +861,25 @@ class PluginDatabase:
 
         rows = await self._run(read)
         return [RegisteredServer(*row) for row in rows]
+
+    async def contract_tools(self, instance_id: str) -> dict[str, tuple[str, ...]]:
+        """관리 중인 서버별 계약 도구 이름. 승인·드리프트·폐기 후보를 가리지 않는다."""
+
+        async def read(conn: Any) -> Any:
+            probe = await conn.execute("SELECT to_regclass('mint.tool_contracts')")
+            if (await probe.fetchone())[0] is None:
+                return []
+            cursor = await conn.execute(
+                "SELECT t.server_id, t.tool FROM mint.tool_contracts t"
+                " JOIN mint.servers s ON s.instance_id = t.instance_id"
+                " AND s.server_id = t.server_id AND s.contract_status = 'managed'"
+                " WHERE t.instance_id = %s GROUP BY t.server_id, t.tool"
+                " ORDER BY t.server_id, t.tool",
+                (instance_id,),
+            )
+            return await cursor.fetchall()
+
+        found: dict[str, list[str]] = {}
+        for server_id, tool in await self._run(read):
+            found.setdefault(server_id, []).append(tool)
+        return {server_id: tuple(tools) for server_id, tools in found.items()}
