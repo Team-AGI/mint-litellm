@@ -47,3 +47,32 @@ mcp_servers:
     transport: http
     allow_all_keys: false
     description: Integration test upstream D (same server as A)
+  # 전송·판본 조합 회귀 시험용 서버. 같은 시험 서버를 조합별로 다른 경로와 판본으로 가리킨다.
+  mcp_e:
+    server_id: e1000000000000000000000000000005
+    url: http://counting-proxy:8080/e/mcp
+    transport: http
+    protocol_version: "2025-06-18"
+    allow_all_keys: false
+    description: Integration test upstream E (Streamable HTTP, JSON response)
+  mcp_f:
+    server_id: e1000000000000000000000000000006
+    url: http://counting-proxy:8080/f/mcp
+    transport: http
+    protocol_version: "2025-06-18"
+    allow_all_keys: false
+    description: Integration test upstream F (Streamable HTTP, SSE response)
+  mcp_g:
+    server_id: e1000000000000000000000000000007
+    url: http://counting-proxy:8080/g/sse
+    transport: sse
+    protocol_version: "2024-11-05"
+    allow_all_keys: false
+    description: Integration test upstream G (legacy HTTP+SSE)
+  mcp_h:
+    server_id: e1000000000000000000000000000008
+    url: http://counting-proxy:8080/h/mcp
+    transport: http
+    protocol_version: "2026-07-28"
+    allow_all_keys: false
+    description: Integration test upstream H (2026-07-28 per-request envelope)
