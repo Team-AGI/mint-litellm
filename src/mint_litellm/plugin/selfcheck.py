@@ -472,6 +472,13 @@ class PluginRuntime:
             self.config.decision_budget_seconds * 10,
         )
 
+    async def _load_unmanaged(self) -> set[str]:
+        servers = await asyncio.wait_for(
+            self.database.registered_servers(self.config.instance_id),
+            self.config.decision_budget_seconds * 10,
+        )
+        return {s.server_id for s in servers if s.contract_status != "managed"}
+
     async def _register_contract_tools(self, view: LiteLLMView) -> None:
         """계약 도구를 이 워커의 도구 경로표에 올린다. 숨긴 도구의 직접 호출도 판정에 닿게 한다.
 
@@ -498,7 +505,7 @@ class PluginRuntime:
         if self._task is not None:
             return
         try:
-            compat.install_contract_retry(self._load_contract_tools)
+            compat.install_contract_retry(self._load_contract_tools, self._load_unmanaged)
         except Exception as exc:
             log.warning("계약 도구 재시도 설치 실패: %s", type(exc).__name__)
         try:
