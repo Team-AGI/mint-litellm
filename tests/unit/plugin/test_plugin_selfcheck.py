@@ -346,7 +346,8 @@ def test_item_8_required_settings(override):
         ({"registry": [entry(credential="a"), entry("srv-2", ("other",), credential="a")]},
          "POL-R-14"),
         # 한 서버는 인증 토큰으로, 다른 서버는 정적 헤더로 같은 자격을 쓴다.
-        ({"registry": [entry(credential="a"), entry("srv-2", ("other",), header_credentials=("a",))]},
+        ({"registry": [entry(credential="a"),
+                       entry("srv-2", ("other",), header_credentials=("a",))]},
          "POL-R-14"),
     ],
 )

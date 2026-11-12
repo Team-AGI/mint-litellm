@@ -1,8 +1,8 @@
 """LiteLLM 재사용 정책이 기대는 설정의 실제 동작을 재는 시험.
 
-플러그인이 없는 순정 LiteLLM 1.106.6(``litellm-reuse``, 설정은 ``config/litellm.reuse.yaml``)이 설정 값에
-따라 정말 막고 제한하는지를 HTTP로 확인한다. MINT 자가 점검은 이 값들을 요구할 뿐이므로, 값이 효과를 내는지는
-여기서 고정한다. 판본을 올렸을 때 동작이 달라지면 이 시험이 먼저 깨진다.
+플러그인이 없는 순정 LiteLLM 1.106.6(``litellm-reuse``, 설정은 ``config/litellm.reuse.yaml``)이
+설정 값에 따라 정말 막고 제한하는지를 HTTP로 확인한다. MINT 자가 점검은 이 값들을 요구할 뿐이므로,
+값이 효과를 내는지는 여기서 고정한다. 판본을 올렸을 때 동작이 달라지면 이 시험이 먼저 깨진다.
 
 LiteLLM이 하지 않는 일(한계)은 ``test_*_limit_*`` 이름으로 따로 고정한다.
 """
@@ -85,7 +85,7 @@ def test_env_credential_login_is_refused_only_when_the_setting_is_on(stack, plai
         assert "token" not in refused.text
 
 
-# --- POL-E-23: 서버별 분당 호출 한도와 동시 실행 한도 -----------------------------------------------
+# --- POL-E-23: 서버별 분당 호출 한도와 동시 실행 한도 ---------------------------------------
 
 
 def test_server_rpm_limit_stops_calls_above_the_limit_before_the_upstream(reuse, proxy_log):
@@ -155,7 +155,7 @@ def test_tls_certificate_name_must_match_the_address(reuse, proxy_log):
     assert "not valid for 'tls-front-alt'" in reuse_logs()
 
 
-# --- POL-R-11: 조회 주소 제한(인증 서버 메타데이터) --------------------------------------------------
+# --- POL-R-11: 조회 주소 제한(인증 서버 메타데이터) -----------------------------------------
 
 
 def test_cross_origin_metadata_url_on_a_private_address_is_not_fetched(reuse):
@@ -255,8 +255,9 @@ def test_callback_without_the_started_flow_is_not_forwarded(reuse):
 
 
 def test_state_limit_a_finished_callback_can_be_replayed(reuse):
-    # LiteLLM은 릴레이 흐름의 state를 서버에서 한 번만 쓰게 하지 않는다. 쿠키가 남아 있으면 되풀이가 통과한다.
-    # 재사용된 결과의 거부는 이 설정으로 얻지 못하는 부분이며, 판본이 바뀌어 달라지면 이 시험이 알린다.
+    # LiteLLM은 릴레이 흐름의 state를 서버에서 한 번만 쓰게 하지 않는다. 쿠키가 남아 있으면
+    # 되풀이가 통과한다. 재사용된 결과의 거부는 이 설정으로 얻지 못하는 부분이며, 판본이 바뀌어
+    # 달라지면 이 시험이 알린다.
     wait_authorize_ready("rt_oauth")
     started = authorize("rt_oauth", TRUSTED)
     assert finish(started).status_code == 302
@@ -270,7 +271,7 @@ def test_identity_binding_enforce_requires_pkce_and_a_signed_in_caller(reuse):
     plain = authorize("rt_oauth", TRUSTED)
     assert "idp.invalid/authorize" in plain.headers["location"]
     assert "nonce=" not in plain.headers["location"]
-    # enforce 서버는 PKCE(S256)를 요구하고, 로그인한 호출자가 없으면 상류가 아니라 로그인으로 보낸다.
+    # enforce 서버는 PKCE(S256)를 요구하고, 로그인한 호출자가 없으면 상류 대신 로그인으로 보낸다.
     bare = authorize("rt_oauth_bound", TRUSTED)
     assert bare.status_code == 400 and "PKCE" in bare.text
     bound = authorize(
@@ -295,8 +296,9 @@ def test_response_issuer_must_match_the_pinned_issuer(reuse):
 
 
 def test_issuer_limit_a_response_without_iss_passes_unless_the_idp_announces_iss(reuse):
-    # RFC 9207 iss를 보낸다고 메타데이터가 알리는 인가 서버면 iss 없는 응답을 거부한다. 알리지 않는 인가 서버는
-    # iss 없는 응답을 받아들인다. 발급자 고정만으로는 iss를 싣지 않는 바꿔치기 응답을 막지 못하는 부분이다.
+    # RFC 9207 iss를 보낸다고 메타데이터가 알리는 인가 서버면 iss 없는 응답을 거부한다.
+    # 알리지 않는 인가 서버는 iss 없는 응답을 받아들인다. 발급자 고정만으로는 iss를 싣지 않는
+    # 바꿔치기 응답을 막지 못하는 부분이다.
     wait_authorize_ready("rt_oauth")
     wait_authorize_ready("rt_oauth_iss")
     assert finish(authorize("rt_oauth", TRUSTED)).status_code == 302
