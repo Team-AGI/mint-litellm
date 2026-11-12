@@ -154,6 +154,15 @@ def principal_from_auth(
     )
 
 
+def key_auth_dependency() -> Any:
+    """호출자 키를 검증하는 LiteLLM의 인증 의존성. 경로의 허용 목록 검사도 이 안에서 일어난다."""
+    return importlib.import_module("litellm.proxy.auth.user_api_key_auth").user_api_key_auth
+
+
+def proxy_app() -> Any:
+    return importlib.import_module("litellm.proxy.proxy_server").app
+
+
 def global_manager() -> Any:
     return importlib.import_module(_MANAGER_MODULE).global_mcp_server_manager
 

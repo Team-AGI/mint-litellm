@@ -512,6 +512,17 @@ def _approved_contract_id(ctx: Context, server_id: str, tool: str):
     return contract["id"]
 
 
+def _exec_contract_sha256(ctx: Context, server_id: str) -> str | None:
+    """로컬 실행 서버에 지금 등록된 실행 계약 해시. 호출별 승인은 이 계약에 묶인다(아니면 None)."""
+    row = fetchone(
+        ctx.conn,
+        "SELECT exec_contract_sha256 FROM mint.servers WHERE instance_id = %s AND server_id = %s"
+        " FOR SHARE",
+        (ctx.instance_id, server_id),
+    )
+    return None if row is None else row["exec_contract_sha256"]
+
+
 def call_request(
     ctx: Context,
     *,
@@ -546,13 +557,13 @@ def call_request(
         ctx.conn,
         "INSERT INTO mint.call_approvals (id, instance_id, org_id, principal_type, principal_id,"
         " server_id, tool, args_fp, fp_key_version, policy_version_id, status, requested_by,"
-        " expires_at, contract_id)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s)"
+        " expires_at, contract_id, exec_contract_sha256)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s)"
         " RETURNING state_version",
         (call_id, ctx.instance_id, org_id, principal_type, principal_id, server_id, tool, args_fp,
          fp_key_version, policy_version_id, requested_by,
          datetime.now(UTC) + timedelta(minutes=expires_in_minutes),
-         _approved_contract_id(ctx, server_id, tool)),
+         _approved_contract_id(ctx, server_id, tool), _exec_contract_sha256(ctx, server_id)),
     )
     ctx.emit(
         EventKind.CALL_APPROVAL_REQUESTED,

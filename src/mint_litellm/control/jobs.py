@@ -45,6 +45,7 @@ KINDS: dict[str, JobKind] = {
     "export_checkpoint": JobKind(external_write=True),
     "alert_deliver": JobKind(external_write=True),
     "approval_expiry_scan": JobKind(),
+    "endpoint_result_scan": JobKind(),
     "evidence_expiry_scan": JobKind(),
     "session_verify": JobKind(),
     # 해제 경로: 되돌림 차단 상태에서도 실행한다(외부 쓰기 목록에 넣지 않는다).
@@ -143,6 +144,13 @@ def _approval_expiry_scan(job: JobContext) -> None:
     expiry.warn_expiring(job.conn, job.instance_id)
 
 
+def _endpoint_result_scan(job: JobContext) -> None:
+    from mint_litellm.control import endpoint_results
+
+    with job.conn.transaction():
+        endpoint_results.scan(job.conn, job.instance_id)
+
+
 def _alert_deliver(job: JobContext) -> None:
     """경보 전송 한 건(주소 하나). 응답 본문은 읽어 버리고 상태와 보낸 횟수만 남긴다."""
     row = fetchone(
@@ -226,6 +234,7 @@ def _session_verify(job: JobContext) -> None:
 # 이 단계에서 처리기가 붙은 작업. 나머지는 해당 단계에서 붙이며, 처리기 없는 작업은 등록할 수 없다.
 HANDLERS: dict[str, Callable[[JobContext], None]] = {
     "approval_expiry_scan": _approval_expiry_scan,
+    "endpoint_result_scan": _endpoint_result_scan,
     "contract_observe": _contract_observe,
     "sync_server": _sync("sync_server"),
     "sync_target": _sync("sync_target"),
@@ -242,6 +251,7 @@ HANDLERS: dict[str, Callable[[JobContext], None]] = {
 # 일정(주기 작업): 종류 -> 설정에서 주기(초)를 얻는 함수. 처리기가 있는 종류만 일정을 만든다.
 SCHEDULES: dict[str, Callable[[Any], int]] = {
     "approval_expiry_scan": lambda s: 60,
+    "endpoint_result_scan": lambda s: 60,
     "contract_observe": lambda s: s.observe_seconds,
     "seal": lambda s: 60,
     "submission_poll": lambda s: s.submission_poll_seconds,
