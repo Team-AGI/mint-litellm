@@ -22,7 +22,7 @@ D = "."  # 점 표기 주소를 저장소 위생 시험이 막으므로 나눠 �
 
 
 MANAGED_SERVER = server_row(contract_status="managed", last_observed_at=NOW)
-CONTRACTS = (ToolContractRow("c1", "server", "search", "none", 1),)
+CONTRACTS = (ToolContractRow("c1", "server", "search", "none", 1, input_keys=("q",)),)
 MANAGED = snapshot(server=MANAGED_SERVER, tool_contracts=CONTRACTS)
 
 
@@ -97,7 +97,8 @@ def test_allowed_paths_come_from_the_approval(tmp_path):
 def test_secret_markers_come_from_the_fetched_bundle_data(tmp_path):
     args = {"k": "ghp_abc"}
     assert sent_patterns(tmp_path, args)["secret_like"] is False
-    assert sent_patterns(tmp_path, args, markers=("ghp_",))["secret_like"] is True
+    allow = {"allow_input_secrets": ["custom_marker"]}
+    assert sent_patterns(tmp_path, args, conditions=allow, markers=("ghp_",))["secret_like"] is True
 
 
 def test_missing_markers_stop_the_call_as_a_policy_engine_failure(tmp_path):

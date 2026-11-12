@@ -876,7 +876,7 @@ class TestObligations:
 
     def managed_snapshot(self, bound, *, contract="c1", **override):
         contracts = () if contract is None else (
-            ToolContractRow(contract, "server", "search", "none", 1, "high"),)
+            ToolContractRow(contract, "server", "search", "none", 1, "high", input_keys=("q",)),)
         managed = server_row(contract_status="managed", approved_contracts=1, last_observed_at=NOW)
         return snapshot(
             server=managed, tool_contracts=contracts,

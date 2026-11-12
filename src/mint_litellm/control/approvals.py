@@ -19,6 +19,11 @@ from mint_litellm.types.ids import new_uuid7
 SCOPE_TYPES = ("key", "user", "team", "org")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]")
+# 인자에서 비밀을 찾아도 이 승인의 도구에 한해 허용할 탐지 종류(plugin.pipeline의 판정과 같다).
+ALLOWABLE_INPUT_SECRETS = frozenset({
+    "private_key", "cloud_access_key", "access_token", "jwt", "bearer_token",
+    "resident_registration_number", "card_number", "custom_marker",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +73,7 @@ def build_conditions(
     max_result_items: int | None = None,
     scan_result: bool = True,
     response_scan: str | None = None,
+    allow_input_secrets: list[str] | None = None,
 ) -> dict:
     """정책이 읽는 승인 조건. 지정하지 않은 조건은 키를 넣지 않는다."""
     conditions: dict = {}
@@ -83,6 +89,11 @@ def build_conditions(
         if response_scan not in ("block", "mask", "observe"):
             raise ControlError("--response-scan은 block, mask, observe 중 하나여야 합니다.")
         conditions["response_scan"] = response_scan
+    if allow_input_secrets:
+        unknown = sorted(set(allow_input_secrets) - ALLOWABLE_INPUT_SECRETS)
+        if unknown:
+            raise ControlError(f"--allow-input-secret 값이 올바르지 않습니다: {unknown[0][:64]!r}")
+        conditions["allow_input_secrets"] = sorted(set(allow_input_secrets))
     if confirm_tools:
         purpose = (confirm_purpose or "").strip()
         if not 1 <= len(purpose) <= 128:
