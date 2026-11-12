@@ -26,7 +26,7 @@ from mint_litellm.types.settings import Mode
 def managed(**overrides):
     values = dict(
         server=server_row(contract_status="managed", last_observed_at=NOW),
-        tool_contracts=(ToolContractRow("c1", "server", "search", "none", 1),),
+        tool_contracts=(ToolContractRow("c1", "server", "search", "none", 1, input_keys=()),),
     )
     values.update(overrides)
     return snapshot(**values)
@@ -102,9 +102,8 @@ def test_contract_findings_convert_as_family(tmp_path):
 
 def test_description_and_output_are_alert_only(tmp_path):
     for drift in ("none", "description", "output_schema"):
-        h = harness(
-            tmp_path, managed(tool_contracts=(ToolContractRow("c", "server", "search", drift, 1),))
-        )
+        contract = ToolContractRow("c", "server", "search", drift, 1, input_keys=())
+        h = harness(tmp_path, managed(tool_contracts=(contract,)))
         assert asyncio.run(evaluate_request(request(), h.deps)).allowed
 
 

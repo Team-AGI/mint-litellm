@@ -34,6 +34,7 @@ from mint_litellm.plugin.policy.defaults import effective_conditions
 from mint_litellm.plugin.policy.input import policy_input as make_policy_input
 from mint_litellm.plugin.policy.opa_client import Evaluation
 from mint_litellm.plugin.policy.patterns import compute_patterns
+from mint_litellm.plugin.policy.sensitive_scan import INPUT_SECRET_KINDS, scan_arguments
 from mint_litellm.plugin.snapshot import (
     ApprovalRow,
     CallApprovalRow,
@@ -72,7 +73,7 @@ from mint_litellm.types.identity import (
     with_org,
 )
 from mint_litellm.types.ids import new_uuid7
-from mint_litellm.types.reason_codes import Reason
+from mint_litellm.types.reason_codes import ContractDriftKind, Reason
 from mint_litellm.types.settings import Mode, ObservationSettings, effective_mode
 from mint_litellm.types.target import (
     READ,
@@ -384,6 +385,22 @@ def contract_result(
     return StageResult.passed()
 
 
+def input_keys_unknown(
+    snapshot: Snapshot, tool: str, selected: ApprovalRow | None
+) -> StageResult | None:
+    """허용 인자 키를 채울 수 없는 호출. 계약의 입력 정의를 모르는데(NULL) 승인에도 키 목록이
+    없으면 인자 키 판정이 건너뛰어지므로 막는다(닫힌 쪽). 승인에 목록이 있으면 그 값이 쓰인다."""
+    contract = current_contract(snapshot, tool)
+    if (
+        selected is None
+        or contract is None
+        or contract.input_keys is not None
+        or "allowed_arg_keys" in selected.conditions
+    ):
+        return None
+    return StageResult.finding(Reason.CONTRACT_DRIFT, ContractDriftKind.INPUT_KEYS_UNKNOWN.value)
+
+
 def consent_state(snapshot: Snapshot, principal: Principal, purpose: str) -> tuple[str, str | None]:
     """목적에 대한 동의 상태와 출처. 동의는 사람 사용자에게만 있다."""
     if principal.principal_type is not PrincipalType.USER:
@@ -405,6 +422,10 @@ class InputError(Exception):
 
 # 결과 크기(바이트)와 결과 항목 수의 상한을 담는 승인 조건 이름
 RESULT_LIMIT_KEYS = ("max_result_bytes", "max_result_items")
+
+# 도구로 보내는 인자의 비밀 검사(POL-E-05). 운영자가 정한 비밀 표지에 걸린 경우의 탐지 종류 이름.
+POL_INPUT_SENSITIVE = "POL-E-05"
+CUSTOM_MARKER = "custom_marker"
 
 # 결과의 비밀·개인정보 검사 방식 승인 조건. 지정하지 않으면 가린다(mask).
 RESPONSE_SCAN_MODES = ("block", "mask", "observe")
@@ -591,6 +612,40 @@ def build_policy_input(
             else None
         ),
     )
+
+
+def input_secret_result(
+    snapshot: Snapshot,
+    selected: ApprovalRow | None,
+    arguments: Mapping[str, Any],
+    policy_input: Mapping[str, Any],
+) -> StageResult | None:
+    """호출 인자에 비밀이 있으면 막는 결과(POL-E-05, 도구로 보내기 전 입력). 계약 관리 서버만 본다.
+
+    승인 조건 ``allow_input_secrets``에 적은 탐지 종류는 이 승인의 도구에 한해 허용한다. 사유에는
+    탐지 종류와 건수만 남기고 값은 남기지 않는다. 운영자가 정한 비밀 표지(``secret_like``)도 본다.
+    """
+    server = snapshot.server
+    if server is None or server.contract_status != "managed":
+        return None
+    patterns = policy_input["arguments"].get("patterns") or {}
+    # 크기·깊이 상한을 넘으면 네 패턴이 모두 참이 되어 다른 패턴 규칙이 이미 막는다. 훑지 않는다.
+    if patterns and all(patterns.values()):
+        return None
+    allowed: set[str] = set()
+    if selected is not None:
+        allowed = set(_condition_list(selected.conditions, "allow_input_secrets"))
+    found = {
+        kind: count
+        for kind, count in scan_arguments(arguments).items()
+        if kind in INPUT_SECRET_KINDS and kind not in allowed
+    }
+    if patterns.get("secret_like") and CUSTOM_MARKER not in allowed:
+        found[CUSTOM_MARKER] = 1
+    if not found:
+        return None
+    detail = "input " + ",".join(f"{kind}={count}" for kind, count in sorted(found.items()))
+    return StageResult.finding(Reason.POLICY_DETECT, POL_INPUT_SENSITIVE, detail)
 
 
 @dataclass(frozen=True)
@@ -1126,6 +1181,9 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
     stages.add(Stage.CONTRACT, contract_result(snapshot, tool, config.observe_seconds))
     if req.operation is OperationType.RUNTIME_DISCOVERY:
         return
+    unknown_keys = input_keys_unknown(snapshot, tool, run.selected)
+    if unknown_keys is not None:
+        stages.add(Stage.CONTRACT, unknown_keys)
     run.current = Stage.POLICY
     markers: Sequence[str] = ()
     if (
@@ -1165,9 +1223,12 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
             secret_markers=markers,
             timing=timing,
         )
+        secret = input_secret_result(snapshot, run.selected, hook.arguments, policy_input)
     except InputError as exc:
         stages.add(Stage.POLICY, StageResult.stop(Reason.SCHEMA_ERROR, detail=str(exc)[:200]))
         return
+    if secret is not None:
+        stages.add(Stage.POLICY, secret)
     # 패턴 계산은 따로 재므로 입력 단계에서 뺀다.
     timing.since("input", started + timing.seconds.get("patterns", 0.0))
     started = timing.now()

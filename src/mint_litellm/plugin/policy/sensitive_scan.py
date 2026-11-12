@@ -7,8 +7,9 @@
 
 import re
 from collections import Counter
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from datetime import date
+from typing import Any
 
 # 이 글자 수를 넘는 결과는 끝까지 볼 수 없으므로 탐지 종류 ``scan_limit``으로 따로 센다.
 MAX_SCAN_CHARS = 4 * 1024 * 1024
@@ -141,3 +142,41 @@ def mask_text(text: str) -> str:
         pos = end
     out.append(text[pos:])
     return "".join(out)
+
+
+# 도구로 보내는 인자에서 막는 종류. 인증정보와 검증식이 맞는 식별번호만 본다. 이메일·전화번호는
+# 수신자 같은 정상 입력이 많아 제외한다. 끝까지 볼 수 없는 인자(scan_limit)는 막는다.
+INPUT_SECRET_KINDS = frozenset({
+    "private_key", "cloud_access_key", "access_token", "jwt", "bearer_token",
+    "resident_registration_number", "card_number", SCAN_LIMIT,
+})
+_MAX_ARGUMENT_DEPTH = 20
+
+
+class _TooDeep(Exception):
+    pass
+
+
+def _argument_texts(value: Any) -> Iterable[str]:
+    stack: list[tuple[Any, int]] = [(value, 0)]
+    while stack:
+        item, depth = stack.pop()
+        if depth > _MAX_ARGUMENT_DEPTH:
+            raise _TooDeep
+        if isinstance(item, str):
+            yield item
+        elif isinstance(item, Mapping):
+            for key, child in item.items():
+                stack += [(str(key), depth + 1), (child, depth + 1)]
+        elif isinstance(item, list | tuple):
+            stack += [(child, depth + 1) for child in item]
+        elif item is not None:
+            yield str(item)
+
+
+def scan_arguments(arguments: Any) -> dict[str, int]:
+    """호출 인자(키와 값)의 탐지 종류별 건수. 값은 돌려주지 않는다. 너무 깊으면 ``scan_limit``."""
+    try:
+        return scan_sensitive(_argument_texts(arguments))
+    except _TooDeep:
+        return {SCAN_LIMIT: 1}

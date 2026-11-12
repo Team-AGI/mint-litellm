@@ -27,7 +27,7 @@ from mint_litellm.plugin.snapshot import ToolContractRow
 from mint_litellm.types.decision import OperationType
 
 SERVER = server_row(contract_status="managed", last_observed_at=NOW)
-CONTRACTS = (ToolContractRow("c1", "server", "search", "none", 1),)
+CONTRACTS = (ToolContractRow("c1", "server", "search", "none", 1, input_keys=("q",)),)
 PROSE = "The quick brown fox: see https://example.com/a?b=c and /var/log/x.txt, key=value\n"
 KIB = 1024
 
