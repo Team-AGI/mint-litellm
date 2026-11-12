@@ -67,6 +67,7 @@ def build(tmp_path, snap=None, **kwargs):
     database = FakeDatabase(h.store)
     runtime = SimpleNamespace(
         config=h.deps.config,
+        verified=kwargs.get("verified", True),
         deps=h.deps,
         database=database,
         result_deps=ResultDeps(config=h.deps.config, database=database, recorder=h.deps.recorder),
@@ -211,6 +212,45 @@ def test_both_routes_reject_bodies_over_the_limit(tmp_path):
     for path in ("/mint/v1/decide", "/mint/v1/result"):
         assert client.post(path, content=big, headers=KEY_HEADER).status_code == 413
     assert h.store.events == {}
+
+
+def test_each_route_has_its_own_limit_checked_from_the_declared_length_first(tmp_path):
+    client, h = build(tmp_path)
+    result_body = " " * (4 * 1024 + 1)  # 결정 요청에는 들어가지만 결과 보고에는 크다
+    url = "/mint/v1/{}".format
+    assert client.post(url("result"), content=result_body, headers=KEY_HEADER).status_code == 413
+    assert client.post(url("decide"), content=result_body, headers=KEY_HEADER).status_code == 422
+    # 본문을 읽기 전에 선언된 길이로 거절한다.
+    headers = {**KEY_HEADER, "Content-Length": str(10 * 1024 * 1024)}
+    assert client.post("/mint/v1/decide", content=b"{}", headers=headers).status_code in (400, 413)
+    assert h.store.events == {}
+
+
+def test_a_request_before_the_worker_finished_starting_gets_a_coded_refusal(tmp_path):
+    client, _ = build(tmp_path, verified=False)
+    # 결과 보고는 기동 전에는 받지 않는다(코드가 있는 503).
+    res = post(client, "/mint/v1/result", {"reference": f"{'0' * 8}-0000-0000-0000-{'0' * 12}:1",
+                                          "outcome": "success"})
+    assert res.status_code == 503
+    assert json.loads(res.json()["detail"])["error"]["code"] == "MINT-ENDPOINT-NOT-READY"
+    # 판정은 파이프라인이 막고 사건을 남긴다(통과하지 않는다).
+    res = post(client, "/mint/v1/decide", body())
+    assert res.status_code == 200 and res.json()["decision"] == "deny"
+    assert res.json()["error"]["code"] == "MINT-ENFORCEMENT-UNVERIFIED"
+
+
+def test_a_second_guardrail_in_the_same_worker_does_not_attach_the_routes_again(monkeypatch):
+    from mint_litellm.endpoint import decide as decide_module
+
+    app = FastAPI()
+    monkeypatch.setattr(compat, "proxy_app", lambda: app)
+    monkeypatch.setattr(compat, "key_auth_dependency", lambda: (lambda: auth()))
+    env = {decide_module.ENABLE_ENV: "true"}
+    assert decide_module.install_from_env(env) is True
+    count = len(app.router.routes)
+    assert decide_module.install_from_env(env) is False
+    assert len(app.router.routes) == count
+
 
 
 def test_the_routes_fail_closed_when_the_runtime_is_not_ready(tmp_path):
