@@ -344,7 +344,8 @@ def relation_finalize(ctx: JobContext) -> None:
         resolve_alert(conn, inst, key)
         if fetchone(
             conn,
-            "SELECT 1 AS x FROM mint.events WHERE instance_id = %s AND kind = 'relation_terminating'"
+            "SELECT 1 AS x FROM mint.events WHERE instance_id = %s"
+            " AND kind = 'relation_terminating'"
             " AND payload ->> 'relation_id' = %s AND payload ->> 'phase' = 'revocation_confirmed'",
             (inst, relation_id),
         ):
