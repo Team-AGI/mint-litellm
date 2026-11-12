@@ -248,7 +248,7 @@ def test_ingress_initialize_2025_06_18_is_negotiated_and_answered_as_sse(world):
     ("method", "name"),
     [("tools/call", "mcp_e-echo"), ("tools/list", None), ("server/discover", None)],
 )
-@pytest.mark.parametrize("version", ["2026-07-28", "2099-01-01"])
+@pytest.mark.parametrize("version", ["2026-07-28", "1999-01-01"])
 def test_ingress_unadvertised_revision_is_refused_before_any_call(
     world, evidence, method, name, version
 ):
