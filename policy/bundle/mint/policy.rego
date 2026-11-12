@@ -126,7 +126,7 @@ missing contains "approval.conditions.allowed_arg_keys" if {
 }
 
 # 서버 식별 방식. 로컬 실행(stdio) 서버 규칙(POL-R-18·POL-R-20)이 기대는 입력이라 빠지면 오류다.
-missing contains "server.identity_kind" if not input.server.identity_kind in {"remote", "stdio"}
+missing contains "server.identity_kind" if not object.get(input.server, "identity_kind", null) in {"remote", "stdio"}
 
 # 로컬 실행 서버는 보고된 실행 계약 해시가 있어야 승인본과 대조할 수 있다.
 missing contains "server.exec_contract_sha256" if {

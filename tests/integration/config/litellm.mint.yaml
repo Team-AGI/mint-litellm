@@ -63,6 +63,8 @@ mcp_servers:
     transport: http
     protocol_version: "2025-06-18"
     allow_all_keys: false
+    rpm: 600
+    max_concurrent_requests: 8
     description: Integration test upstream E (Streamable HTTP, JSON response)
   mcp_f:
     server_id: e1000000000000000000000000000006
@@ -70,6 +72,8 @@ mcp_servers:
     transport: http
     protocol_version: "2025-06-18"
     allow_all_keys: false
+    rpm: 600
+    max_concurrent_requests: 8
     description: Integration test upstream F (Streamable HTTP, SSE response)
   mcp_g:
     server_id: e1000000000000000000000000000007
@@ -77,6 +81,8 @@ mcp_servers:
     transport: sse
     protocol_version: "2024-11-05"
     allow_all_keys: false
+    rpm: 600
+    max_concurrent_requests: 8
     description: Integration test upstream G (legacy HTTP+SSE)
   mcp_h:
     server_id: e1000000000000000000000000000008
@@ -84,4 +90,6 @@ mcp_servers:
     transport: http
     protocol_version: "2026-07-28"
     allow_all_keys: false
+    rpm: 600
+    max_concurrent_requests: 8
     description: Integration test upstream H (2026-07-28 per-request envelope)
