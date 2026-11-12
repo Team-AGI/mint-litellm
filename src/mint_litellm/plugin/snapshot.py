@@ -63,14 +63,7 @@ SELECT jsonb_build_object(
         SELECT coalesce(jsonb_agg(jsonb_build_object(
             'id', t.id, 'credential_scope', t.credential_scope, 'tool', t.tool,
             'drift', t.drift, 'version', t.version, 'risk_grade', t.risk_grade,
-            'action_type', t.action_type,
-            'input_keys', (
-                SELECT coalesce(jsonb_agg(k ORDER BY k), '[]'::jsonb)
-                FROM jsonb_object_keys(CASE
-                    WHEN jsonb_typeof(t.canonical_text::jsonb -> 'input_schema' -> 'properties')
-                         = 'object'
-                    THEN t.canonical_text::jsonb -> 'input_schema' -> 'properties'
-                    ELSE '{}'::jsonb END) AS k))), '[]'::jsonb)
+            'action_type', t.action_type, 'input_keys', to_jsonb(t.input_keys))), '[]'::jsonb)
         FROM mint.tool_contracts t
         WHERE t.instance_id = %(iid)s AND t.server_id = %(server_id)s
           AND t.tool = %(tool)s AND t.status = 'approved'
@@ -81,12 +74,6 @@ SELECT jsonb_build_object(
         WHERE t.instance_id = %(iid)s AND t.server_id = %(server_id)s AND t.status = 'approved'
           AND t.credential_scope = CASE WHEN srv.auth_type IN ('oauth_delegate',
               'true_passthrough') THEN 'per_user' ELSE 'server' END
-    ),
-    'data_grade', (
-        SELECT i.data_grade FROM mint.intakes i
-        WHERE i.instance_id = %(iid)s AND i.server_id = %(server_id)s
-          AND i.decision IN ('approved', 'exception')
-        ORDER BY i.decided_at DESC LIMIT 1
     ),
     'allowlists', (
         SELECT coalesce(jsonb_agg(to_jsonb(a)), '[]'::jsonb) FROM mint.allowlists a
@@ -396,7 +383,7 @@ class Snapshot:
     self_confirmations: tuple[ConfirmationRow, ...] = ()
     # (값, 조직 또는 None): 지금 유효한 허용 목적지 목록. 패턴 계산의 허용 호스트에 쓴다.
     egress_targets: tuple[tuple[str, str | None], ...] = ()
-    # 서버의 마지막 승인된 수용 신청이 적은 자료 등급. 신청 기록이 없으면 None.
+    # 서버의 마지막 승인된 수용 신청이 적은 자료 등급. 수용 신청 없이 등록된 서버는 None.
     data_grade: str | None = None
 
 
@@ -534,7 +521,7 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
             }) for c in doc.get("self_confirmations", ())
         ),
         egress_targets=tuple((e["value"], e["org_id"]) for e in doc.get("egress_targets", [])),
-        data_grade=doc.get("data_grade"),
+        data_grade=None if server is None else server.get("data_grade"),
     )
 
 

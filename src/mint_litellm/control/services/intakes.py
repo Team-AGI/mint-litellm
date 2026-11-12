@@ -985,10 +985,10 @@ def _approve(
     # 서버 행에 계약 값을 복사한다(정본은 servers 열)
     ctx.conn.execute(
         "UPDATE mint.servers SET url_sha256 = %s, transport = %s, auth_type = %s, issuer = %s,"
-        " contract_status = 'managed', basis_allowlist_ids = %s::uuid[]"
+        " contract_status = 'managed', basis_allowlist_ids = %s::uuid[], data_grade = %s"
         " WHERE instance_id = %s AND server_id = %s",
         (deployment["url_sha256"], deployment["transport"], deployment["auth_type"],
-         deployment["issuer"], allowlist_ids, ctx.instance_id, server_id),
+         deployment["issuer"], allowlist_ids, row["data_grade"], ctx.instance_id, server_id),
     )
     # 이용 관계와 승인(pending)
     relation = fetchone(

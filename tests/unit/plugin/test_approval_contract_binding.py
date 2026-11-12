@@ -124,15 +124,7 @@ def test_the_policy_input_carries_defaults_filled_from_the_contract_and_the_inta
     )
     scene.conn.execute("UPDATE mint.tool_contracts SET status = 'approved' WHERE id = %s",
                        (contract_id,))
-    scene.conn.execute(
-        "INSERT INTO mint.intakes (id, instance_id, org_id, server_id, source, status, purpose,"
-        " data_grade, allowed_resources, provider, owner_user_id, readiness, data_return_terms,"
-        " requested_by, decided_by, decision, decided_at) VALUES (%s, %s, 'org1', 'srv-1',"
-        " 'operator', 'decided', 'support', 'restricted', '[]'::jsonb, 'p', 'u1',"
-        " '{\"credential_notice\":1,\"revocation_record\":1,\"audit_access_days\":1}'::jsonb,"
-        " 'terms', 'u1', 'boss', 'approved', now())",
-        (uuid4(), scene.iid),
-    )
+    scene.conn.execute("UPDATE mint.servers SET data_grade = 'restricted'")
     calls = []
 
     async def go():
