@@ -356,6 +356,13 @@ def test_item_8_enforces_the_settings_behind_litellm_reuse_policies(override, po
     assert policy in detail
 
 
+def test_item_8_does_not_refuse_database_servers_whose_limits_are_still_empty():
+    waiting = view(registry=[entry(rpm=None, max_concurrent=None, in_database=True)])
+    assert failed(run_checks(waiting)) == set()
+    zero = view(registry=[entry(rpm=0, in_database=False)])
+    assert SelfCheckItem.REQUIRED_SETTINGS in failed(run_checks(zero))
+
+
 def test_item_8_ignores_servers_mint_does_not_control():
     stray = view(registry=[entry(), entry("srv-9", ("stray",), discovery_oauth=True)])
     assert failed(run_checks(stray)) == set()

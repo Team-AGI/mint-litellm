@@ -338,6 +338,7 @@ class RegistryEntry:
     credential: str | None = None
     rpm: int | None = None
     max_concurrent: int | None = None
+    in_database: bool = False
 
     def facts(self) -> ServerFacts:
         return ServerFacts(
@@ -350,6 +351,7 @@ class RegistryEntry:
             self.credential,
             self.rpm,
             self.max_concurrent,
+            self.in_database,
         )
 
 
@@ -363,6 +365,7 @@ def _credential(server: Any) -> str | None:
 
 def registry_entries(*, manager: Any = None) -> list[RegistryEntry]:
     mgr = manager if manager is not None else global_manager()
+    database_ids = frozenset(getattr(mgr, "registry", None) or ())  # 설정 파일 서버는 따로 있다
     return [
         RegistryEntry(
             server_id=server.server_id,
@@ -382,6 +385,7 @@ def registry_entries(*, manager: Any = None) -> list[RegistryEntry]:
             credential=_credential(server),
             rpm=getattr(server, "rpm", None),
             max_concurrent=getattr(server, "max_concurrent_requests", None),
+            in_database=server.server_id in database_ids,
         )
         for server in mgr.get_registry().values()
     ]

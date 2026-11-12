@@ -45,6 +45,8 @@ class ServerFacts:
     credential: str | None  # 서버 고유 정적 자격의 해시. 없으면 None
     rpm: float | None = None
     max_concurrent: float | None = None
+    # LiteLLM DB에 등록된 서버. 한도는 MINT가 승인·동기화 때 채우므로 기동을 막지 않는다.
+    in_database: bool = False
 
 
 @dataclass(frozen=True)
@@ -125,8 +127,9 @@ def reuse_violations(
         add(KEY_TIMEOUT, "도구 호출 제한 시간이 없거나 너무 깁니다: " + ", ".join(unbounded[:5]))
 
     for key, label, values in (
-        (KEY_RPM, "분당 호출 한도", [(s.name, s.rpm) for s in servers]),
-        (KEY_CONCURRENCY, "동시 실행 한도", [(s.name, s.max_concurrent) for s in servers]),
+        (KEY_RPM, "분당 호출 한도", [(s.name, s.rpm) for s in servers if not s.in_database]),
+        (KEY_CONCURRENCY, "동시 실행 한도",
+         [(s.name, s.max_concurrent) for s in servers if not s.in_database]),
     ):
         unset = [n for n, v in values if not isinstance(v, (int, float)) or v <= 0]
         if unset:

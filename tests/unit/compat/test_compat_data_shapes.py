@@ -389,6 +389,14 @@ class TestServerResolution:
         assert entry.discovery_oauth and entry.per_user_oauth and entry.binding_mode == "enforce"
         assert entry.timeout == 30.0 and entry.facts().issuer == "https://issuer.test"
         assert entry.credential and "secret-token" not in entry.credential
+        assert entry.in_database  # 대역 관리자의 registry에 있는 서버는 DB 서버이다
+
+    def test_config_servers_are_not_database_servers(self):
+        manager = Manager([server()])
+        manager.config_mcp_servers = {"srv-1": manager.registry.pop("srv-1")}
+        manager.get_registry = lambda: manager.config_mcp_servers
+        (entry,) = compat.registry_entries(manager=manager)
+        assert not entry.in_database
 
 
 class TestResultHelpers:

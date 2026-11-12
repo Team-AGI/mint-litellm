@@ -187,6 +187,17 @@ def test_credential_columns_are_scrubbed_from_reads(fake, client):
     assert "credentials" not in client.get_server("srv-c")
 
 
+def test_server_limits_are_written_alone_and_must_be_positive_integers(fake, client):
+    fake.add_server("srv-1")
+    client.set_server_limits("srv-1", {"rpm": 600, "max_concurrent_requests": 8})
+    assert fake.writes() == [("PUT", "/v1/mcp/server",
+                              {"server_id": "srv-1", "rpm": 600, "max_concurrent_requests": 8})]
+    check_write("PUT", "/v1/mcp/server", {"server_id": "s", "allow_all_keys": False, "rpm": 1})
+    for bad in ({"rpm": 0}, {"rpm": -1}, {"rpm": True}, {"rpm": "600"}, {"timeout": 5}):
+        with pytest.raises(WriteRefused):
+            check_write("PUT", "/v1/mcp/server", {"server_id": "s", **bad})
+
+
 def test_the_only_server_update_allowed_closes_allow_all_keys(fake, client):
     fake.add_server("srv-1")
     fake.servers["srv-1"]["allow_all_keys"] = True

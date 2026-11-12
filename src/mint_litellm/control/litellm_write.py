@@ -25,7 +25,7 @@ _SERVER = r"/v1/mcp/server/[^/]+"
 WRITE_ROUTES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
     (method, re.compile(pattern))
     for method, pattern in (
-        ("PUT", r"/v1/mcp/server"),  # 본문은 allow_all_keys 끄기뿐이다(아래 check_write)
+        ("PUT", r"/v1/mcp/server"),  # 본문은 allow_all_keys 끄기와 호출 한도뿐이다(check_write)
         ("POST", r"/key/update"),
         ("POST", r"/team/update"),
         ("PUT", _SERVER + r"/approve"),
@@ -35,6 +35,7 @@ WRITE_ROUTES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
     )
 )
 
+LIMIT_FIELDS = ("rpm", "max_concurrent_requests")
 _ID_FIELD = {"/key/update": "key", "/team/update": "team_id"}
 _PERMISSION_FIELDS = frozenset({"mcp_servers", "mcp_tool_permissions"})
 
@@ -72,13 +73,19 @@ def check_write(method: str, path: str, body: Any) -> None:
     if path == "/v1/mcp/server":
         if (
             not isinstance(body, dict)
-            or set(body) != {"server_id", "allow_all_keys"}
-            or not isinstance(body["server_id"], str)
+            or not isinstance(body.get("server_id"), str)
             or not body["server_id"]
-            or body["allow_all_keys"] is not False
+            or len(body) < 2
+            or not set(body) <= {"server_id", "allow_all_keys", *LIMIT_FIELDS}
+            or body.get("allow_all_keys", False) is not False
+            or any(
+                not isinstance(body[f], int) or isinstance(body[f], bool) or body[f] <= 0
+                for f in LIMIT_FIELDS if f in body
+            )
         ):
             raise WriteRefused(
-                "PUT /v1/mcp/server 본문은 {server_id, allow_all_keys: false}만 보낼 수 있습니다."
+                "PUT /v1/mcp/server 본문은 server_id와 allow_all_keys: false, 양의 정수 "
+                "rpm·max_concurrent_requests만 보낼 수 있습니다."
             )
         return
     if path.endswith("/reject"):
@@ -220,6 +227,10 @@ class LiteLLMSync(LiteLLMAdmin):
         return self._write(
             "PUT", "/v1/mcp/server", {"server_id": server_id, "allow_all_keys": False}
         )
+
+    def set_server_limits(self, server_id: str, limits: dict[str, int]) -> dict | None:
+        """서버의 호출 한도(``rpm``, ``max_concurrent_requests``)만 쓴다."""
+        return self._write("PUT", "/v1/mcp/server", {"server_id": server_id, **limits})
 
     def pin(self, server_id: str) -> dict:
         """서버 도구를 지금 값으로 고정한다. 응답은 ``{도구: {description, input_schema}}``이다."""

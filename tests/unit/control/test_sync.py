@@ -838,6 +838,41 @@ def test_an_allow_all_keys_that_cannot_be_closed_raises_a_divergence(admin, fake
     assert alerts(admin, "sync_divergence")[0]["status"] == "resolved"
 
 
+def test_empty_call_limits_are_filled_and_operator_values_are_kept(admin, fake, worker):
+    add_server(admin)
+    fake.add_server("srv-1")
+    fake.servers["srv-1"].update(rpm=30, max_concurrent_requests=None)
+    add_approval(admin, "user", "u1")
+    reconcile(admin)
+    drain(worker)
+    assert fake.servers["srv-1"]["rpm"] == 30  # 운영자 값은 덮지 않는다
+    assert fake.servers["srv-1"]["max_concurrent_requests"] == 8
+    assert fake.writes() == [("PUT", "/v1/mcp/server",
+                              {"server_id": "srv-1", "max_concurrent_requests": 8})]
+    reconcile(admin)
+    drain(worker)
+    assert len(fake.writes()) == 1  # 채워진 뒤에는 쓰지 않는다
+
+
+def test_call_limits_that_cannot_be_filled_raise_a_divergence_without_blocking(
+    admin, fake, worker
+):
+    add_server(admin)
+    fake.add_server("srv-1")
+    fake.servers["srv-1"].update(rpm=None, max_concurrent_requests=None)
+    add_approval(admin, "user", "u1")
+    fake.fail_writes["/v1/mcp/server"] = 403
+    reconcile(admin)
+    drain(worker)
+    [alert] = alerts(admin, "sync_divergence")
+    assert alert["subject"] == {"server_id": "srv-1", "reason": "call_limits_write_failed"}
+    fake.fail_writes.clear()
+    reconcile(admin)
+    drain(worker)
+    assert fake.servers["srv-1"]["rpm"] == 600
+    assert alerts(admin, "sync_divergence")[0]["status"] == "resolved"
+
+
 def test_an_uncontrolled_server_with_allow_all_keys_is_left_alone(admin, fake, worker):
     add_server(admin)
     fake.add_server("srv-1")
