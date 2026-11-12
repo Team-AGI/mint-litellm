@@ -8,8 +8,9 @@
 </form>
 <p>설치: ./install.sh<br>제거: ./install.sh uninstall</p>
 {% if rows %}
-<table><thead><tr><th>설치 상태</th><th>Claude Code 판본</th><th>MCP 서버</th><th>발급</th><th>마지막 보고</th></tr></thead><tbody>
+<table><thead><tr><th>팀</th><th>설치 상태</th><th>Claude Code 판본</th><th>MCP 서버</th><th>발급</th><th>마지막 보고</th></tr></thead><tbody>
 {% for r in rows %}<tr>
+<td>{{ r.team_id | blank }}</td>
 <td>{{ m.badge(L.INSTALL, r.state) }}</td>
 <td>{{ r.claude_version | blank }}</td>
 <td>{{ (r.mcp_servers or []) | join }}</td>

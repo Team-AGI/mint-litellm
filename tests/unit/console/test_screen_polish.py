@@ -203,8 +203,9 @@ def test_the_decided_badge_is_readable():
 
 def test_the_endpoint_install_screens_show_korean_states_only():
     rows = [
-        {"user_id": "u1", "state": state, "claude_version": None, "mcp_servers": ["srv"],
-         "issued_at": datetime(2026, 11, 3, tzinfo=UTC), "reported_at": None}
+        {"user_id": "u1", "team_id": "team-a", "state": state, "claude_version": None,
+         "mcp_servers": ["srv"], "issued_at": datetime(2026, 11, 3, tzinfo=UTC),
+         "reported_at": None}
         for state in ("managed", "user", "pending", "removed", "revoked")
     ]  # fmt: skip
     for name in ("endpoints.html", "staff_endpoint.html"):
@@ -213,5 +214,7 @@ def test_the_endpoint_install_screens_show_korean_states_only():
             assert text in html, (name, text)
         for enum in ("managed", "pending", "removed", "revoked"):
             assert enum not in html, (name, enum)
+    assert "team-a" in render("endpoints.html", rows=rows)
+    assert "team-a" in render("staff_endpoint.html", rows=rows, active=True)
     assert "설치 묶음 내려받기" in render("staff_endpoint.html", rows=[], active=False)
     assert "다시 내려받기" in render("staff_endpoint.html", rows=rows, active=True)

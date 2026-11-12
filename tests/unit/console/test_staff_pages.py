@@ -659,6 +659,7 @@ def kits(sworld):
         servers.register_local(make_ctx(admin), "local-1", contract)
         admin.execute("UPDATE mint.servers SET status = 'approved' WHERE server_id = 'local-1'")
     issuer = KitIssuer()
+    sworld.stub.own(CONSOLE, STAFFER, team_id="team-a")  # 세션의 첫 팀이 키에 걸린다.
     sworld.app.state.config = dataclasses.replace(
         sworld.config, kit_issuer=issuer, endpoint_url="https://mint.test"
     )
@@ -686,8 +687,8 @@ def test_the_download_hands_out_a_kit_with_the_users_own_key_and_the_approved_se
     assert response.headers["content-type"] == "application/gzip"
     assert "mint-kit.tar.gz" in response.headers["content-disposition"]
     config = unpack(response)
-    ((user, _, alias),) = kits.issuer.made
-    assert user == STAFFER and config["key"] == f"sk-kit-{alias}"
+    ((user, team, alias),) = kits.issuer.made
+    assert (user, team) == (STAFFER, "team-a") and config["key"] == f"sk-kit-{alias}"
     assert config["decide_url"] == "https://mint.test" and list(config["servers"]) == ["local-1"]
     ((stored_token, owner, stored_alias),) = kits.query(
         "SELECT key_token, user_id, key_alias FROM mint.endpoint_installs")
@@ -710,6 +711,7 @@ def test_the_page_shows_the_managed_and_the_unmanaged_state_in_korean(kits):
     download(client)
     page = client.get("/staff/endpoint").text
     assert "보고 전" in page and "다시 내려받기" in page
+    assert "team-a" in client.get("/staff/endpoint").text
     kits.query("UPDATE mint.endpoint_installs SET install_mode = 'user', kit_version = 'k',"
                " claude_version = '2.1.0', mcp_servers = '[\"local-1\"]', reported_at = now()")
     page = client.get("/staff/endpoint").text
@@ -718,7 +720,7 @@ def test_the_page_shows_the_managed_and_the_unmanaged_state_in_korean(kits):
         assert enum not in page
     admin = kits.session_client("admin")
     table = admin.get("/endpoints").text
-    assert "관리되지 않음" in table and STAFFER in table
+    assert "관리되지 않음" in table and STAFFER in table and "team-a" in table
     api = admin.get("/api/v1/endpoint/installs").json()["items"]
     assert [(r["user_id"], r["state"]) for r in api] == [(STAFFER, "user")]
 
