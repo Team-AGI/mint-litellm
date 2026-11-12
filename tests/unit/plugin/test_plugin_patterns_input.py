@@ -2,6 +2,7 @@ import asyncio
 import json
 from dataclasses import replace
 
+import pytest
 from plugin_helpers import (
     NOW,
     approval,
@@ -80,7 +81,9 @@ def test_allowed_hosts_come_from_the_approval_and_from_egress_targets(tmp_path):
 
 def test_allowed_paths_come_from_the_approval(tmp_path):
     args = {"p": "/etc/passwd"}
-    assert sent_patterns(tmp_path, args)["path_traversal"] is False
+    assert sent_patterns(tmp_path, args)["path_traversal"] is True
+    unrestricted = {"allowed_paths_unrestricted": True}
+    assert sent_patterns(tmp_path, args, conditions=unrestricted)["path_traversal"] is False
     assert (
         sent_patterns(tmp_path, args, conditions={"allowed_paths": ["/srv/docs"]})["path_traversal"]
         is True
@@ -206,3 +209,52 @@ def test_managed_servers_send_the_contract_status(tmp_path):
     h = harness(tmp_path, MANAGED, evaluate=evaluator(calls=calls))
     assert decide(h).allowed
     assert calls[0]["server"]["contract_status"] == "managed"
+
+
+def test_result_policy_reaches_the_call_context(tmp_path):
+    conditions = {"max_result_bytes": 100, "max_result_items": 2}
+    approvals = (approval(conditions=conditions),)
+    snap = snapshot(server=MANAGED_SERVER, tool_contracts=CONTRACTS, approvals=approvals)
+    outcome = decide(harness(tmp_path, snap, evaluate=evaluator()))
+    assert outcome.allowed
+    assert outcome.context["result_policy"] == {
+        "max_result_bytes": 100,
+        "max_result_items": 2,
+        "response_scan": "mask",
+        "scan": True,
+        "enforce": True,
+    }
+
+
+def test_result_scan_is_off_for_servers_without_a_contract_and_when_the_approval_says_so(tmp_path):
+    plain = decide(harness(tmp_path, snapshot(), evaluate=evaluator()))
+    assert plain.context["result_policy"]["scan"] is False
+    off = snapshot(
+        server=MANAGED_SERVER,
+        tool_contracts=CONTRACTS,
+        approvals=(approval(conditions={"scan_result": False}),),
+    )
+    scan = decide(harness(tmp_path, off, evaluate=evaluator())).context["result_policy"]["scan"]
+    assert scan is False
+
+
+@pytest.mark.parametrize("bad", [0, -1, "10", 1.5, True])
+def test_malformed_result_limits_are_a_schema_error(tmp_path, bad):
+    snap = snapshot(approvals=(approval(conditions={"max_result_bytes": bad}),))
+    outcome = decide(harness(tmp_path, snap, evaluate=evaluator()))
+    assert not outcome.allowed and outcome.error.code == "MINT-SCHEMA-ERROR"
+
+
+def test_response_scan_defaults_to_mask_and_follows_the_approval(tmp_path):
+    plain = decide(harness(tmp_path, snapshot(), evaluate=evaluator()))
+    assert plain.context["result_policy"]["response_scan"] == "mask"
+    snap = snapshot(approvals=(approval(conditions={"response_scan": "block"}),))
+    chosen = decide(harness(tmp_path, snap, evaluate=evaluator()))
+    assert chosen.context["result_policy"]["response_scan"] == "block"
+
+
+@pytest.mark.parametrize("bad", ["off", "", 1, None, ["mask"]])
+def test_unknown_response_scan_is_a_schema_error(tmp_path, bad):
+    snap = snapshot(approvals=(approval(conditions={"response_scan": bad}),))
+    outcome = decide(harness(tmp_path, snap, evaluate=evaluator()))
+    assert not outcome.allowed and outcome.error.code == "MINT-SCHEMA-ERROR"

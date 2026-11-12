@@ -3,6 +3,7 @@
 import json
 import re
 import uuid
+from collections.abc import Collection, Iterable
 from typing import Any
 
 from mint_litellm.control import alerts
@@ -365,11 +366,108 @@ def record_oauth2_flow(
     return True
 
 
+def instance_differences(
+    instances: Collection[str], rows: Iterable[tuple[str, str, str, str]]
+) -> list[dict]:
+    """인스턴스마다 승인 계약의 해시가 하나로 모이지 않는 항목.
+
+    ``rows``는 (인스턴스, 종류, 항목, 해시)이다. 어떤 인스턴스에 없는 항목은 해시가 None이라
+    있는 인스턴스와 다른 것으로 본다.
+    """
+    table: dict[tuple[str, str], dict[str, str]] = {}
+    for instance, kind, item, digest in rows:
+        table.setdefault((kind, item), {})[instance] = digest
+    names = sorted(instances)
+    return [
+        {"kind": kind, "item": item, "digests": {i: by.get(i) for i in names}}
+        for (kind, item), by in sorted(table.items())
+        if len({by.get(i) for i in names}) > 1
+    ]
+
+
+_APPROVED_CONTRACTS = (
+    "SELECT d.instance_id, 'deployment' AS kind, '' AS item, d.sha256"
+    " FROM mint.deployment_contracts d WHERE d.server_id=%s AND d.status='approved'"
+    " AND d.instance_id = ANY(%s)"
+    " UNION ALL"
+    " SELECT t.instance_id, 'tool', t.credential_scope || '/' || t.tool, t.sha256"
+    " FROM mint.tool_contracts t WHERE t.server_id=%s AND t.status='approved'"
+    " AND t.instance_id = ANY(%s)"
+)
+
+
+def compare_instances(ctx: Context) -> int:
+    """같은 서버를 계약 관리하는 다른 인스턴스의 승인 계약(배포·도구 정의)과 비교한다.
+
+    서로 다른 설정으로 운영되는 서버는 경보와 배포 변경 사건을 낸다. 차단하지는 않는다(각 인스턴스의
+    승인 계약이 그 인스턴스의 호출 기준이다). 어긋난 서버 수를 돌려준다.
+    """
+    mine = fetchall(
+        ctx.conn,
+        "SELECT server_id FROM mint.servers WHERE instance_id=%s AND status='approved'"
+        " AND contract_status='managed' ORDER BY server_id",
+        (ctx.instance_id,),
+    )
+    mismatched = 0
+    for row in mine:
+        server_id = row["server_id"]
+        with transact(ctx):
+            peers = [
+                r["instance_id"]
+                for r in fetchall(
+                    ctx.conn,
+                    "SELECT instance_id FROM mint.servers WHERE server_id=%s AND status='approved'"
+                    " AND contract_status='managed' ORDER BY instance_id",
+                    (server_id,),
+                )
+            ]
+            key = f"instance_mismatch:{server_id}"
+            differences = (
+                instance_differences(
+                    peers,
+                    (
+                        (r["instance_id"], r["kind"], r["item"], r["sha256"])
+                        for r in fetchall(
+                            ctx.conn, _APPROVED_CONTRACTS, (server_id, peers, server_id, peers)
+                        )
+                    ),
+                )
+                if len(peers) > 1
+                else []
+            )
+            entity = uuid.uuid5(uuid.NAMESPACE_OID, f"{ctx.instance_id}/{server_id}/instances")
+            observation, changed = _observe(
+                ctx, server_id, "deployment", "server", "instance_compare", entity,
+                {"instances": peers, "differences": differences}, is_drift=bool(differences),
+            )
+            if not differences:
+                alerts.resolve(ctx.conn, ctx.instance_id, key)
+                continue
+            mismatched += 1
+            body = {
+                "server_id": server_id,
+                "kind": "instance_mismatch",
+                "instances": peers,
+                "items": [f"{d['kind']}:{d['item']}".rstrip(":") for d in differences],
+                "observed_sha256": observation["observed_sha256"],
+            }
+            if changed:
+                ctx.emit(
+                    EventKind.DEPLOYMENT_DRIFT_DETECTED, entity, observation["change_seq"], body
+                )
+            alerts.raise_alert(
+                ctx.conn, ctx.instance_id, kind="instance_mismatch", severity="high",
+                dedup_key=key, subject={**body, "differences": differences},
+            )
+    return mismatched
+
+
 def handle(job) -> None:
     from mint_litellm.types.canonical import credential_scope
 
     ctx = Context(job.conn, job.instance_id, Operator("contract-observer", "admin", None))
     consume_deployment_events(ctx)
+    compare_instances(ctx)
     servers = fetchall(
         job.conn,
         "SELECT s.server_id,d.auth_type,s.state_version,d.url,d.transport"

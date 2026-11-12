@@ -757,3 +757,27 @@ def test_the_download_needs_a_staff_session_and_a_csrf_token(kits):
     )
     assert anonymous.post("/staff/endpoint/kit").status_code in (303, 403)
     assert kits.issuer.made == []
+
+
+def test_the_download_follows_the_chosen_system_and_tool(kits):
+    import io
+    import json
+    import zipfile
+
+    client = logged_in(kits)
+    agent = {"user-agent": "Mozilla/5.0 (Windows NT 10.0)"}
+    page = client.get("/staff/endpoint", headers=agent).text
+    assert 'value="windows" selected' in page and "Claude Code + Codex" in page
+    response = client.post(
+        "/staff/endpoint/kit", data={"csrf": csrf(client), "platform": "windows", "harness": "all"}
+    )
+    assert response.status_code == 200 and response.headers["content-type"] == "application/zip"
+    assert "mint-kit.zip" in response.headers["content-disposition"]
+    with zipfile.ZipFile(io.BytesIO(response.content)) as bundle:
+        config = json.loads(bundle.read("mint-kit/kit.json"))
+        assert "mint-kit/install.ps1" in bundle.namelist()
+    assert config["harnesses"] == ["claude", "codex"] and list(config["servers"]) == ["local-1"]
+    for bad in ({"platform": "macos"}, {"harness": "vim"}):
+        refused = client.post("/staff/endpoint/kit", data={"csrf": csrf(client), **bad})
+        assert refused.status_code == 400
+    assert len(kits.issuer.made) == 1  # 잘못된 요청은 키를 발급하지 않는다.

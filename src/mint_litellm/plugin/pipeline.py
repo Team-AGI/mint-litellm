@@ -30,6 +30,7 @@ from mint_litellm.plugin.obligations import (
     RequireUserConfirmation,
     normalize_policy_output,
 )
+from mint_litellm.plugin.policy.defaults import effective_conditions
 from mint_litellm.plugin.policy.input import policy_input as make_policy_input
 from mint_litellm.plugin.policy.opa_client import Evaluation
 from mint_litellm.plugin.policy.patterns import compute_patterns
@@ -73,6 +74,13 @@ from mint_litellm.types.identity import (
 from mint_litellm.types.ids import new_uuid7
 from mint_litellm.types.reason_codes import Reason
 from mint_litellm.types.settings import Mode, ObservationSettings, effective_mode
+from mint_litellm.types.target import (
+    READ,
+    Target,
+    TargetUnresolved,
+    bind_target,
+    effective_profile,
+)
 
 log = logging.getLogger("mint_litellm.pipeline")
 
@@ -395,6 +403,14 @@ class InputError(Exception):
     """정책 입력으로 만들 수 없는 승인 조건."""
 
 
+# 결과 크기(바이트)와 결과 항목 수의 상한을 담는 승인 조건 이름
+RESULT_LIMIT_KEYS = ("max_result_bytes", "max_result_items")
+
+# 결과의 비밀·개인정보 검사 방식 승인 조건. 지정하지 않으면 가린다(mask).
+RESPONSE_SCAN_MODES = ("block", "mask", "observe")
+DEFAULT_RESPONSE_SCAN = "mask"
+
+
 def _argument_sizes(arguments: Mapping[str, Any]) -> dict[str, int]:
     sizes: dict[str, int] = {}
     for key, value in arguments.items():
@@ -410,6 +426,24 @@ def _condition_list(conditions: Mapping[str, Any], key: str) -> list[str]:
     if not isinstance(values, list) or not all(isinstance(v, str) and v for v in values):
         raise InputError(f"{key} must be a list of non-empty strings")
     return values
+
+
+def _condition_limit(conditions: Mapping[str, Any], key: str) -> int | None:
+    """승인 조건의 양의 정수 상한. 없으면 None, 정수가 아니거나 0 이하면 입력 오류."""
+    value = conditions.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise InputError(f"{key} must be a positive integer")
+    return value
+
+
+def _response_scan_mode(conditions: Mapping[str, Any]) -> str:
+    """승인 조건 response_scan의 값. 없으면 기본값, 모르는 값이면 입력 오류."""
+    value = conditions.get("response_scan", DEFAULT_RESPONSE_SCAN)
+    if value not in RESPONSE_SCAN_MODES:
+        raise InputError("response_scan must be one of block, mask, observe")
+    return value
 
 
 def _host_of(value: str) -> str:
@@ -439,6 +473,7 @@ def _argument_patterns(
             arguments,
             allowed_hosts={h for h in hosts if h},
             allowed_paths=paths,
+            paths_unrestricted=conditions.get("allowed_paths_unrestricted") is True,
             secret_markers=secret_markers,
         )
     finally:
@@ -495,6 +530,8 @@ def build_policy_input(
     contract = current_contract(snapshot, tool)
     if contract is not None:
         tool_doc["risk_grade"] = contract.risk_grade
+        if contract.action_type is not None:
+            tool_doc["action_type"] = contract.action_type
 
     if selected is None:
         approval: dict[str, Any] = {"present": False}
@@ -506,9 +543,20 @@ def build_policy_input(
             "class": selected.approval_class,
             "scope_type": selected.scope_type,
             "expires_in_days": max(0, (selected.valid_until - now).days),
-            "conditions": dict(selected.conditions),
+            "conditions": effective_conditions(
+                selected.conditions,
+                tool=tool,
+                action_type=None if contract is None else contract.action_type,
+                input_keys=None if contract is None else contract.input_keys,
+                data_grade=snapshot.data_grade,
+                purpose=getattr(snapshot.relations.get(selected.relation_id), "purpose", None),
+            ),
         }
-        purpose = selected.conditions.get("require_consent")
+        # 결과 상한은 호출 뒤에 쓰이지만 형식 오류는 호출 전에 막는다.
+        for limit_key in RESULT_LIMIT_KEYS:
+            _condition_limit(selected.conditions, limit_key)
+        _response_scan_mode(selected.conditions)
+        purpose = approval["conditions"].get("require_consent")
         if purpose is None:
             consent = {"status": "not_applicable", "source": None}
         elif isinstance(purpose, str) and purpose:
@@ -627,6 +675,22 @@ async def policy_stage(
     )
 
 
+def target_binding(
+    profile: str | None, resolved: ResolvedServer, tool: str, arguments: Mapping[str, Any]
+) -> Target | StageResult | None:
+    """프로필이 있는 서버 호출의 대상·행위. 프로필이 없으면 None, 정할 수 없으면 중단 결과.
+
+    읽기가 아닌 효과를 정하지 못하는 호출(프로필에 없는 도구, 빠지거나 모호한 대상)은 승인으로
+    풀 수 없으므로 업스트림으로 보내지 않는다.
+    """
+    if profile is None:
+        return None
+    try:
+        return bind_target(profile, resolved.server_id, tool, arguments)
+    except TargetUnresolved as exc:
+        return StageResult.stop(Reason.CALL_APPROVAL_REQUIRED, detail=f"target: {exc}"[:200])
+
+
 @dataclass(frozen=True)
 class ObligationCheck:
     results: list[StageResult]
@@ -641,11 +705,14 @@ def match_call_approval(
     arguments: Mapping[str, Any],
     config: PluginConfig,
     invocation_id: UUID,
+    binding: Target | None = None,
 ) -> tuple[StageResult | None, ConsumeRequest | None]:
     if config.fingerprint_key is None:
         return StageResult.stop(
             Reason.CALL_APPROVAL_REQUIRED, detail="fingerprint key not set"
         ), None
+    bound_target = binding.target if binding is not None else None
+    bound_action = binding.action if binding is not None else None
     version = snapshot.policy_version
     try:
         fingerprint = argument_fingerprint(arguments, config.fingerprint_key)
@@ -665,6 +732,8 @@ def match_call_approval(
             and row.fp_key_version == config.fingerprint_key_version
             and row.contract_version is None
             and bound_to_current_contract(snapshot, tool, row.contract_id)
+            and row.target == bound_target
+            and row.action == bound_action
             and row.exec_contract_sha256 == resolved.exec_contract_sha256
             and row.expires_at > snapshot.now
         )
@@ -687,6 +756,8 @@ def match_call_approval(
             policy_version_id=row.policy_version_id,
             state_version=row.state_version,
             contract_id=row.contract_id,
+            target=row.target,
+            action=row.action,
             exec_contract_sha256=row.exec_contract_sha256,
         )
     if candidates:
@@ -703,12 +774,13 @@ def obligation_check(
     obligations: Sequence[Any],
     config: PluginConfig,
     invocation_id: UUID,
+    binding: Target | None = None,
 ) -> ObligationCheck:
     consume: ConsumeRequest | None = None
     for obligation in obligations:
         if isinstance(obligation, RequireCallApproval):
             failure, consume = match_call_approval(
-                snapshot, principal, resolved, tool, arguments, config, invocation_id
+                snapshot, principal, resolved, tool, arguments, config, invocation_id, binding
             )
             if failure is not None:
                 return ObligationCheck([failure], None)
@@ -824,6 +896,9 @@ class _Run:
     snapshot: Snapshot | None = None
     selected: ApprovalRow | None = None
     consume: ConsumeRequest | None = None
+    binding: Target | None = None
+    # (프로필, 출처): 승인된 배포 계약에서 자동으로 골랐거나 환경 변수로 덮어쓴 결과.
+    profile: tuple[str, str] | None = None
     policy: PolicyStageResult | None = None
     observation: ObservationSettings = field(default_factory=ObservationSettings)
     # 판정 사건의 기록이 시작됐는지(결과가 불명일 수 있다), 어느 위치든 남겨졌는지.
@@ -873,6 +948,11 @@ def _decision_snapshot(
     values["resolved_identity_kind"] = resolved.identity_kind if resolved else None
     values["resolved_exec_contract_sha256"] = resolved.exec_contract_sha256 if resolved else None
     values["resolved_exec_contract_version"] = resolved.exec_contract_version if resolved else None
+    values["resolved_credential_ref"] = resolved.credential_ref if resolved else None
+    values["target_profile"] = run.profile[0] if run.profile else None
+    values["target_profile_source"] = run.profile[1] if run.profile else None
+    values["bound_target"] = run.binding.target if run.binding else None
+    values["bound_action"] = run.binding.action if run.binding else None
     reasons["revoked_after_snapshot"] = _MISSING["revoked_after_snapshot"]
     reasons["revocation_check"] = _MISSING["revocation_check"]
     if snap is not None:
@@ -1102,6 +1182,24 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         return
 
     run.current = Stage.OBLIGATIONS
+    run.profile = effective_profile(
+        config.target_profiles, resolved.server_id, snapshot.auto_profile
+    )
+    binding = target_binding(
+        run.profile[0] if run.profile else None, resolved, tool, hook.arguments
+    )
+    if isinstance(binding, StageResult):
+        stages.add(Stage.OBLIGATIONS, binding)
+        return
+    run.binding = binding
+    obligations = run.policy.obligations
+    # 프로필이 있는 서버의 변경·실행 호출은 정책이 요구하지 않아도 대상에 묶인 승인이 있어야 한다.
+    if (
+        binding is not None
+        and binding.effect != READ
+        and not any(isinstance(o, RequireCallApproval) for o in obligations)
+    ):
+        obligations = (*obligations, RequireCallApproval())
     started = timing.now()
     check = obligation_check(
         snapshot,
@@ -1109,9 +1207,10 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         resolved,
         tool,
         hook.arguments,
-        run.policy.obligations,
+        obligations,
         config,
         req.invocation_id,
+        binding,
     )
     timing.since("fingerprint", started)
     for result in check.results:
@@ -1310,6 +1409,35 @@ async def _evaluate(run: _Run, deps: PipelineDeps) -> Outcome:
     )
 
 
+def _result_policy(run: _Run) -> dict[str, Any]:
+    """결과 검사 입력. 승인 조건의 상한과, 계약 관리 서버의 지시문 표지 검사 여부.
+
+    관측 모드에서는 결과를 막지 않고 기록만 한다. 조건 형식이 틀린 호출은 이미 막혔으므로
+    상한을 읽지 못하면 비운다.
+    """
+    conditions = run.selected.conditions if run.selected else {}
+    if not isinstance(conditions, Mapping):
+        conditions = {}
+    server = run.snapshot.server if run.snapshot else None
+    limits: dict[str, int | None] = {}
+    for key in RESULT_LIMIT_KEYS:
+        try:
+            limits[key] = _condition_limit(conditions, key)
+        except InputError:
+            limits[key] = None
+    managed = server is not None and server.contract_status == "managed"
+    try:
+        response_scan = _response_scan_mode(conditions)
+    except InputError:
+        response_scan = DEFAULT_RESPONSE_SCAN
+    return {
+        **limits,
+        "response_scan": response_scan,
+        "scan": managed and conditions.get("scan_result") is not False,
+        "enforce": run.mode is Mode.ENFORCE,
+    }
+
+
 def _context_document(
     run: _Run, snapshot: DecisionSnapshot, allowed: bool, consumed: ConsumeRequest | None
 ) -> dict[str, Any]:
@@ -1334,6 +1462,7 @@ def _context_document(
         "user_id": principal.user_id,
         "team_id": principal.team_id,
         "org_id": principal.org_id,
+        "result_policy": _result_policy(run),
     }
 
 

@@ -64,9 +64,25 @@ def build_conditions(
     confirm_tools: list[str] | None = None,
     confirm_purpose: str | None = None,
     confirm_fields: list[str] | None = None,
+    max_result_bytes: int | None = None,
+    max_result_items: int | None = None,
+    scan_result: bool = True,
+    response_scan: str | None = None,
 ) -> dict:
     """정책이 읽는 승인 조건. 지정하지 않은 조건은 키를 넣지 않는다."""
     conditions: dict = {}
+    for name, limit in (("max_result_bytes", max_result_bytes),
+                        ("max_result_items", max_result_items)):
+        if limit is not None:
+            if limit < 1:
+                raise ControlError(f"--{name.replace('_', '-')}는 1 이상이어야 합니다.")
+            conditions[name] = limit
+    if not scan_result:
+        conditions["scan_result"] = False
+    if response_scan is not None:
+        if response_scan not in ("block", "mask", "observe"):
+            raise ControlError("--response-scan은 block, mask, observe 중 하나여야 합니다.")
+        conditions["response_scan"] = response_scan
     if confirm_tools:
         purpose = (confirm_purpose or "").strip()
         if not 1 <= len(purpose) <= 128:
@@ -536,6 +552,8 @@ def call_request(
     policy_version_id: str | None,
     expires_in_minutes: int,
     requested_by: str,
+    target: str | None = None,
+    action: str | None = None,
 ) -> str:
     if principal_type not in PRINCIPAL_TYPES:
         raise ControlError(f"principal-type은 {', '.join(PRINCIPAL_TYPES)} 중 하나여야 합니다.")
@@ -557,13 +575,14 @@ def call_request(
         ctx.conn,
         "INSERT INTO mint.call_approvals (id, instance_id, org_id, principal_type, principal_id,"
         " server_id, tool, args_fp, fp_key_version, policy_version_id, status, requested_by,"
-        " expires_at, contract_id, exec_contract_sha256)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s)"
+        " expires_at, contract_id, exec_contract_sha256, target, action)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s, %s)"
         " RETURNING state_version",
         (call_id, ctx.instance_id, org_id, principal_type, principal_id, server_id, tool, args_fp,
          fp_key_version, policy_version_id, requested_by,
          datetime.now(UTC) + timedelta(minutes=expires_in_minutes),
-         _approved_contract_id(ctx, server_id, tool), _exec_contract_sha256(ctx, server_id)),
+         _approved_contract_id(ctx, server_id, tool), _exec_contract_sha256(ctx, server_id),
+         target, action),
     )
     ctx.emit(
         EventKind.CALL_APPROVAL_REQUESTED,
@@ -571,7 +590,8 @@ def call_request(
         row["state_version"],
         {"call_approval_id": str(call_id), "org_id": org_id, "principal_type": principal_type,
          "principal_id": principal_id, "server_id": server_id, "tool": tool,
-         "policy_version_id": policy_version_id, "requested_by": requested_by},
+         "policy_version_id": policy_version_id, "requested_by": requested_by,
+         **({"target": target, "action": action} if action is not None else {})},
     )
     return str(call_id)
 

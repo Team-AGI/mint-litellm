@@ -191,7 +191,11 @@ def test_the_body_has_the_documented_fields_and_no_console_address():
     }
     body = json.loads(webhook.build_body(row, None))
     assert set(body) == {"kind", "severity", "subject", "count", "first_at", "last_at",
-                         "console_url"}
+                         "console_url", "summary", "action"}
+    assert body["summary"] and body["action"]
+    unknown = json.loads(webhook.build_body({**row, "kind": "no_such_kind"}, None))
+    assert (unknown["summary"], unknown["action"]) == webhook.DEFAULT_GUIDE
+    assert all(webhook.GUIDE[k][0] and webhook.GUIDE[k][1] for k in webhook.GUIDE)
     assert body["count"] == 2 and body["console_url"] is None
     given = json.loads(webhook.build_body(row, "https://console.example.com"))
     assert given["console_url"] == "https://console.example.com"

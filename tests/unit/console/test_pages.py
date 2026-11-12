@@ -284,13 +284,15 @@ def test_the_stranger_key_is_not_an_operator_so_no_screen_opens(world):
     assert world.client.get("/").status_code == 303
 
 
-def test_the_review_form_explains_what_an_unset_path_limit_does(world, admin):
+def test_the_review_form_offers_the_path_choices_and_the_result_limits(world, admin):
     world.with_control_key()
     relation = world.query("SELECT id FROM mint.usage_relations WHERE server_id = 'srv-wait'")[0][0]
     html = admin.get(f"/approvals/new?relation_id={relation}").text
-    assert "경로 이탈(<code>..</code>)만 차단하고" in html
     assert 'name="paths_mode" value="unset" checked' in html
     assert 'name="paths_mode" value="unrestricted"' in html and "제한 없음" in html
+    assert 'name="max_result_bytes"' in html and "결과 크기 상한(바이트)" in html
+    assert 'name="max_result_items"' in html and "결과 항목 수 상한" in html
+    assert "경로 이탈" not in html
 
 
 def test_the_overview_shows_jobs_nobody_can_handle_and_the_longest_wait(world, admin, monkeypatch):

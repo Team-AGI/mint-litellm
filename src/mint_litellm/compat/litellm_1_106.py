@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import importlib
 import importlib.metadata
 import time
@@ -193,6 +194,19 @@ def _matching_servers(manager: Any, server_name: str) -> list[Any]:
     return matches
 
 
+def _credential_ref(server: Any) -> str | None:
+    """레지스트리가 가진 원격 자격의 주체. 고정 토큰은 지문만, OAuth는 클라이언트 식별자만 쓴다."""
+    token = getattr(server, "authentication_token", None)
+    if token is not None and hasattr(token, "get_secret_value"):
+        token = token.get_secret_value()
+    if isinstance(token, str) and token:
+        return "static:" + hashlib.sha256(b"mint-credential:" + token.encode()).hexdigest()[:16]
+    client_id = getattr(server, "client_id", None)
+    if isinstance(client_id, str) and client_id:
+        return "oauth2-client:" + client_id[:64]
+    return None
+
+
 def _to_resolved(server: Any, candidates: int) -> ResolvedServer:
     if not getattr(server, "url", None):
         # 레지스트리의 로컬 실행(stdio)·OpenAPI 서버는 URL 해시도 실행 계약도 만들 수 없어 막는다.
@@ -204,6 +218,7 @@ def _to_resolved(server: Any, candidates: int) -> ResolvedServer:
         transport=_enum_text(server.transport),
         auth_type=normalize_auth_type(server.auth_type),
         candidates_with_same_name=max(candidates, 1),
+        credential_ref=_credential_ref(server),
     )
 
 
@@ -422,8 +437,19 @@ def exception_status(exc: BaseException | None) -> int | None:
     return status if isinstance(status, int) else None
 
 
-def tool_result_size(result: object) -> int | None:
-    content = getattr(result, "content", None)
+def content_texts(content: object) -> list[str]:
+    """도구 결과 내용 블록의 본문(텍스트 블록과 내장 리소스의 텍스트)."""
+    texts: list[str] = []
+    for block in content if isinstance(content, (list, tuple)) else ():
+        text = getattr(block, "text", None)
+        if text is None:
+            text = getattr(getattr(block, "resource", None), "text", None)
+        if isinstance(text, str):
+            texts.append(text)
+    return texts
+
+
+def content_size(content: object) -> int | None:
     if not isinstance(content, (list, tuple)):
         return None
     total = 0
@@ -434,6 +460,27 @@ def tool_result_size(result: object) -> int | None:
         elif hasattr(block, "model_dump_json"):
             total += len(block.model_dump_json().encode("utf-8"))
     return total
+
+
+def tool_result_size(result: object) -> int | None:
+    return content_size(getattr(result, "content", None))
+
+
+def mask_tool_content(response: Any, mask: Callable[[str], str]) -> None:
+    """후처리 훅이 받은 결과의 텍스트 블록과 내장 리소스 텍스트에 ``mask``를 적용한다."""
+    for block in response.mcp_tool_call_response:
+        holder = block if isinstance(getattr(block, "text", None), str) else getattr(
+            block, "resource", None
+        )
+        if isinstance(getattr(holder, "text", None), str):
+            holder.text = mask(holder.text)
+
+
+def replace_tool_content(response: Any, text: str) -> None:
+    """후처리 훅이 받은 결과 내용을 텍스트 블록 하나로 바꾼다(호출자에게 가는 값이 바뀐다)."""
+    from mcp.types import TextContent
+
+    response.mcp_tool_call_response[:] = [TextContent(type="text", text=text)]
 
 
 def litellm_callbacks() -> list[Any]:

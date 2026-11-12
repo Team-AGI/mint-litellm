@@ -117,3 +117,12 @@ def test_bad_allowed_paths_are_rejected(path):
 @pytest.mark.parametrize("path", ["/srv/docs", "/", "C:/srv/docs", "C:" + chr(92) + "srv"])
 def test_good_allowed_paths_are_accepted(path):
     assert _conditions(allowed_paths=[path])["allowed_paths"]
+
+
+def test_response_scan_is_an_approval_condition_only_when_given():
+    a = cli.build_parser().parse_args([*BASE, "--response-scan", "block"])
+    assert _conditions(response_scan=a.response_scan) == {"response_scan": "block"}
+    assert cli.build_parser().parse_args(BASE).response_scan is None
+    assert _conditions() == {}
+    with pytest.raises(ControlError, match="response-scan"):
+        _conditions(response_scan="off")

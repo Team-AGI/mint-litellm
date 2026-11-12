@@ -1,4 +1,4 @@
-"""사용자에게 내려보낼 단말 설치 묶음(tar.gz)을 만든다. 같은 입력이면 같은 바이트이다."""
+"""단말 설치 묶음(Linux는 tar.gz, Windows는 zip)을 만든다. 같은 입력이면 같은 바이트이다."""
 
 from __future__ import annotations
 
@@ -7,18 +7,28 @@ import hashlib
 import io
 import json
 import tarfile
-from collections.abc import Mapping
+import zipfile
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from mint_litellm.types.exec_contract import ExecContract
 
 KIT = Path(__file__).resolve().parent / "kit"
-FILES = (
-    ("install.sh", KIT / "install.sh", 0o755),
+PROGRAMS = (
     ("mint_kit.py", KIT / "mint_kit.py", 0o644),
     ("mint_agent.py", KIT / "mint_agent.py", 0o644),
 )
+# 운영체제마다 설치기 진입 파일이 다르다. 판본은 모든 파일의 해시라 어느 쪽을 받아도 같다.
+LAUNCHERS = {
+    "linux": (("install.sh", KIT / "install.sh", 0o755),),
+    "windows": (
+        ("install.cmd", KIT / "install.cmd", 0o644),
+        ("install.ps1", KIT / "install.ps1", 0o644),
+    ),
+}
+FILES = tuple(item for launchers in LAUNCHERS.values() for item in launchers) + PROGRAMS
+HARNESSES = ("claude", "codex")
 
 
 def _text(path: Path) -> bytes:
@@ -49,17 +59,29 @@ def build_kit(
     decide_url: str,
     key: str,
     ca_pem: str | None = None,
+    platform: str = "linux",
+    harnesses: Sequence[str] = ("claude",),
 ) -> bytes:
+    if platform not in LAUNCHERS or not harnesses or not set(harnesses) <= set(HARNESSES):
+        raise ValueError("unknown platform or harness")
     config = {
         "kit_version": kit_version(),
+        "harnesses": [h for h in HARNESSES if h in harnesses],
         "decide_url": decide_url,
         "key": key,
         "ca_pem": ca_pem,
         "servers": approved_contracts(documents),
     }
-    members = [(name, _text(path), mode) for name, path, mode in FILES]
+    members = [(name, _text(path), mode) for name, path, mode in (*LAUNCHERS[platform], *PROGRAMS)]
     members.append(("kit.json", json.dumps(config, indent=1).encode(), 0o600))
     raw = io.BytesIO()
+    if platform == "windows":
+        with zipfile.ZipFile(raw, "w", zipfile.ZIP_DEFLATED) as archive:
+            for name, data, _ in members:
+                info = zipfile.ZipInfo(f"mint-kit/{name}", date_time=(1980, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                archive.writestr(info, data)
+        return raw.getvalue()
     with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as packed:
         with tarfile.open(fileobj=packed, mode="w", format=tarfile.PAX_FORMAT) as archive:
             for name, data, mode in members:

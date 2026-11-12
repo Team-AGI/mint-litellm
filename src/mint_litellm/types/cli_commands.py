@@ -92,6 +92,12 @@ COMMANDS: tuple[CliCommand, ...] = (
         litellm_reads=("/v1/mcp/server", "/key/list", "/team/list"),
     ),
     CliCommand(
+        path=("doctor",),
+        summary="비어 있거나 기다리는 일과 다음에 실행할 명령을 보인다(토큰 불필요, 읽기 전용).",
+        roles=frozenset(),
+        unauthenticated=True,
+    ),
+    CliCommand(
         path=("operator", "add"),
         summary="운영자를 등록하고 토큰을 발급한다. `admin`·`approver`는 LiteLLM 사용자 식별자 "
         "(`--user-id`) 결속이 필수이다.",
@@ -155,10 +161,11 @@ COMMANDS: tuple[CliCommand, ...] = (
     ),
     CliCommand(
         path=("relation", "terminate"),
-        summary="이용 관계를 종료 중으로 바꾼다. 그 관계에 속한 승인과 매칭되는 호출은 "
-        "`RELATION_TERMINATED`로 차단된다.",
+        summary="이용 관계를 종료 중으로 바꾸고 그 관계의 활성 승인을 철회한다. 그 관계에 속한 "
+        "승인과 매칭되는 호출은 `RELATION_TERMINATED`로 차단되고, LiteLLM 권한 회수를 읽어 "
+        "확인한 결과가 사건으로 남는다.",
         roles=ADMIN_ONLY,
-        events=(EventKind.RELATION_TERMINATING,),
+        events=(EventKind.RELATION_TERMINATING, EventKind.APPROVAL_REVOKED),
     ),
     CliCommand(
         path=("approve",),

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MINT 배포 보조 스크립트: up | status | backup | upgrade | cli
+# MINT 배포 보조 스크립트: up | status | bootstrap | backup | upgrade | cli
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -34,14 +34,23 @@ ensure_secrets() {
     chmod 700 "$dir"
 }
 
-# 직원 화면의 단말 설치 묶음이 사용자 키를 발급할 때 쓰는 LiteLLM 키(/key/generate, /key/delete만 연 키).
-# 비밀 폴더에 없을 때만 마스터 키로 한 번 만들어 두고, 있으면 그대로 콘솔에 넘긴다.
-# 만들지 못해도 기동은 계속하며(묶음 내려받기만 막힌다) 다음 up·upgrade가 다시 시도한다.
-KIT_ISSUER_SCRIPT=$(cat <<'PY'
+# LiteLLM 키 두 개를 마스터 키로 한 번씩 만들어 비밀 폴더에 둔다. 파일이 있으면 그대로 쓴다.
+# - kit: 직원 화면의 단말 설치 묶음이 사용자 키를 발급할 때 쓰는 키(/key/generate, /key/delete만 연 키).
+# - control: 제어 평면 키(MINT_LITELLM_KEY). 승인·동기화·수용검증에 필요한 경로만 연다.
+# 만들지 못해도 기동은 계속하며(해당 기능만 막힌다) 다음 up·upgrade가 다시 시도한다.
+KEY_ISSUER_SCRIPT=$(cat <<'PY'
 import json, os, secrets, sys, time, urllib.error, urllib.request
 base = "http://litellm:4000"
 headers = {"Authorization": "Bearer " + os.environ["LITELLM_MASTER_KEY"],
            "Content-Type": "application/json"}
+if os.environ["KEY_KIND"] == "control":
+    from mint_litellm.control.litellm_control import STAGE2_ALLOWED_ROUTES
+    from mint_litellm.types.cli_commands import CONTROL_PLANE_ALLOWED_ROUTES
+    user, prefix = "mint-control", "mint-control-"
+    routes = [*CONTROL_PLANE_ALLOWED_ROUTES, *STAGE2_ALLOWED_ROUTES]
+else:
+    user, prefix = "mint-kit-issuer", "mint-kit-issuer-"
+    routes = ["/key/generate", "/key/delete"]
 
 
 def post(path, body):
@@ -54,14 +63,14 @@ deadline = time.time() + 120
 while True:
     try:
         try:
-            post("/user/new", {"user_id": "mint-kit-issuer", "user_role": "proxy_admin",
+            post("/user/new", {"user_id": user, "user_role": "proxy_admin",
                                "auto_create_key": False})
         except urllib.error.HTTPError:
             pass  # 이미 있는 사용자
         print(post("/key/generate", {
-            "user_id": "mint-kit-issuer",
-            "key_alias": "mint-kit-issuer-" + secrets.token_hex(4),
-            "allowed_routes": ["/key/generate", "/key/delete"],
+            "user_id": user,
+            "key_alias": prefix + secrets.token_hex(4),
+            "allowed_routes": routes,
         })["key"])
         break
     except urllib.error.HTTPError:
@@ -73,21 +82,62 @@ while True:
 PY
 )
 
+# 비밀 폴더 파일이 없을 때만 키를 만들어 쓴다. 성공하면 0, 만들지 못하면 1.
+issue_key() {
+    local kind="$1" file="$2" key
+    [ -s "$file" ] && return 0
+    key="$(env "LITELLM_MASTER_KEY=$(env_value LITELLM_MASTER_KEY)" \
+        "${COMPOSE[@]}" run --rm --no-deps -T -e LITELLM_MASTER_KEY -e "KEY_KIND=$kind" \
+        --entrypoint python control -c "$KEY_ISSUER_SCRIPT" | tail -n 1)" || key=""
+    [[ "$key" =~ ^sk-[A-Za-z0-9_-]+$ ]] || return 1
+    (umask 077; printf '%s\n' "$key" > "$file")
+}
+
 ensure_kit_issuer_key() {
-    local file key
+    local file
     file="$(env_value MINT_SECRETS_DIR)/kit_issuer.key"
-    if [ ! -s "$file" ]; then
-        key="$(env "LITELLM_MASTER_KEY=$(env_value LITELLM_MASTER_KEY)"             "${COMPOSE[@]}" run --rm --no-deps -T -e LITELLM_MASTER_KEY             --entrypoint python control -c "$KIT_ISSUER_SCRIPT" | tail -n 1)" || key=""
-        if [[ "$key" =~ ^sk-[A-Za-z0-9_-]+$ ]]; then
-            (umask 077; printf '%s
-' "$key" > "$file")
-        else
-            echo "단말 설치 묶음 키를 만들지 못했습니다. 다음 up·upgrade에서 다시 시도합니다." >&2
-            return 0
-        fi
+    if ! issue_key kit "$file"; then
+        echo "단말 설치 묶음 키를 만들지 못했습니다. 다음 up·upgrade에서 다시 시도합니다." >&2
+        return 0
     fi
     MINT_KIT_ISSUER_KEY="$(head -n 1 "$file")"
     export MINT_KIT_ISSUER_KEY
+}
+
+# 제어 평면 키는 .env의 MINT_LITELLM_KEY가 우선이고, 없으면 비밀 폴더의 control.key를 쓴다.
+# 새로 만들었으면 init을 다시 실행해 도구 목록 면제 키로 저장한다.
+load_control_key() {
+    local file
+    file="$(env_value MINT_SECRETS_DIR)/control.key"
+    if [ -z "$(env_value MINT_LITELLM_KEY)" ] && [ -s "$file" ]; then
+        MINT_LITELLM_KEY="$(head -n 1 "$file")"
+        export MINT_LITELLM_KEY
+    fi
+}
+
+ensure_control_key() {
+    local file="$(env_value MINT_SECRETS_DIR)/control.key"
+    [ -z "$(env_value MINT_LITELLM_KEY)" ] || return 0
+    if [ ! -s "$file" ]; then
+        if ! issue_key control "$file"; then
+            echo "제어 평면 키를 만들지 못했습니다. 다음 up·upgrade에서 다시 시도합니다." >&2
+            return 0
+        fi
+        load_control_key
+        admin_cli init --out /app/config/litellm.mint.yaml \
+            --fix-config /app/config/litellm.config.yaml >/dev/null
+    fi
+    load_control_key
+}
+
+# 첫 관리자 토큰과 이후 명령이 쓰는 토큰은 비밀 폴더의 operator.token에 둔다(환경 변수가 있으면 그것이 우선).
+load_operator_token() {
+    local file
+    file="$(env_value MINT_SECRETS_DIR)/operator.token"
+    if [ -z "${MINT_OPERATOR_TOKEN:-}" ] && [ -z "$(env_value MINT_OPERATOR_TOKEN)" ] && [ -s "$file" ]; then
+        MINT_OPERATOR_TOKEN="$(head -n 1 "$file")"
+        export MINT_OPERATOR_TOKEN
+    fi
 }
 
 # 비밀값은 .env에 없거나 비어 있을 때만 새로 만든다(base64url, 무작위 32바이트). 이미 있는 값은 바꾸지 않는다.
@@ -110,6 +160,8 @@ require_env() {
     [ -f .env ] || fail ".env가 없습니다. .env.example을 복사해 값을 채우십시오."
     ensure_secrets
     ensure_generated
+    load_control_key
+    load_operator_token
 }
 
 # 관리자 권한(마이그레이션·역할 생성)이 필요한 명령은 슈퍼유저 접속으로 실행한다.
@@ -123,12 +175,12 @@ admin_cli() {
         "MINT_STAFF_DB_PASSWORD=$(env_value MINT_STAFF_DB_PASSWORD)" \
         "${COMPOSE[@]}" run --rm --no-deps \
         -e MINT_DATABASE_URL -e MINT_PLUGIN_DB_PASSWORD -e MINT_CONTROL_DB_PASSWORD \
-        -e MINT_WORKER_DB_PASSWORD -e MINT_STAFF_DB_PASSWORD \
+        -e MINT_WORKER_DB_PASSWORD -e MINT_STAFF_DB_PASSWORD ${MINT_LITELLM_KEY:+-e MINT_LITELLM_KEY} \
         control "$@"
 }
 
 cli() {
-    "${COMPOSE[@]}" run --rm control "$@"
+    "${COMPOSE[@]}" run --rm ${MINT_LITELLM_KEY:+-e MINT_LITELLM_KEY} control "$@"
 }
 
 # 정책 엔진은 번들 파일이 있어야 기동한다. 파일이 없으면 저장소의 기본 정책으로 첫 번들을 게시하고,
@@ -166,15 +218,49 @@ cmd_up() {
     ensure_bundle
     "${COMPOSE[@]}" up -d opa litellm
     ensure_kit_issuer_key
+    ensure_control_key
     "${COMPOSE[@]}" --profile worker up -d worker
     "${COMPOSE[@]}" --profile console up -d console
-    echo "기동했습니다. 상태: ./mint.sh status"
+    echo "기동했습니다."
+    next_step
 }
 
+# 다음에 할 일 한 줄. 첫 관리자가 없으면 만드는 명령을, 있으면 상태 확인을 안내한다.
+next_step() {
+    if [ -z "${MINT_OPERATOR_TOKEN:-}" ] && [ -z "$(env_value MINT_OPERATOR_TOKEN)" ]; then
+        echo "다음: ./mint.sh bootstrap <이름> <LiteLLM 사용자 식별자>  (첫 관리자를 만들고 기본 정책을 적용합니다)"
+    else
+        echo "상태: ./mint.sh status"
+    fi
+}
+
+# 토큰이 없으면 상태 대신 할 일만 보인다(운영자가 아직 없을 때도 실행된다).
 cmd_status() {
     require_env
     "${COMPOSE[@]}" ps
-    cli status
+    if [ -z "${MINT_OPERATOR_TOKEN:-}" ] && [ -z "$(env_value MINT_OPERATOR_TOKEN)" ]; then
+        cli doctor
+    else
+        cli status
+    fi
+}
+
+# 첫 관리자를 만들어 토큰을 비밀 폴더에 두고(이후 mint.sh 명령이 자동으로 씁니다) 기본 정책을 적용한다.
+cmd_bootstrap() {
+    require_env
+    [ "$#" -eq 2 ] || fail "사용법: ./mint.sh bootstrap <이름> <LiteLLM 사용자 식별자>"
+    local file reply token pattern
+    file="$(env_value MINT_SECRETS_DIR)/operator.token"
+    [ ! -e "$file" ] || fail "$file이 이미 있습니다. 첫 관리자는 한 번만 만들 수 있습니다."
+    reply="$("${COMPOSE[@]}" run --rm -T ${MINT_LITELLM_KEY:+-e MINT_LITELLM_KEY} control --json \
+        operator bootstrap --name "$1" --user-id "$2")" || fail "첫 관리자를 만들지 못했습니다."
+    pattern='"token": *"([A-Za-z0-9_-]+)"'
+    [[ "$reply" =~ $pattern ]] || fail "토큰을 받지 못했습니다."
+    token="${BASH_REMATCH[1]}"
+    (umask 077; printf '%s\n' "$token" > "$file") || fail "토큰을 $file에 쓰지 못했습니다. 토큰: $token"
+    load_operator_token
+    cli policy activate initial || echo "기본 정책을 적용하지 못했습니다. ./mint.sh status로 확인하십시오." >&2
+    echo "첫 관리자 $1을(를) 만들었습니다. 토큰은 $file에 있습니다. 상태: ./mint.sh status"
 }
 
 # 백업은 데이터베이스 두 개, 정책 번들, LiteLLM 설정을 한 폴더에 모은다. 하나라도 비면 폴더를 지운다.
@@ -205,6 +291,7 @@ cmd_upgrade() {
         --fix-config /app/config/litellm.config.yaml >/dev/null
     "${COMPOSE[@]}" up -d litellm
     ensure_kit_issuer_key
+    ensure_control_key
     "${COMPOSE[@]}" --profile worker up -d worker
     "${COMPOSE[@]}" --profile console up -d console
     echo "업그레이드했습니다."
@@ -214,7 +301,8 @@ case "${1:-}" in
     up) cmd_up ;;
     status) cmd_status ;;
     backup) cmd_backup ;;
+    bootstrap) shift; cmd_bootstrap "$@" ;;
     upgrade) cmd_upgrade ;;
     cli) shift; require_env; cli "$@" ;;
-    *) fail "사용법: ./mint.sh up | status | backup | upgrade | cli <명령...>" ;;
+    *) fail "사용법: ./mint.sh up | status | bootstrap <이름> <사용자> | backup | upgrade | cli <명령...>" ;;
 esac

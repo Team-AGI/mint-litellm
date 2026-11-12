@@ -9,7 +9,11 @@ from ctl_fixtures import seed_version_evidence
 from psycopg.types.json import Jsonb
 
 from mint_litellm.control.context import Context, Operator
-from mint_litellm.control.contract_observe import consume_deployment_events, record_tools
+from mint_litellm.control.contract_observe import (
+    compare_instances,
+    consume_deployment_events,
+    record_tools,
+)
 from mint_litellm.control.contract_pin import finalize_reapproval
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import AdminError
@@ -674,3 +678,70 @@ def test_a_deployment_drift_alert_also_has_its_opening_event(contract_db):
     assert [e["source_key"] for e in events(conn, "alert_opened")] == [
         f"alert:{alert['id']}:0:alert_opened"
     ]
+
+
+def seed_peer(conn, url, tool_value):
+    """같은 서버 식별자를 계약 관리하는 두 번째 인스턴스와 그 승인 계약."""
+    conn.execute("INSERT INTO mint.orgs(instance_id,org_id,name) VALUES ('j','o','org')")
+    conn.execute(
+        "INSERT INTO mint.servers(id,instance_id,server_id,status,url_sha256,transport,"
+        "auth_type,registered_by,contract_status) VALUES (%s,'j','s','pending',%s,'http',"
+        "'none','requester','managed')",
+        (new_uuid7(), url_sha256(url)),
+    )
+    for status in ("validating", "awaiting_approval", "approved"):
+        conn.execute("UPDATE mint.servers SET status=%s WHERE instance_id='j'", (status,))
+    deployment = {"url": url, "transport": "http", "auth_type": "none"}
+    did = new_uuid7()
+    conn.execute(
+        "INSERT INTO mint.deployment_contracts(id,instance_id,server_id,canonical_text,"
+        "sha256,url,url_sha256,transport,auth_type)"
+        " VALUES (%s,'j','s',%s,%s,%s,%s,'http','none')",
+        (did, canonical_text(deployment), sha256(deployment), url, url_sha256(url)),
+    )
+    conn.execute("UPDATE mint.deployment_contracts SET status='approved' WHERE id=%s", (did,))
+    tid = new_uuid7()
+    conn.execute(
+        "INSERT INTO mint.tool_contracts(id,instance_id,server_id,credential_scope,tool,"
+        "canonical_text,sha256,pin_sha256,risk_grade,action_type,source)"
+        " VALUES (%s,'j','s','server','read',%s,%s,%s,'low','read','intake')",
+        (tid, canonical_text(tool_value), sha256(tool_value), pin_sha256(tool_value)),
+    )
+    conn.execute("UPDATE mint.tool_contracts SET status='approved' WHERE id=%s", (tid,))
+
+
+def instance_alerts(conn):
+    return fetchall(
+        conn, "SELECT * FROM mint.alerts WHERE kind='instance_mismatch' AND status<>'resolved'"
+    )
+
+
+def test_instances_with_the_same_approved_contracts_raise_nothing(contract_db):
+    conn, ctx, _ = contract_db
+    seed_peer(conn, "https://mcp.test/api", TOOL)
+    assert compare_instances(ctx) == 0
+    assert instance_alerts(conn) == []
+    assert events(conn, "deployment_drift_detected") == []
+
+
+def test_a_differing_peer_raises_one_alert_and_one_event_until_it_changes(contract_db):
+    conn, ctx, _ = contract_db
+    seed_peer(conn, "https://other.test/api", NEW)
+    assert compare_instances(ctx) == 1
+    (alert,) = instance_alerts(conn)
+    assert alert["subject"]["instances"] == ["i", "j"]
+    assert sorted(alert["subject"]["items"]) == ["deployment", "tool:server/read"]
+    assert len(events(conn, "deployment_drift_detected")) == 1
+    # 같은 차이를 다시 보아도 경보 횟수만 오르고 사건은 늘지 않는다
+    assert compare_instances(ctx) == 1
+    assert len(events(conn, "deployment_drift_detected")) == 1
+    assert instance_alerts(conn)[0]["count"] == 2
+
+
+def test_the_alert_closes_when_the_peer_leaves(contract_db):
+    conn, ctx, _ = contract_db
+    seed_peer(conn, "https://other.test/api", TOOL)
+    assert compare_instances(ctx) == 1
+    conn.execute("UPDATE mint.servers SET status='suspended' WHERE instance_id='j'")
+    assert compare_instances(ctx) == 0
+    assert instance_alerts(conn) == []

@@ -21,8 +21,9 @@
 | `mint-litellm contract reapprove` | `admin`, `approver` | 직무 분리·재검사 증거를 확인하고 후보 id·판본을 고정한 계획과 동기화 작업을 등록한다. | - | `reapproval_requested` |
 | `mint-litellm init` | 토큰 불필요 | LiteLLM 설정 조각(권장 설정 포함)을 만들고 기본 조직을 준비한다. `--no-spend-logs`를 주면 `disable_spend_logs: true`를 포함한다. `--fix-config <파일>`은 운영자 LiteLLM 설정의 MINT 가드레일 `mode`에 빠진 모드와 빠진 필수 설정(`disable_env_credential_login: true`, 서버별 기본 `rpm`·`max_concurrent_requests`)을 한 줄 수정으로 더한다(바꾸기 전 `<파일>.bak-<시각>` 사본을 남기고, 다른 항목과 주석은 그대로이며 이미 있으면 아무것도 하지 않는다). 안전하게 고칠 수 없는 모양이면 고칠 줄을 알리고 오류로 끝난다. `./mint.sh up`·`upgrade`가 `config/litellm.config.yaml`에 이 옵션을 쓴다. | - | - |
 | `mint-litellm check` | 모든 역할 | 필수 설정 위반이 있으면 종료 코드 0이 아닌 값으로 끝나고, 권장 설정은 경고하며, 관측 항목 4가지를 출력한다. | `/v1/mcp/server`, `/key/list`, `/team/list`, `/guardrails/list` | - |
-| `mint-litellm status` | 모든 역할 | 모드, 정책 판본, 경보, 관측 항목을 표시한다. | `/v1/mcp/server`, `/key/list`, `/team/list` | - |
-| `mint-litellm operator add` | `admin` | 운영자를 등록하고 토큰을 발급한다. `admin`·`approver`는 LiteLLM 사용자 식별자 (`--user-id`) 결속이 필수이다. | `/user/info` | `operator_added` |
+| `mint-litellm doctor` | 토큰 불필요 | 지금 비어 있거나 기다리는 일(운영자·제어 평면 키·정책 판본 없음, 승인 대기, 결정 대기 신청, 열린 경보, 실패한 작업, 보류된 동기화)과 다음에 실행할 명령을 보인다. 읽기 전용이며 데이터베이스만 읽는다. | - | - |
+| `mint-litellm status` | 모든 역할 | 모드, 정책 판본, 경보, 관측 항목과 같은 「할 일」 목록을 표시한다. | `/v1/mcp/server`, `/key/list`, `/team/list` | - |
+| `mint-litellm operator add` | `admin` | 운영자를 등록하고 토큰을 발급한다. `--save-token <파일>`을 주면 토큰을 화면에 보이지 않고 0600 파일로만 받는다(파일이 이미 있으면 운영자를 만들기 전에 거부한다). `admin`·`approver`는 LiteLLM 사용자 식별자 (`--user-id`) 결속이 필수이다. | `/user/info` | `operator_added` |
 | `mint-litellm operator bootstrap` | 토큰 불필요 | `operators` 표가 비어 있을 때만 토큰 없이 첫 `admin` 운영자를 만들고 토큰을 발급한다. `--name`과 `--user-id`가 필요하며, 사용자가 LiteLLM의 사람 사용자로 존재하는지 확인한다. 행위자는 `bootstrap`으로 기록하고, 운영자가 이미 있으면 거부한다. | `/user/info` | `operator_added` |
 | `mint-litellm operator remove` | `admin` | 운영자를 삭제한다. 토큰이 끝나고 그 사용자의 콘솔 세션이 폐기된다. 마지막 관리자와 본인은 삭제할 수 없다. | 없음 | `operator_removed` |
 | `mint-litellm operator set-role` | `admin` | 운영자의 역할을 바꾼다(`--role`). 그 사용자의 콘솔 세션이 폐기된다. 마지막 관리자는 낮출 수 없다. | 없음 | `operator_role_changed` |
@@ -31,7 +32,7 @@
 | `mint-litellm server suspend` | `admin` | 서버를 중지한다. 중지된 서버의 호출은 차단된다. | - | `server_suspended` |
 | `mint-litellm server resume` | `admin` | 중지한 서버를 다시 승인 상태로 되돌린다. | - | `server_resumed` |
 | `mint-litellm relation add` | `admin` | 조직·팀·목적·서버를 묶는 이용 관계를 만든다. | - | `relation_created` |
-| `mint-litellm relation terminate` | `admin` | 이용 관계를 종료 중으로 바꾼다. 그 관계에 속한 승인과 매칭되는 호출은 `RELATION_TERMINATED`로 차단된다. | - | `relation_terminating` |
+| `mint-litellm relation terminate` | `admin` | 이용 관계를 종료 중으로 바꾸고 그 관계의 활성 승인을 철회한다. 그 관계에 속한 승인과 매칭되는 호출은 `RELATION_TERMINATED`로 차단되고, LiteLLM 권한 회수를 읽어 확인한 결과가 사건으로 남는다. | - | `relation_terminating`, `approval_revoked` |
 | `mint-litellm approve` | `admin`, `approver` | 이용 관계에 속한 승인을 등록한다. 근거와 유효 기간이 필수이며, 대상 권한이 LiteLLM에 서버 식별자 형식으로 있는지 읽어 확인한다. | `/key/info`, `/team/info` | `approval_granted`, `server_approved` |
 | `mint-litellm deny` | `admin`, `approver` | 주체 또는 서버에 대한 거부를 만든다. 거부는 모든 승인보다 우선한다. | - | `denial_created` |
 | `mint-litellm denial lift` | `admin`, `approver` | 거부를 해제한다. | - | `denial_lifted` |
@@ -67,6 +68,10 @@
 | `mint-litellm intake approve` | `admin`, `approver` | 모든 검사를 통과한 신청을 승인한다. | - | `intake_decided`, `contract_approved` |
 | `mint-litellm intake reject` | `admin`, `approver` | 신청을 거절한다. | - | `intake_decided` |
 | `mint-litellm intake except` | `admin`, `approver` | 판별 불가가 있는 신청을 예외 승인한다. | - | `intake_decided`, `contract_approved` |
+
+## 식별자 줄여 쓰기와 토큰 안내
+
+목록에 나온 식별자(경보·신청·호출별 승인·동기화 항목·승인·거부·동의·허용 목록)는 끝 8자리(또는 충분히 긴 앞부분)만 써도 이 배치 안에서 한 건으로 정해지면 찾아 준다(`alert ack 3f9c1a2b`). 둘 이상이면 더 길게 입력하라고 알리고, 없으면 그대로 없다고 알린다. 토큰 없이 인증이 필요한 명령을 실행하면 운영자가 한 명도 없을 때는 첫 관리자를 만드는 명령(`operator bootstrap ... --save-token`)을, 있을 때는 토큰을 받는 방법을 안내한다.
 
 ## 정책 활성화 실패와 복원
 
@@ -119,7 +124,7 @@
 
 | 명령 | 역할 | 설명 |
 | --- | --- | --- |
-| `mint-litellm seal verify [--from N --to M]` | 전부 | 봉인 연쇄를 처음부터 다시 계산하고 마지막 체크포인트 파일의 봉인 끝과 대조한다. 어긋나면 종료 코드 1. |
+| `mint-litellm seal verify [--from N --to M]` | 전부 | 봉인 연쇄를 처음부터 다시 계산하고 마지막 체크포인트 파일의 봉인 끝과 대조한다. 내보내기 키가 있으면 배치 끝 해시의 서명도 확인한다. 어긋나면 종료 코드 1. |
 | `mint-litellm export status` | 전부 | 최근 내보내기와 최신 파일의 서명 키를 보여 주고 옛 키를 빼도 되는지 알려 준다. |
 | `mint-litellm restore check` | admin | 파일의 부정 상태와 DB를 비교해 누락·봉인 앵커·마지막 성공 전송 이후 활동 서버를 보여 준다. |
 | `mint-litellm restore attest --reason <사유>` | admin | 파일에 담긴 부정 상태 행 전체 스냅숏으로 복구 DB를 되돌리고(없는 행은 같은 식별자로 다시 넣고, 뒤처진 행은 파일 내용으로 되돌린다), DB 세대를 파일 세대 + 1로 올리고, 복원 요청과 `restore_attested`를 커밋한다. 부모 행이 없어 되돌릴 수 없는 항목이 있으면 목록과 함께 거부한다. 반복해도 같은 결과다. 명령은 파일을 쓰지 않는다. |
@@ -182,7 +187,7 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 | `MINT_INSTANCE_ID` | 배치 식별자. 영문자·숫자·`.`·`_`·`-`, 128자 이하 | `default` |
 | `MINT_OPERATOR_TOKEN` | 운영자 토큰. `--token-file <파일>`로 대신할 수 있다. | 인증이 필요한 명령에서 필수 |
 | `MINT_LITELLM_URL` | LiteLLM 관리 API 주소 | `server register`·`operator add`·`approve`·`consent add`·`check`·`status`에서 필요 |
-| `MINT_LITELLM_KEY` | 제어 평면 LiteLLM 키(`proxy_admin`, `allowed_routes` 7개로 제한). `init`이 이 키의 토큰을 도구 목록 면제 키로 저장한다(키를 넣은 뒤 `init`을 다시 실행하거나 `settings control-key`를 실행). 저장되지 않으면 서버 승인 때 도구 고정이 멈추고 경보 `sync_divergence`(`control_key_not_set`)가 열린다. | 위와 같음 |
+| `MINT_LITELLM_KEY` | 제어 평면 LiteLLM 키(`proxy_admin`, `allowed_routes` 11개로 제한). `./mint.sh up`이 비워 둔 `.env`의 값을 대신해 만들어 비밀 폴더에 둔다. `init`이 이 키의 토큰을 도구 목록 면제 키로 저장한다(키를 넣은 뒤 `init`을 다시 실행하거나 `settings control-key`를 실행). 저장되지 않으면 서버 승인 때 도구 고정이 멈추고 경보 `sync_divergence`(`control_key_not_set`)가 열린다. | 위와 같음 |
 | `MINT_STAFF_DATABASE_URL` | 콘솔 직원 화면이 쓰는 `mint_staff_app` 로그인의 데이터베이스 주소 | 없으면 직원 화면을 열지 않음 |
 | `MINT_STAFF_CONSENT_MAX_DAYS` | 직원 본인 동의의 유효 기간 상한(일, 1~365) | `90` |
 | `MINT_CONSOLE_URL` | 경보 본문의 `console_url`에 넣을 콘솔 주소(선택). 없으면 `null`이다. | 없음 |
@@ -208,10 +213,14 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 | `--high-risk-tools a,b` | `high_risk_tools` | 나열한 도구는 호출별 승인을 요구한다. 계약 관리 서버의 도구는 승인된 계약의 위험 등급이 `high`·`critical`이면 이 옵션 없이도 요구하므로, 이 옵션은 요구를 더하기만 한다. |
 | `--business-hours-only` | `business_hours_only` | 업무 시간 밖의 호출을 차단한다. 업무 시간은 정책 번들의 값이다. |
 | `--business-hours 시간대,요일,시작,끝` | `business_hours` | 이 승인의 업무 시간을 재정의한다(예: `Asia/Seoul,1-5,09:00,18:00`, 요일은 1=월 ~ 7=일). `--business-hours-only`와 함께 쓴다. |
-| `--require-consent 목적` | `require_consent` | 그 목적의 동의가 있어야 호출을 허용한다. |
+| `--require-consent 목적` | `require_consent` | 그 목적의 동의가 있어야 호출을 허용한다. 서버의 수용 신청 자료 등급이 `confidential`·`restricted`이면 이 옵션 없이도 이용 목적을 동의 목적으로 요구한다. |
 | `--allowed-host 호스트` (반복) | `allowed_hosts` | 인자의 URL이 향할 수 있는 호스트(하위 도메인 포함). 계약 관리 서버에만 적용한다. |
-| `--allowed-path 경로` (반복) | `allowed_paths` | 인자의 절대 경로가 있어야 하는 폴더. 계약 관리 서버에만 적용한다. |
-| `--allowed-arg-key 이름` (반복) | `allowed_arg_keys` | 호출이 쓸 수 있는 인자 이름. 이 밖의 이름이 있으면 차단한다. 계약 관리 서버에만 적용한다. |
+| `--allowed-path 경로` (반복) | `allowed_paths` | 인자의 절대 경로가 있어야 하는 폴더. 계약 관리 서버에만 적용한다. 허용 경로가 없으면 모든 절대 경로를 차단하며, 제한을 두지 않으려면 승인에 `allowed_paths_unrestricted`를 명시한다(콘솔의 「제한 없음」). |
+| `--allowed-arg-key 이름` (반복) | `allowed_arg_keys` | 호출이 쓸 수 있는 인자 이름. 이 밖의 이름이 있으면 차단한다. 계약 관리 서버에만 적용한다. 지정하지 않으면 승인된 도구 계약의 입력 정의에 있는 이름만 허용한다. |
+| `--max-result-bytes 수` | `max_result_bytes` | 도구 결과 한 건의 크기 상한(바이트). 넘으면 결과 대신 `MINT-OUTPUT-BLOCKED`를 돌려주고 응답 사건의 `output_findings`에 `POL-E-16`을 남긴다. |
+| `--max-result-items 수` | `max_result_items` | 도구 결과 한 건의 내용 블록 수 상한. 넘으면 위와 같이 막는다. |
+| `--no-result-scan` | `scan_result` | 결과 본문의 지시문 표지 검사를 끈다. 계약 관리 서버는 이 옵션이 없으면 검사하며, 표지가 있으면 결과를 `MINT-OUTPUT-BLOCKED`로 막고 `output_findings`에 `POL-E-04`를 남긴다. 관측 모드에서는 막지 않고 응답 사건에만 남긴다. |
+| `--response-scan block\|mask\|observe` | `response_scan` | 결과 본문의 비밀(개인 키, 클라우드 접근 키, GitHub 토큰, Bearer 토큰, JWT)과 개인정보(주민등록번호, 전화번호, 이메일, 카드 번호)를 찾았을 때의 처리. `mask`(기본)는 찾은 값만 `[MASKED:종류]`로 바꿔 주고, `block`은 결과 대신 `MINT-OUTPUT-BLOCKED`를 돌려주며, `observe`는 기록만 한다. 응답 사건의 `sensitive_findings`에 종류별 건수만 남기고 값은 남기지 않으며 `output_findings`에 `POL-E-05`를 남긴다. 관측 모드에서는 어느 값이든 기록만 한다. |
 
 계약 관리 서버의 호출별 승인(`call-approval request`)과 본인 확인은 요청할 때 승인된 도구 계약에 묶인다. 계약이 교체되거나 철회되면 아직 쓰지 않은 승인은 만료되고, 승인된 계약이 없는 도구에는 호출별 승인을 요청할 수 없다.
 
@@ -280,6 +289,8 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 - `--arguments '<JSON 객체>'` 또는 `--args-file <파일>`(읽을 수 없으면 오류로 끝난다): 호출 인자 원문으로 플러그인과 같은 함수(HMAC-SHA256, 키를 정렬하고 구분자 공백 없이 비ASCII 문자를 그대로 둔 JSON)로 지문을 계산한다. 키는 `MINT_FINGERPRINT_KEY`(없으면 비밀 파일이며, 권한이 0600이 아니거나 심볼릭 링크이면 거부한다)에서 읽고 키 판본은 `MINT_FINGERPRINT_KEY_VERSION`(`--fp-key-version`으로 바꿀 수 있다)을 쓴다.
 - `--args-fp <지문>`: 차단 사건에 기록된 지문(소문자 16진 64자)을 그대로 넣는다.
 
+`MINT_TARGET_PROFILES`에 프로필이 지정된 서버는 인자 원문(`--arguments`·`--args-file`)으로만 요청할 수 있다. 같은 규칙으로 대상과 행위를 뽑아 승인에 함께 기록하며, 이 값이 호출에서 뽑은 값과 같아야 승인이 쓰인다.
+
 키가 없으면 인자 원문으로는 요청할 수 없고, 지문 키가 설정되어 있지 않으면 플러그인에서 호출별 승인은 항상 요구 상태로 남는다.
 
 ## 경보와 웹훅
@@ -297,7 +308,7 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 - 헤더 `X-MINT-Delivery`는 전송 식별자이며 수신 쪽이 중복을 거를 때 쓴다. 재시도는 같은 식별자로 새 서명을 붙여 보낸다.
 - 수신 쪽은 `t`와 현재 시각의 차이가 5분을 넘으면 거부하고, 서명을 상수 시간 비교로 확인한다. 구현 예시는 `mint_litellm.control.webhook.verify`다.
 
-본문 `console_url`은 `MINT_CONSOLE_URL`(선택)을 그대로 쓰며, 설정이 없으면 `null`이다.
+본문 `console_url`은 `MINT_CONSOLE_URL`(선택)을 그대로 쓰며, 설정이 없으면 `null`이다. 본문 `summary`는 위험 요지, `action`은 담당자가 취할 조치 절차이며 경보 종류마다 정해진 문구다(알 수 없는 종류는 일반 문구).
 
 ## 원장 조회
 

@@ -245,7 +245,7 @@ def test_the_snapshot_collects_the_state_in_one_read(scenario, plugin_dsn):
     assert snap.relations == {
         str(scenario.relation): snapshot()
         .relations["r1"]
-        .__class__(id=str(scenario.relation), status="active")
+        .__class__(id=str(scenario.relation), status="active", purpose="support")
     }
     assert len(snap.denials) == 1 and snap.denials[0].scope_id == "t1"
     assert len(snap.call_approvals) == 1 and snap.call_approvals[0].state_version >= 1

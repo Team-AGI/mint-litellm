@@ -113,7 +113,8 @@ def test_command_table_is_unique_and_documented():
 
 
 def test_only_first_setup_commands_run_without_a_token():
-    assert [c.name for c in COMMANDS if c.unauthenticated] == ["init", "operator bootstrap"]
+    names = [c.name for c in COMMANDS if c.unauthenticated]
+    assert names == ["init", "doctor", "operator bootstrap"]
     for command in COMMANDS:
         assert command.unauthenticated == (not command.roles)
 
@@ -216,7 +217,7 @@ def test_bootstrap_and_relation_terminate_commands():
     assert bootstrap.litellm_reads == ("/user/info",)
     terminate = by_name["relation terminate"]
     assert terminate.roles == frozenset({OperatorRole.ADMIN})
-    assert terminate.events == (EventKind.RELATION_TERMINATING,)
+    assert terminate.events == (EventKind.RELATION_TERMINATING, EventKind.APPROVAL_REVOKED)
 
 
 def test_observation_items_used_by_rows_are_declared():

@@ -41,6 +41,7 @@ from mint_litellm.types.settings import (
     SETTINGS_TABLE,
     SettingGrade,
 )
+from mint_litellm.types.target import effective_profile, parse_profile_map, select_profile
 
 _REUSE_KEYS = (
     KEY_ENV_LOGIN, KEY_URL_HOSTS, KEY_SSL, KEY_REDIRECT, KEY_ISSUER, KEY_BINDING, KEY_TIMEOUT,
@@ -550,3 +551,24 @@ def _fingerprint_finding(
         report.add(FINGERPRINT_ITEM, Level.FAIL, f"키 판본은 1 이상이어야 합니다.{note}")
         return
     report.add(FINGERPRINT_ITEM, Level.OK, f"키 판본 {version}{note}")
+
+
+def target_profile_findings(
+    report: Report, deployments: list[dict], env: Mapping[str, str]
+) -> None:
+    """서버마다 대상·행위 프로필을 무엇으로 쓰는지(자동 선택인지 환경 변수 덮어쓰기인지) 보인다.
+
+    ``deployments``는 서버 식별자·승인된 배포 계약의 URL·승인된 도구 이름(``tools``)이다.
+    """
+    try:
+        overrides = parse_profile_map(env.get("MINT_TARGET_PROFILES", ""))
+    except ValueError as error:
+        report.add("호출 대상 프로필", Level.FAIL, f"MINT_TARGET_PROFILES가 올바르지 않음: {error}")
+        return
+    auto = {d["server_id"]: select_profile(d["url"], d["tools"] or ()) for d in deployments}
+    shown = []
+    for server_id in sorted(auto.keys() | overrides.keys()):
+        chosen = effective_profile(overrides, server_id, auto.get(server_id))
+        if chosen is not None:
+            shown.append(f"{server_id}={chosen[0]}({'자동' if chosen[1] == 'auto' else '덮어씀'})")
+    report.add("호출 대상 프로필", Level.INFO, ", ".join(shown) if shown else "지정된 서버 없음")

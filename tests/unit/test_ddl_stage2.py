@@ -1409,6 +1409,7 @@ def test_plugin_reads_contracts_and_exports_but_not_the_intake_side(db, base):
     assert scalar(db, "SELECT count(*) FROM mint.exports") == 1
     assert scalar(db, "SELECT count(*) FROM mint.seal_batches") == 0
     assert scalar(db, "SELECT contract_status FROM mint.servers") == "none"
+    assert scalar(db, "SELECT input_keys FROM mint.tool_contracts") == []
     denied(db, "SELECT canonical_text FROM mint.tool_contracts",
            "SELECT * FROM mint.deployment_contracts", "SELECT * FROM mint.intakes",
            "SELECT * FROM mint.intake_checks", "SELECT * FROM mint.jobs",
@@ -1416,6 +1417,14 @@ def test_plugin_reads_contracts_and_exports_but_not_the_intake_side(db, base):
            "UPDATE mint.tool_contracts SET drift = 'input_schema'",
            "UPDATE mint.servers SET last_observed_at = now()",
            "INSERT INTO mint.exports (id) VALUES (gen_random_uuid())")  # fmt: skip
+
+
+def test_the_input_keys_come_from_the_contract_text_and_are_unknown_when_unreadable(db, base):
+    add_tool(db, tool="a", canonical_text='{"input_schema":{"properties":{"q":{},"limit":{}}}}')
+    add_tool(db, tool="b", canonical_text='{"input_schema":{"type":"object"}}')
+    add_tool(db, tool="c", canonical_text="not json")
+    keys = dict(db.execute("SELECT tool, input_keys FROM mint.tool_contracts").fetchall())
+    assert keys == {"a": ["limit", "q"], "b": [], "c": None}
 
 
 CALL_EVENT = "decision_evaluated"

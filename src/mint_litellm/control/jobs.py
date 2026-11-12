@@ -38,6 +38,7 @@ KINDS: dict[str, JobKind] = {
     "sync_server": JobKind(convergent=True, external_write=True),
     "sync_target": JobKind(convergent=True, external_write=True),
     "sync_reconcile": JobKind(external_write=True),
+    "relation_finalize": JobKind(convergent=True),
     "activation_finalize": JobKind(convergent=True, external_write=True),
     # 되돌림 상태에서는 봉인도 하지 않는다(되돌린 DB 위에 새 연쇄를 잇지 않는다).
     "seal": JobKind(external_write=True),
@@ -205,7 +206,7 @@ def _sync(name: str) -> Callable[[JobContext], None]:
 
 def _seal(job: JobContext) -> None:
     job.external_write()
-    seal.seal_once(job.conn, job.instance_id)
+    seal.seal_once(job.conn, job.instance_id, getattr(job.settings, "export_hmac_key", None))
 
 
 def _export_negative_state(job: JobContext) -> None:
@@ -241,6 +242,7 @@ HANDLERS: dict[str, Callable[[JobContext], None]] = {
     "sync_target": _sync("sync_target"),
     "sync_reconcile": _sync("sync_reconcile"),
     "activation_finalize": _sync("activation_finalize"),
+    "relation_finalize": _sync("relation_finalize"),
     "seal": _seal,
     "export_negative_state": _export_negative_state,
     "export_checkpoint": _export_checkpoint,

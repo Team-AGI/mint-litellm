@@ -8,6 +8,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -30,6 +31,7 @@ from mint_litellm.control import (
     policy_versions,
     secrets_file,
     status,
+    todo,
     worker,
 )
 from mint_litellm.control.config import ControlConfig
@@ -39,6 +41,7 @@ from mint_litellm.control.db.migrate import apply_migrations
 from mint_litellm.control.db.roles import LOGIN_PASSWORD_VARIABLES, LOGIN_ROLES, ensure_login_roles
 from mint_litellm.control.errors import AuthError, ControlError
 from mint_litellm.control.litellm_admin import LiteLLMAdmin
+from mint_litellm.control.litellm_control import STAGE2_ALLOWED_ROUTES
 from mint_litellm.control.services import alerts as alert_service
 from mint_litellm.control.services import allowlists as allowlist_service
 from mint_litellm.control.services import approvals as approval_service
@@ -64,6 +67,13 @@ from mint_litellm.types.cli_commands import (
 from mint_litellm.types.exec_contract import ExecContract
 from mint_litellm.types.identity import SubjectType
 from mint_litellm.types.settings import Mode
+from mint_litellm.types.target import (
+    TargetUnresolved,
+    bind_target,
+    effective_profile,
+    parse_profile_map,
+    select_profile,
+)
 
 PROGRAM = "mint-litellm"
 
@@ -196,14 +206,15 @@ def _init(run: Run) -> None:
             "역할을 쓰도록 MINT_PLUGIN_DB_PASSWORD·MINT_CONTROL_DB_PASSWORD를 지정하십시오.",
             file=log,
         )
-    print(
-        "제어 평면 LiteLLM 키는 proxy_admin 사용자 키로 발급하고 allowed_routes를 다음으로 "
-        "제한하십시오:\n  "
-        + ", ".join(CONTROL_PLANE_ALLOWED_ROUTES)
-        + "\n그 값을 MINT_LITELLM_KEY로 설정한 뒤 init을 다시 실행하면 이 키가 도구 목록 면제 "
-        "키로 저장됩니다(바꿀 때는 settings control-key).",
-        file=log,
-    )
+    if not run.cfg.litellm_key:
+        print(
+            "제어 평면 LiteLLM 키가 없습니다. deploy/mint.sh up이 자동으로 만들어 넣습니다. "
+            "직접 발급하려면 proxy_admin 사용자 키에 allowed_routes를 다음으로 제한하십시오:\n  "
+            + ", ".join([*CONTROL_PLANE_ALLOWED_ROUTES, *STAGE2_ALLOWED_ROUTES])
+            + "\n그 값을 MINT_LITELLM_KEY로 설정한 뒤 init을 다시 실행하면 이 키가 도구 목록 면제 "
+            "키로 저장됩니다(바꿀 때는 settings control-key).",
+            file=log,
+        )
     notes = {
         "set": "제어 평면 키 저장됨: 서버 승인 때 도구 고정이 이 키로 동작합니다.",
         "differs": "저장된 제어 평면 키와 MINT_LITELLM_KEY가 다릅니다. 바꾸려면 settings "
@@ -265,6 +276,7 @@ def _check(run: Run) -> None:
             run.conn, ctx.instance_id, run.environ.get("MINT_OPA_URL")
         ),
     )
+    checks.target_profile_findings(report, _deployment_basis(run), run.environ)
     run.data.update(
         findings=[
             {"item": f.item, "level": f.level.name, "message": f.message} for f in report.findings
@@ -301,24 +313,60 @@ def _status(run: Run) -> None:
         run.failure_code = 3
 
 
-def _issued(run: Run, token: str) -> None:
+def _issue_token(run: Run, issue: Callable[[], str]) -> None:
+    """토큰을 발급해 알린다. ``--save-token``이면 화면에 보이지 않고 0600 파일로만 받는다.
+
+    파일은 운영자를 등록하기 전에 만들어 두므로 경로가 막혀 있으면 운영자를 만들지 않는다.
+    """
+    given = getattr(run.args, "save_token", None)
+    path = Path(given) if given else None
+    if path:
+        secrets_file.reserve_private(path)
+    try:
+        token = issue()
+        if path:
+            secrets_file.fill_private(path, token)
+    except BaseException:
+        if path:
+            path.unlink(missing_ok=True)
+        raise
+    if path:
+        run.data["token_file"] = given
+        run.say(f"토큰을 {given}에 저장했습니다. 이 파일을 --token-file로 주면 인증됩니다.")
+        return
     run.data["token"] = token
     run.say(f"발급된 토큰(다시 표시되지 않습니다): {token}")
 
 
+def _doctor(run: Run) -> None:
+    items = todo.collect(run.conn, run.cfg.instance_id)
+    if not (run.cfg.litellm_url and run.cfg.litellm_key):
+        what = "이 환경에 MINT_LITELLM_URL·MINT_LITELLM_KEY가 없어 LiteLLM 읽기 명령이 실패합니다"
+        fix = "deploy/mint.sh cli ... 로 실행하거나 두 환경 변수를 설정하십시오"
+        items.insert(0, {"what": what, "next": fix})
+    run.data["todo"] = items
+    run.say(todo.render(items))
+
+
 def _operator_add(run: Run) -> None:
     a = run.args
-    token = operator_service.add(
-        run.context(), run.litellm(), a.name, OperatorRole(a.role), a.user_id, a.expires_in_days
+    _issue_token(
+        run,
+        lambda: operator_service.add(
+            run.context(), run.litellm(), a.name, OperatorRole(a.role), a.user_id,
+            a.expires_in_days,
+        ),
     )
-    _issued(run, token)
 
 
 def _operator_bootstrap(run: Run) -> None:
-    token = operator_service.bootstrap(
-        run.conn, run.cfg.instance_id, run.litellm(), run.args.name, run.args.user_id, run.emitted
+    _issue_token(
+        run,
+        lambda: operator_service.bootstrap(
+            run.conn, run.cfg.instance_id, run.litellm(), run.args.name, run.args.user_id,
+            run.emitted,
+        ),
     )
-    _issued(run, token)
 
 
 def _second(run: Run) -> Operator | None:
@@ -365,6 +413,10 @@ def _approve(run: Run) -> None:
             confirm_tools=a.confirm_tool,
             confirm_purpose=a.confirm_purpose,
             confirm_fields=a.confirm_field,
+            max_result_bytes=a.max_result_bytes,
+            max_result_items=a.max_result_items,
+            scan_result=not a.no_result_scan,
+            response_scan=a.response_scan,
         ),
     )
     _created(run, approval_id)
@@ -511,14 +563,61 @@ def _denial(run: Run) -> None:
     )
 
 
+def _arguments(a: Any) -> Any:
+    text = a.arguments if a.arguments is not None else Path(a.args_file).read_text("utf-8")
+    return json.loads(text)
+
+
+def _deployment_basis(run: Run) -> list[dict]:
+    """서버별 승인된 배포 계약의 URL과 승인된 도구 이름. 프로필 자동 선택의 근거이다."""
+    return fetchall(
+        run.conn,
+        "SELECT d.server_id, d.url, coalesce(d.allowed_tools, '{}') ||"
+        " coalesce((SELECT array_agg(DISTINCT t.tool) FROM mint.tool_contracts t"
+        " WHERE t.instance_id = d.instance_id AND t.server_id = d.server_id"
+        " AND t.status = 'approved'), '{}') AS tools"
+        " FROM mint.deployment_contracts d WHERE d.instance_id = %s AND d.status = 'approved'",
+        (run.context().instance_id,),
+    )
+
+
+def _bound_target(run: Run) -> tuple[str | None, str | None]:
+    """프로필이 있는 서버의 승인은 인자 원문에서 플러그인과 같은 규칙으로 대상을 뽑아 묶는다."""
+    a = run.args
+    try:
+        overrides = parse_profile_map(run.environ.get("MINT_TARGET_PROFILES", ""))
+    except ValueError as error:
+        raise ControlError(f"MINT_TARGET_PROFILES가 올바르지 않습니다: {error}") from None
+    auto = None if a.server in overrides else next(
+        (select_profile(d["url"], d["tools"] or ())
+         for d in _deployment_basis(run) if d["server_id"] == a.server),
+        None,
+    )
+    chosen = effective_profile(overrides, a.server, auto)
+    if chosen is None:
+        return None, None
+    profile = chosen[0]
+    if a.args_fp:
+        raise ControlError(
+            "대상·행위 프로필이 있는 서버는 --arguments 또는 --args-file로 요청해야 합니다."
+        )
+    try:
+        arguments = _arguments(a)
+        if not isinstance(arguments, dict):
+            raise ValueError("인자는 JSON 객체여야 합니다")
+        bound = bind_target(profile, a.server, a.tool, arguments)
+    except (ValueError, OSError, TargetUnresolved) as error:
+        raise ControlError(f"호출 대상을 정할 수 없습니다: {error}") from None
+    return bound.target, bound.action
+
+
 def _fingerprint(run: Run) -> tuple[str, int]:
     """``--args-fp``는 그대로, 인자 원문은 플러그인과 같은 함수로 지문을 계산한다."""
     a = run.args
     if a.args_fp:
         return a.args_fp, a.fp_key_version or 1
     try:
-        text = a.arguments if a.arguments is not None else Path(a.args_file).read_text("utf-8")
-        arguments = json.loads(text)
+        arguments = _arguments(a)
         key_text, version = secrets_file.load_fingerprint_key(run.environ)
         key = fingerprint.decode_fingerprint_key(key_text)
         return fingerprint.argument_fingerprint(arguments, key), a.fp_key_version or version
@@ -529,6 +628,7 @@ def _fingerprint(run: Run) -> tuple[str, int]:
 def _call_request(run: Run) -> None:
     a, ctx = run.args, run.context()
     args_fp, fp_key_version = _fingerprint(run)
+    target, action = _bound_target(run)
     _created(
         run,
         call_approval_service.request(
@@ -543,6 +643,8 @@ def _call_request(run: Run) -> None:
             policy_version_id=a.policy_version,
             expires_in_minutes=a.expires_in_minutes,
             requested_by=a.requested_by or ctx.operator.user_id or ctx.operator.name,
+            target=target,
+            action=action,
         ),
     )
 
@@ -667,6 +769,7 @@ HANDLERS: dict[str, Handler] = {
     "init": _init,
     "check": _check,
     "status": _status,
+    "doctor": _doctor,
     "operator add": _operator_add,
     "operator bootstrap": _operator_bootstrap,
     "operator remove": _done(operator_service.remove, "name"),
@@ -754,6 +857,7 @@ _ENV_FILE = _a("--env-file", help="LiteLLM 환경 파일(KEY=VALUE)")
 _SECOND = _a("--second-approver", help="요청자와 다른 사용자의 운영자 토큰(또는 @파일)")
 _SERVER_ID = _a("server_id", help="LiteLLM 서버 식별자")
 _ALERT_ID = _a("alert_id", help="경보 식별자")
+_SAVE_TOKEN = _a("--save-token", help="토큰을 화면에 보이지 않고 이 경로에 0600 파일로 저장")
 
 
 ARGUMENTS: dict[str, list[Any]] = {
@@ -788,13 +892,17 @@ ARGUMENTS: dict[str, list[Any]] = {
     ],
     "check": [_CONFIG, _ENV_FILE],
     "status": [_CONFIG, _ENV_FILE],
+    "doctor": [],
     "operator add": [
         _a("name"),
         _a("--role", required=True, choices=[r.value for r in OperatorRole]),
         _a("--user-id", help="LiteLLM 사용자 식별자(admin·approver 필수)"),
         _a("--expires-in-days", type=int),
+        _SAVE_TOKEN,
     ],
-    "operator bootstrap": [_a("--name", required=True), _a("--user-id", required=True)],
+    "operator bootstrap": [
+        _a("--name", required=True), _a("--user-id", required=True), _SAVE_TOKEN,
+    ],
     "operator remove": [_a("name")],
     "operator set-role": [
         _a("name"), _a("--role", required=True, choices=[r.value for r in OperatorRole])
@@ -837,6 +945,14 @@ ARGUMENTS: dict[str, list[Any]] = {
         _a("--allowed-host", action="append", help="허용 목적지 호스트(반복 가능)"),
         _a("--allowed-path", action="append", help="허용 폴더의 절대 경로(반복 가능)"),
         _a("--allowed-arg-key", action="append", help="허용 인자 이름(반복 가능)"),
+        _a("--max-result-bytes", type=int,
+           help="결과 한 건의 크기 상한(바이트). 넘으면 결과를 막는다"),
+        _a("--max-result-items", type=int, help="결과 한 건의 항목(내용 블록) 수 상한"),
+        _a("--no-result-scan", action="store_true",
+           help="결과 본문의 지시문 표지 검사를 끈다(계약 관리 서버는 기본으로 검사한다)"),
+        _a("--response-scan", choices=["block", "mask", "observe"],
+           help="결과의 비밀·개인정보 처리: block(결과를 막음), mask(찾은 값만 가림, 기본), "
+           "observe(기록만)"),
         _a("--confirm-tool", action="append",
            help="호출 때 본인 확인을 요구할 도구(반복 가능, 승인 도구 안에 있어야 한다)"),
         _a("--confirm-purpose", help="본인 확인의 목적(--confirm-tool과 함께)"),
@@ -1071,6 +1187,61 @@ def _result(run: Run, command: CliCommand) -> dict[str, Any]:
     return result
 
 
+# 목록에 나온 식별자를 끝 8자리(또는 앞부분)만으로 가리킬 수 있는 인자. 인자 이름 -> 표
+ID_ARGUMENTS = {
+    "alert_id": "alerts",
+    "intake_id": "intakes",
+    "call_approval_id": "call_approvals",
+    "grant_id": "litellm_grants",
+    "approval_id": "approvals",
+    "denial_id": "denials",
+    "consent_id": "consents",
+    "allowlist_id": "allowlists",
+}
+_SHORT_ID = re.compile(r"[0-9a-fA-F-]{6,35}")
+
+
+def expand_ids(run: Run) -> None:
+    """식별자 인자가 전체 형식이 아니면 이 배치에서 앞이나 끝이 일치하는 한 건으로 바꾼다.
+
+    일치하는 것이 없으면 그대로 두어 서비스가 없다고 알리고, 둘 이상이면 더 길게 입력하라고 한다.
+    """
+    for name, table in ID_ARGUMENTS.items():
+        value = getattr(run.args, name, None)
+        if not isinstance(value, str) or not _SHORT_ID.fullmatch(value):
+            continue
+        found = fetchall(
+            run.conn,
+            f"SELECT id::text AS id FROM mint.{table} WHERE instance_id = %s"
+            " AND (id::text LIKE %s OR id::text LIKE %s) LIMIT 2",
+            (run.cfg.instance_id, value.lower() + "%", "%" + value.lower()),
+        )
+        if len(found) > 1:
+            raise ControlError(f"{value}과(와) 일치하는 식별자가 둘 이상입니다. 더 길게 쓰십시오.")
+        if found:
+            setattr(run.args, name, found[0]["id"])
+
+
+def _missing_token_message(conn: psycopg.Connection, instance_id: str) -> str:
+    """토큰이 없을 때 다음에 할 일까지 알린다. 운영자가 없으면 첫 관리자를 만드는 명령을 낸다."""
+    try:
+        has_operator = fetchall(
+            conn, "SELECT 1 AS x FROM mint.operators WHERE instance_id = %s LIMIT 1", (instance_id,)
+        )
+    except psycopg.errors.UndefinedTable:
+        conn.rollback()
+        return "데이터베이스가 준비되지 않았습니다. 먼저 mint-litellm init을 실행하십시오."
+    if not has_operator:
+        return (
+            "운영자가 아직 없습니다. 첫 관리자를 만드십시오: mint-litellm operator bootstrap "
+            "--name <이름> --user-id <LiteLLM 사용자> --save-token <파일>"
+        )
+    return (
+        "운영자 토큰이 필요합니다(MINT_OPERATOR_TOKEN 또는 --token-file). "
+        "토큰은 관리자가 operator add로 발급합니다."
+    )
+
+
 def run_command(args: argparse.Namespace, environ: dict[str, str]) -> None:
     command = COMMAND_INDEX[args.command_name]
     cfg = ControlConfig.from_env(environ)
@@ -1079,11 +1250,16 @@ def run_command(args: argparse.Namespace, environ: dict[str, str]) -> None:
         if command.name == "init":
             ctx = Context(conn, cfg.instance_id, Operator("init", "admin", None))
         elif not command.unauthenticated:
-            operator = operators.authenticate(conn, cfg.instance_id, _token(args, environ))
+            token = _token(args, environ)
+            if not token:
+                raise AuthError(_missing_token_message(conn, cfg.instance_id))
+            operator = operators.authenticate(conn, cfg.instance_id, token)
             if OperatorRole(operator.role) not in command.roles:
                 raise AuthError(f"{command.name}은(는) {operator.role} 역할로 실행할 수 없습니다.")
             ctx = Context(conn, cfg.instance_id, operator)
         run = Run(args, cfg, environ, conn, ctx)
+        if ctx is not None:
+            expand_ids(run)
         extra = {**cli_restore.HANDLERS, **cli_evidence.HANDLERS}
         (HANDLERS.get(command.name) or extra[command.name])(run)
     if args.json:

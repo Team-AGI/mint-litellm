@@ -7,8 +7,15 @@
         끝낸다(하네스의 권한 흐름을 그대로 두며 이 훅이 권한을 대신 주지 않는다).
   post  호출 뒤 훅(성공)과 post-failure(실패). 판정 때 받은 참조를 MINT에 돌려 결과를 보고한다.
         보고하지 못해도 호출에는 영향이 없고, MINT는 보고 없는 호출을 결과 미확인으로 남긴다.
+  serve 연결 중계(내부용). 훅은 호출마다 새 프로세스라 연결을 이어 쓸 수 없으므로, 사용자
+        전용 소켓을 가진 작은 프로세스가 결정 서버와의 연결을 유지하고 훅이 이를 거쳐 보낸다.
+        중계에 닿지 못하면 훅이 직접 보내며(느릴 뿐 판정은 같다), 요청이 한동안 없으면 끝난다.
   run   MCP 서버 실행기. 승인된 실행 계약과 디스크의 실행 파일·스크립트 해시가 모두 같을 때만
         서버를 시작하고, 아니면 시작하지 않고 종료 코드 126으로 끝난다.
+
+Claude Code와 Codex가 같은 훅 입력(도구 이름 ``mcp__서버__도구``, 호출 식별자)을 준다. Codex는
+서버 이름을 따로 주지 않아 승인 목록의 서버 이름과 도구 이름의 접두로 서버를 찾는다. Windows에서
+서버 실행기는 exec 대신 자식 프로세스로 서버를 띄우고 같은 종료 코드로 끝난다.
 
 시간 상한은 HTTP 대기 < 훅 내부 상한 < 하네스 ``timeout`` 순서여야 한다. 하네스는 시간 초과나
 시작 실패를 기본적으로 통과시키므로 관리형 설정에 ``"onFailure": "block"``을 함께 둔다.
@@ -19,15 +26,21 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
 import os
 import re
+import socket
+import socketserver
+import ssl
+import subprocess
 import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 DECIDE_PATH = "/mint/v1/decide"
@@ -41,6 +54,10 @@ SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 # 승인된 계약이 값을 정하지 않은 한, 시작 직전에 물려받지 않는 환경 변수.
 ENV_DENIED = re.compile(r"^(LD_|DYLD_|NODE_OPTIONS$|NODE_PATH$|PYTHON|BASH_ENV$|ENV$)")
 REFUSED = 126
+# 연결 중계는 요청이 이 시간(초) 없으면 끝난다. 소켓 경로는 운영체제 상한 안이어야 한다.
+BROKER_SOCKET = "conn.sock"
+BROKER_IDLE = 300.0
+BROKER_SOCKET_MAX = 100
 
 Post = Callable[[str, "dict[str, str]", bytes, float], "tuple[int, bytes]"]
 
@@ -106,12 +123,28 @@ def load_contract(path: str, server: str) -> dict[str, Any]:
     return entry
 
 
-def server_and_tool(event: Mapping[str, Any]) -> tuple[str, str]:
-    server = (event.get("mcp_server") or {}).get("name")
+def server_prefix(server: str) -> str:
+    return "mcp__" + re.sub(r"[^a-zA-Z0-9_-]", "_", server) + "__"
+
+
+def known_servers(path: str) -> list[str]:
+    """승인 목록의 서버 이름. 목록을 읽지 못하면 비어 있다(그러면 호출은 막힌다)."""
+    try:
+        with open(os.path.expanduser(path), encoding="utf-8") as handle:
+            return [str(name) for name in (json.load(handle).get("servers") or {})]
+    except (OSError, ValueError, AttributeError):
+        return []
+
+
+def server_and_tool(event: Mapping[str, Any], known: Sequence[str] = ()) -> tuple[str, str]:
     name = event.get("tool_name")
+    server = (event.get("mcp_server") or {}).get("name")
+    if server is None and isinstance(name, str):
+        # Codex는 서버 이름을 따로 주지 않는다. 승인된 서버 중 도구 이름의 접두와 맞는 것을 쓴다.
+        server = next((s for s in known if name.startswith(server_prefix(s))), None)
     if not isinstance(server, str) or not isinstance(name, str):
         raise Refuse("hook input has no MCP server or tool name")
-    prefix = "mcp__" + re.sub(r"[^a-zA-Z0-9_-]", "_", server) + "__"
+    prefix = server_prefix(server)
     if not name.startswith(prefix) or len(name) == len(prefix):
         raise Refuse("tool name does not match the MCP server")
     return server, name[len(prefix) :]
@@ -140,6 +173,170 @@ def http_post(
         return exc.code, exc.read(MAX_RESPONSE + 1)
 
 
+class BrokerDown(Exception):
+    """중계 프로세스에 닿지 못했다. 요청은 보내지 않았으므로 직접 보내도 된다."""
+
+
+def broker_post(
+    sock_path: str, url: str, headers: dict[str, str], body: bytes, timeout: float
+) -> tuple[int, bytes]:
+    request = json.dumps(
+        {"url": url, "headers": headers, "body": body.decode(), "timeout": timeout}
+    ).encode()
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    except (AttributeError, OSError) as exc:
+        raise BrokerDown from exc
+    with sock:
+        sock.settimeout(timeout)
+        try:
+            sock.connect(sock_path)
+        except OSError as exc:
+            raise BrokerDown from exc
+        sock.sendall(request)
+        sock.shutdown(socket.SHUT_WR)
+        chunks, size = [], 0
+        while block := sock.recv(65536):
+            chunks.append(block)
+            size += len(block)
+            if size > 8 * MAX_RESPONSE:
+                raise OSError("broker answer is too large")
+    reply = json.loads(b"".join(chunks))
+    if "error" in reply:
+        raise OSError(f"broker request failed ({reply['error']})")
+    return reply["status"], reply["body"].encode()
+
+
+# 유닉스 소켓이 없는 운영체제에서도 이 파일을 읽을 수 있게 한다(중계는 쓰이지 않는다).
+_UnixServer = getattr(socketserver, "UnixStreamServer", socketserver.TCPServer)
+
+
+class _Broker(socketserver.ThreadingMixIn, _UnixServer):
+    daemon_threads = True
+
+    def __init__(self, path: str, ca_file: str | None) -> None:
+        super().__init__(path, _BrokerHandler)
+        self.ca_file = ca_file
+        self.idle = False
+        self.lock = threading.Lock()
+        # ponytail: 주소마다 쉬는 연결 하나. 동시에 여러 훅이 오면 나머지는 새로 연결하고 닫는다.
+        self.pool: dict[tuple[str, str], http.client.HTTPConnection] = {}
+
+    def handle_timeout(self) -> None:
+        self.idle = True
+
+    def _connect(self, parts: urllib.parse.SplitResult, timeout: float):
+        if parts.scheme == "https":
+            context = ssl.create_default_context(cafile=self.ca_file)
+            return http.client.HTTPSConnection(
+                parts.hostname, parts.port, timeout=timeout, context=context
+            )
+        if parts.scheme == "http":
+            return http.client.HTTPConnection(parts.hostname, parts.port, timeout=timeout)
+        raise ValueError("unsupported scheme")
+
+    def forward(self, url: str, headers: dict, body: bytes, timeout: float) -> tuple[int, bytes]:
+        parts = urllib.parse.urlsplit(url)
+        origin = (parts.scheme, parts.netloc)
+        target = parts.path + (f"?{parts.query}" if parts.query else "")
+        for attempt in (0, 1):
+            with self.lock:
+                conn = self.pool.pop(origin, None)
+            reused = conn is not None
+            if conn is None:
+                conn = self._connect(parts, timeout)
+            try:
+                if conn.sock is not None:
+                    conn.sock.settimeout(timeout)
+                conn.request("POST", target, body=body, headers=headers)
+                response = conn.getresponse()
+                data = response.read(MAX_RESPONSE + 1)
+            except (ConnectionError, http.client.BadStatusLine):
+                conn.close()
+                if reused and attempt == 0:
+                    continue  # 서버가 쉬던 연결을 닫았다: 새 연결로 한 번 더
+                raise
+            except BaseException:
+                conn.close()
+                raise
+            with self.lock:
+                if len(data) > MAX_RESPONSE or response.will_close or origin in self.pool:
+                    conn.close()
+                else:
+                    self.pool[origin] = conn
+            return response.status, data
+        raise OSError("unreachable")
+
+
+class _BrokerHandler(socketserver.StreamRequestHandler):
+    timeout = 10
+
+    def handle(self) -> None:
+        try:
+            request = json.loads(self.rfile.read(4 * MAX_RESPONSE))
+            status, raw = self.server.forward(  # type: ignore[attr-defined]
+                request["url"], request["headers"], request["body"].encode(),
+                float(request["timeout"]),
+            )  # fmt: skip
+            reply: dict[str, Any] = {"status": status, "body": raw.decode("utf-8", "replace")}
+        except Exception as exc:
+            reply = {"error": type(exc).__name__}
+        self.wfile.write(json.dumps(reply).encode())
+
+
+def serve_broker(sock_path: str, ca_file: str | None, idle: float = BROKER_IDLE) -> None:
+    os.makedirs(os.path.dirname(sock_path), mode=0o700, exist_ok=True)
+    if os.path.exists(sock_path):
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                probe.connect(sock_path)
+            return  # 이미 중계가 떠 있다.
+        except OSError:
+            os.unlink(sock_path)  # 죽은 중계가 남긴 소켓
+    previous = os.umask(0o177)
+    try:
+        server = _Broker(sock_path, ca_file)
+    finally:
+        os.umask(previous)
+    server.timeout = idle
+    try:
+        while not server.idle:
+            server.handle_request()
+    finally:
+        server.server_close()
+        try:
+            os.unlink(sock_path)
+        except OSError:
+            pass
+
+
+def start_broker(state_dir: str, contracts: str, ca_file: str | None) -> None:
+    """중계를 뒤에서 띄운다(이번 호출은 직접 보낸다). 띄우지 못해도 판정은 그대로다."""
+    if os.name != "posix" or len(os.path.join(state_dir, BROKER_SOCKET)) >= BROKER_SOCKET_MAX:
+        return
+    command = [sys.executable, os.path.abspath(__file__), "serve", "--contracts", contracts,
+               "--state-dir", state_dir]  # fmt: skip
+    if ca_file:
+        command += ["--ca-file", ca_file]
+    try:
+        subprocess.Popen(
+            command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True,
+        )  # fmt: skip
+    except OSError:
+        pass
+
+
+def _refusal_code(raw: bytes) -> str:
+    """거절 응답에 MINT 오류 코드가 있으면 ``, 코드`` 꼴로 돌려준다."""
+    try:
+        code = json.loads(json.loads(raw)["detail"])["error"]["code"]
+    except (ValueError, KeyError, TypeError):
+        return ""
+    ok = isinstance(code, str) and re.fullmatch(r"MINT-[A-Z0-9-]{1,64}", code)
+    return f", {code}" if ok else ""
+
+
 def _call(post: Post, base: str, path: str, key: str, payload: dict, timeout: float) -> dict:
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     try:
@@ -147,7 +344,7 @@ def _call(post: Post, base: str, path: str, key: str, payload: dict, timeout: fl
     except (OSError, ValueError) as exc:
         raise Refuse(f"decision service is unreachable ({type(exc).__name__})") from exc
     if status != 200:
-        raise Refuse(f"decision service refused the request (HTTP {status})")
+        raise Refuse(f"decision service refused the request (HTTP {status}{_refusal_code(raw)})")
     try:
         answer = json.loads(raw) if len(raw) <= MAX_RESPONSE else None
     except ValueError:
@@ -186,7 +383,7 @@ def decide(
     name = event.get("tool_name")
     if not isinstance(name, str) or not name.startswith("mcp__"):
         return  # MCP 호출이 아니면 이 훅의 대상이 아니다.
-    server, tool = server_and_tool(event)
+    server, tool = server_and_tool(event, known_servers(contracts))
     arguments = event.get("tool_input")
     if not isinstance(arguments, dict):
         raise Refuse("tool arguments are not an object")
@@ -269,17 +466,22 @@ def verify_launch(approved: Mapping[str, Any], fd: int) -> None:
         raise Refuse("server script differs from the approved contract")
 
 
+def spawn_and_exit(path: str, argv: list[str], env: Mapping[str, str]) -> None:
+    """exec가 없는 Windows용. 자식을 띄워 표준 입출력을 그대로 잇고 같은 종료 코드로 끝난다."""
+    sys.exit(subprocess.call([path, *argv[1:]], env=dict(env)))
+
+
 def run_server(
     server: str,
     contracts: str,
     environ: Mapping[str, str],
-    execve: Callable[..., Any] = os.execve,
+    execve: Callable[..., Any] | None = None,
 ) -> None:
     """승인된 서버만 시작한다. 검증을 통과하지 못하면 ``Refuse``이고 서버는 시작되지 않는다."""
     approved = load_contract(contracts, server)
     executable = approved["executable"]
     try:
-        fd = os.open(executable, os.O_RDONLY)
+        fd = os.open(executable, os.O_RDONLY | getattr(os, "O_BINARY", 0))
     except OSError as exc:
         raise Refuse(f"server executable cannot be opened ({type(exc).__name__})") from exc
     verify_launch(approved, fd)
@@ -291,6 +493,11 @@ def run_server(
     # 실행할 수 없으면 경로 실행으로 물러나 검증과 실행 사이에 틈이 남는다. 읽는 스크립트도
     # 경로로 열린다. 관리형 설치의 쓰기 금지 경로가 틈을 줄이며, 완전히 닫으려면 검증한 사본으로
     # 실행한다.
+    if execve is None and os.name == "nt":
+        # 한계: Windows는 열어 둔 기술자로 실행할 수 없어 닫고 경로로 실행한다(검증과 실행 사이 틈).
+        os.close(fd)
+        spawn_and_exit(executable, argv, env)
+    execve = execve or os.execve
     try:
         execve(fd, argv, env)
     except OSError:
@@ -305,17 +512,24 @@ def _give_up(code: int, message: str) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["pre", "post", "post-failure", "run"])
+    parser.add_argument("command", choices=["pre", "post", "post-failure", "run", "serve"])
     parser.add_argument("--url")
     parser.add_argument("--key-file")
     parser.add_argument("--contracts", required=True)
     parser.add_argument("--state-dir")
     parser.add_argument("--ca-file")
     parser.add_argument("--server")
+    parser.add_argument("--no-keepalive", action="store_true")
+    parser.add_argument("--idle", type=float, default=BROKER_IDLE)
     parser.add_argument("--http-timeout", type=float, default=HTTP_TIMEOUT)
     parser.add_argument("--deadline", type=float, default=HOOK_DEADLINE)
     args = parser.parse_args(argv)
 
+    if args.command == "serve":
+        serve_broker(
+            os.path.join(os.path.expanduser(args.state_dir), BROKER_SOCKET), args.ca_file, args.idle
+        )
+        return
     if args.command == "run":
         try:
             run_server(args.server or "", args.contracts, os.environ)
@@ -331,14 +545,21 @@ def main(argv: list[str] | None = None) -> None:
     watchdog.daemon = True
     watchdog.start()
     try:
-        event = json.loads(sys.stdin.read())
+        event = json.loads(sys.stdin.buffer.read())  # 지역 인코딩이 아니라 UTF-8 그대로
         if not isinstance(event, dict):
             raise Refuse("hook input is not an object")
         with open(os.path.expanduser(args.key_file), encoding="utf-8") as handle:
             key = handle.read().strip()
         state_dir = os.path.expanduser(args.state_dir)
 
+        sock_path = os.path.join(state_dir, BROKER_SOCKET)
+
         def post(url: str, headers: dict, body: bytes, timeout: float) -> tuple[int, bytes]:
+            if not args.no_keepalive:
+                try:
+                    return broker_post(sock_path, url, headers, body, timeout)
+                except BrokerDown:
+                    start_broker(state_dir, args.contracts, args.ca_file)
             return http_post(url, headers, body, timeout, args.ca_file)
 
         if blocking:

@@ -95,6 +95,38 @@ def test_a_recomputed_chain_is_caught_by_the_checkpoint_anchor(admin, sealer):
     assert seal.verify(sealer, INSTANCE, checkpoint=(9, tail))["checkpoint_ok"] is False
 
 
+KEY = b"k" * 32
+
+
+def test_signed_batches_verify_and_a_recomputed_chain_fails_the_signature(admin, sealer):
+    add(admin, 3)
+    seal.seal_once(sealer, INSTANCE, KEY)
+    batch = fetchone(admin, "SELECT * FROM mint.seal_batches")
+    assert len(bytes(batch["tail_sig"])) == 32 and len(batch["sig_key_id"]) == 16
+    assert seal.verify(sealer, INSTANCE, keys=[KEY])["ok"]
+    wrong = seal.verify(sealer, INSTANCE, keys=[b"x" * 32])
+    assert not wrong["ok"] and "서명" in wrong["errors"][0]
+    # 끝 해시를 바꿔 맞춰도(키가 없으면) 서명이 맞지 않는다.
+    admin.execute("ALTER TABLE mint.seal_batches DISABLE TRIGGER seal_batches_1_append_only")
+    admin.execute("UPDATE mint.seal_batches SET tail_hash = decode(repeat('aa', 32), 'hex')")
+    admin.execute("ALTER TABLE mint.seal_batches ENABLE TRIGGER seal_batches_1_append_only")
+    assert any("서명" in e for e in seal.verify(sealer, INSTANCE, keys=[KEY])["errors"])
+
+
+def test_unsigned_old_batches_pass_but_a_batch_after_a_signed_one_must_be_signed(admin, sealer):
+    add(admin, 2, age=60)
+    seal.seal_once(sealer, INSTANCE)  # 서명 도입 전 배치
+    assert seal.verify(sealer, INSTANCE, keys=[KEY])["ok"]
+    add(admin, 2, age=50)
+    seal.seal_once(sealer, INSTANCE, KEY)
+    assert seal.verify(sealer, INSTANCE, keys=[KEY])["ok"]
+    add(admin, 2, age=40)
+    seal.seal_once(sealer, INSTANCE)  # 서명 뒤에 서명 없는 배치
+    result = seal.verify(sealer, INSTANCE, keys=[KEY])
+    assert not result["ok"] and any("서명이 없습니다" in e for e in result["errors"])
+    assert seal.verify(sealer, INSTANCE)["ok"]  # 키 없이는 서명을 보지 않는다
+
+
 def test_a_gap_in_the_batches_is_reported(admin, sealer):
     add(admin, 3)
     seal.seal_once(sealer, INSTANCE)

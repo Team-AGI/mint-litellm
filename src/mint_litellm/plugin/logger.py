@@ -15,7 +15,13 @@ from fastapi import HTTPException
 from litellm.integrations.custom_logger import CustomLogger
 
 from mint_litellm.compat import litellm_1_106 as compat
-from mint_litellm.plugin.result import observe_response, observe_unknown_outcome
+from mint_litellm.plugin.policy.sensitive_scan import mask_text
+from mint_litellm.plugin.result import (
+    blocked_output_detail,
+    observe_response,
+    observe_unknown_outcome,
+    screen_result,
+)
 from mint_litellm.plugin.selfcheck import PluginRuntime, get_runtime, leave_startup_failure_marker
 from mint_litellm.types.decision import MINT_CTX_KEY, MintContext
 from mint_litellm.types.errors import error_for_reason
@@ -48,6 +54,43 @@ class MintLogger(CustomLogger):
         except Exception as exc:
             leave_startup_failure_marker()
             raise RuntimeError(f"MintLogger could not start: {type(exc).__name__}") from exc
+
+    async def async_post_mcp_tool_call_hook(
+        self, kwargs, response_obj, start_time, end_time
+    ):
+        """허용된 호출의 결과를 호출자에게 주기 전에 검사한다.
+
+        막아야 하면 결과 내용을 오류 본문으로 바꾸고, 가려야 하면 찾은 값만 바꾼다.
+
+        LiteLLM은 이 훅의 예외를 삼키므로 검사 오류는 기록만 하고 결과를 그대로 둔다.
+        """
+        ctx = kwargs.get(MINT_CTX_KEY)
+        content = getattr(response_obj, "mcp_tool_call_response", None)
+        if not isinstance(ctx, dict) or not isinstance(content, list):
+            return None
+        try:
+            if screen_result(
+                ctx,
+                size=compat.content_size(content),
+                items=len(content),
+                texts=compat.content_texts(content),
+            ):
+                compat.replace_tool_content(response_obj, blocked_output_detail(ctx))
+            elif ctx.get("output_masked"):
+                self._mask_or_block(ctx, response_obj)
+        except Exception as exc:
+            log.error("결과 검사 오류: %s", type(exc).__name__)
+        return None
+
+    @staticmethod
+    def _mask_or_block(ctx, response_obj) -> None:
+        """결과의 비밀·개인정보를 가린다. 가리지 못하면 원문을 주지 않고 막는다."""
+        try:
+            compat.mask_tool_content(response_obj, mask_text)
+        except Exception as exc:
+            log.error("결과 가리기 오류: %s", type(exc).__name__)
+            compat.replace_tool_content(response_obj, blocked_output_detail(ctx))
+            ctx["output_masked"], ctx["output_blocked"] = False, True
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         ctx = kwargs.get(MINT_CTX_KEY)

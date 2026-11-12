@@ -26,13 +26,17 @@
   <label>신청자(사용자 식별자)<input name="requested_by" required></label>
   <fieldset class="form">
     <legend>허용 경로</legend>
-    <label class="radio"><input type="radio" name="paths_mode" value="unset" checked> 지정하지 않음: 경로 이탈(<code>..</code>)만 차단하고 다른 경로는 차단하지 않습니다</label>
-    <label class="radio"><input type="radio" name="paths_mode" value="listed"> 아래 경로만 허용: 그 밖의 절대 경로를 차단합니다</label>
+    <label class="radio"><input type="radio" name="paths_mode" value="unset" checked> 허용 경로 없음</label>
+    <label class="radio"><input type="radio" name="paths_mode" value="listed"> 아래 경로만 허용</label>
     <label>허용 경로(줄바꿈으로 구분)<textarea name="allowed_paths"></textarea></label>
-    <label class="radio"><input type="radio" name="paths_mode" value="unrestricted"> 제한 없음: 경로 검사를 하지 않기로 명시합니다</label>
+    <label class="radio"><input type="radio" name="paths_mode" value="unrestricted"> 제한 없음</label>
   </fieldset>
-  <label>허용 호스트(줄바꿈으로 구분, 비워 두면 모든 주소를 외부로 간주합니다)<textarea name="allowed_hosts"></textarea></label>
+  <label>허용 호스트(줄바꿈으로 구분)<textarea name="allowed_hosts"></textarea></label>
   <label>허용 인자 키(줄바꿈으로 구분)<textarea name="allowed_arg_keys"></textarea></label>
+  <div class="row">
+    <label>결과 크기 상한(바이트)<input type="number" name="max_result_bytes" min="1"></label>
+    <label>결과 항목 수 상한<input type="number" name="max_result_items" min="1"></label>
+  </div>
   <label>승인 사유 (예외는 필수)<textarea name="basis"></textarea></label>
   <label>두 번째 승인자 토큰 (신청자와 같은 사용자일 때)<input type="password" name="second_approver_token" autocomplete="off"></label>
   <div class="actions"><button class="primary" type="submit">승인</button><a class="button" href="/approvals">취소</a></div>
