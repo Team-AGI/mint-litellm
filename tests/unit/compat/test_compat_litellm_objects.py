@@ -149,6 +149,10 @@ def test_the_judgment_hook_is_defined_on_the_guardrail_class_and_not_on_the_logg
     assert "async_pre_call_hook" not in vars(MintLogger)
 
 
+async def no_unmanaged():
+    return set()
+
+
 class TestRegisterContractTools:
     def manager(self, *servers):
         manager = MCPServerManager()
@@ -192,6 +196,32 @@ class TestRegisterContractTools:
         with pytest.raises(ValueError, match="not found"):
             manager._resolve_mcp_server_for_tool_call("alpha", "wipe")
 
+    def test_a_server_without_contracts_gets_the_called_tool_mapped_for_the_hook(self):
+        manager = self.manager(
+            mcp_server("sa", "alpha", alias="alpha"), mcp_server("sb", "beta", alias="beta")
+        )
+        seen = []
+
+        async def original(server_name, name, **kwargs):
+            seen.append(manager._resolve_mcp_server_for_tool_call(server_name, name).server_id)
+
+        async def reload():
+            return None
+
+        async def load():
+            return {}
+
+        async def unmanaged():
+            return {"sa"}
+
+        manager.call_tool = original
+        manager.reload_servers_from_database = reload
+        compat.install_contract_retry(load, unmanaged, manager=manager)
+        asyncio.run(manager.call_tool(server_name="alpha", name="slow"))
+        assert seen == ["sa"]
+        with pytest.raises(ValueError, match="not found"):  # 계약이 있는 서버는 그대로 거절
+            asyncio.run(manager.call_tool(server_name="beta", name="slow"))
+
     def test_a_call_to_an_unmapped_contract_tool_reads_the_names_once_and_proceeds(self):
         manager = self.manager(mcp_server("sa", "alpha", alias="alpha"))
         seen = []
@@ -201,17 +231,23 @@ class TestRegisterContractTools:
             return "ok"
 
         manager.call_tool = original
+        reloads = []
+
+        async def reload():
+            reloads.append(1)
+
+        manager.reload_servers_from_database = reload
         loads = []
 
         async def load():
             loads.append(1)
             return {"sa": ("wipe",)}
 
-        compat.install_contract_retry(load, manager=manager)
-        compat.install_contract_retry(load, manager=manager)  # 다시 감싸지 않는다
+        compat.install_contract_retry(load, no_unmanaged, manager=manager)
+        compat.install_contract_retry(load, no_unmanaged, manager=manager)  # 다시 감싸지 않는다
         for _ in range(2):
             assert asyncio.run(manager.call_tool(server_name="alpha", name="wipe")) == "ok"
-        assert seen == ["sa", "sa"] and loads == [1]
+        assert seen == ["sa", "sa"] and loads == [1] and reloads == [1]
 
     def test_a_failed_read_leaves_litellms_own_rejection(self):
         manager = self.manager(mcp_server("sa", "alpha", alias="alpha"))
@@ -224,6 +260,6 @@ class TestRegisterContractTools:
         async def load():
             raise RuntimeError("database down")
 
-        compat.install_contract_retry(load, manager=manager)
+        compat.install_contract_retry(load, no_unmanaged, manager=manager)
         with pytest.raises(ValueError, match="not found"):
             asyncio.run(manager.call_tool(server_name="alpha", name="wipe"))

@@ -7,10 +7,12 @@ LiteLLM을 직접 가져오지 않는다. 함수는 가져오기를 호출 시�
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import importlib
 import importlib.metadata
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+import time
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -256,27 +258,56 @@ def register_contract_tools(
     return added
 
 
-def install_contract_retry(
-    load: Callable[[], Awaitable[Mapping[str, Sequence[str]]]], *, manager: Any = None
-) -> None:
-    """도구 호출이 서버를 못 풀면 계약 이름을 한 번 다시 읽어 경로표에 올린 뒤 넘긴다.
+_REGISTRY_RELOAD_SECONDS = 5.0
 
-    방금 승인된 서버는 다음 주기 등록 전에 호출될 수 있다. LiteLLM은 호출 진입에서 훅보다
-    먼저 서버를 풀고 그 앞에 끼어들 훅이 없으므로, 진입 함수를 감싼다. 풀이만 미리 시도해
-    실패할 때만 읽고, 도구 실행은 감싸지 않아 재시도로 부작용이 겹치지 않는다. 읽기가 실패하면
-    LiteLLM이 원래대로 거절한다. 여러 번 불러도 한 번만 감싼다.
+
+def install_contract_retry(
+    load: Callable[[], Awaitable[Mapping[str, Sequence[str]]]],
+    unmanaged: Callable[[], Awaitable[Collection[str]]],
+    *,
+    manager: Any = None,
+) -> None:
+    """도구 호출이 서버를 못 풀면 서버 목록과 계약 이름을 다시 읽어 경로표를 채운 뒤 넘긴다.
+
+    LiteLLM은 호출 진입에서 훅보다 먼저 서버를 풀고 그 앞에 끼어들 훅이 없다. 다른 복제본이나
+    워커가 방금 등록·승인한 서버는 이 워커의 레지스트리와 경로표에 아직 없을 수 있다. 풀이만
+    미리 시도해 실패할 때만 레지스트리(5초에 한 번)와 계약 이름을 읽고, 그래도 못 풀면 계약이
+    없는 서버(``unmanaged``)의 호출 도구를 그 서버의 것으로 올려 훅이 승인 범위로 판정하게 한다.
+    계약이 있는 서버의 계약 밖 도구는 LiteLLM이 그대로 거절한다. 도구 실행은 감싸지 않아 재시도로
+    부작용이 겹치지 않는다. 읽기가 실패하면 LiteLLM이 원래대로 거절한다. 한 번만 감싼다.
     """
     mgr = manager if manager is not None else global_manager()
     original = mgr.call_tool
     if getattr(original, "mint_contract_retry", False):
         return
+    lock = asyncio.Lock()
+    reloaded = [-_REGISTRY_RELOAD_SECONDS]
 
-    async def call_tool(server_name: str, name: str, *args: Any, **kwargs: Any) -> Any:
+    def resolved(server_name: str, name: str) -> bool:
         try:
             mgr._resolve_mcp_server_for_tool_call(server_name, name)
         except ValueError:
-            with contextlib.suppress(Exception):
-                register_contract_tools(await load(), manager=mgr)
+            return False
+        return True
+
+    async def refill(server_name: str, name: str) -> None:
+        now = time.monotonic()
+        if now - reloaded[0] >= _REGISTRY_RELOAD_SECONDS:
+            reloaded[0] = now
+            await mgr.reload_servers_from_database()
+        register_contract_tools(await load(), manager=mgr)
+        if resolved(server_name, name):
+            return
+        matches = _matching_servers(mgr, server_name)
+        if len(matches) == 1 and matches[0].server_id in await unmanaged():
+            register_contract_tools({matches[0].server_id: (name,)}, manager=mgr)
+
+    async def call_tool(server_name: str, name: str, *args: Any, **kwargs: Any) -> Any:
+        if not resolved(server_name, name):
+            async with lock:
+                if not resolved(server_name, name):
+                    with contextlib.suppress(Exception):
+                        await refill(server_name, name)
         return await original(server_name, name, *args, **kwargs)
 
     call_tool.mint_contract_retry = True  # type: ignore[attr-defined]
@@ -401,6 +432,7 @@ _REQUIRED_SYMBOLS: tuple[tuple[str, str], ...] = (
     (_MANAGER_MODULE, "global_mcp_server_manager._resolve_mcp_server_for_tool_call"),
     (_MANAGER_MODULE, "global_mcp_server_manager.get_registry"),
     (_MANAGER_MODULE, "global_mcp_server_manager.catalog"),
+    (_MANAGER_MODULE, "global_mcp_server_manager.reload_servers_from_database"),
     (_MANAGER_MODULE, "global_mcp_server_manager.tool_name_to_mcp_server_name_mapping"),
     (_MANAGER_MODULE, "global_mcp_server_manager.server_owning_tool_name_prefix"),
     (_UTILS_MODULE, "get_server_prefix"),
