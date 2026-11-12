@@ -154,7 +154,8 @@ def seen(upstream, label: str) -> dict:
 @pytest.mark.parametrize("path", PATHS)
 def test_each_path_blocks_without_approval_and_allows_with_it(world, evidence, path):
     ingress, server = PATHS[path]
-    # 서버의 첫 승인이 서버를 승인됨으로 만든다. 그 전에는 승인이 없다는 판정이 아니라 서버 미승인이 된다.
+    # 서버의 첫 승인이 서버를 승인됨으로 만든다.
+    # 그 전에는 승인이 없다는 판정이 아니라 서버 미승인이 된다.
     seed = world.subject((server,))
     world.approve(seed, world.prepare(seed, server), tools="echo")
     subject = world.subject((server,))
