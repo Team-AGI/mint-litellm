@@ -14,6 +14,8 @@ EXCEPTION WHEN others THEN
     RETURN NULL;
 END $$;
 REVOKE ALL ON FUNCTION mint.contract_input_keys(text) FROM PUBLIC;
+-- 생성 열은 삽입하는 쪽이 계산하므로 도구 계약을 등록하는 제어 평면에만 실행 권한을 준다(직원 로그인 제외).
+GRANT EXECUTE ON FUNCTION mint.contract_input_keys(text) TO mint_control;
 
 ALTER TABLE mint.tool_contracts
     ADD COLUMN input_keys text[] GENERATED ALWAYS AS (mint.contract_input_keys(canonical_text)) STORED;
