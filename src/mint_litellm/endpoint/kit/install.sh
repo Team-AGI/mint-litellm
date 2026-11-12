@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # MINT 단말 설치 묶음: 이 파일 하나를 실행하면 설치된다. 관리자 권한은 한 번만 쓴다.
-# 사용: ./install.sh [install|uninstall|status] [--user-level]
+# 사용: ./install.sh [install|uninstall|status] [--user-level] [--dry-run]
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON="$(command -v python3 || true)"
@@ -9,7 +9,7 @@ PYTHON="$(command -v python3 || true)"
   { echo "Python 3.9 이상이 필요합니다." >&2; exit 2; }
 
 user_level=0
-for arg in "$@"; do [[ $arg == --user-level ]] && user_level=1; done
+for arg in "$@"; do [[ $arg == --user-level || $arg == --dry-run ]] && user_level=1; done
 if [[ ${EUID} -eq 0 || $user_level -eq 1 ]]; then
   exec "$PYTHON" -I -B "$HERE/mint_kit.py" "$@"
 fi

@@ -293,3 +293,31 @@ def test_the_command_line_hook_blocks_on_bad_input_and_an_unreachable_service(wo
     # 호출 뒤 훅은 어떤 경우에도 호출을 막지 않는다.
     assert run_agent("post", *base, stdin="not json").returncode == 0
     assert run_agent("post-failure", *base, stdin=json.dumps(event())).returncode == 0
+
+
+def test_a_call_without_a_server_field_is_matched_to_the_approved_server(world):
+    """Codex는 호출 정보에 서버 이름을 따로 주지 않는다."""
+    wire = Wire()
+    decide(world, wire, mcp_server=None)
+    assert [(r[2]["server"], r[2]["tool"]) for r in wire.requests] == [("srv-1", "search")]
+    with pytest.raises(agent.Refuse, match="no MCP server"):
+        decide(world, wire, mcp_server=None, tool_name="mcp__other__x")
+    assert len(wire.requests) == 1
+
+
+def test_the_hook_reads_utf8_input_whatever_the_console_encoding(world):
+    key = world.tmp / "key"
+    key.write_text("sk-k")
+    body = json.dumps(event(tool_name="Bash", tool_input={"q": "한글 검색"}), ensure_ascii=False)
+    done = subprocess.run(
+        [sys.executable, str(KIT / "mint_agent.py"), "pre", "--url", "http://localhost:9",
+         "--key-file", str(key), "--contracts", world.listing, "--state-dir", world.state],
+        input=body.encode("utf-8"), capture_output=True, timeout=30,
+    )  # fmt: skip
+    assert done.returncode == 0
+
+
+def test_without_exec_the_server_is_started_as_a_child_with_the_same_exit_code():
+    with pytest.raises(SystemExit) as exit_:
+        agent.spawn_and_exit(sys.executable, ["tool", "-c", "import sys; sys.exit(3)"], os.environ)
+    assert exit_.value.code == 3

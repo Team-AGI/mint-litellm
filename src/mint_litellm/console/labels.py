@@ -186,6 +186,8 @@ MODE = {"enforce": "집행", "observe": "관측"}
 SCOPE = {"key": "키", "user": "사용자", "team": "팀", "org": "조직", "server": "서버"}
 APPROVAL_CLASS = {"standard": "일반", "exception": "예외"}
 PRINCIPAL = {"user": "사용자", "team_key": "팀 키", "service_account": "서비스 계정"}
+KIT_PLATFORM = {"linux": "Linux", "windows": "Windows"}
+KIT_HARNESS = {"claude": "Claude Code", "codex": "Codex", "all": "Claude Code + Codex"}
 ALLOWLIST_KIND = {
     "provider": "제공자",
     "auth_server": "인증 서버",

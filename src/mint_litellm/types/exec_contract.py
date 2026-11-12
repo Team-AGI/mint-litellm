@@ -6,7 +6,9 @@
 """
 
 import hashlib
+import ntpath
 import posixpath
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -16,6 +18,7 @@ from mint_litellm.types.decision import ResolvedServer
 
 SCHEMA_VERSION = 1
 _SHA256 = r"^[0-9a-f]{64}$"
+_DRIVE = re.compile(r"^[A-Za-z]:\\")  # Windows 절대 경로(드라이브 글자로 시작)
 
 
 class ExecContract(BaseModel):
@@ -38,7 +41,9 @@ class ExecContract(BaseModel):
     def _absolute_normal_path(cls, value: str | None) -> str | None:
         if value is None:
             return value
-        if "\0" in value or not posixpath.isabs(value) or posixpath.normpath(value) != value:
+        posix = posixpath.isabs(value) and posixpath.normpath(value) == value
+        windows = _DRIVE.match(value) and ntpath.normpath(value) == value
+        if "\0" in value or not (posix or windows):
             raise ValueError("path must be absolute and normalized")
         return value
 
