@@ -93,9 +93,9 @@ MINT_SETTINGS: tuple[MintSettingRow, ...] = (
         key="MINT_TARGET_PROFILES",
         source=SettingSource.ENV,
         rule=(
-            "원격 서버의 호출 대상·행위 프로필(`서버 식별자=프로필` 쉼표 목록, 프로필은 `github`·"
-            "`n8n`). 프로필이 있는 서버는 호출 인자에서 대상(저장소, 워크플로 등)과 행위를 "
-            "뽑아 호출별 승인을 거기에 묶는다. 저장된 설정으로 덮지 않는다."
+            "원격 서버의 호출 대상·행위 프로필을 덮어쓴다(`서버 식별자=프로필` 쉼표 목록, "
+            "프로필은 `github`·`n8n`·`none`). 기본은 승인된 배포 계약에서 자동으로 고른다. "
+            "저장된 설정으로 덮지 않는다."
         ),
     ),
     MintSettingRow(

@@ -37,7 +37,9 @@ from mint_litellm.types.target import (
     Target,
     TargetUnresolved,
     bind_target,
+    effective_profile,
     parse_profile_map,
+    select_profile,
 )
 
 TRIGGER = {
@@ -115,9 +117,31 @@ def test_a_read_only_tool_is_not_blocked_when_its_target_is_missing():
 def test_profile_map_parsing():
     assert parse_profile_map(" gh = github , n8n-prod=n8n,") == {"gh": "github", "n8n-prod": "n8n"}
     assert parse_profile_map("") == {}
+    assert parse_profile_map("gh=none") == {"gh": "none"}
     for bad in ("gh", "gh=nope", "=github"):
         with pytest.raises(ValueError):
             parse_profile_map(bad)
+
+
+def test_the_profile_is_selected_from_the_deployment_host_or_the_tool_names():
+    assert select_profile("https://api.githubcopilot.com/mcp/", []) == "github"
+    assert select_profile("https://ghe.corp.example/mcp", ["issue_write", "get_file_contents"]) == (
+        "github")
+    assert select_profile("https://n8n.corp.example", ["n8n_get_workflow", "n8n_executions"]) == (
+        "n8n")
+    assert select_profile("https://n8n.corp.example", ["n8n_get_workflow"]) is None
+    assert select_profile(None, ["search"]) is None
+    assert select_profile("not a url", ()) is None
+    # 두 프로필의 근거가 함께 맞으면 고르지 않는다.
+    both = ["issue_write", "get_file_contents", "n8n_get_workflow", "n8n_executions"]
+    assert select_profile("https://x.example", both) is None
+
+
+def test_the_environment_overrides_the_automatic_selection():
+    assert effective_profile({}, "s", "github") == ("github", "auto")
+    assert effective_profile({"s": "n8n"}, "s", "github") == ("n8n", "config")
+    assert effective_profile({"s": "none"}, "s", "github") is None
+    assert effective_profile({"other": "n8n"}, "s", None) is None
 
 
 def test_the_plugin_config_reads_profiles_and_rejects_a_bad_value():
@@ -212,6 +236,27 @@ def test_a_read_call_needs_no_approval_but_is_recorded_with_its_target(tmp_path)
     assert outcome.snapshot.bound_target == "acme/app"
 
 
+def test_the_profile_chosen_from_the_deployment_binds_calls_and_is_recorded(tmp_path):
+    snap = snapshot(call_approvals=(row(TRIGGER),), auto_profile="github")
+    h, outcome = decide(tmp_path, snap, profiles={})
+    assert outcome.allowed
+    assert (outcome.snapshot.target_profile, outcome.snapshot.target_profile_source) == (
+        "github", "auto")
+    h, outcome = decide(tmp_path, snapshot(auto_profile="github"), profiles={})
+    assert outcome.error.code == "MINT-CALL-APPROVAL-REQUIRED"
+
+
+def test_a_configured_profile_overrides_or_switches_off_the_automatic_one(tmp_path):
+    snap = snapshot(auto_profile="github")
+    _, outcome = decide(tmp_path, snap, profiles={"srv-1": "none"})
+    assert outcome.allowed and outcome.snapshot.target_profile is None
+    snap = snapshot(call_approvals=(row(TRIGGER),), auto_profile="n8n")
+    _, outcome = decide(tmp_path, snap, profiles={"srv-1": "github"})
+    assert outcome.allowed
+    assert (outcome.snapshot.target_profile, outcome.snapshot.target_profile_source) == (
+        "github", "config")
+
+
 def test_a_server_without_a_profile_keeps_the_existing_behavior(tmp_path):
     h, outcome = decide(tmp_path, snapshot(), profiles={})
     assert outcome.allowed
@@ -254,7 +299,34 @@ def command(server, tool, arguments=None, args_fp=None, profiles="gh=github"):
     return SimpleNamespace(args=args, environ={"MINT_TARGET_PROFILES": profiles})
 
 
-def test_the_operator_command_extracts_the_same_target_as_the_plugin():
+def test_the_operator_command_uses_the_profile_chosen_from_the_deployment(monkeypatch):
+    run = command("srv", "actions_run_trigger", TRIGGER, profiles="")
+    monkeypatch.setattr(cli, "_deployment_basis", lambda _run: [
+        {"server_id": "srv", "url": "https://api.githubcopilot.com/mcp/", "tools": []}])
+    assert cli._bound_target(run) == ("acme/app", RUN_WORKFLOW)
+    run = command("srv", "actions_run_trigger", TRIGGER, profiles="srv=none")
+    assert cli._bound_target(run) == (None, None)
+
+
+def test_the_check_shows_which_profile_each_server_uses():
+    from mint_litellm.control import checks
+
+    report = checks.Report()
+    deployments = [
+        {"server_id": "gh", "url": "https://api.githubcopilot.com/mcp/", "tools": None},
+        {"server_id": "plain", "url": "https://mcp.example", "tools": ["search"]},
+    ]
+    checks.target_profile_findings(report, deployments, {"MINT_TARGET_PROFILES": "wf=n8n"})
+    (finding,) = report.findings
+    assert finding.item == "호출 대상 프로필" and finding.level is checks.Level.INFO
+    assert finding.message == "gh=github(자동), wf=n8n(덮어씀)"
+    report = checks.Report()
+    checks.target_profile_findings(report, [], {"MINT_TARGET_PROFILES": "bad"})
+    assert report.failed
+
+
+def test_the_operator_command_extracts_the_same_target_as_the_plugin(monkeypatch):
+    monkeypatch.setattr(cli, "_deployment_basis", lambda _run: [])
     got = cli._bound_target(command("gh", "actions_run_trigger", TRIGGER))
     assert got == ("acme/app", RUN_WORKFLOW)
     assert cli._bound_target(command("other", "actions_run_trigger", TRIGGER)) == (None, None)

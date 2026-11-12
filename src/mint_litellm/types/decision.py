@@ -525,6 +525,8 @@ class DecisionSnapshot(BaseModel):
     resolved_transport: str | None = None
     resolved_auth_type: str | None = None
     resolved_credential_ref: str | None = None
+    target_profile: str | None = None
+    target_profile_source: Literal["auto", "config"] | None = None
     bound_target: str | None = None
     bound_action: str | None = None
     candidates_with_same_name: int | None = Field(default=None, ge=1)

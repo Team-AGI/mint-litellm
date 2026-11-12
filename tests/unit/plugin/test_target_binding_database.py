@@ -1,6 +1,7 @@
 """호출별 승인의 대상·행위 결속을 실제 DB에서 확인한다: 기록, 매칭, 소비, 변경 불가."""
 
 from dataclasses import replace
+from uuid import uuid4
 
 import ctl_fixtures
 import pytest
@@ -13,6 +14,7 @@ from mint_litellm.control import approvals
 from mint_litellm.control.context import Context, Operator
 from mint_litellm.plugin.buffer import ConsumptionLost
 from mint_litellm.plugin.pipeline import match_call_approval
+from mint_litellm.plugin.snapshot import PluginDatabase
 from mint_litellm.types.target import WRITE, Target
 
 fresh_db = ctl_fixtures.fresh_db
@@ -116,3 +118,42 @@ def test_an_unbound_approval_does_not_match_a_bound_call(world, tmp_path):
 
     failure, consume = run(go())
     assert failure is not None and consume is None
+
+
+def approve_deployment(scene, url, allowed_tools=None):
+    scene.conn.execute(
+        "UPDATE mint.deployment_contracts SET status = 'superseded'"
+        " WHERE instance_id = %s AND server_id = 'srv-1' AND status = 'approved'", (scene.iid,))
+    deployment_id = uuid4()
+    scene.conn.execute(
+        "INSERT INTO mint.deployment_contracts (id, instance_id, server_id, canonical_text,"
+        " sha256, url, url_sha256, transport, auth_type, allowed_tools, status)"
+        " VALUES (%s, %s, 'srv-1', '{}', repeat('a', 64), %s, repeat('b', 64), 'http', 'none',"
+        " %s, 'candidate')", (deployment_id, scene.iid, url, allowed_tools))
+    scene.conn.execute(
+        "UPDATE mint.deployment_contracts SET status = 'approved' WHERE id = %s", (deployment_id,))
+
+
+@pytest.mark.parametrize(
+    ("url", "tools", "expected"),
+    [
+        ("https://api.githubcopilot.com/mcp/", None, "github"),
+        ("https://n8n.corp.example/mcp", ["n8n_get_workflow", "n8n_test_workflow"], "n8n"),
+        ("https://n8n.corp.example/mcp", ["n8n_get_workflow"], None),
+        ("https://mcp.example/api", ["search"], None),
+    ],
+)
+def test_the_snapshot_selects_the_profile_from_the_approved_deployment(
+    world, tmp_path, url, tools, expected
+):
+    scene, dsn = world
+    approve_deployment(scene, url, tools)
+
+    async def go():
+        live = PluginDatabase(dsn, acquire_timeout=3)
+        try:
+            return (await live.read_snapshot(scene.query())).auto_profile
+        finally:
+            await live.close()
+
+    assert run(go()) == expected

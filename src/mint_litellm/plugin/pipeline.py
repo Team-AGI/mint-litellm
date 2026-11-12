@@ -73,7 +73,13 @@ from mint_litellm.types.identity import (
 from mint_litellm.types.ids import new_uuid7
 from mint_litellm.types.reason_codes import Reason
 from mint_litellm.types.settings import Mode, ObservationSettings, effective_mode
-from mint_litellm.types.target import READ, Target, TargetUnresolved, bind_target
+from mint_litellm.types.target import (
+    READ,
+    Target,
+    TargetUnresolved,
+    bind_target,
+    effective_profile,
+)
 
 log = logging.getLogger("mint_litellm.pipeline")
 
@@ -626,14 +632,13 @@ async def policy_stage(
 
 
 def target_binding(
-    config: PluginConfig, resolved: ResolvedServer, tool: str, arguments: Mapping[str, Any]
+    profile: str | None, resolved: ResolvedServer, tool: str, arguments: Mapping[str, Any]
 ) -> Target | StageResult | None:
     """프로필이 있는 서버 호출의 대상·행위. 프로필이 없으면 None, 정할 수 없으면 중단 결과.
 
     읽기가 아닌 효과를 정하지 못하는 호출(프로필에 없는 도구, 빠지거나 모호한 대상)은 승인으로
     풀 수 없으므로 업스트림으로 보내지 않는다.
     """
-    profile = config.target_profiles.get(resolved.server_id)
     if profile is None:
         return None
     try:
@@ -845,6 +850,8 @@ class _Run:
     selected: ApprovalRow | None = None
     consume: ConsumeRequest | None = None
     binding: Target | None = None
+    # (프로필, 출처): 승인된 배포 계약에서 자동으로 골랐거나 환경 변수로 덮어쓴 결과.
+    profile: tuple[str, str] | None = None
     policy: PolicyStageResult | None = None
     observation: ObservationSettings = field(default_factory=ObservationSettings)
     # 판정 사건의 기록이 시작됐는지(결과가 불명일 수 있다), 어느 위치든 남겨졌는지.
@@ -895,6 +902,8 @@ def _decision_snapshot(
     values["resolved_exec_contract_sha256"] = resolved.exec_contract_sha256 if resolved else None
     values["resolved_exec_contract_version"] = resolved.exec_contract_version if resolved else None
     values["resolved_credential_ref"] = resolved.credential_ref if resolved else None
+    values["target_profile"] = run.profile[0] if run.profile else None
+    values["target_profile_source"] = run.profile[1] if run.profile else None
     values["bound_target"] = run.binding.target if run.binding else None
     values["bound_action"] = run.binding.action if run.binding else None
     reasons["revoked_after_snapshot"] = _MISSING["revoked_after_snapshot"]
@@ -1126,7 +1135,12 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         return
 
     run.current = Stage.OBLIGATIONS
-    binding = target_binding(config, resolved, tool, hook.arguments)
+    run.profile = effective_profile(
+        config.target_profiles, resolved.server_id, snapshot.auto_profile
+    )
+    binding = target_binding(
+        run.profile[0] if run.profile else None, resolved, tool, hook.arguments
+    )
     if isinstance(binding, StageResult):
         stages.add(Stage.OBLIGATIONS, binding)
         return

@@ -25,6 +25,7 @@ from mint_litellm.types.events import Event
 from mint_litellm.types.identity import OrgStatus, SubjectType
 from mint_litellm.types.reason_codes import OBSERVATION_CANDIDATES, Reason
 from mint_litellm.types.settings import Mode
+from mint_litellm.types.target import select_profile
 
 STAGE2_SNAPSHOT_SQL = """
 WITH
@@ -73,6 +74,14 @@ SELECT jsonb_build_object(
         WHERE t.instance_id = %(iid)s AND t.server_id = %(server_id)s AND t.status = 'approved'
           AND t.credential_scope = CASE WHEN srv.auth_type IN ('oauth_delegate',
               'true_passthrough') THEN 'per_user' ELSE 'server' END
+    ),
+    'deployment_basis', (
+        SELECT jsonb_build_object('url', d.url, 'tools', coalesce(d.allowed_tools, '{}') ||
+            coalesce((SELECT array_agg(DISTINCT t.tool) FROM mint.tool_contracts t
+                      WHERE t.instance_id = d.instance_id AND t.server_id = d.server_id
+                        AND t.status = 'approved'), '{}'))
+        FROM mint.deployment_contracts d
+        WHERE d.instance_id = %(iid)s AND d.server_id = %(server_id)s AND d.status = 'approved'
     ),
     'allowlists', (
         SELECT coalesce(jsonb_agg(to_jsonb(a)), '[]'::jsonb) FROM mint.allowlists a
@@ -385,6 +394,8 @@ class Snapshot:
     self_confirmations: tuple[ConfirmationRow, ...] = ()
     # (값, 조직 또는 None): 지금 유효한 허용 목적지 목록. 패턴 계산의 허용 호스트에 쓴다.
     egress_targets: tuple[tuple[str, str | None], ...] = ()
+    # 서버의 승인된 배포 계약에서 고른 대상·행위 프로필(근거가 없으면 None).
+    auto_profile: str | None = None
 
 
 def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
@@ -392,6 +403,7 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
     settings = doc.get("settings")
     server = doc.get("server")
     policy = doc.get("policy_version")
+    basis = doc.get("deployment_basis") or {}
     return Snapshot(
         now=_time(doc["now"]),
         epoch=doc.get("epoch"),
@@ -519,6 +531,7 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
             }) for c in doc.get("self_confirmations", ())
         ),
         egress_targets=tuple((e["value"], e["org_id"]) for e in doc.get("egress_targets", [])),
+        auto_profile=select_profile(basis.get("url"), basis.get("tools") or ()),
     )
 
 

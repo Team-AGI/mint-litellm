@@ -14,12 +14,17 @@
 - ``escalate``: ``{인자: 방식}``. 그 인자가 참이면 ``방식``이 행위이고 효과는 기본 효과다.
 
 프로필에도 규칙에도 없는 도구는 풀 수 없는 호출이다(``TargetUnresolved``).
+
+서버에 어느 프로필을 쓸지는 승인된 배포 계약에서 자동으로 고른다(``select_profile``). 프로필의
+``match``는 선택 근거로, ``hosts``(URL 호스트)에 들거나 ``tools``(도구 이름 서명) 중 둘 이상이
+승인된 도구에 있으면 그 프로필이다. 환경 변수 값은 이 선택을 덮어쓴다(``none``은 끈다).
 """
 
 import re
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 READ, WRITE, EXECUTE = "read", "write", "execute"
 
@@ -49,6 +54,11 @@ _N8N_READ = (
 # 대상 인자 이름과 기본값은 각 서버 저장소의 도구 입력 스키마에서 확인한 값이다.
 PROFILES: dict[str, dict[str, Any]] = {
     "github": {
+        "match": {
+            "hosts": ("api.githubcopilot.com",),
+            "tools": ("actions_run_trigger", "get_file_contents", "issue_write",
+                      "create_pull_request", "pull_request_read", "list_issues"),
+        },
         "fold_case": True,
         # 목록에 없는 도구는 owner/repo를 대상으로 하는 변경으로 본다. 둘이 없으면 풀 수 없다.
         "unlisted": {"target": ["owner", "repo"], "operation": "method", "effect": WRITE},
@@ -61,6 +71,11 @@ PROFILES: dict[str, dict[str, Any]] = {
         },
     },
     "n8n": {
+        "match": {
+            "hosts": (),
+            "tools": ("n8n_create_workflow", "n8n_get_workflow", "n8n_list_workflows",
+                      "n8n_test_workflow", "n8n_executions", "n8n_update_full_workflow"),
+        },
         "unlisted": {"target": ["instance=$server"], "operation": "action", "effect": WRITE},
         "tools": {
             **{t: _READ_ONLY_RULE for t in _N8N_READ},
@@ -107,6 +122,34 @@ class Target:
     effect: str
 
 
+OFF = "none"
+
+
+def select_profile(url: str | None, tools: Collection[str]) -> str | None:
+    """승인된 배포 계약의 URL과 도구 이름으로 고른 프로필. 근거가 없거나 둘 이상이면 None."""
+    try:
+        host = (urlsplit(url).hostname or "").lower() if url else ""
+    except ValueError:
+        host = ""
+    names = set(tools)
+    found = [
+        name for name, profile in PROFILES.items()
+        if host in profile.get("match", {}).get("hosts", ())
+        or len(names & set(profile.get("match", {}).get("tools", ()))) >= 2
+    ]
+    return found[0] if len(found) == 1 else None
+
+
+def effective_profile(
+    overrides: Mapping[str, str], server_id: str, auto: str | None
+) -> tuple[str, str] | None:
+    """서버에 쓸 (프로필, 출처). 출처는 ``config``(환경 변수 덮어쓰기)나 ``auto``이다."""
+    if server_id in overrides:
+        name = overrides[server_id]
+        return None if name == OFF else (name, "config")
+    return None if auto is None else (auto, "auto")
+
+
 def parse_profile_map(text: str) -> dict[str, str]:
     """``서버=프로필`` 쉼표 목록(``MINT_TARGET_PROFILES``). 형식이 틀리면 ``ValueError``."""
     mapping: dict[str, str] = {}
@@ -114,8 +157,9 @@ def parse_profile_map(text: str) -> dict[str, str]:
         if not item:
             continue
         server, sep, profile = (s.strip() for s in item.partition("="))
-        if not sep or not server or profile not in PROFILES:
-            raise ValueError(f"'{item}' must be <server_id>=<profile> ({', '.join(PROFILES)})")
+        if not sep or not server or (profile not in PROFILES and profile != OFF):
+            raise ValueError(
+                f"'{item}' must be <server_id>=<profile> ({', '.join([*PROFILES, OFF])})")
         mapping[server] = profile
     return mapping
 
