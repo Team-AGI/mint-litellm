@@ -64,9 +64,20 @@ def build_conditions(
     confirm_tools: list[str] | None = None,
     confirm_purpose: str | None = None,
     confirm_fields: list[str] | None = None,
+    max_result_bytes: int | None = None,
+    max_result_items: int | None = None,
+    scan_result: bool = True,
 ) -> dict:
     """정책이 읽는 승인 조건. 지정하지 않은 조건은 키를 넣지 않는다."""
     conditions: dict = {}
+    for name, limit in (("max_result_bytes", max_result_bytes),
+                        ("max_result_items", max_result_items)):
+        if limit is not None:
+            if limit < 1:
+                raise ControlError(f"--{name.replace('_', '-')}는 1 이상이어야 합니다.")
+            conditions[name] = limit
+    if not scan_result:
+        conditions["scan_result"] = False
     if confirm_tools:
         purpose = (confirm_purpose or "").strip()
         if not 1 <= len(purpose) <= 128:

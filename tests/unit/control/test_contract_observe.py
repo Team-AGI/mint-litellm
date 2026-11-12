@@ -1,6 +1,6 @@
 import pytest
 
-from mint_litellm.control.contract_observe import drift_kind, normalize_tools
+from mint_litellm.control.contract_observe import drift_kind, instance_differences, normalize_tools
 from mint_litellm.control.contract_pin import verify_pin
 from mint_litellm.control.errors import AdminError
 
@@ -51,3 +51,22 @@ def test_pin_checks_full_set_and_hash_domain():
     ):
         with pytest.raises(AdminError):
             verify_pin({"read": TOOL}, response)
+
+
+def test_instance_differences_compare_every_item_across_instances():
+    same = [("a", "deployment", "", "h1"), ("b", "deployment", "", "h1")]
+    assert instance_differences(["a", "b"], same) == []
+    changed = [*same[:1], ("b", "deployment", "", "h2")]
+    (diff,) = instance_differences(["a", "b"], changed)
+    assert diff == {"kind": "deployment", "item": "", "digests": {"a": "h1", "b": "h2"}}
+
+
+def test_an_item_missing_from_one_instance_is_a_difference_and_unlisted_instances_are_ignored():
+    rows = [
+        ("a", "tool", "server/read", "h1"),
+        ("b", "tool", "server/read", "h1"),
+        ("b", "tool", "server/write", "h9"),
+        ("c", "tool", "server/read", "hX"),
+    ]
+    (diff,) = instance_differences(["a", "b"], rows)
+    assert diff["item"] == "server/write" and diff["digests"] == {"a": None, "b": "h9"}

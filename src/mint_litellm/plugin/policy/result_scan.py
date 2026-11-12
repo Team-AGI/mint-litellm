@@ -1,0 +1,70 @@
+"""도구 결과 본문에서 지시문 표지를 찾는다.
+
+결과에 심은 지시를 사용자 명령으로 처리하지 않으려는 휴리스틱 검사이며, 탐지를 완전히 보장하지
+않는다. 정규식은 모두 반복 횟수를 제한해 결과 길이에 곱으로 늘지 않게 하고, 앞쪽
+``MAX_SCAN_CHARS`` 글자만 훑는다(이를 넘는 부분은 보지 않는다).
+"""
+
+import re
+import unicodedata
+from collections.abc import Iterable
+
+MAX_SCAN_CHARS = 256 * 1024
+
+_FLAGS = re.IGNORECASE
+_MARKERS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "instruction_override",
+        re.compile(
+            r"(?:ignore|disregard|forget|override)\s{1,3}(?:all\s|any\s|the\s|your\s|my\s){0,3}"
+            r"(?:previous|prior|above|earlier|preceding)\s{1,3}"
+            r"(?:instructions?|prompts?|rules?|directions?|context)",
+            _FLAGS,
+        ),
+    ),
+    (
+        "instruction_override",
+        re.compile(r"(?:이전|위의?|앞선|기존)\s{0,3}(?:지시|명령|지침|규칙)\S{0,3}\s{0,3}무시"),
+    ),
+    (
+        "role_marker",
+        re.compile(
+            r"<\|?(?:im_start|system|assistant)\|?>|\[/?(?:INST|SYS)\]|<<SYS>>"
+            r"|(?:^|\n)\s{0,8}(?:system|assistant)\s{0,3}:",
+            _FLAGS,
+        ),
+    ),
+    (
+        "role_marker",
+        re.compile(r"시스템\s{0,3}프롬프트|(?:^|\n)\s{0,8}(?:시스템|어시스턴트)\s{0,3}:"),
+    ),
+    (
+        "concealment",
+        re.compile(
+            r"(?:do\s{1,3}not|don'?t|never)\s{1,3}(?:tell|inform|mention|reveal|show)\s{1,3}"
+            r"(?:this\s{1,3}to\s{1,3})?(?:the\s{1,3})?user",
+            _FLAGS,
+        ),
+    ),
+    (
+        "concealment",
+        re.compile(r"사용자(?:에게|한테)\s{0,3}(?:알리지|말하지|보여주지|공개하지)\s{0,3}(?:마|말)"),
+    ),
+)
+
+
+def scan_instructions(texts: Iterable[str]) -> tuple[str, ...]:
+    """걸린 지시문 표지의 종류를 정렬해 돌려준다.
+
+    종류는 ``instruction_override``·``role_marker``·``concealment``이다.
+    """
+    found: set[str] = set()
+    budget = MAX_SCAN_CHARS
+    for text in texts:
+        if budget <= 0:
+            break
+        # 전각 문자나 호환 문자로 표지를 피하지 못하게 한다.
+        head = unicodedata.normalize("NFKC", text[:budget])
+        budget -= len(text)
+        found.update(kind for kind, pattern in _MARKERS if pattern.search(head))
+    return tuple(sorted(found))

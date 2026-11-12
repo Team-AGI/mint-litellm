@@ -216,7 +216,7 @@ def test_bootstrap_and_relation_terminate_commands():
     assert bootstrap.litellm_reads == ("/user/info",)
     terminate = by_name["relation terminate"]
     assert terminate.roles == frozenset({OperatorRole.ADMIN})
-    assert terminate.events == (EventKind.RELATION_TERMINATING,)
+    assert terminate.events == (EventKind.RELATION_TERMINATING, EventKind.APPROVAL_REVOKED)
 
 
 def test_observation_items_used_by_rows_are_declared():
