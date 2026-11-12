@@ -10,7 +10,7 @@ from mint_litellm.types.identity import Principal
 _FIELDS = {
     "server": (
         "id", "status", "transport", "auth_type", "provider_allowed", "auth_server_allowed",
-        "contract_status",
+        "contract_status", "identity_kind", "exec_contract_sha256", "exec_contract_version",
     ),
     # risk_grade: 계약 관리 서버에서 지금 승인된 도구 계약의 위험 등급(계약이 없으면 키가 없다).
     "tool": ("name", "risk_grade"),
