@@ -355,6 +355,9 @@ def _approve(run: Run) -> None:
             confirm_tools=a.confirm_tool,
             confirm_purpose=a.confirm_purpose,
             confirm_fields=a.confirm_field,
+            max_result_bytes=a.max_result_bytes,
+            max_result_items=a.max_result_items,
+            scan_result=not a.no_result_scan,
         ),
     )
     _created(run, approval_id)
@@ -814,6 +817,11 @@ ARGUMENTS: dict[str, list[Any]] = {
         _a("--allowed-host", action="append", help="허용 목적지 호스트(반복 가능)"),
         _a("--allowed-path", action="append", help="허용 폴더의 절대 경로(반복 가능)"),
         _a("--allowed-arg-key", action="append", help="허용 인자 이름(반복 가능)"),
+        _a("--max-result-bytes", type=int,
+           help="결과 한 건의 크기 상한(바이트). 넘으면 결과를 막는다"),
+        _a("--max-result-items", type=int, help="결과 한 건의 항목(내용 블록) 수 상한"),
+        _a("--no-result-scan", action="store_true",
+           help="결과 본문의 지시문 표지 검사를 끈다(계약 관리 서버는 기본으로 검사한다)"),
         _a("--confirm-tool", action="append",
            help="호출 때 본인 확인을 요구할 도구(반복 가능, 승인 도구 안에 있어야 한다)"),
         _a("--confirm-purpose", help="본인 확인의 목적(--confirm-tool과 함께)"),

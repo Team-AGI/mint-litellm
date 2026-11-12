@@ -30,7 +30,7 @@
 | `mint-litellm server suspend` | `admin` | 서버를 중지한다. 중지된 서버의 호출은 차단된다. | - | `server_suspended` |
 | `mint-litellm server resume` | `admin` | 중지한 서버를 다시 승인 상태로 되돌린다. | - | `server_resumed` |
 | `mint-litellm relation add` | `admin` | 조직·팀·목적·서버를 묶는 이용 관계를 만든다. | - | `relation_created` |
-| `mint-litellm relation terminate` | `admin` | 이용 관계를 종료 중으로 바꾼다. 그 관계에 속한 승인과 매칭되는 호출은 `RELATION_TERMINATED`로 차단된다. | - | `relation_terminating` |
+| `mint-litellm relation terminate` | `admin` | 이용 관계를 종료 중으로 바꾸고 그 관계의 활성 승인을 철회한다. 그 관계에 속한 승인과 매칭되는 호출은 `RELATION_TERMINATED`로 차단되고, LiteLLM 권한 회수를 읽어 확인하면 관계가 종료됨으로 바뀐다. | - | `relation_terminating`, `approval_revoked` |
 | `mint-litellm approve` | `admin`, `approver` | 이용 관계에 속한 승인을 등록한다. 근거와 유효 기간이 필수이며, 대상 권한이 LiteLLM에 서버 식별자 형식으로 있는지 읽어 확인한다. | `/key/info`, `/team/info` | `approval_granted`, `server_approved` |
 | `mint-litellm deny` | `admin`, `approver` | 주체 또는 서버에 대한 거부를 만든다. 거부는 모든 승인보다 우선한다. | - | `denial_created` |
 | `mint-litellm denial lift` | `admin`, `approver` | 거부를 해제한다. | - | `denial_lifted` |
@@ -186,6 +186,9 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 | `--allowed-host 호스트` (반복) | `allowed_hosts` | 인자의 URL이 향할 수 있는 호스트(하위 도메인 포함). 계약 관리 서버에만 적용한다. |
 | `--allowed-path 경로` (반복) | `allowed_paths` | 인자의 절대 경로가 있어야 하는 폴더. 계약 관리 서버에만 적용한다. |
 | `--allowed-arg-key 이름` (반복) | `allowed_arg_keys` | 호출이 쓸 수 있는 인자 이름. 이 밖의 이름이 있으면 차단한다. 계약 관리 서버에만 적용한다. |
+| `--max-result-bytes 수` | `max_result_bytes` | 도구 결과 한 건의 크기 상한(바이트). 넘으면 결과 대신 `MINT-OUTPUT-BLOCKED`를 돌려주고 응답 사건의 `output_findings`에 `POL-E-16`을 남긴다. |
+| `--max-result-items 수` | `max_result_items` | 도구 결과 한 건의 내용 블록 수 상한. 넘으면 위와 같이 막는다. |
+| `--no-result-scan` | `scan_result` | 결과 본문의 지시문 표지 검사를 끈다. 계약 관리 서버는 이 옵션이 없으면 검사하며, 표지가 있으면 결과를 `MINT-OUTPUT-BLOCKED`로 막고 `output_findings`에 `POL-E-04`를 남긴다. 관측 모드에서는 막지 않고 응답 사건에만 남긴다. |
 
 계약 관리 서버의 호출별 승인(`call-approval request`)과 본인 확인은 요청할 때 승인된 도구 계약에 묶인다. 계약이 교체되거나 철회되면 아직 쓰지 않은 승인은 만료되고, 승인된 계약이 없는 도구에는 호출별 승인을 요청할 수 없다.
 

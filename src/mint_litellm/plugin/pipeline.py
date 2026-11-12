@@ -395,6 +395,10 @@ class InputError(Exception):
     """정책 입력으로 만들 수 없는 승인 조건."""
 
 
+# 결과 크기(바이트)와 결과 항목 수의 상한을 담는 승인 조건 이름
+RESULT_LIMIT_KEYS = ("max_result_bytes", "max_result_items")
+
+
 def _argument_sizes(arguments: Mapping[str, Any]) -> dict[str, int]:
     sizes: dict[str, int] = {}
     for key, value in arguments.items():
@@ -410,6 +414,16 @@ def _condition_list(conditions: Mapping[str, Any], key: str) -> list[str]:
     if not isinstance(values, list) or not all(isinstance(v, str) and v for v in values):
         raise InputError(f"{key} must be a list of non-empty strings")
     return values
+
+
+def _condition_limit(conditions: Mapping[str, Any], key: str) -> int | None:
+    """승인 조건의 양의 정수 상한. 없으면 None, 정수가 아니거나 0 이하면 입력 오류."""
+    value = conditions.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise InputError(f"{key} must be a positive integer")
+    return value
 
 
 def _host_of(value: str) -> str:
@@ -505,6 +519,9 @@ def build_policy_input(
             "expires_in_days": max(0, (selected.valid_until - now).days),
             "conditions": dict(selected.conditions),
         }
+        # 결과 상한은 호출 뒤에 쓰이지만 형식 오류는 호출 전에 막는다.
+        for limit_key in RESULT_LIMIT_KEYS:
+            _condition_limit(selected.conditions, limit_key)
         purpose = selected.conditions.get("require_consent")
         if purpose is None:
             consent = {"status": "not_applicable", "source": None}
@@ -1303,6 +1320,30 @@ async def _evaluate(run: _Run, deps: PipelineDeps) -> Outcome:
     )
 
 
+def _result_policy(run: _Run) -> dict[str, Any]:
+    """결과 검사 입력. 승인 조건의 상한과, 계약 관리 서버의 지시문 표지 검사 여부.
+
+    관측 모드에서는 결과를 막지 않고 기록만 한다. 조건 형식이 틀린 호출은 이미 막혔으므로
+    상한을 읽지 못하면 비운다.
+    """
+    conditions = run.selected.conditions if run.selected else {}
+    if not isinstance(conditions, Mapping):
+        conditions = {}
+    server = run.snapshot.server if run.snapshot else None
+    limits: dict[str, int | None] = {}
+    for key in RESULT_LIMIT_KEYS:
+        try:
+            limits[key] = _condition_limit(conditions, key)
+        except InputError:
+            limits[key] = None
+    managed = server is not None and server.contract_status == "managed"
+    return {
+        **limits,
+        "scan": managed and conditions.get("scan_result") is not False,
+        "enforce": run.mode is Mode.ENFORCE,
+    }
+
+
 def _context_document(
     run: _Run, snapshot: DecisionSnapshot, allowed: bool, consumed: ConsumeRequest | None
 ) -> dict[str, Any]:
@@ -1327,6 +1368,7 @@ def _context_document(
         "user_id": principal.user_id,
         "team_id": principal.team_id,
         "org_id": principal.org_id,
+        "result_policy": _result_policy(run),
     }
 
 

@@ -13,6 +13,7 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo  # noqa: E402
 
 from mint_litellm.control import approvals as approvals_domain  # noqa: E402
 from mint_litellm.control import jobs, sync_state  # noqa: E402
+from mint_litellm.control import relations as relations_domain  # noqa: E402
 from mint_litellm.control.db.connection import fetchall, fetchone  # noqa: E402
 from mint_litellm.control.db.roles import LOGIN_ROLES  # noqa: E402
 from mint_litellm.control.errors import ControlError  # noqa: E402
@@ -907,3 +908,67 @@ def test_rows_are_recorded_before_the_write_so_a_crash_keeps_mint_ownership(
     # 쓰기 전에 적어 둔 덕에 MINT가 넣은 항목을 원래 있던 것으로 오판하지 않는다
     assert (row_["observed"], row_["preexisting"]) == (True, False)
     assert grant(admin, "tool_permission")["tools"] == ["a", "b"]
+
+
+# --- 이용 관계 종료: 승인 철회, 권한 회수 확인, 결과 기록 ---------------------------------
+
+
+def relation_row(admin) -> dict:
+    return fetchone(admin, "SELECT id::text AS id, status FROM mint.usage_relations")
+
+
+def termination_done(admin) -> list[dict]:
+    return [e["payload"] for e in events(admin, "relation_terminating")
+            if e["payload"].get("phase") == "revocation_confirmed"]
+
+
+def test_terminating_a_relation_revokes_withdraws_confirms_and_records(admin, fake, worker):
+    key_world(admin, fake)
+    enqueue(admin, "sync_target", "key:k1")
+    drain(worker)
+    assert fake.permission("key", "k1")[0] == ["srv-1"]
+    relations_domain.terminate(make_ctx(admin), relation_row(admin)["id"])
+    assert fetchone(admin, "SELECT status FROM mint.approvals")["status"] == "revoked"
+    drain(worker)
+    reconcile(admin)
+    drain(worker)
+    servers, tools = fake.permission("key", "k1")
+    assert "srv-1" not in servers and not tools.get("srv-1")
+    assert relation_row(admin)["status"] == "terminated"
+    (done,) = termination_done(admin)
+    assert done["targets"] == ["key:k1"] and done["retained"] == []
+    assert alerts(admin, "termination_unconfirmed") == []
+
+
+def test_access_that_mint_did_not_grant_is_reported_as_retained_not_withdrawn(
+    admin, fake, worker
+):
+    key_world(admin, fake, servers=["srv-1"])
+    enqueue(admin, "sync_target", "key:k1")
+    drain(worker)
+    relations_domain.terminate(make_ctx(admin), relation_row(admin)["id"])
+    drain(worker)
+    reconcile(admin)
+    drain(worker)
+    assert "srv-1" in fake.permission("key", "k1")[0]
+    assert relation_row(admin)["status"] == "terminated"
+    (done,) = termination_done(admin)
+    assert done["retained"] == [{"target": "key:k1", "item": "mcp_server"}]
+
+
+def test_unwithdrawn_grants_keep_the_relation_terminating_until_the_sync_confirms(
+    admin, fake, worker
+):
+    approval = key_world(admin, fake)
+    enqueue(admin, "sync_target", "key:k1")
+    drain(worker)
+    revoke(admin, approval)  # 동기화를 요청하지 않고 승인만 철회한다
+    admin.execute("UPDATE mint.usage_relations SET status = 'terminating'")
+    enqueue(admin, "relation_finalize", relation_row(admin)["id"])
+    drain(worker)  # 마무리 확인이 거두지 못한 항목을 보고 동기화를 요청하고, 동기화가 거둔다
+    assert relation_row(admin)["status"] == "terminating"
+    reconcile(admin)
+    drain(worker)
+    assert relation_row(admin)["status"] == "terminated"
+    assert [a["status"] for a in alerts(admin, "termination_unconfirmed")] == ["resolved"]
+    assert len(termination_done(admin)) == 1

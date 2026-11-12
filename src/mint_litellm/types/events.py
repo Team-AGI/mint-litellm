@@ -287,6 +287,8 @@ class ResponseObservation(BaseModel):
 
     ``revoked_after_snapshot``은 판정 스냅숏을 읽은 뒤 선택된 승인·거부·관계가 부정 상태로
     바뀌었는지이다. 세대를 읽지 못하면 값을 비우고 ``revocation_check``를 ``unavailable``로 둔다.
+    ``output_findings``는 결과 검사에서 걸린 정책 식별자이고, ``output_blocked``는 결과를 호출자에게
+    주지 않고 막았는지이다(관측 모드는 걸려도 막지 않는다).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -297,9 +299,13 @@ class ResponseObservation(BaseModel):
     current_state_epoch: int | None = Field(default=None, ge=0)
     revocation_check: RevocationCheck
     revoked_after_snapshot: bool | None = None
+    output_findings: tuple[str, ...] = ()
+    output_blocked: bool = False
 
     @model_validator(mode="after")
     def _check(self) -> Self:
+        if self.output_blocked and not self.output_findings:
+            raise ValueError("a blocked output needs at least one finding")
         unavailable = self.revocation_check is RevocationCheck.UNAVAILABLE
         if unavailable != (self.revoked_after_snapshot is None):
             raise ValueError("revoked_after_snapshot is null exactly when the check is unavailable")

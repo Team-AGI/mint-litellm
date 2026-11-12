@@ -149,10 +149,11 @@ COMMANDS: tuple[CliCommand, ...] = (
     ),
     CliCommand(
         path=("relation", "terminate"),
-        summary="이용 관계를 종료 중으로 바꾼다. 그 관계에 속한 승인과 매칭되는 호출은 "
-        "`RELATION_TERMINATED`로 차단된다.",
+        summary="이용 관계를 종료 중으로 바꾸고 그 관계의 활성 승인을 철회한다. 그 관계에 속한 "
+        "승인과 매칭되는 호출은 `RELATION_TERMINATED`로 차단되고, LiteLLM 권한 회수를 읽어 "
+        "확인하면 관계가 종료됨으로 바뀐다.",
         roles=ADMIN_ONLY,
-        events=(EventKind.RELATION_TERMINATING,),
+        events=(EventKind.RELATION_TERMINATING, EventKind.APPROVAL_REVOKED),
     ),
     CliCommand(
         path=("approve",),

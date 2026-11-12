@@ -1,9 +1,10 @@
 """이용 관계."""
 
-from mint_litellm.control import orgs
+from mint_litellm.control import approvals, orgs
 from mint_litellm.control.context import Context
-from mint_litellm.control.db.connection import fetchone
+from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import ControlError, not_found
+from mint_litellm.control.services import base
 from mint_litellm.types.events import EventKind
 from mint_litellm.types.ids import new_uuid7
 
@@ -51,6 +52,11 @@ def add(ctx: Context, org_id: str, server_id: str, purpose: str, team_id: str | 
 
 
 def terminate(ctx: Context, relation_id: str) -> None:
+    """관계를 종료 중으로 바꾸고, 그 관계의 활성 승인을 바로 철회한다.
+
+    LiteLLM의 권한을 거둔 것을 읽어 확인하고 ``terminated``로 마무리하는 일은
+    ``relation_finalize`` 작업이 한다(``sync_jobs``).
+    """
     row = fetchone(
         ctx.conn,
         "UPDATE mint.usage_relations SET status = 'terminating' WHERE instance_id = %s"
@@ -63,5 +69,18 @@ def terminate(ctx: Context, relation_id: str) -> None:
         EventKind.RELATION_TERMINATING,
         relation_id,
         row["state_version"],
-        {"relation_id": relation_id, "org_id": row["org_id"], "server_id": row["server_id"]},
+        {
+            "relation_id": relation_id,
+            "org_id": row["org_id"],
+            "server_id": row["server_id"],
+            "phase": "started",
+        },
     )
+    for approval in fetchall(
+        ctx.conn,
+        "SELECT id FROM mint.approvals WHERE instance_id = %s AND relation_id = %s"
+        " AND status = 'active' ORDER BY id",
+        (ctx.instance_id, relation_id),
+    ):
+        approvals.revoke(ctx, str(approval["id"]), "이용 관계 종료", False)
+    base.enqueue_job(ctx, "relation_finalize", relation_id)

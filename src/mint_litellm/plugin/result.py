@@ -1,7 +1,8 @@
-"""도구 호출 응답·실패 관측.
+"""도구 호출 응답·실패 관측과 결과 검사.
 
 응답 본문과 결과 값은 기록하지 않는다. 허용된 호출만 관측하며, 차단된 호출의 실패 이벤트는
-이미 판정 사건으로 기록되어 있어 무시한다.
+이미 판정 사건으로 기록되어 있어 무시한다. 결과 검사는 크기·항목 수 상한과 지시문 표지를 보고,
+걸린 정책 식별자만 응답 사건에 남긴다.
 """
 
 from __future__ import annotations
@@ -9,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -17,8 +18,10 @@ from uuid import UUID
 
 from mint_litellm.plugin.buffer import EvidenceRecorder
 from mint_litellm.plugin.config import PluginConfig
+from mint_litellm.plugin.policy.result_scan import scan_instructions
 from mint_litellm.plugin.snapshot import NegativeStateQuery
 from mint_litellm.types.decision import RevocationCheck
+from mint_litellm.types.errors import output_blocked_error
 from mint_litellm.types.events import (
     Event,
     EventKind,
@@ -27,6 +30,10 @@ from mint_litellm.types.events import (
 )
 
 log = logging.getLogger("mint_litellm.result")
+
+
+POL_RESULT_LIMIT = "POL-E-16"
+POL_RESULT_INSTRUCTION = "POL-E-04"
 
 
 class RevocationSource(Protocol):
@@ -89,6 +96,47 @@ async def check_revocation(
     return RevocationCheck.CHANGED, current, changed
 
 
+def inspect_result(
+    policy: Mapping[str, Any] | None, *, size: int | None, items: int, texts: Sequence[str]
+) -> list[str]:
+    """결과 한 건이 걸린 정책 식별자. 크기·항목 수 상한(E-16), 지시문 표지(E-04) 순으로 본다."""
+    if not policy:
+        return []
+    findings: list[str] = []
+    max_bytes, max_items = policy.get("max_result_bytes"), policy.get("max_result_items")
+    # 크기를 잴 수 없는 결과는 상한이 있을 때 넘은 것으로 본다.
+    if (max_bytes is not None and (size is None or size > max_bytes)) or (
+        max_items is not None and items > max_items
+    ):
+        findings.append(POL_RESULT_LIMIT)
+    if policy.get("scan") and scan_instructions(texts):
+        findings.append(POL_RESULT_INSTRUCTION)
+    return findings
+
+
+def screen_result(
+    ctx: dict[str, Any], *, size: int | None, items: int, texts: Sequence[str]
+) -> bool:
+    """결과를 검사해 호출 컨텍스트에 걸린 정책을 남긴다. 호출자에게 주지 않고 막아야 하면 참.
+
+    허용된 호출만 본다. 남긴 값은 같은 호출의 응답 관측 사건이 읽는다.
+    """
+    if not ctx.get("allowed"):
+        return False
+    policy = ctx.get("result_policy")
+    findings = inspect_result(policy, size=size, items=items, texts=texts)
+    if not findings:
+        return False
+    ctx["output_findings"] = findings
+    ctx["output_blocked"] = bool(policy and policy.get("enforce"))
+    return ctx["output_blocked"]
+
+
+def blocked_output_detail(ctx: Mapping[str, Any]) -> str:
+    """막힌 결과 대신 호출자에게 가는 오류 본문."""
+    return output_blocked_error(ctx["decision_ref"]).detail()
+
+
 async def observe_response(
     ctx: Mapping[str, Any], *, is_error: bool, size_bytes: int | None, deps: ResultDeps
 ) -> None:
@@ -105,6 +153,8 @@ async def observe_response(
         current_state_epoch=current,
         revocation_check=check,
         revoked_after_snapshot=revoked,
+        output_findings=tuple(ctx.get("output_findings") or ()),
+        output_blocked=bool(ctx.get("output_blocked")),
     )
     event = _event(ctx, EventKind.CALL_RESPONSE_RECEIVED, observation.model_dump(mode="json"), deps)
     await deps.recorder.record(event)

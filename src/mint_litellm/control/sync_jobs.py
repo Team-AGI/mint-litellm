@@ -258,6 +258,117 @@ def sync_target(ctx: JobContext) -> None:
     _request_finalize(ctx, _pending_approvals(conn, inst, desired.approvals))
 
 
+# --- relation_finalize ----------------------------------------------------------------
+
+
+def _unwithdrawn(
+    ctx: JobContext, client: LiteLLMSync, kind: str, target_id: str, server_id: str
+) -> tuple[list[str], list[str]]:
+    """종료한 관계의 서버에 대해 대상(키·팀)에 남은 것: (거두지 못한 MINT 항목, 원래 있던 권한).
+
+    다른 승인이 아직 그 서버를 원하면 둘 다 비어 있다. 대상이 LiteLLM에서 사라졌으면 권한도
+    없는 것이다.
+    """
+    current = _read(client, kind, target_id)
+    if current is None:
+        return [], []
+    if server_id in desired_for_target(ctx.conn, ctx.instance_id, kind, target_id).servers:
+        return [], []
+    managed = [
+        r["item"]
+        for r in load_rows(ctx.conn, ctx.instance_id, kind, target_id)
+        if r["server_id"] == server_id and r["observed"] is not None
+    ]
+    servers, tools = permission_of(current)
+    # MINT가 넣지 않은 권한은 MINT가 거두지 않는다. 남아 있다는 사실만 결과에 적는다.
+    retained = [] if managed or (server_id not in servers and server_id not in tools) else [
+        "mcp_server" if server_id in servers else "tool_permission"
+    ]
+    return managed, retained
+
+
+@_reachable
+def relation_finalize(ctx: JobContext) -> None:
+    """종료 중인 이용 관계의 권한 회수를 확인하고 결과를 남긴다.
+
+    관계의 철회·만료된 승인이 가리키던 키·팀마다 LiteLLM 값을 읽어, MINT가 넣은 서버 권한이 모두
+    거두어졌을 때만 관계를 ``terminated``로 바꾸고 결과(대상과 남은 권한)를 사건으로 적는다.
+    거두지 못한 항목이 있는데 그 대상의 동기화가 진행 중이 아니면 동기화를 다시 요청하고 경보
+    ``termination_unconfirmed``를 연다. 주기 조정(``sync_reconcile``)이 종료 중인 관계마다 이
+    작업을 다시 등록하므로 확인은 조정 주기 안에 끝난다.
+    """
+    relation_id, conn, inst = ctx.job["target_ref"], ctx.conn, ctx.instance_id
+    relation = fetchone(
+        conn,
+        "SELECT org_id, server_id, status FROM mint.usage_relations"
+        " WHERE instance_id = %s AND id = %s",
+        (inst, relation_id),
+    )
+    if relation is None or relation["status"] != "terminating":
+        return
+    targets = fetchall(
+        conn,
+        "SELECT DISTINCT scope_type AS kind, scope_id AS id FROM mint.approvals"
+        " WHERE instance_id = %s AND relation_id = %s AND scope_type IN ('key', 'team')"
+        " AND status IN ('revoked', 'expired') ORDER BY 1, 2",
+        (inst, relation_id),
+    )
+    client = _client(ctx) if targets else None
+    pending: list[dict] = []
+    retained: list[dict] = []
+    for target in targets:
+        ctx.checkpoint()
+        left, kept = _unwithdrawn(ctx, client, target["kind"], target["id"], relation["server_id"])
+        ref = target_ref(target["kind"], target["id"])
+        pending += [{"target": ref, "item": item} for item in left]
+        retained += [{"target": ref, "item": item} for item in kept]
+    key = f"termination_unconfirmed:{relation_id}"
+    if pending:
+        refs = sorted({p["target"] for p in pending})
+        if fetchone(
+            conn,
+            "SELECT 1 AS x FROM mint.jobs WHERE instance_id = %s AND kind = 'sync_target'"
+            " AND target_ref = ANY(%s) AND status IN ('pending', 'running')",
+            (inst, refs),
+        ):
+            return  # 거두는 동기화가 진행 중이다. 끝난 뒤 주기 조정이 다시 확인한다.
+        for ref in refs:
+            enqueue_job(_actor_context(ctx), "sync_target", ref)
+        raise_alert(conn, inst, kind="termination_unconfirmed", severity="high", dedup_key=key,
+                    subject={"relation_id": relation_id, "server_id": relation["server_id"],
+                             "pending": pending})
+        return
+    with conn.transaction():
+        row = fetchone(
+            conn,
+            "UPDATE mint.usage_relations SET status = 'terminated' WHERE instance_id = %s"
+            " AND id = %s AND status = 'terminating' RETURNING state_version",
+            (inst, relation_id),
+        )
+        if row is None:
+            return  # 그 사이 다른 작업이 마무리했다
+        ledger.record(
+            conn, inst, EventKind.RELATION_TERMINATING, entity_id=relation_id,
+            state_version=row["state_version"], actor=ACTOR,
+            payload={"relation_id": relation_id, "org_id": relation["org_id"],
+                     "server_id": relation["server_id"], "phase": "revocation_confirmed",
+                     "targets": [target_ref(t["kind"], t["id"]) for t in targets],
+                     "retained": retained},
+        )
+        resolve_alert(conn, inst, key)
+
+
+def _finalize_terminating(ctx: JobContext) -> None:
+    """종료 중인 이용 관계마다 마무리 확인을 다시 요청한다."""
+    for row in fetchall(
+        ctx.conn,
+        "SELECT id::text AS ref FROM mint.usage_relations WHERE instance_id = %s"
+        " AND status = 'terminating'",
+        (ctx.instance_id,),
+    ):
+        enqueue_job(_actor_context(ctx), "relation_finalize", row["ref"])
+
+
 # --- sync_server ---------------------------------------------------------------------
 
 
@@ -869,3 +980,4 @@ def sync_reconcile(ctx: JobContext) -> None:
         ctx.checkpoint()
         _reconcile_server(ctx, client, server["server_id"])
     _overdue_activations(ctx)
+    _finalize_terminating(ctx)
