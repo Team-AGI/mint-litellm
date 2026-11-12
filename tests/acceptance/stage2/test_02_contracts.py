@@ -61,7 +61,7 @@ def test_synthetic_contract_changes(rig, mutation):
                  240, "배포 변경")
         rig.wait(lambda: rig.rows("alerts", "kind='contract_drift' AND subject->>'server_id'=%s",
                                   [server]), 120, "배포 변경 경보")
-        rig.check_events(window, worker_count=2)
+        rig.check_events(window, worker_count=int(os.environ.get("ACC_SELFCHECK_PROCESSES", "2")))
         # DS-185 ①: 제한된 제어 키는 새 URL을 돌려주지 않으므로 운영자가 등록된 새 주소를 입력해 후보를 만든다.
         url = rig.request("GET", f"/v1/mcp/server/{server}", role="litellm_admin",
                           base="litellm_admin")["url"]

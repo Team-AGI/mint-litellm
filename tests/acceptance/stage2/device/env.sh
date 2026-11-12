@@ -30,3 +30,5 @@ mkdir -p "$ACC_STATE_DIR"
 [ -f "$STATE/local.env" ] && . "$STATE/local.env"
 # 호출별 승인의 인자 지문은 스택이 쓰는 키로 계산해야 한다(호스트 기본 ~/.config/mint 키와 다르다).
 export MINT_SECRETS_FILE="$STATE/secrets/secrets.env"
+# 자가 점검 사건은 LiteLLM 프로세스(복제본 2 x 컨테이너당 워커 2)마다 한 번 나온다.
+export ACC_SELFCHECK_PROCESSES=4
