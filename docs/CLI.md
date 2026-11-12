@@ -27,6 +27,7 @@
 | `mint-litellm operator remove` | `admin` | 운영자를 삭제한다. 토큰이 끝나고 그 사용자의 콘솔 세션이 폐기된다. 마지막 관리자와 본인은 삭제할 수 없다. | 없음 | `operator_removed` |
 | `mint-litellm operator set-role` | `admin` | 운영자의 역할을 바꾼다(`--role`). 그 사용자의 콘솔 세션이 폐기된다. 마지막 관리자는 낮출 수 없다. | 없음 | `operator_role_changed` |
 | `mint-litellm server register` | `admin` | LiteLLM에 등록된 서버를 승인 대기 상태로 등록한다. | `/v1/mcp/server/{server_id}` | `server_registered` |
+| `mint-litellm server register-local` | `admin` | 로컬 실행(stdio) 서버를 LiteLLM 없이 실행 계약(`--contract` JSON 파일)으로 승인 대기 상태로 등록한다. | - | `server_registered` |
 | `mint-litellm server suspend` | `admin` | 서버를 중지한다. 중지된 서버의 호출은 차단된다. | - | `server_suspended` |
 | `mint-litellm server resume` | `admin` | 중지한 서버를 다시 승인 상태로 되돌린다. | - | `server_resumed` |
 | `mint-litellm relation add` | `admin` | 조직·팀·목적·서버를 묶는 이용 관계를 만든다. | - | `relation_created` |
@@ -193,7 +194,7 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 
 ## 서버 등록의 계약 URL
 
-`server register`는 서버의 URL 해시를 계약 값으로 저장한다. URL은 `--url`, LiteLLM 설정 파일(`--config` 또는 `MINT_LITELLM_CONFIG`의 `mcp_servers.<이름>.url`, `server_id`가 같은 항목), 관리 API 응답 순으로 정하며 출처는 사건의 `url_source`(`operator`, `config_file`, `registry`)에 남는다. 제어 평면 키는 제한된 키라서 관리 API가 URL을 응답하지 않는 것이 보통이다. 둘 이상의 출처가 보이면 모두 같아야 한다. URL이 없는 서버(stdio, OpenAPI 명세 기반)는 `MINT-UNSUPPORTED`(사유 `server_without_url`)로 거부한다. 이미 등록된 서버에 다시 실행하면 계약 값을 갱신한다. `status`는 플러그인이 관측한 계약 불일치(`server_identity_mismatch_observed`)를 서버를 다시 등록하기 전까지 경보로 표시한다.
+`server register`는 서버의 URL 해시를 계약 값으로 저장한다. URL은 `--url`, LiteLLM 설정 파일(`--config` 또는 `MINT_LITELLM_CONFIG`의 `mcp_servers.<이름>.url`, `server_id`가 같은 항목), 관리 API 응답 순으로 정하며 출처는 사건의 `url_source`(`operator`, `config_file`, `registry`)에 남는다. 제어 평면 키는 제한된 키라서 관리 API가 URL을 응답하지 않는 것이 보통이다. 둘 이상의 출처가 보이면 모두 같아야 한다. URL이 없는 서버(stdio, OpenAPI 명세 기반)는 `MINT-UNSUPPORTED`(사유 `server_without_url`)로 거부한다. 로컬 실행(stdio) 서버는 `server register-local <server_id> --contract <파일>`로 등록한다. 계약 파일은 실행 경로(`executable`, 절대 경로), `argv`, 작업 디렉터리(`cwd`, 선택), `executable_sha256`, `script_sha256`(선택), 비밀이 아닌 `env`, 비밀 참조 ID(`secret_refs`)를 담은 JSON이고, 서버 행에는 URL 해시 없이 계약 해시와 판본이 저장된다. 이 서버는 LiteLLM 레지스트리·접근 권한 없이 MINT 표만으로 등록·승인되며 `check`와 플러그인 자가 점검의 레지스트리 대조에서 빠진다. 이미 등록된 서버에 다시 실행하면 계약 값을 갱신한다. `status`는 플러그인이 관측한 계약 불일치(`server_identity_mismatch_observed`)를 서버를 다시 등록하기 전까지 경보로 표시한다.
 
 ## 출력 형식
 

@@ -482,6 +482,25 @@ def test_servers_without_a_url_are_refused(mint, stub):
     assert code == 1 and "server_without_url" in err
 
 
+def test_a_local_server_is_registered_from_a_contract_file_without_litellm(mint):
+    boss = bootstrap(mint)
+    path = mint.tmp / "contract.json"
+    path.write_text(json.dumps({"executable": "/usr/bin/node", "argv": ["/opt/srv/index.js"],
+                                "executable_sha256": "ab" * 32}), encoding="utf-8")
+    code, _, err = mint.run("server", "register-local", "local-1", "--contract", str(path),
+                            token=boss)
+    assert code == 0, err
+    with psycopg.connect(mint.env["MINT_DATABASE_URL"]) as conn:
+        row = conn.execute(
+            "SELECT identity_kind, url_sha256, status FROM mint.servers WHERE server_id = 'local-1'"
+        ).fetchone()
+    assert row == ("stdio", None, "awaiting_approval")
+    path.write_text("{}", encoding="utf-8")
+    code, _, err = mint.run("server", "register-local", "local-1", "--contract", str(path),
+                            token=boss)
+    assert code == 1 and "실행 계약" in err
+
+
 def test_ledger_list_finds_a_decision_by_its_error_reference(mint):
     boss = bootstrap(mint)
     first, second = "01a19fbd-0000-7000-8000-000000000001", "01a19fbd-0000-7000-8000-000000000002"

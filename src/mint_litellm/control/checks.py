@@ -290,6 +290,11 @@ def _check_registry_rows(
     suspended_missing: list[str] = []
     for row in registered:
         entry = by_id.get(row["server_id"])
+        if row.get("identity_kind", "remote") == "stdio":
+            # 로컬 실행 서버는 레지스트리에 없어야 한다. 같은 식별자가 있으면 다른 서버로 오인된다.
+            if entry is not None:
+                problems.append(f"{row['server_id']}: 로컬 서버와 같은 식별자가 레지스트리에 있음")
+            continue
         if entry is None:
             # 플러그인 자가 점검 5번과 같다: 승인된 서버만 기동을 막고, 중지된 서버는 알리기만 한다.
             status = row.get("status", "approved")
