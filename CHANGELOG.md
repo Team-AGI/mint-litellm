@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- 로컬 실행(stdio) 서버의 호출별 승인과 본인 확인은 받은 때의 실행 계약 해시에 묶인다(마이그레이션 `019_exec_contract_approval_binding`). 서버의 실행 계약이 바뀌면(재등록) 묶인 열린 승인이 같은 트랜잭션에서 만료되고, 소비는 서버 행의 지금 계약과 같을 때만 된다. `MINT_ENDPOINT_ROUTES=true`이면 단말 훅용 `POST /mint/v1/decide`·`/mint/v1/result` 경로가 붙고, 결과 보고가 5분 안에 없는 허용된 로컬 서버 호출은 `call_outcome_unknown`(사유 `no_report`)으로 남는다. 원격 서버 경로는 그대로다.
 - 로컬 실행(stdio) 서버를 LiteLLM 레지스트리 없이 MINT 표만으로 등록·승인한다: `server register-local <server_id> --contract <파일>`이 실행 계약(실행 경로·`argv`·`cwd`·실행 파일 해시·비밀 아닌 `env`·비밀 참조)의 해시와 판본을 서버 행에 저장한다(URL 해시는 비어 있다). 승인은 LiteLLM 키·팀의 서버 권한을 요구하지 않고, 권한 동기화는 로컬 서버를 LiteLLM 권한으로 옮기지 않으며, `check`와 플러그인 자가 점검의 레지스트리 대조에서 로컬 서버는 빠진다(레지스트리에 같은 식별자가 있으면 `identity_kind` 불일치로 알린다). 원격 서버 경로는 그대로다.
 - 서버 식별 방식(`identity_kind`: `remote`·`stdio`)과 실행 계약(`exec_contract_sha256`·`exec_contract_version`)을 `servers`·배포 계약·판정 사건(`resolved_identity_kind` 등)·정책 입력의 URL 해시와 따로 둔 필드로 추가했다. 로컬 실행 서버는 URL 해시를 갖지 않고, 배포 계약은 실행 위치·실행물 출처·권한을 위한 별개 열(`exec_location`·`artifact_source`·`permissions`)을 비워 둔다. 원격 서버의 동작은 바뀌지 않는다. 정책 입력에 `server.identity_kind`(항상)와 `server.exec_contract_*`(`stdio`만)가 더해지며 번들 규칙은 아직 읽지 않는다(마이그레이션 `018_exec_contract_fields`).
 - 정책 입력의 `server.contract_status`(`none`·`managed`)를 항상 보내고, 계약 관리 서버의 `arguments.patterns`를 필수로 한다. 차단 규칙이 기대는 입력이 빠지거나 깨지면 규칙이 조용히 평가되지 않아 허용되는 대신 입력 오류로 차단한다. 새 번들은 이 항목을 필수로 보므로 플러그인을 먼저 올린 뒤 번들을 활성화한다.

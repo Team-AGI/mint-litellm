@@ -185,6 +185,19 @@ WHERE instance_id = %(iid)s AND id = %(id)s AND status = 'approved'
   AND server_id = %(server_id)s AND tool = %(tool)s AND args_fp = %(args_fp)s
   AND policy_version_id = %(policy_version_id)s AND contract_version IS NULL
   AND state_version = %(state_version)s
+  AND exec_contract_sha256 IS NOT DISTINCT FROM %(exec_contract_sha256)s::text
+  AND (%(exec_contract_sha256)s::text IS NULL OR EXISTS (
+       SELECT 1 FROM mint.servers s
+       WHERE s.instance_id = %(iid)s AND s.server_id = %(server_id)s
+         AND s.exec_contract_sha256 = %(exec_contract_sha256)s::text))
+"""
+
+# 로컬 실행 서버의 호출별 승인: 받은 때의 실행 계약이 서버 행의 지금 계약일 때만 소비한다.
+CONSUME_EXEC_SQL = CONSUME_SQL + """
+  AND exec_contract_sha256 = %(exec_contract_sha256)s::text
+  AND EXISTS (SELECT 1 FROM mint.servers s
+              WHERE s.instance_id = %(iid)s AND s.server_id = %(server_id)s
+                AND s.exec_contract_sha256 = %(exec_contract_sha256)s::text)
 """
 
 # 계약 관리 서버의 호출별 승인: 받은 때의 계약이 지금도 승인된 계약일 때만 소비한다.
@@ -311,6 +324,7 @@ class CallApprovalRow:
     expires_at: datetime
     state_version: int
     contract_id: str | None = None
+    exec_contract_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -329,6 +343,7 @@ class ConfirmationRow:
     confirmed_by_key_token: str
     requested_by_key_token: str
     contract_id: str | None = None
+    exec_contract_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -476,6 +491,7 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
                 expires_at=_time(c["expires_at"]),
                 state_version=c["state_version"],
                 contract_id=c.get("contract_id"),
+                exec_contract_sha256=c.get("exec_contract_sha256"),
             )
             for c in doc["call_approvals"]
         ),
@@ -504,9 +520,11 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
         negative_relation=bool(doc.get("negative_relation", False)),
         self_confirmations=tuple(
             ConfirmationRow(**{
-                **{k: c[k] for k in ConfirmationRow.__dataclass_fields__ if k != "contract_id"},
+                **{k: c[k] for k in ConfirmationRow.__dataclass_fields__
+                   if k not in ("contract_id", "exec_contract_sha256")},
                 "id": UUID(c["id"]), "expires_at": _time(c["expires_at"]),
                 "contract_id": c.get("contract_id"),
+                "exec_contract_sha256": c.get("exec_contract_sha256"),
             }) for c in doc.get("self_confirmations", ())
         ),
         egress_targets=tuple((e["value"], e["org_id"]) for e in doc.get("egress_targets", [])),
@@ -755,7 +773,8 @@ class PluginDatabase:
                 inserted = cursor.rowcount == 1
                 if consume is not None and consume.call_approval_id is not None:
                     cursor = await conn.execute(
-                        CONSUME_SQL if consume.contract_id is None else CONSUME_BOUND_SQL,
+                        CONSUME_EXEC_SQL if consume.exec_contract_sha256 is not None
+                        else CONSUME_SQL if consume.contract_id is None else CONSUME_BOUND_SQL,
                         {
                             "iid": event.instance_id,
                             "id": consume.call_approval_id,
@@ -768,6 +787,7 @@ class PluginDatabase:
                             "policy_version_id": consume.policy_version_id,
                             "state_version": consume.state_version,
                             "contract_id": consume.contract_id,
+                            "exec_contract_sha256": consume.exec_contract_sha256,
                         },
                     )
                     if cursor.rowcount != 1:
@@ -782,6 +802,7 @@ class PluginDatabase:
                         "fp_key_version": sc.fp_key_version,
                         "policy_version_id": consume.policy_version_id,
                         "state_version": sc.state_version, "contract_id": consume.contract_id,
+                        "exec_contract_sha256": consume.exec_contract_sha256,
                     })
                     if cursor.rowcount != 1:
                         raise ConsumptionLost("CONFIRMATION_REQUIRED")
@@ -811,13 +832,14 @@ class PluginDatabase:
                     INSERT INTO mint.self_confirmations
                         (id, instance_id, org_id, principal_id, server_id, tool, args_fp,
                          fp_key_version, policy_version_id, purpose, requested_by_key_token,
-                         display, expires_at, contract_id)
+                         display, expires_at, contract_id, exec_contract_sha256)
                     SELECT %(id)s, %(iid)s::mint.ident, %(org_id)s::mint.ident, %(principal_id)s,
                            %(server_id)s,
                            %(tool)s, %(args_fp)s, %(fp_key_version)s,
                            %(policy_version_id)s::mint.ident, %(purpose)s, %(key_token)s,
                            %(display)s,
-                           clock_timestamp() + interval '10 minutes', %(contract_id)s::uuid
+                           clock_timestamp() + interval '10 minutes', %(contract_id)s::uuid,
+                           %(exec_contract_sha256)s::text
                     WHERE (SELECT count(*) FROM mint.self_confirmations
                            WHERE instance_id = %(iid)s AND principal_id = %(principal_id)s
                              AND status = 'pending' AND expires_at > clock_timestamp()) < 20
@@ -825,6 +847,22 @@ class PluginDatabase:
                 """, {**params, "display": Jsonb(params["display"])})
 
         await self._run(write)
+
+    async def read_decision(
+        self, instance_id: str, invocation_id: UUID, attempt_id: int
+    ) -> dict[str, Any] | None:
+        """호출의 판정 사건 본문. 없으면 None. 결과 보고가 호출 컨텍스트를 다시 만들 때 읽는다."""
+
+        async def read(conn: Any) -> Any:
+            cursor = await conn.execute(
+                "SELECT payload FROM mint.events WHERE instance_id = %s"
+                " AND kind = 'decision_evaluated' AND invocation_id = %s AND attempt_id = %s",
+                (instance_id, invocation_id, attempt_id),
+            )
+            return await cursor.fetchone()
+
+        row = await self._run(read)
+        return None if row is None else row[0]
 
     async def read_epoch(self, instance_id: str) -> int | None:
         async def read(conn: Any) -> Any:

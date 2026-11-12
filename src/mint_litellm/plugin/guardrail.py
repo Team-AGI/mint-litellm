@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import Any
 
@@ -27,6 +28,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.types.guardrails import GuardrailEventHooks
 
 from mint_litellm.compat import litellm_1_106 as compat
+from mint_litellm.endpoint.decide import install_from_env
 from mint_litellm.plugin.logger import MintLogger, internal_block
 from mint_litellm.plugin.provider_mcp import external_mcp, is_realtime
 from mint_litellm.plugin.selfcheck import (
@@ -63,6 +65,7 @@ class MintGuardrail(CustomGuardrail):
             self._runtime.guardrail = self
             self._register_logger()
             self._runtime.ensure_started()
+            install_from_env(os.environ)
         except RuntimeError:
             leave_startup_failure_marker()
             raise

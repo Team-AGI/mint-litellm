@@ -3,7 +3,17 @@
 import asyncio
 
 import pytest
-from plugin_helpers import evaluator, harness, request, resolved_server, server_row, snapshot
+from plugin_helpers import (
+    call_approval,
+    config,
+    evaluator,
+    harness,
+    request,
+    resolved_server,
+    server_row,
+    snapshot,
+    user_principal,
+)
 from pydantic import ValidationError
 
 from mint_litellm.plugin.pipeline import evaluate_request
@@ -145,3 +155,29 @@ def test_a_contract_built_server_passes_and_a_changed_contract_is_stopped(tmp_pa
     changed = approved.model_copy(update={"argv": ("/opt/srv/evil.js",)})
     outcome = decide(harness(tmp_path, snapshot(server=row)), resolved=changed.resolved("srv-1"))
     assert outcome.error.code == "MINT-SERVER-IDENTITY-MISMATCH"
+
+
+def _match(row, resolved, tmp_path):
+    from uuid import uuid4
+
+    from plugin_helpers import NOW
+
+    from mint_litellm.plugin.pipeline import match_call_approval
+    from mint_litellm.types.identity import OrgSource
+
+    principal = user_principal().model_copy(update={"org_id": "org1", "org_source": OrgSource.TEAM})
+    snap = snapshot(server=stdio_row(), call_approvals=(row,), now=NOW)
+    return match_call_approval(
+        snap, principal, resolved, "search", {"q": "x"}, config(tmp_path), uuid4()
+    )
+
+
+def test_a_call_approval_is_bound_to_the_execution_contract_it_was_given_under(tmp_path):
+    bound = call_approval(exec_contract_sha256=EXEC)
+    failure, consume = _match(bound, stdio_resolved(), tmp_path)
+    assert failure is None and consume.exec_contract_sha256 == EXEC
+    # 실행 계약이 바뀐 서버, 계약에 묶이지 않은 승인, 원격 서버는 맞지 않는다.
+    changed = stdio_resolved(exec_contract_sha256="f" * 64)
+    assert _match(bound, changed, tmp_path)[0].reason_code == "CALL_APPROVAL_REQUIRED"
+    assert _match(call_approval(), stdio_resolved(), tmp_path)[0] is not None
+    assert _match(bound, resolved_server(), tmp_path)[0] is not None
