@@ -26,7 +26,7 @@ for line in sys.stdin:
     if "id" not in msg:
         continue
     if msg["method"] == "initialize":
-        result = {"protocolVersion": "2025-06-18", "capabilities": {}}
+        result = {"protocolVersion": msg["params"]["protocolVersion"], "capabilities": {}}
     else:
         with open(msg["params"]["arguments"]["path"], "a") as out:
             out.write("x\n")

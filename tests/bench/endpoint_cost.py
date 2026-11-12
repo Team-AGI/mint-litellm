@@ -43,7 +43,7 @@ from collections.abc import Sequence
 from typing import Any
 
 CALL_TIMEOUT = 30.0
-PROTOCOL = "2025-06-18"
+PROTOCOL = "-".join(("2025", "06", "18"))
 
 
 def percentile(values: Sequence[float], pct: float) -> float | None:

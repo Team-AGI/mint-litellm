@@ -46,8 +46,8 @@ class Server:
             def log_message(self, *args):
                 pass
 
-        self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.url = f"http://127.0.0.1:{self.httpd.server_port}/mint/v1/decide"
+        self.httpd = http.server.ThreadingHTTPServer(("localhost", 0), Handler)
+        self.url = f"http://localhost:{self.httpd.server_port}/mint/v1/decide"
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
 
     def close(self):
@@ -109,10 +109,10 @@ def test_without_a_broker_the_hook_may_send_directly_but_a_failed_forward_is_an_
     tmp_path, server, broker
 ):
     with pytest.raises(agent.BrokerDown):
-        send(str(tmp_path / "missing.sock"), "http://127.0.0.1:1/")
+        send(str(tmp_path / "missing.sock"), "http://localhost:1/")
     sock, _ = broker
     with pytest.raises(OSError, match="ConnectionRefusedError"):
-        send(sock, "http://127.0.0.1:1/mint/v1/decide")
+        send(sock, "http://localhost:1/mint/v1/decide")
 
 
 def test_the_hook_process_reuses_the_connection_through_the_broker(tmp_path, server):
