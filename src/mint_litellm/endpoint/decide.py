@@ -31,6 +31,9 @@ from mint_litellm.types.identity import Principal
 log = logging.getLogger("mint_litellm.endpoint")
 
 MAX_BODY_BYTES = 64 * 1024
+# 경로마다 정상 본문이 이보다 작다(결과 보고는 참조와 결과 종류, 설치 보고는 서버 이름 목록).
+BODY_LIMITS = {DECIDE_PATH: MAX_BODY_BYTES, RESULT_PATH: 4 * 1024, REPORT_PATH: 16 * 1024}
+NOT_READY_CODE = "MINT-ENDPOINT-NOT-READY"
 _REFERENCE = re.compile(r"^([0-9a-f-]{36}):([1-9][0-9]{0,8})$")
 
 
@@ -148,6 +151,9 @@ def result_context(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 async def _read_limited(request: Request, limit: int) -> bytes:
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > limit:
+        raise HTTPException(status_code=413, detail="request body too large")
     chunks: list[bytes] = []
     size = 0
     async for chunk in request.stream():
@@ -159,7 +165,7 @@ async def _read_limited(request: Request, limit: int) -> bytes:
 
 
 async def _body(request: Request, model: type[BaseModel]) -> Any:
-    raw = await _read_limited(request, MAX_BODY_BYTES)
+    raw = await _read_limited(request, BODY_LIMITS[request.url.path])
     try:
         return model.model_validate(strict_json(raw))
     except (ValueError, ValidationError) as exc:
@@ -175,15 +181,18 @@ def make_router(
     """결정·결과 보고 경로. 인증은 호출자 키로 ``auth_dependency``(LiteLLM의 키 인증)가 한다."""
     router = APIRouter()
 
-    def ready() -> Any:
+    def ready(*, verified: bool = True) -> Any:
+        """기동을 마치지 못한 워커는 요청을 받지 않는다(코드가 있는 503). 판정은 ``verified``를
+        요구하지 않고 파이프라인이 사유와 사건을 남기며 막는다."""
         runtime = runtime_provider()
-        if runtime is None:
-            raise HTTPException(status_code=503, detail="decision runtime is not ready")
+        if runtime is None or (verified and not runtime.verified):
+            detail = {"error": {"code": NOT_READY_CODE, "message": "MINT is still starting"}}
+            raise HTTPException(status_code=503, detail=json.dumps(detail))
         return runtime
 
     @router.post(DECIDE_PATH)
     async def decide(request: Request, auth: Any = Depends(auth_dependency)) -> dict[str, Any]:
-        runtime = ready()
+        runtime = ready(verified=False)
         body = await _body(request, DecideBody)
         call = local_request(
             body, auth, instance_id=runtime.config.instance_id, principal_factory=principal_factory
