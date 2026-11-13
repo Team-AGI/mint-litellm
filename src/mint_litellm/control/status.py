@@ -152,6 +152,8 @@ def enforcement_states(ctx: Context) -> list[dict[str, Any]]:
                 "worker_id": str(payload.get("worker_id") or "-"),
                 "passed": passed,
                 "failed": failed,
+                "litellm": payload.get("litellm") if isinstance(payload.get("litellm"), dict)
+                else None,
                 "run_id": parts[1] if len(parts) > 1 else None,
                 "last_transition_at": row["inserted_at"].isoformat(),
                 "payload": payload,
