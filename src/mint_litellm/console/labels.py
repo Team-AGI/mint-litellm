@@ -254,6 +254,10 @@ TIME_ZONE = {
 ALERT_KIND = {
     "contract_drift": "계약 변경",
     "call_spike": "호출량 급증",
+    "package_unpinned": "버전 미고정 패키지",
+    "package_vulnerable": "패키지 취약점",
+    "package_vuln_due": "취약점 조치 기한",
+    "vuln_feed_unreachable": "취약점 조회 실패",
 }
 EVENT_KIND = {
     "decision_evaluated": "호출 판정",

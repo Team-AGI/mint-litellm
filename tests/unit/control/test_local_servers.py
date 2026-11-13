@@ -19,6 +19,7 @@ from mint_litellm.control import (  # noqa: E402
     orgs,
     relations,
     servers,
+    vuln,
 )
 from mint_litellm.control.db.connection import fetchall, fetchone  # noqa: E402
 from mint_litellm.control.endpoint_results import GRACE_SECONDS  # noqa: E402
@@ -221,3 +222,108 @@ def test_a_narrowed_execution_contract_raises_only_a_low_alert(ctx, conn):
     register_local(ctx, contract=CONTRACT.model_copy(update={"argv": ()}))
     alert = fetchone(conn, "SELECT * FROM mint.alerts WHERE kind = 'contract_drift'")
     assert alert["severity"] == "low" and alert["subject"]["widened"] == []
+
+
+NPX = ExecContract(executable="/usr/bin/npx", argv=["-y", "left-pad@1.0.0"],
+                   executable_sha256="ab" * 32)
+
+
+def test_the_packages_of_a_local_server_are_recorded_with_their_provider(ctx, conn):
+    register_local(ctx, "pkg-1", NPX)
+    rows = fetchall(conn, "SELECT ecosystem, name, version, pinned, registry"
+                    " FROM mint.server_packages ORDER BY ecosystem")
+    got = [(r["ecosystem"], r["name"], r["version"], r["pinned"], r["registry"]) for r in rows]
+    assert got == [
+        ("executable", "/usr/bin/npx", "ab" * 32, True, "local"),
+        ("npm", "left-pad", "1.0.0", True, "registry.npmjs.org"),
+    ]
+    assert fetchall(conn, "SELECT 1 FROM mint.alerts WHERE kind = 'package_unpinned'") == []
+    with pytest.raises(psycopg.Error):
+        conn.execute("DELETE FROM mint.server_packages")
+
+
+def test_an_unpinned_package_opens_an_alert_and_blocks_approval_without_evidence(
+    ctx, litellm, conn, stub
+):
+    loose = ExecContract(executable="/usr/bin/npx", argv=["-y", "left-pad"],
+                         executable_sha256="ab" * 32)
+    orgs.add(ctx, "acme", "ACME")
+    orgs.bind(ctx, "acme", SubjectType.USER, "human-1")
+    register_local(ctx, "pkg-2", loose)
+    alert = fetchone(conn, "SELECT subject FROM mint.alerts WHERE kind = 'package_unpinned'")
+    assert alert["subject"]["packages"][0]["name"] == "left-pad"
+    relation = relations.add(ctx, "acme", "pkg-2", "ops", None)
+    with pytest.raises(ControlError, match="버전 미고정 패키지 사용 승인"):
+        approve(ctx, litellm, relation)
+    from mint_litellm.control.services import evidence
+
+    evidence.attach(ctx, "unpinned_acceptance", "pkg-2", summary="내부 검토 끝")
+    info = json.loads(json.dumps(stub.routes[("/key/info", frozenset({("key", GOOD_KEY)}))][1]))
+    info["info"]["object_permission"]["mcp_servers"] = []
+    stub.set("/key/info", info, key=GOOD_KEY)
+    approve(ctx, litellm, relation)
+    register_local(ctx, "pkg-2", NPX)  # 버전을 고정해 다시 등록하면 경보가 닫힌다
+    assert fetchall(conn, "SELECT 1 FROM mint.alerts WHERE kind = 'package_unpinned'"
+                    " AND status <> 'resolved'") == []
+
+
+def test_a_package_version_move_is_named_in_the_drift_alert(ctx, conn):
+    register_local(ctx, "pkg-3", NPX)
+    register_local(ctx, "pkg-3", NPX.model_copy(update={"argv": ("-y", "left-pad@1.1.0")}))
+    alert = fetchone(conn, "SELECT subject FROM mint.alerts WHERE kind = 'contract_drift'")
+    assert alert["subject"]["package_changes"] == ["패키지 left-pad 1.0.0 → 1.1.0"]
+    assert "패키지 변경: 패키지 left-pad 1.0.0 → 1.1.0" in alert["subject"]["summary"]
+
+
+def seed_critical(conn, vuln_id, hours):
+    conn.execute(
+        "INSERT INTO mint.package_vulns (id, instance_id, ecosystem, name, version, vuln_id,"
+        " severity, cvss, exploited, first_seen_at) VALUES (gen_random_uuid(), %s, 'npm',"
+        " 'left-pad', '1.0.0', %s, 'critical', 9.8, false,"
+        " now() - make_interval(hours => %s))", (INSTANCE, vuln_id, hours))
+
+
+def clear(conn):
+    conn.execute("UPDATE mint.package_vulns SET cleared_at = now() WHERE cleared_at IS NULL")
+
+
+def blocked(conn, server_id):
+    return fetchone(conn, "SELECT vuln_blocked_at FROM mint.servers WHERE server_id = %s",
+                    (server_id,))["vuln_blocked_at"] is not None
+
+
+def test_a_critical_vulnerability_blocks_the_server_after_48_hours_until_it_is_fixed(ctx, conn):
+    register_local(ctx, "pkg-4", NPX)
+    seed_critical(conn, "V1", 1)
+    vuln.evaluate(conn, INSTANCE, datetime.now(UTC))
+    assert not blocked(conn, "pkg-4")
+    assert fetchall(conn, "SELECT 1 FROM mint.alerts WHERE kind = 'package_vulnerable'")
+    clear(conn)
+    seed_critical(conn, "V2", 30)
+    vuln.evaluate(conn, INSTANCE, datetime.now(UTC))
+    assert not blocked(conn, "pkg-4")
+    due = fetchone(conn, "SELECT subject FROM mint.alerts WHERE kind = 'package_vuln_due'")
+    assert due["subject"]["state"] == "escalated"
+    clear(conn)
+    seed_critical(conn, "V3", 60)
+    vuln.evaluate(conn, INSTANCE, datetime.now(UTC))
+    assert blocked(conn, "pkg-4")
+    clear(conn)  # 패키지를 고쳐 조회에서 사라졌다
+    vuln.evaluate(conn, INSTANCE, datetime.now(UTC))
+    assert not blocked(conn, "pkg-4")
+    assert fetchall(conn, "SELECT 1 FROM mint.alerts WHERE kind LIKE 'package_vuln%%'"
+                    " AND status <> 'resolved'") == []
+
+
+def test_an_admin_exception_lifts_the_block_and_the_first_seen_time_cannot_be_reset(ctx, conn):
+    from mint_litellm.control.services import evidence
+
+    register_local(ctx, "pkg-5", NPX)
+    seed_critical(conn, "V9", 60)
+    vuln.evaluate(conn, INSTANCE, datetime.now(UTC))
+    assert blocked(conn, "pkg-5")
+    evidence.attach(ctx, "vuln_exception", "pkg-5", summary="패치 배포 대기, 완화책 적용")
+    vuln.evaluate(conn, INSTANCE, datetime.now(UTC))
+    assert not blocked(conn, "pkg-5")
+    with pytest.raises(psycopg.Error):
+        conn.execute("UPDATE mint.package_vulns SET first_seen_at = now()")

@@ -98,6 +98,16 @@ def _webhook_urls(raw: str | None) -> tuple[str, ...]:
     return urls
 
 
+def _feed_url(raw: str | None) -> str:
+    """취약점 조회 주소. 비우면 공개 OSV이고, 내부 미러를 쓰려면 http(s) 주소를 준다."""
+    if raw is None or not raw.strip():
+        return "https://api.osv.dev"
+    parts = urlsplit(raw.strip())
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ControlError(f"MINT_VULN_FEED_URL은 http 또는 https 주소여야 합니다: {raw!r}")
+    return raw.strip().rstrip("/")
+
+
 @dataclass(frozen=True)
 class Stage2Settings:
     export_dir: Path
@@ -131,6 +141,10 @@ class Stage2Settings:
     spike_baseline_seconds: int = 86400
     spike_factor: int = 3
     spike_min_calls: int = 50
+    # 알려진 취약점 조회(OSV 형식 API): 주소, 조회 주기, 요청 제한 시간(초). 기본값은 MINT가 채운다.
+    vuln_feed_url: str = "https://api.osv.dev"
+    vuln_scan_seconds: int = 900
+    vuln_feed_timeout_seconds: int = 15
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "Stage2Settings":
@@ -162,6 +176,9 @@ class Stage2Settings:
             spike_baseline_seconds=_seconds(env, "MINT_SPIKE_BASELINE_SECONDS", 86400),
             spike_factor=_seconds(env, "MINT_SPIKE_FACTOR", 3),
             spike_min_calls=_seconds(env, "MINT_SPIKE_MIN_CALLS", 50),
+            vuln_feed_url=_feed_url(env.get("MINT_VULN_FEED_URL")),
+            vuln_scan_seconds=_seconds(env, "MINT_VULN_SCAN_SECONDS", 900, 60),
+            vuln_feed_timeout_seconds=_seconds(env, "MINT_VULN_FEED_TIMEOUT_SECONDS", 15),
             console_url=(env.get("MINT_CONSOLE_URL") or "").strip() or None,
         )
         if settings.session_idle_seconds > settings.session_absolute_seconds:

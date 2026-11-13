@@ -57,9 +57,9 @@ def widened_axes(result: dict[str, dict[str, Any]]) -> list[str]:
     return [a for a in AXES if result[a]["verdict"] == "widened"]
 
 
-def summary(result: dict[str, dict[str, Any]]) -> str:
-    """경보·콘솔에 쓰는 한국어 요약. 확대된 축은 더해진 항목을 나열한다."""
-    parts = []
+def summary(result: dict[str, dict[str, Any]], package_changes: list[str] | tuple = ()) -> str:
+    """경보·콘솔에 쓰는 한국어 요약. 패키지 변화를 먼저 적고 확대된 축은 더해진 항목을 나열한다."""
+    parts = [f"패키지 변경: {', '.join(package_changes)}"] if package_changes else []
     for axis in AXES:
         r = result[axis]
         if r["verdict"] == "widened":

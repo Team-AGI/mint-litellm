@@ -16,6 +16,19 @@
 {% for axis, label in [('file', '파일 접근'), ('exec', '실행'), ('network', '네트워크')] %}{% set r = s.exec_drift.axes[axis] %}<tr><td>{{ label }}</td><td>{{ {'widened': '확대', 'narrowed': '축소', 'unchanged': '변화 없음'}[r.verdict] }}</td><td>{{ r.added | join(', ') | blank }}</td><td>{{ r.removed | join(', ') | blank }}</td></tr>{% endfor %}
 </tbody></table>
 {% endif %}
+{% if s.packages %}
+<h2>실행 패키지</h2>
+<table><thead><tr><th>구분</th><th>이름</th><th>버전</th><th>제공처</th></tr></thead><tbody>
+{% for p in s.packages %}<tr><td>{{ {'npm': 'npm', 'pypi': 'PyPI', 'container': '컨테이너 이미지', 'executable': '실행 파일'}[p.ecosystem] }}</td><td>{{ p.name }}</td><td>{{ p.version | blank if p.ecosystem != 'executable' else ('내용 지문 ' ~ p.version[:12]) }}{% if not p.pinned %} <span class="badge wait"><span class="icon" aria-hidden="true">{{ ICONS.wait }}</span>버전 미고정</span>{% endif %}</td><td>{{ '로컬' if p.registry == 'local' else p.registry }}</td></tr>{% endfor %}
+</tbody></table>
+{% endif %}
+{% if s.vuln_blocked_at %}<p class="muted">치명 취약점의 조치 기한(48시간)이 지나 이 서버의 호출을 막고 있습니다. 패키지를 올려 다시 등록하거나, 관리자가 「취약점 조치 예외」 증빙을 붙여야 풀립니다.</p>{% endif %}
+{% if s.vulns %}
+<h2>알려진 취약점</h2>
+<table><thead><tr><th>패키지</th><th>취약점</th><th>심각도</th><th>확인 시각</th><th>조치 기한</th></tr></thead><tbody>
+{% for v in s.vulns %}<tr><td>{{ v.name }} {{ v.version }}</td><td>{{ v.vuln_id }}</td><td>{{ {'critical': '치명', 'high': '높음', 'medium': '중간', 'low': '낮음', 'unknown': '미확인'}[v.severity] }}{% if v.cvss is not none %} ({{ v.cvss }}){% endif %}{% if v.exploited %} · 악용 확인{% endif %}</td><td>{{ v.first_seen_at | when }}</td><td>{% if v.severity == 'critical' or v.exploited %}{{ v.deadline_at | when }}{% else %}—{% endif %}</td></tr>{% endfor %}
+</tbody></table>
+{% endif %}
 <h2>도구</h2>
 {% if s.tools %}
 <table><thead><tr><th>도구</th><th>위험 등급</th><th>동작 유형</th><th>변경</th></tr></thead><tbody>
