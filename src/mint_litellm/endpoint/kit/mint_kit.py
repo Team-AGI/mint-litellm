@@ -40,6 +40,7 @@ import re
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -356,38 +357,182 @@ def proc_start(pid: int, windows: bool) -> str | None:
     return stat.rsplit(")", 1)[-1].split()[19] if ")" in stat else None
 
 
-def home_owner(home: Path) -> tuple[int, int] | None:
-    """관리자(root)로 돌 때 사용자 홈 아래에 만든 파일을 사용자에게 돌려줄 소유자. 아니면 None."""
+def drop_target(user: str | None) -> tuple[int, int] | None:
+    """관리자(root)로 돌 때 사용자 홈 일을 내려 보낼 (uid, gid). 이름으로 계정부에서 찾으며
+    홈 폴더의 소유자 정보는 쓰지 않는다. root가 아니거나 계정을 모르면 None."""
+    if os.name != "posix" or os.geteuid() != 0 or not user:
+        return None
+    import pwd
+
     try:
-        if os.geteuid() != 0:
-            return None
-        info = home.stat()
-        return info.st_uid, info.st_gid
-    except (AttributeError, OSError):
+        entry = pwd.getpwnam(user)
+    except KeyError:
+        return None
+    return entry.pw_uid, entry.pw_gid
+
+
+def as_user(uid: int, gid: int, fn):
+    """``fn()``을 uid·gid로 내려간 자식 프로세스에서 돌리고 JSON으로 돌려받는다(실패하면 None).
+
+    사용자 홈의 읽기·쓰기·프로세스 종료를 커널이 그 사용자의 권한으로 집행하게 하므로, 사용자가
+    경로 중간을 심볼릭 링크로 바꿔도 root 권한으로 엉뚱한 파일을 읽거나 쓰지 못한다.
+    """
+    reader, writer = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        code = 1
+        try:
+            os.close(reader)
+            os.setgroups([])
+            os.setresgid(gid, gid, gid)
+            os.setresuid(uid, uid, uid)
+            data = json.dumps(fn()).encode()
+            with os.fdopen(writer, "wb") as handle:
+                handle.write(data)
+            code = 0
+        except BaseException:
+            pass
+        os._exit(code)
+    os.close(writer)
+    with os.fdopen(reader, "rb") as handle:
+        data = handle.read(1 << 20)
+    _, status = os.waitpid(pid, 0)
+    try:
+        return json.loads(data) if status == 0 and data else None
+    except ValueError:
         return None
 
 
-def hand_over(path: Path, home: Path, owner: tuple[int, int] | None) -> None:
-    """``path``와 홈 아래의 상위 폴더를 사용자 소유로 한다(실패해도 보고는 계속한다)."""
-    if owner is None:
-        return
-    for item in (path, *path.parents):
-        if item == home or home not in item.parents:
-            break
-        try:
-            os.chown(item, *owner)
-        except OSError:
-            pass
-
-
-def save_retired(home: Path, names: list[str], now: float, owner: tuple[int, int] | None) -> None:
+def save_retired(home: Path, names: list[str], now: float) -> None:
     """응답의 폐기 서버 목록을 실행기가 읽을 캐시에 쓴다. 쓰지 못해도 보고는 계속한다."""
-    path = home / STATE_REL / RETIRED_FILE
     try:
-        write_atomic(path, json.dumps({"servers": names, "at": now}).encode(), 0o600, owner)
+        write_atomic(
+            home / STATE_REL / RETIRED_FILE, json.dumps({"servers": names, "at": now}).encode(),
+            0o600,
+        )
     except OSError:
         return
-    hand_over(path, home, owner)
+
+
+def unlink_if_ours(path: str, digest: str | None) -> bool:
+    """우리가 쓴 그대로인 파일이면 지운다(이미 없어도 참). 바뀐 파일은 두고 거짓."""
+    if not os.path.exists(path):
+        return True
+    if digest is None or sha256_file(Path(path)) != digest:
+        return False
+    os.unlink(path)
+    return True
+
+
+# --- 실행 신뢰 점검: 관리자 권한으로 돌 코드와 상위 폴더는 관리자 소유이고 남이 못 쓴다 ---
+SAFE_OWNERS = ("NT AUTHORITY\\SYSTEM", "BUILTIN\\Administrators", "NT SERVICE\\TrustedInstaller")
+OPEN_GROUPS = ("builtin\\users", "authenticated users", "everyone")
+WRITE_RIGHTS = {"F", "M", "W", "WD", "AD", "GW", "GA", "WO", "WDAC"}
+REPARSE_POINT = 0x400
+
+
+def chain_of(path: str) -> list[str]:
+    seen = []
+    cur = path
+    while True:
+        seen.append(cur)
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return seen
+        cur = parent
+
+
+def untrusted_reason(path: str, lstat=os.lstat, realpath=os.path.realpath) -> str | None:
+    """POSIX: ``path``와 상위 폴더 전부(링크를 따라간 실제 경로 포함)가 root 소유이고 그룹·모두가
+    쓸 수 없는지 본다. 아니면 이유."""
+    items = dict.fromkeys(chain_of(os.path.abspath(path)) + chain_of(realpath(path)))
+    for item in items:
+        try:
+            info = lstat(item)
+        except OSError:
+            return f"{item} cannot be inspected"
+        if info.st_uid != 0:
+            return f"{item} is not root-owned"
+        if not stat.S_ISLNK(info.st_mode) and info.st_mode & 0o022:
+            return f"{item} is writable by other users"
+    return None
+
+
+def windows_owner(path: str, run) -> str:
+    script = f"(Get-Acl -LiteralPath '{path}').Owner"
+    return run(["powershell", "-NoProfile", "-Command", script]).strip()
+
+
+def windows_untrusted_reason(path: str, run=None) -> str | None:
+    """Windows: ``path``와 상위 폴더의 소유자가 SYSTEM·Administrators이고 Users·Authenticated
+    Users·Everyone에 쓰기 권한이 없는지 본다. 아니면 이유."""
+    run = run or capture
+    for item in chain_of(path.replace("/", "\\")):
+        listing = run(["icacls", item])
+        if not listing.strip():
+            return f"{item} cannot be inspected"
+        for line in listing.splitlines():
+            if not any(group in line.lower() for group in OPEN_GROUPS):
+                continue
+            rights = {t for part in re.findall(r"\(([^)]*)\)", line) for t in part.split(",")}
+            if rights & WRITE_RIGHTS:
+                return f"{item} is writable by other users"
+        if windows_owner(item, run) not in SAFE_OWNERS:
+            return f"{item} is not owned by an administrator"
+    return None
+
+
+def untrusted_run(folder: Path, windows: bool, python: str | None = None, run=None) -> str | None:
+    """관리자 권한 보고기가 돌 때 믿어야 할 것(인터프리터·이 파일·설정·설치 폴더)의 점검."""
+    check = (lambda p: windows_untrusted_reason(p, run)) if windows else untrusted_reason
+    here = os.path.abspath(__file__)
+    for path in (python or sys.executable, here, str(folder / "mint_kit.py"),
+                 str(folder / "kit.json"), str(folder)):  # fmt: skip
+        reason = check(path)
+        if reason:
+            return reason
+    return None
+
+
+def windows_system() -> bool:
+    """Windows에서 SYSTEM 계정(사용자 이름이 ``컴퓨터$``)으로 도는 예약 작업인가."""
+    return os.name == "nt" and os.environ.get("USERNAME", "").endswith("$")
+
+
+def profile_unsafe(path: Path, home: Path, name: str, run=None) -> bool:
+    """SYSTEM이 사용자 프로필 경로를 만지기 전 점검: 홈에서 ``path``까지 재분석 지점(정션·링크)이
+    있거나 소유자가 그 계정(또는 관리자)이 아니면 참."""
+    run = run or capture
+    chain = []
+    cur = path
+    while cur != home and home in cur.parents:
+        chain.append(cur)
+        cur = cur.parent
+    chain.append(home)
+    for item in chain:
+        try:
+            info = os.lstat(item)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return True
+        if getattr(info, "st_file_attributes", 0) & REPARSE_POINT:
+            return True
+        owner = windows_owner(str(item), run)
+        if not (owner.lower().endswith("\\" + name.lower()) or owner in SAFE_OWNERS):
+            return True
+    return False
+
+
+def read_trusted(path: Path, need_root: bool) -> bytes:
+    """링크를 따라가지 않고 열어 읽는다. ``need_root``이면 root 소유이고 남이 못 쓰는 파일만."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    fd = os.open(path, flags)
+    with os.fdopen(fd, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        if need_root and (info.st_uid != 0 or info.st_mode & 0o022):
+            raise OSError(f"{path} is not root-owned")
+        return handle.read()
 
 
 def system_python(path: str) -> bool:
@@ -459,11 +604,18 @@ class Kit:
             user_programs = str(self.home / ".local/lib/mint-endpoint")
         self.system_paths = (managed_programs, self.claude_dir, self.codex_dir, SYSTEMD_DIR)
         self.answer: dict = {}  # 마지막 보고의 응답
+
         self.logical_programs = managed_programs if self.managed else user_programs
         self.programs = self.physical(self.logical_programs)
         self.managed_dir = self.physical(self.claude_dir)
         self.codex_managed_dir = self.physical(self.codex_dir)
         self.owner = (account.uid, account.gid) if chown else None
+
+    guard_profile = False  # SYSTEM이 사용자 프로필을 만질 때 경로를 점검한다
+
+    def run_as_user(self, fn):
+        """사용자 홈 일을 돌린다. 관리자 권한 보고기는 이를 사용자 권한의 자식 프로세스로 바꾼다."""
+        return fn()
 
     def physical(self, logical: str) -> Path:
         """기록한 경로의 디스크 위치(``--root``가 있으면 시스템 경로만 그 아래로 간다)."""
@@ -542,10 +694,11 @@ class Kit:
         if self.windows:
             if not system_python(python):
                 raise SystemExit("관리형 설치에는 모든 사용자용으로 설치한 Python이 필요합니다.")
-            return
-        info = os.stat(os.path.realpath(python))
-        if info.st_uid != 0 or info.st_mode & 0o022:
-            raise SystemExit("python3 is not root-owned; refusing a managed install")
+            reason = windows_untrusted_reason(python)
+        else:
+            reason = untrusted_reason(python)
+        if reason:
+            raise SystemExit(f"managed install needs a trusted interpreter: {reason}")
 
     def install(self) -> dict:
         previous = self.load_state()
@@ -570,11 +723,13 @@ class Kit:
             state, self.programs / "contracts.json", contracts,
             json.dumps({"servers": servers}, indent=1).encode(), 0o644,
         )  # fmt: skip
-        python = (
-            sys.executable.replace("\\", "/")
-            if self.windows
-            else shutil.which("python3") or sys.executable
-        )
+        fixed = "/usr/bin/python3"  # 관리자 권한으로 돌 보고기는 시스템 인터프리터를 쓴다
+        if self.windows:
+            python = sys.executable.replace("\\", "/")
+        elif self.managed and self.strict and os.path.exists(fixed):
+            python = fixed
+        else:
+            python = shutil.which("python3") or sys.executable
         self.check_python(python)
         if self.config.get("ca_pem"):
             self.write_tracked(
@@ -624,6 +779,11 @@ class Kit:
             state, self.programs / "kit.json", f"{self.logical_programs}/kit.json",
             json.dumps(config, indent=1).encode(), 0o644,
         )  # fmt: skip
+        if self.managed and self.strict:
+            for path in (self.programs / "mint_kit.py", self.programs / "kit.json", self.programs):
+                reason = (windows_untrusted_reason if self.windows else untrusted_reason)(str(path))
+                if reason:
+                    raise SystemExit(f"managed install needs a trusted kit folder: {reason}")
         command = [python, "-I", "-B", tool, "report", "--kit", self.logical_programs]
         if self.managed:
             # 관리자 권한으로 돌므로 사용자의 키와 캐시가 있는 홈을 알려 준다.
@@ -903,7 +1063,10 @@ class Kit:
         return " · ".join(found)[:64] or None
 
     def inventory(self) -> dict:
-        """프로세스·자동 시작 인벤토리. 읽기에 실패해도 보고는 막지 않는다."""
+        """프로세스·자동 시작 인벤토리(사용자 홈을 읽으므로 사용자 권한으로). 실패해도 계속."""
+        return self.run_as_user(self.read_inventory) or {}
+
+    def read_inventory(self) -> dict:
         try:
             processes = scan_processes(self.windows)
             autostart = scan_autostart(self.home, self.windows, self.account.name)
@@ -963,10 +1126,10 @@ class Kit:
 
     def edit_file(self, state: dict, path: Path, logical: str, edit) -> tuple[list[str], bool]:
         """파일 내용을 ``edit(글) -> (새 글, 지운 이름들)``로 고친다. (지운 이름, 쓰기 성공)."""
-        if not path.exists():
+        if not path.exists() and not path.is_symlink():
             return [], True
         try:
-            raw = path.read_bytes()
+            raw = read_trusted(path, self.root_owned())
             new, gone = edit(raw.decode("utf-8-sig"))
             if not gone:
                 return [], True
@@ -975,6 +1138,10 @@ class Kit:
             return [], False
         self.retrack(state, logical, sha256_bytes(raw), new.encode())
         return gone, True
+
+    def root_owned(self) -> bool:
+        """실제 시스템에서 관리자(root)로 돌 때는 관리형 파일이 root 소유인지 확인한다."""
+        return self.root is None and os.name == "posix" and os.geteuid() == 0
 
     def drop_configs(self, state: dict, names: set[str]) -> tuple[list[dict], set[str]]:
         """관리형 설정에서 이 묶음이 쓴 ``names`` 서버 항목을 지운다. (지운 항목, 못 지운 이름)."""
@@ -1018,6 +1185,8 @@ class Kit:
     def edit_codex_block(self, state: dict, path: Path, names: set[str]) -> tuple[list[str], bool]:
         if not path.exists():
             return [], True
+        if self.guard_profile and profile_unsafe(path, self.home, self.account.name):
+            return [], False
         try:
             current = path.read_bytes().decode("utf-8-sig")
             new, gone = drop_block_tables(current, names)
@@ -1074,9 +1243,9 @@ class Kit:
             else:
                 logical = item.get("file", "")
                 path = self.physical(logical)
-                done = not path.exists() or sha256_file(path) == state["files"].get(logical)
+                digest = state["files"].get(logical)
+                done = bool(self.run_as_user(lambda p=str(path), d=digest: unlink_if_ours(p, d)))
                 if done:
-                    path.unlink(missing_ok=True)
                     state["files"].pop(logical, None)
                 target = path.name
             if done:
@@ -1096,7 +1265,7 @@ class Kit:
         gone_names = set(retired)
         mine = set(state.get("mcp_servers", [])) & gone_names
         removed, failed = self.drop_configs(state, mine) if mine else ([], set())
-        removed += self.stop_launched(gone_names)
+        removed += self.run_as_user(lambda: self.stop_launched(gone_names)) or []
         removed += self.drop_autostart(state, gone_names)
         state["mcp_servers"] = sorted(set(state.get("mcp_servers", [])) - (mine - failed))
         if removed:
@@ -1118,19 +1287,49 @@ def report_installed(
     sleep=time.sleep,
     rand=random.random,
 ) -> int:
-    """설치된 묶음의 주기 보고. 설치되어 있지 않거나(키·상태 없음) 할 일이 없으면 조용히 0."""
+    """설치된 묶음의 주기 보고. 설치되어 있지 않거나(키·상태 없음) 할 일이 없으면 조용히 0.
+
+    관리자 권한(root·SYSTEM)으로 돌 때는 먼저 인터프리터·이 파일·설정·설치 폴더를 점검하고, 사용자
+    홈을 읽고 쓰는 일은 모두 그 사용자 권한으로 내려간 자식 프로세스에서 한다(Windows는 프로필
+    경로에 정션·링크가 없고 소유자가 그 계정인지 먼저 확인한다).
+    """
     home = home or Path(os.path.expanduser("~"))
-    owner = home_owner(home)
+    target = drop_target(user)
+    system = windows_system()
+    if target is not None or system:
+        problem = untrusted_run(folder, system)
+        if not problem and system:
+            startup = home / "AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup"
+            for sub in (home / KEY_REL, home / STATE_REL, startup):
+                if profile_unsafe(sub, home, user or ""):
+                    problem = f"{sub} is not a plain folder owned by the user"
+                    break
+        if problem:
+            sys.stderr.write(f"MINT report refused: {problem}" + NL)
+            return 1
+
+    def run(fn):
+        return as_user(*target, fn) if target else fn()
+
     stamp = home / STATE_REL / LAST_REPORT
-    try:
-        last = float(stamp.read_text())
-    except (OSError, ValueError):
-        last = None
-    if if_due and not report_due(last, now()):
+
+    def read_side() -> dict:
+        try:
+            last = float(stamp.read_text())
+        except (OSError, ValueError):
+            last = None
+        try:
+            key = (home / KEY_REL).read_text(encoding="utf-8").strip()
+        except OSError:
+            key = ""
+        return {"last": last, "key": key}
+
+    seen = run(read_side) or {}
+    if if_due and not report_due(seen.get("last"), now()):
         return 0
+    key = seen.get("key") or ""
     try:
         state = json.loads((folder / "state.json").read_text(encoding="utf-8"))
-        key = (home / KEY_REL).read_text(encoding="utf-8").strip()
     except (OSError, ValueError):
         return 0
     if state.get("mode") not in ("managed", "user") or not key:
@@ -1138,19 +1337,24 @@ def report_installed(
     import getpass
 
     sleep(jitter_delay(jitter, rand))
-    stamp.parent.mkdir(parents=True, exist_ok=True)
-    stamp.write_text(str(now()))  # 곧바로 기록해 동시에 뜬 실행기들이 한 번만 보내게 한다.
-    hand_over(stamp, home, owner)
+
+    def write_stamp() -> None:
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.write_text(str(now()))  # 곧바로 기록해 동시에 뜬 실행기들이 한 번만 보내게 한다.
+
+    run(write_stamp)
     account = Account(user or getpass.getuser(), home, 0, 0)
     kit = Kit(folder, None, state["mode"] == "managed", account, False)
     kit.config["key"] = key
+    kit.run_as_user = run
+    kit.guard_profile = system
     if not kit.report(state, "installed"):
-        stamp.unlink(missing_ok=True)  # 닿지 못했으면 다음 기회에 다시 보낸다.
+        run(lambda: stamp.unlink(missing_ok=True))  # 닿지 못했으면 다음 기회에 다시 보낸다.
         return 1
     retired = kit.answer.get("retired")
     if isinstance(retired, list):
         names = [n for n in retired if isinstance(n, str)][:MAX_PENDING]
-        save_retired(home, names, now(), owner)
+        run(lambda: save_retired(home, names, now()))
         if kit.remediate(state, names):
             kit.report(state, "installed")  # 지운 것을 곧바로 알린다.
     return 0
