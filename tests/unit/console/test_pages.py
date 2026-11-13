@@ -15,7 +15,7 @@ from mint_litellm.types.settings import Mode
 INSTANCE = "inst1"
 PAGES = [
     "/", "/servers", "/servers/srv-ok", "/approvals", "/revocations", "/call-approvals",
-    "/endpoints", "/alerts", "/ledger", "/policy", "/admin",
+    "/endpoints", "/endpoints/mcp", "/intakes/new", "/alerts", "/ledger", "/policy", "/admin",
 ]
 # 화면에 그대로 나오면 안 되는 영어 열거값(상세의 「코드」 칸과 원장의 사건 키는 예외)
 ENUMS = ["awaiting_approval", "enforce", "approver", "terminated", "suspended", "pending"]

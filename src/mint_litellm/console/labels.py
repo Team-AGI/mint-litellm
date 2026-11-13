@@ -208,6 +208,8 @@ SCOPE = {"key": "키", "user": "사용자", "team": "팀", "org": "조직", "ser
 APPROVAL_CLASS = {"standard": "일반", "exception": "예외"}
 PRINCIPAL = {"user": "사용자", "team_key": "팀 키", "service_account": "서비스 계정"}
 KIT_PLATFORM = {"linux": "Linux", "windows": "Windows"}
+# 단말 설정에서 발견한 MCP 항목의 전송 방식
+LOCAL_TRANSPORT = {"stdio": "로컬 실행", "http": "원격(HTTP)", "sse": "원격(SSE)"}
 KIT_HARNESS = {"claude": "Claude Code", "codex": "Codex", "all": "Claude Code + Codex"}
 ORG_RULE = {
     "team_metadata": "팀 메타데이터",
@@ -453,6 +455,7 @@ NOTICES = {
     "shadow_cancelled": "정책 시험 적용을 취소했습니다.",
     "operator_role": "운영자의 역할을 변경했습니다.",
     "requester_assigned": "신청자를 지정했습니다.",
+    "intake_created": "신청을 등록했습니다.",
     "evidence_attached": "증빙을 첨부했습니다.",
     "rechecked": "재검사를 등록했습니다.",
     "intake_approved": "신청을 승인했습니다.",
