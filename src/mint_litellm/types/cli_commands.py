@@ -25,6 +25,7 @@ CONTROL_PLANE_ALLOWED_ROUTES: tuple[str, ...] = (
     "/user/info",
     "/key/list",
     "/team/list",
+    "/user/list",
     "/guardrails/list",
     "/key/update",
     "/team/update",
@@ -270,6 +271,37 @@ COMMANDS: tuple[CliCommand, ...] = (
         summary="팀 또는 사용자의 조직 바인딩을 제거한다.",
         roles=ADMIN_ONLY,
         events=(EventKind.ORG_BINDING_REMOVED,),
+    ),
+    CliCommand(
+        path=("org", "suggest"),
+        summary="조직 연결 제안을 조회한다.",
+        roles=ALL_ROLES,
+    ),
+    CliCommand(
+        path=("org", "suggest", "apply"),
+        summary="조직 연결 제안을 적용한다(제안 하나 또는 규칙 하나의 열린 제안 전체).",
+        roles=ADMIN_ONLY,
+        events=(EventKind.ORG_BINDING_CREATED,),
+    ),
+    CliCommand(
+        path=("org", "suggest", "ignore"),
+        summary="조직 연결 제안을 무시한다. 무시한 제안은 다시 열리지 않는다.",
+        roles=ADMIN_ONLY,
+    ),
+    CliCommand(
+        path=("org", "domain"),
+        summary="이메일 도메인과 조직의 대응을 조회한다.",
+        roles=ALL_ROLES,
+    ),
+    CliCommand(
+        path=("org", "domain", "set"),
+        summary="이메일 도메인을 조직에 대응시킨다.",
+        roles=ADMIN_ONLY,
+    ),
+    CliCommand(
+        path=("org", "domain", "unset"),
+        summary="이메일 도메인의 조직 대응을 지운다.",
+        roles=ADMIN_ONLY,
     ),
     CliCommand(
         path=("settings", "default-org"),

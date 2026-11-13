@@ -60,6 +60,7 @@ CONTROL_ROUTES = [
     "/user/info",
     "/key/list",
     "/team/list",
+    "/user/list",
     "/guardrails/list",
 ]
 PROXY_PORT = _port(4180)

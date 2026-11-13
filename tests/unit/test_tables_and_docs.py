@@ -89,6 +89,7 @@ def test_control_plane_routes():
         "/user/info",
         "/key/list",
         "/team/list",
+        "/user/list",
         "/guardrails/list",
         "/key/update",
         "/team/update",
@@ -144,7 +145,8 @@ def test_command_roles_follow_the_operator_role_model():
         elif command.roles == frozenset(OperatorRole):
             assert command.name in {
                 "check", "status", "ledger list", "alert list", "sync status", "intake list",
-                "intake show", "contract show", "contract diff", "policy status"}
+                "intake show", "contract show", "contract diff", "policy status",
+                "org suggest", "org domain"}
         else:
             assert command.roles == frozenset({OperatorRole.ADMIN}), command.name
 

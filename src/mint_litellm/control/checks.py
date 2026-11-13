@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from mint_litellm.compat import capabilities
 from mint_litellm.control import secrets_file
 from mint_litellm.control.errors import ControlError
 from mint_litellm.control.litellm_admin import LiteLLMAdmin
@@ -153,6 +154,10 @@ def probe_compat_symbols() -> list[str] | None:
     return missing
 
 
+def _result_guardrail_exists() -> bool:
+    return capabilities.assess(()).grade != "C"
+
+
 def _litellm_absent() -> bool:
     try:
         importlib.import_module("litellm")
@@ -247,8 +252,11 @@ def _check_file_rows(judge, config, general, lsettings, servers_cfg, env, replic
         modes = params.get("mode")
         modes = [modes] if isinstance(modes, str) else list(modes or [])
         problems = []
-        if not set(GUARDRAIL_MODES) <= set(modes):
-            problems.append("mode에 pre_call, pre_mcp_call, post_mcp_call이 모두 필요합니다")
+        needed = [m for m in GUARDRAIL_MODES
+                  if m != "post_mcp_call"
+                  or not (capabilities.allow_degraded(env) and not _result_guardrail_exists())]
+        if not set(needed) <= set(modes):  # 결과 단계 가드레일이 없는 LiteLLM(저하 운용)은 제외
+            problems.append(f"mode에 {', '.join(needed)}이 모두 필요합니다")
         if params.get("default_on") is not True:
             problems.append("default_on이 true가 아닙니다")
         judge("guardrails[MINT]", not problems, "; ".join(problems))

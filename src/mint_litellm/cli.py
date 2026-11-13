@@ -27,6 +27,7 @@ from mint_litellm.control import (
     ledger,
     litellm_config,
     operators,
+    org_suggest,
     policy_check,
     policy_versions,
     secrets_file,
@@ -571,6 +572,34 @@ def _alert_list(run: Run) -> None:
         )
 
 
+def _suggest_list(run: Run) -> None:
+    rows = org_service.list_suggestions(run.context())
+    run.data["suggestions"] = [json.loads(json.dumps(r, default=str)) for r in rows]
+    for r in rows:
+        run.say(
+            f"{r['id']}	{r['subject_type']}	{r['subject_id']}	{r['org_id']}	"
+            f"{r['rule']}	{r['matched']}	{r['calls']}"
+        )
+
+
+def _suggest_apply(run: Run) -> None:
+    a = run.args
+    if bool(a.suggestion_id) == bool(a.rule):
+        raise ControlError("제안 식별자와 --rule 중 하나만 주십시오.")
+    if a.rule:
+        run.data["applied"] = org_service.apply_rule(run.context(), a.rule)
+        run.say(f"적용 {run.data['applied']}건")
+    else:
+        org_service.apply_suggestion(run.context(), a.suggestion_id)
+
+
+def _domain_list(run: Run) -> None:
+    rows = org_service.list_domains(run.context())
+    run.data["domains"] = rows
+    for r in rows:
+        run.say(f"{r['domain']}	{r['org_id']}")
+
+
 def _server_register(run: Run) -> None:
     server_service.register(
         run.context(),
@@ -868,6 +897,12 @@ HANDLERS: dict[str, Handler] = {
     "org close": _done(org_service.close, "org_id"),
     "org bind": lambda r: org_service.bind(r.context(), r.args.org, *_subject(r.args)),
     "org unbind": lambda r: org_service.unbind(r.context(), *_subject(r.args)),
+    "org suggest": _suggest_list,
+    "org suggest apply": _suggest_apply,
+    "org suggest ignore": _done(org_service.ignore_suggestion, "suggestion_id"),
+    "org domain": _domain_list,
+    "org domain set": lambda r: org_service.set_domain(r.context(), r.args.domain, r.args.org),
+    "org domain unset": _done(org_service.unset_domain, "domain"),
     "settings default-org": lambda r: settings_service.set_default_org(
         r.context(), None if r.args.clear else r.args.org
     ),
@@ -1094,6 +1129,13 @@ ARGUMENTS: dict[str, list[Any]] = {
     "org close": [_a("org_id")],
     "org bind": [_a("--org", required=True), "SUBJECT"],
     "org unbind": ["SUBJECT"],
+    "org suggest apply": [
+        _a("suggestion_id", nargs="?"),
+        _a("--rule", choices=list(org_suggest.RULES), help="이 규칙의 열린 제안 전체"),
+    ],
+    "org suggest ignore": [_a("suggestion_id")],
+    "org domain set": [_a("domain"), _a("--org", required=True)],
+    "org domain unset": [_a("domain")],
     "settings default-org": ["ORG_OR_CLEAR"],
     "settings mode": [_a("mode", choices=[m.value for m in Mode])],
     "settings control-key": [_a("--clear", action="store_true", help="저장된 키를 해제한다")],
@@ -1212,8 +1254,11 @@ def build_parser() -> argparse.ArgumentParser:
     root.add_argument("--json", action="store_true", help="결과를 JSON 한 개로 출력")
     tree: dict[tuple[str, ...], argparse._SubParsersAction] = {(): root.add_subparsers(
         dest="group0", metavar="명령", required=True)}
-    for command in [*COMMANDS, *cli_restore.COMMANDS, *cli_evidence.COMMANDS,
-                    *cli_upgrade.COMMANDS]:
+    commands = [*COMMANDS, *cli_restore.COMMANDS, *cli_evidence.COMMANDS, *cli_upgrade.COMMANDS]
+    # 하위 명령도 가진 명령(``org suggest``)은 하위 명령 없이 부르면 자기 자신이 실행된다.
+    parents = {c.path for c in commands if any(o.path[:len(c.path)] == c.path != o.path
+                                              for o in commands)}
+    for command in commands:
         for depth in range(1, len(command.path)):
             prefix = command.path[:depth]
             if prefix not in tree:
@@ -1226,6 +1271,9 @@ def build_parser() -> argparse.ArgumentParser:
         leaf.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
                           help="결과를 JSON 한 개로 출력")
         _add_arguments(leaf, command.name)
+        if command.path in parents:
+            tree[command.path] = leaf.add_subparsers(
+                dest=f"group{len(command.path)}", metavar="명령", required=False)
     # 작업 실행기는 운영자 명령이 아니라 상주 프로세스라 명령 표(COMMANDS)에 없다.
     tree[()].add_parser("worker", help="작업 실행기를 기동한다").set_defaults(
         process="worker")

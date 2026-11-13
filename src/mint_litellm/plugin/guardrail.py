@@ -97,14 +97,15 @@ class MintGuardrail(CustomGuardrail):
         compat.register_callback(logger)
 
     def get_supported_event_hooks(self):
-        return [
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.pre_mcp_call,
-            GuardrailEventHooks.post_mcp_call,
-        ]
+        hooks = [GuardrailEventHooks.pre_call, GuardrailEventHooks.pre_mcp_call]
+        # 결과 단계 가드레일이 없는 LiteLLM(등급 C)에는 이 모드가 없다. 결과는 로거가 관측만 한다.
+        post = getattr(GuardrailEventHooks, "post_mcp_call", None)
+        return hooks if post is None else [*hooks, post]
 
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
         if call_type == compat.LIST_TOOLS:
+            if not self._runtime.list_enforced:
+                return None  # 저하 운용: 목록은 판정하지 않고 숨김은 LiteLLM 권한 동기화에 맡긴다
             return await self._discover(user_api_key_dict, data)
         if call_type == compat.CALL_TOOL:
             # 가드레일이 도는 단계의 호출 데이터는 서버·도구 이름이 있는 객체여야 한다. 아니면
