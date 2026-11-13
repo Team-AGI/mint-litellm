@@ -5,6 +5,7 @@
 경우와 같다.
 """
 
+import json
 import os
 import time
 import uuid
@@ -193,3 +194,94 @@ def test_a_replaced_upstream_version_is_observed_within_two_periods(
     with psycopg.connect(url, autocommit=True) as conn:
         kinds = {r[0] for r in conn.execute("SELECT kind FROM mint.events")}
     assert "contract_drift_detected" in kinds
+
+
+def _alert_kinds(url: str) -> set[str]:
+    with psycopg.connect(url, autocommit=True) as conn:
+        return {
+            r[0]
+            for r in conn.execute(
+                "SELECT kind FROM mint.alerts WHERE instance_id=%s AND status <> 'resolved'",
+                (INSTANCE,),
+            )
+        }
+
+
+def _run_worker(login, settings, control_client, until) -> None:
+    worker = Worker(login, INSTANCE, settings, litellm=control_client)
+    worker.open()
+    try:
+        deadline = time.monotonic() + 60
+        while not until() and time.monotonic() < deadline:
+            if not worker.step():
+                time.sleep(0.5)
+    finally:
+        worker.close()
+
+
+def test_a_new_tool_raises_a_contract_drift_alert(observed_server, control_client, tmp_path):
+    url, database = observed_server
+    # 승인된 계약에서 한 도구를 빼면 다음 관측에서 새 도구로 보인다
+    with psycopg.connect(url, autocommit=True) as conn:
+        conn.execute(
+            "UPDATE mint.tool_contracts SET status='superseded'"
+            " WHERE instance_id=%s AND tool='echo' AND status='approved'",
+            (INSTANCE,),
+        )
+    _run_worker(
+        _worker_url(database), _settings(3600, tmp_path), control_client,
+        lambda: "contract_drift" in _alert_kinds(url),
+    )
+    assert "contract_drift" in _alert_kinds(url)
+    with psycopg.connect(url, autocommit=True) as conn:
+        opened = conn.execute(
+            "SELECT count(*) FROM mint.events WHERE kind='alert_opened'"
+            " AND payload->>'kind'='contract_drift'"
+        ).fetchone()[0]
+    assert opened >= 1
+
+
+def test_a_burst_of_calls_raises_a_call_spike_alert_and_recovery_closes_it(
+    observed_server, control_client, tmp_path
+):
+    url, database = observed_server
+    with psycopg.connect(url, autocommit=True) as conn:
+        server = conn.execute(
+            "SELECT server_id FROM mint.servers WHERE instance_id=%s", (INSTANCE,)
+        ).fetchone()[0]
+        for _ in range(6):  # 시험용 낮은 기준(5건 이상, 기준선 없음)에서 6건
+            invocation = new_uuid7()
+            conn.execute(
+                "INSERT INTO mint.events(event_id,instance_id,kind,source_key,invocation_id,"
+                "attempt_id,payload) VALUES (%s,%s,'decision_evaluated',%s,%s,1,%s::jsonb)",
+                (new_uuid7(), INSTANCE, f"call:{invocation}:1", invocation,
+                 json.dumps({"operation": "tool_call", "resolved_server_id": server,
+                             "tool": "echo"})),
+            )
+    settings = Stage2Settings.from_env(
+        {
+            "MINT_EXPORT_DIR": str(tmp_path),
+            "MINT_EXPORT_HMAC_KEY": "A" * 43,
+            "MINT_SPIKE_MIN_CALLS": "5",
+        }
+    )
+    _run_worker(
+        _worker_url(database), settings, control_client,
+        lambda: "call_spike" in _alert_kinds(url),
+    )
+    assert "call_spike" in _alert_kinds(url)
+    # 평소 수준으로 돌아온 것과 같게, 최소 호출 수를 올려 다음 점검에서 경보가 닫히는지 본다.
+    quiet = Stage2Settings.from_env(
+        {
+            "MINT_EXPORT_DIR": str(tmp_path),
+            "MINT_EXPORT_HMAC_KEY": "A" * 43,
+            "MINT_SPIKE_MIN_CALLS": "1000",
+        }
+    )
+    with psycopg.connect(url, autocommit=True) as conn:
+        conn.execute("UPDATE mint.schedules SET next_run_at = now() WHERE kind='call_spike_scan'")
+    _run_worker(
+        _worker_url(database), quiet, control_client,
+        lambda: "call_spike" not in _alert_kinds(url),
+    )
+    assert "call_spike" not in _alert_kinds(url)

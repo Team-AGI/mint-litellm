@@ -123,6 +123,11 @@ class Stage2Settings:
     staff_consent_max_days: int = 90
     intake_allowed_ports: tuple[int, ...] = (443, 8443)
     console_url: str | None = None
+    # 호출량 급증: 최근 구간, 지난 기간(평균을 내는 기간), 평균의 몇 배, 최소 호출 수
+    spike_window_seconds: int = 300
+    spike_baseline_seconds: int = 86400
+    spike_factor: int = 3
+    spike_min_calls: int = 50
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "Stage2Settings":
@@ -148,6 +153,10 @@ class Stage2Settings:
             session_verify_seconds=_seconds(env, "MINT_SESSION_VERIFY_SECONDS", 300),
             staff_consent_max_days=_days(env, "MINT_STAFF_CONSENT_MAX_DAYS", 90),
             intake_allowed_ports=_ports(env.get("MINT_INTAKE_ALLOWED_PORTS")),
+            spike_window_seconds=_seconds(env, "MINT_SPIKE_WINDOW_SECONDS", 300),
+            spike_baseline_seconds=_seconds(env, "MINT_SPIKE_BASELINE_SECONDS", 86400),
+            spike_factor=_seconds(env, "MINT_SPIKE_FACTOR", 3),
+            spike_min_calls=_seconds(env, "MINT_SPIKE_MIN_CALLS", 50),
             console_url=(env.get("MINT_CONSOLE_URL") or "").strip() or None,
         )
         if settings.session_idle_seconds > settings.session_absolute_seconds:

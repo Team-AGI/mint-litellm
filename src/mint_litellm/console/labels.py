@@ -243,6 +243,11 @@ TIME_ZONE = {
     "UTC": "협정 세계시",
 }
 
+# 경보 종류(경보 발생·해결 사건에 함께 보인다)
+ALERT_KIND = {
+    "contract_drift": "계약 변경",
+    "call_spike": "호출량 급증",
+}
 EVENT_KIND = {
     "decision_evaluated": "호출 판정",
     "discovery_evaluated": "도구 목록 판정",

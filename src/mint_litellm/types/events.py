@@ -329,3 +329,4 @@ class AlertKind(StrEnum):
     APPROVAL_EXPIRING = "approval_expiring"
     ENDPOINT_STALE_SERVER = "endpoint_stale_server"
     ENDPOINT_UNMANAGED = "endpoint_unmanaged"
+    CALL_SPIKE = "call_spike"
