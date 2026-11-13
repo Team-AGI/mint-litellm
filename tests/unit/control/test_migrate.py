@@ -190,7 +190,8 @@ def test_open_approvals_without_a_contract_are_closed_on_managed_servers_only(fr
                 "019_exec_contract_approval_binding", "020_endpoint_installs",
                 "021_policy_evidence",
                 "022_approval_target_binding", "023_plugin_condition_defaults",
-                "024_stage3_hardening", "025_approval_recertification", "026_plugin_oauth_scopes_read"]
+                "024_stage3_hardening", "025_approval_recertification",
+                "026_plugin_oauth_scopes_read"]
             rows = conn.execute(
                 "SELECT server_id, status, count(*) FROM mint.call_approvals"
                 " GROUP BY server_id, status ORDER BY 1, 2"
