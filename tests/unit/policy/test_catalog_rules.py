@@ -83,8 +83,8 @@ def test_the_five_class_count_is_pinned():
     assert (_count("unconditional"), _count("conditional"), _count("partial")) == (37, 14, 21)
     assert auto == 72
     # 목표(90개 중 72개 이상) 산정은 반자동 수동 증거를 함께 센다.
-    assert _count("semi_auto_evidence") == 10
-    assert auto + _count("semi_auto_evidence") == 82
+    assert _count("semi_auto_evidence") == 12
+    assert auto + _count("semi_auto_evidence") == 84
 
 
 def test_policies_that_are_not_counted_stay_out_of_the_count():
