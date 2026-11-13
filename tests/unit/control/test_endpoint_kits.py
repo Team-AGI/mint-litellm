@@ -14,6 +14,7 @@ from ctl_fixtures import INSTANCE
 psycopg = pytest.importorskip("psycopg")
 from psycopg import errors  # noqa: E402
 from psycopg.conninfo import conninfo_to_dict, make_conninfo  # noqa: E402
+from psycopg.types.json import Jsonb  # noqa: E402
 
 from mint_litellm.control import endpoint_kits, servers  # noqa: E402
 from mint_litellm.control.errors import ControlError  # noqa: E402
@@ -238,4 +239,84 @@ def test_issuing_a_key_sets_the_expiry_and_the_plugin_role_cannot_change_the_lif
         conn.execute("UPDATE mint.endpoint_installs SET ttl_days = 365")
     with pytest.raises(errors.CheckViolation), conn.transaction():
         conn.execute("UPDATE mint.endpoint_installs SET expires_at = NULL")
+    conn.execute("RESET ROLE")
+
+
+# -- 단말의 관리 대상이 아닌 MCP 항목 ---------------------------------------------------------
+
+
+def entry(name, target="npx", **extra):
+    return {"harness": "claude", "name": name, "kind": "stdio", "target": target,
+            "package": None} | extra
+
+
+def test_the_unmanaged_mcp_list_keeps_first_seen_and_is_replaced_by_the_next_report(
+    fresh_db, plugin_dsn
+):
+    pytest.importorskip("psycopg_pool")
+    with psycopg.connect(fresh_db) as admin:
+        admin.execute(
+            "INSERT INTO mint.endpoint_installs (instance_id, key_token, user_id, key_alias,"
+            " issued_by) VALUES (%s, 'tok-a', 'u1', 'mint-kit-a', 'u1')", (INSTANCE,))
+
+    async def report(**extra):
+        database = PluginDatabase(plugin_dsn)
+        try:
+            return await database.report_install(
+                INSTANCE, "tok-a", mode="managed", kit_version="k", claude_version=None,
+                mcp_servers=[], **extra)
+        finally:
+            await database.close()
+
+    def stored():
+        with psycopg.connect(fresh_db) as admin:
+            return admin.execute(
+                "SELECT local_mcp FROM mint.endpoint_installs WHERE key_token = 'tok-a'"
+            ).fetchone()[0]
+
+    assert asyncio.run(report()) == "recorded" and stored() is None
+    asyncio.run(report(local_mcp=[entry("a"), entry("b")]))
+    first = {i["name"]: i["first_seen"] for i in stored()}
+    assert set(first) == {"a", "b"} and all(first.values())
+    asyncio.run(report(local_mcp=[entry("a"), entry("c")]))
+    again = {i["name"]: i["first_seen"] for i in stored()}
+    assert set(again) == {"a", "c"} and again["a"] == first["a"]  # 지속된 항목은 처음 시각을 유지
+    asyncio.run(report())  # 목록이 없는 보고(이전 묶음·SYSTEM)는 앞서 보고한 목록을 둔다.
+    assert {i["name"] for i in stored()} == {"a", "c"}
+    asyncio.run(report(local_mcp=[]))
+    assert stored() == []
+
+
+def test_the_inventory_counts_the_endpoints_that_share_an_entry_and_skips_dead_installs(conn):
+    issuer = Issuer()
+    keys = {user: issue(conn, issuer, user=user) for user in ("u1", "u2", "u3", "u4")}
+    modes = {"u1": "managed", "u2": "user", "u3": "managed", "u4": "removed"}
+    shared = entry(
+        "files", package="@scope/server-files@1.2.0", first_seen="2026-01-02T03:04:05+00:00"
+    )
+    for user, key in keys.items():
+        items = [shared, entry("only-" + user, "node")]
+        conn.execute(
+            "UPDATE mint.endpoint_installs SET install_mode = %s, reported_at = now(),"
+            " local_mcp = %s WHERE key_token = %s",
+            (modes[user], Jsonb(items), token(key)),
+        )
+    endpoint_kits.revoke_keys(conn, issuer, INSTANCE, "u3")
+    rows = endpoint_kits.local_mcp_inventory(conn, INSTANCE)
+    assert {(r["user_id"], r["name"]) for r in rows} == {
+        ("u1", "files"), ("u1", "only-u1"), ("u2", "files"), ("u2", "only-u2")}
+    files = [r for r in rows if r["name"] == "files"]
+    assert {r["endpoints"] for r in files} == {2}
+    assert {r["endpoints"] for r in rows if r["name"] != "files"} == {1}
+    assert files[0]["first_seen"].year == 2026 and files[0]["last_seen"] is not None
+    assert {r["state"] for r in files} == {"managed", "user"}
+
+
+def test_the_plugin_role_may_write_the_unmanaged_list_but_nothing_else_of_the_row(conn):
+    key = issue(conn, Issuer())
+    conn.execute("SET LOCAL ROLE mint_plugin")
+    conn.execute("UPDATE mint.endpoint_installs SET local_mcp = '[]'::jsonb WHERE key_token = %s",
+                 (token(key),))
+    with pytest.raises(errors.CheckViolation), conn.transaction():
+        conn.execute("UPDATE mint.endpoint_installs SET local_mcp = '{}'::jsonb")
     conn.execute("RESET ROLE")

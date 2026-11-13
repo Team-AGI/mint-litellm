@@ -52,6 +52,12 @@
 | `mint-litellm org close` | `admin` | 조직을 닫는다. 닫힌 조직에 속한 주체의 호출은 차단된다. | - | `org_closed` |
 | `mint-litellm org bind` | `admin` | 팀 또는 사용자를 조직에 묶는다. 한 팀·한 사용자는 한 조직에만 묶인다. | - | `org_binding_created` |
 | `mint-litellm org unbind` | `admin` | 팀 또는 사용자의 조직 바인딩을 제거한다. | - | `org_binding_removed` |
+| `mint-litellm org suggest` | 모든 역할 | 점검 작업이 만든 열린 조직 연결 제안을 조회한다(최근 7일 호출이 많은 주체가 먼저). | - | - |
+| `mint-litellm org suggest apply` | `admin` | 제안 하나(`<제안 식별자>`) 또는 한 규칙의 열린 제안 전체(`--rule team_metadata\|team_alias\|email_domain`)를 적용한다. 묶기는 `org bind`와 같은 경로이다. | - | `org_binding_created` |
+| `mint-litellm org suggest ignore` | `admin` | 제안을 무시한다. 무시한 제안은 다시 열리지 않는다. | - | - |
+| `mint-litellm org domain` | 모든 역할 | 이메일 도메인과 조직의 대응표를 조회한다. | - | - |
+| `mint-litellm org domain set` | `admin` | 이메일 도메인을 조직에 대응시킨다(`--org`). | - | - |
+| `mint-litellm org domain unset` | `admin` | 도메인의 조직 대응을 지운다. | - | - |
 | `mint-litellm settings default-org` | `admin` | 바인딩이 없는 주체에 적용할 기본 조직을 지정하거나 해제한다. | - | `settings_changed` |
 | `mint-litellm settings mode` | `admin` | 집행 모드를 enforce 또는 observe로 정한다. 환경 변수의 상한이 enforce이면 observe로 바꿀 수 없다. | - | `settings_changed` |
 | `mint-litellm settings control-key` | `admin` | 환경 변수 `MINT_LITELLM_KEY`의 제어 평면 키를 도구 목록 면제 키로 저장한다(`--clear`는 해제). `init`도 키가 있으면 저장되지 않은 경우 같은 일을 한다. | - | `settings_changed` |
@@ -120,7 +126,7 @@
 
 - 주기가 된 일정(`schedules`)을 한 주기에 한 번 작업으로 등록하고, 임대가 만료된 `running` 작업을 `pending`으로 되돌리고(시도 한 번으로 센다), 대기 작업을 하나씩 임대해 실행한다. 실행 중에는 임대(`MINT_WORKER_LEASE_SECONDS`, 기본 60초)를 1/3마다 연장하고, 연장에 실패하면 그 작업의 외부 호출을 멈춘다.
 - 실패한 작업은 `min(2^시도 횟수 × 5초, 10분)` 뒤에 다시 시도하고, 시도 8번째 실패에서 `failed`가 되며 경보 `job_failed`(같은 종류·대상은 한 건으로 묶고 횟수만 올린다)를 남긴다. 오류 메시지는 저장하지 않고 오류 코드만 남긴다.
-- 작업 실행기가 처리하는 작업은 `submission_poll`(`MINT_SUBMISSION_POLL_SECONDS`마다 LiteLLM 제출을 신청으로 만든다), `intake_run`(수용검증), `session_verify`(콘솔 세션 재확인), `package_vuln_scan`(`MINT_VULN_SCAN_SECONDS`마다 패키지 취약점 조회와 치명 취약점 48시간 기한 판정, 아래 「패키지·취약점 통제」), `evidence_expiry_scan`(1시간마다 증거 만료 7일 전 경보와 재검사 등록), `approval_expiry_scan`(1분마다 만료된 호출별 승인·본인 확인을 `expired`로 표시), `endpoint_result_scan`(1분마다 결과 보고 없이 5분이 지난 허용된 로컬 서버 호출에 `call_outcome_unknown`(사유 `no_report`)을 남긴다), `seal`(1분마다 미봉인 사건을 해시 연쇄로 봉인), `export_negative_state`(부정 상태 전이가 커밋될 때 등록), `export_checkpoint`(10분마다, 기동 직후 한 번)이다. 그 밖에 `contract_observe`, `sync_server`·`sync_target`·`sync_reconcile`, `relation_finalize`·`server_finalize`·`activation_finalize`, `alert_deliver`, `call_spike_scan`, `bulk_extraction_scan`(1분마다 호출한 쪽·서버별 결과량을 지난 7일 평균과 견주는 대량 추출 탐지, 아래 환경 변수 `MINT_BULK_*`), `content_finding_scan`(1분마다 계약 관리가 아닌 서버의 내용 검사 기록을 모아 경보를 연다), `metric_rollup`(1분마다 지표 롤업), `restore_publish`가 있다. 처리기가 없는 종류는 등록할 수 없다.
+- 작업 실행기가 처리하는 작업은 `org_suggest_scan`(`MINT_ORG_SUGGEST_SECONDS`마다 조직 연결 제안 갱신, 「조직 연결 제안」), `bulk_extraction_scan`(1분마다 호출한 쪽·서버별 결과량을 지난 7일 평균과 견주는 대량 추출 탐지, 아래 환경 변수 `MINT_BULK_*`), `submission_poll`(`MINT_SUBMISSION_POLL_SECONDS`마다 LiteLLM 제출을 신청으로 만든다), `intake_run`(수용검증), `session_verify`(콘솔 세션 재확인), `package_vuln_scan`(`MINT_VULN_SCAN_SECONDS`마다 패키지 취약점 조회와 치명 취약점 48시간 기한 판정, 아래 「패키지·취약점 통제」), `evidence_expiry_scan`(1시간마다 증거 만료 7일 전 경보와 재검사 등록), `approval_expiry_scan`(1분마다 만료된 호출별 승인·본인 확인을 `expired`로 표시), `endpoint_result_scan`(1분마다 결과 보고 없이 5분이 지난 허용된 로컬 서버 호출에 `call_outcome_unknown`(사유 `no_report`)을 남긴다), `seal`(1분마다 미봉인 사건을 해시 연쇄로 봉인), `export_negative_state`(부정 상태 전이가 커밋될 때 등록), `export_checkpoint`(10분마다, 기동 직후 한 번)이다. 그 밖에 `contract_observe`, `sync_server`·`sync_target`·`sync_reconcile`, `relation_finalize`·`server_finalize`·`activation_finalize`, `alert_deliver`, `call_spike_scan`, `content_finding_scan`(1분마다 계약 관리가 아닌 서버의 내용 검사 기록을 모아 경보를 연다), `metric_rollup`(1분마다 지표 롤업), `restore_publish`가 있다. 처리기가 없는 종류는 등록할 수 없다.
 - 60초마다 내보내기 파일과 DB를 대조해 되돌림을 판정한다. 처음 어긋나면 봉인·내보내기를 보류하고, 두 번 연속 어긋나거나 파일이 없거나 검증되지 않으면 외부 쓰기를 모두 멈춘다(`restore_blocked`로 대기, 시도 횟수 불변). 외부 쓰기 직전마다 같은 판정과 임대 유효성을 다시 확인한다.
 - SIGTERM·SIGINT를 받으면 실행 중인 작업에 취소를 알린다. 작업이 그대로 끝나면 완료로 기록하고, 취소를 받아 멈추면 시도 횟수를 올리지 않고 임대를 놓은 뒤 종료한다.
 
@@ -218,6 +224,8 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 | `MINT_BULK_FACTOR` | 최근 구간의 결과량이 구간당 평균의 이 배수 이상이면 경보 후보이다. | `5` |
 | `MINT_BULK_MIN_BYTES`, `MINT_BULK_MIN_ITEMS` | 경보의 바닥값. 결과 바이트 수가 앞의 값 이상이거나 항목 수가 뒤의 값 이상일 때만 연다. | `5242880`, `2000` |
 | `MINT_BULK_EXTRACTION_ACTION` | `alert`은 경보만 연다. `hold`는 경보를 새로 열 때 그 호출한 쪽의 해당 서버 호출을 거부로 막고, 관리자가 콘솔 「거부」 화면에서 해제할 때까지 둔다. | `alert` |
+| `MINT_ORG_META_KEY` | 팀 메타데이터에서 조직 식별자를 읽는 키. | `mint_org` |
+| `MINT_ORG_SUGGEST_SECONDS` | 조직 연결 제안 점검 주기(초, 60 이상). | `3600` |
 | `MINT_DORMANT_DAYS` | 이 일수 동안 호출에 한 번도 쓰이지 않은 활성 승인을 「미사용」으로 본다. | `30` |
 | `MINT_CONSOLE_URL` | 경보 본문의 `console_url`에 넣을 콘솔 주소(선택). 없으면 `null`이다. | 없음 |
 | `MINT_LITELLM_CONFIG` | `check`·`status`가 읽는 LiteLLM `config.yaml` 경로. `--config`로 대신할 수 있다. | 없음 |
@@ -358,6 +366,10 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 작업 `package_vuln_scan`은 `MINT_VULN_SCAN_SECONDS`마다 현재 계약의 npm·PyPI 패키지(버전이 고정된 것)를 OSV 형식 API(`POST /v1/querybatch`, 취약점 상세 `GET /v1/vulns/{id}`)로 조회해 결과를 저장하고 취약점마다 `package_vulnerable` 경보를 연다. 등급은 CVSS 3.x 점수와 조회처가 알려 주는 등급 중 높은 쪽이며, 악용 확인 표지(`known_exploited`)가 있으면 치명으로 본다. 조회가 안 되면 `vuln_feed_unreachable` 경보 하나만 열고 호출은 막지 않는다. 컨테이너 이미지는 조회하지 않는다.
 
 치명 취약점(점수 9.0 이상, 등급 CRITICAL, 악용 확인)은 처음 확인한 시각부터 48시간 안에 조치해야 한다. 남은 시간이 24시간 이하가 되면 `package_vuln_due` 경보(`state: escalated`)를 열고, 기한이 지나면 같은 경보(`state: overdue`)와 함께 그 서버의 호출을 사유 `CONTRACT_DRIFT_vuln_overdue`로 막는다. 관측 모드로 풀 수 없다. 패키지를 고쳐 다시 등록·승인해 취약점이 조회에서 사라지거나, admin·approver가 `evidence attach vuln_exception <서버>`로 사유와 기한(30일 이하)을 붙이면 다음 주기에 풀린다.
+
+## 조직 연결 제안
+
+작업 `org_suggest_scan`은 LiteLLM 관리 API(`/team/list`, `/user/list`)로 팀·사용자를 읽어 아직 조직에 묶이지 않은 주체의 조직을 제안한다. 규칙은 이 순서로 처음 맞는 것을 쓴다: 팀 메타데이터의 `MINT_ORG_META_KEY` 값이 활성 조직 식별자와 같음(`team_metadata`), 팀 별칭이 조직 식별자나 이름으로 시작하고 뒤가 문자·숫자가 아님(`team_alias`, 같은 길이로 두 조직에 맞으면 제안하지 않음), 사용자 이메일 도메인이 대응표(`org domain set`)에 있음(`email_domain`). 키는 팀·사용자를 거쳐 조직이 정해지므로 제안하지 않는다. 최근 7일 안에 판정 사건이 있는 주체가 먼저 나온다. 제안은 저장만 하며 관리자가 콘솔 「운영자·조직」의 「적용」·「무시」(규칙별 일괄 적용 포함)나 `org suggest apply`로 적용해야 묶인다. 적용할 수 없는 제안(이미 묶임, 닫힌 조직)은 일괄 적용에서 건너뛴다. 제어 평면 키의 허용 경로에 `/user/list`가 있어야 한다.
 
 ## 원장 조회
 

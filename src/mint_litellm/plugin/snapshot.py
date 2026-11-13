@@ -20,6 +20,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
+from mint_litellm.endpoint.refresh import desired_servers, merge_local_mcp
 from mint_litellm.endpoint.remediation import remediation_events, retired_names
 from mint_litellm.plugin.buffer import ConsumeRequest, ConsumptionLost
 from mint_litellm.types.events import Event
@@ -1016,6 +1017,7 @@ class PluginDatabase:
         processes: Sequence[dict[str, Any]] | None = None,
         autostart: Sequence[dict[str, Any]] | None = None,
         removed: Sequence[dict[str, Any]] | None = None,
+        local_mcp: Sequence[dict[str, Any]] | None = None,
     ) -> str:
         """설치 묶음에 발급한 키의 설치 상태 보고를 남기고 결과를 돌려준다.
 
@@ -1030,7 +1032,7 @@ class PluginDatabase:
                 cursor = await conn.execute(
                     "SELECT expires_at IS NOT NULL AND expires_at <= clock_timestamp(),"
                     " expires_at IS NOT NULL AND expires_at <= clock_timestamp() + %s,"
-                    " user_id, key_alias"
+                    " user_id, key_alias, local_mcp"
                     " FROM mint.endpoint_installs WHERE instance_id = %s AND key_token = %s"
                     " AND revoked_at IS NULL FOR UPDATE",
                     (RENEW_WINDOW, instance_id, key_token),
@@ -1040,16 +1042,21 @@ class PluginDatabase:
                     return "unknown"
                 if row[0]:
                     return "expired"
+                # 보고에 로컬 MCP 목록이 없으면(이전 묶음·SYSTEM 보고기) 앞서 보고한 목록을 둔다.
+                seen = row[4] if local_mcp is None else merge_local_mcp(
+                    local_mcp, row[4], datetime.now(UTC).isoformat()
+                )
                 await conn.execute(
                     "UPDATE mint.endpoint_installs SET install_mode = %s, kit_version = %s,"
                     " claude_version = %s, mcp_servers = %s, processes = %s, autostart = %s,"
+                    " local_mcp = %s,"
                     " reported_at = clock_timestamp(), expires_at = CASE WHEN %s"
                     " THEN clock_timestamp() + make_interval(days => ttl_days) ELSE expires_at END"
                     " WHERE instance_id = %s AND key_token = %s",
                     (mode, kit_version, claude_version, Jsonb(list(mcp_servers)),
                      None if processes is None else Jsonb(list(processes)),
-                     None if autostart is None else Jsonb(list(autostart)), row[1], instance_id,
-                     key_token),
+                     None if autostart is None else Jsonb(list(autostart)),
+                     None if seen is None else Jsonb(list(seen)), row[1], instance_id, key_token),
                 )
                 return ("renewed" if row[1] else "recorded", row[2], row[3])
 
@@ -1064,6 +1071,24 @@ class PluginDatabase:
         ):
             await self.insert_event(event)
         return str(status)
+
+    async def desired_servers(self, instance_id: str) -> list[dict[str, Any]]:
+        """설치 보고 응답에 실을 승인된 로컬 서버 목록(이름·계약·판본)."""
+
+        async def read(conn: Any) -> Any:
+            cursor = await conn.execute(
+                "SELECT DISTINCT ON (s.server_id) s.server_id, e.payload -> 'exec_contract'"
+                " FROM mint.servers s JOIN mint.events e ON e.instance_id = s.instance_id"
+                " AND e.kind = 'server_registered' AND e.payload ->> 'server_id' = s.server_id"
+                " AND e.payload ->> 'exec_contract_sha256' = s.exec_contract_sha256"
+                " WHERE s.instance_id = %s AND s.identity_kind = 'stdio'"
+                " AND s.status = 'approved' ORDER BY s.server_id, e.inserted_at DESC",
+                (instance_id,),
+            )
+            return await cursor.fetchall()
+
+        rows = await self._run(read)
+        return desired_servers({name: doc for name, doc in rows if isinstance(doc, dict)})
 
     async def retired_servers(self, instance_id: str, reported: Sequence[str]) -> list[str]:
         """설치 보고 응답에 실을 폐기·미승인 로컬 서버 이름."""

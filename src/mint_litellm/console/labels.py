@@ -208,7 +208,14 @@ SCOPE = {"key": "키", "user": "사용자", "team": "팀", "org": "조직", "ser
 APPROVAL_CLASS = {"standard": "일반", "exception": "예외"}
 PRINCIPAL = {"user": "사용자", "team_key": "팀 키", "service_account": "서비스 계정"}
 KIT_PLATFORM = {"linux": "Linux", "windows": "Windows"}
+# 단말 설정에서 발견한 MCP 항목의 전송 방식
+LOCAL_TRANSPORT = {"stdio": "로컬 실행", "http": "원격(HTTP)", "sse": "원격(SSE)"}
 KIT_HARNESS = {"claude": "Claude Code", "codex": "Codex", "all": "Claude Code + Codex"}
+ORG_RULE = {
+    "team_metadata": "팀 메타데이터",
+    "team_alias": "팀 별칭",
+    "email_domain": "이메일 도메인",
+}
 ALLOWLIST_KIND = {
     "provider": "제공자",
     "auth_server": "인증 서버",
@@ -282,6 +289,7 @@ ALERT_KIND = {
     "call_spike": "호출량 급증",
     "bulk_extraction": "대량 추출 의심",
     "content_finding_unmanaged": "미관리 서버 내용 검사",
+    "result_unenforced": "결과를 막지 못함",
     "approval_dormant": "미사용 승인",
     "endpoint_stale_server": "폐기 서버 항목 잔존",
     "endpoint_unmanaged": "관리되지 않는 설치",
@@ -439,12 +447,16 @@ NOTICES = {
     "call_cancelled": "승인 요청을 취소했습니다.",
     "org_added": "조직을 생성했습니다.",
     "org_closed": "조직을 닫았습니다.",
+    "org_suggestion_applied": "조직 연결 제안을 적용했습니다.",
+    "org_suggestion_ignored": "조직 연결 제안을 무시했습니다.",
+    "org_suggestions_applied": "규칙의 열린 제안을 적용했습니다.",
     "allowlist_added": "허용 목록에 추가했습니다.",
     "mode_set": "모드를 변경했습니다.",
     "policy_applied": "정책 판본을 적용했습니다.",
     "shadow_cancelled": "정책 시험 적용을 취소했습니다.",
     "operator_role": "운영자의 역할을 변경했습니다.",
     "requester_assigned": "신청자를 지정했습니다.",
+    "intake_created": "신청을 등록했습니다.",
     "evidence_attached": "증빙을 첨부했습니다.",
     "rechecked": "재검사를 등록했습니다.",
     "intake_approved": "신청을 승인했습니다.",

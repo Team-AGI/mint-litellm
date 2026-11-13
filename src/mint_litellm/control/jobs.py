@@ -53,12 +53,14 @@ KINDS: dict[str, JobKind] = {
     "call_spike_scan": JobKind(),
     "bulk_extraction_scan": JobKind(),
     "content_finding_scan": JobKind(),
+    "result_unenforced_scan": JobKind(),
     "package_vuln_scan": JobKind(),
     # 사건 분할을 미리 만들고 닫힌 달을 내보낸다 / 보관 기간이 지난 달을 지운다.
     "event_partition_maintain": JobKind(external_write=True),
     "event_retention": JobKind(external_write=True),
     "approval_dormant_scan": JobKind(),
     "metric_rollup": JobKind(),
+    "org_suggest_scan": JobKind(),
     # 해제 경로: 되돌림 차단 상태에서도 실행한다(외부 쓰기 목록에 넣지 않는다).
     "restore_publish": JobKind(),
 }
@@ -234,6 +236,10 @@ def _content_finding_scan(job: JobContext) -> None:
     from mint_litellm.control import content_finding
 
     content_finding.run(job)
+def _result_unenforced_scan(job: JobContext) -> None:
+    from mint_litellm.control import result_unenforced
+
+    result_unenforced.run(job)
 
 
 def _approval_dormant_scan(job: JobContext) -> None:
@@ -246,6 +252,10 @@ def _metric_rollup(job: JobContext) -> None:
     from mint_litellm.control import metric_rollup
 
     metric_rollup.run(job)
+def _org_suggest_scan(job: JobContext) -> None:
+    from mint_litellm.control import org_suggest
+
+    org_suggest.run(job)
 
 
 def _package_vuln_scan(job: JobContext) -> None:
@@ -332,11 +342,13 @@ HANDLERS: dict[str, Callable[[JobContext], None]] = {
     "call_spike_scan": _call_spike_scan,
     "bulk_extraction_scan": _bulk_extraction_scan,
     "content_finding_scan": _content_finding_scan,
+    "result_unenforced_scan": _result_unenforced_scan,
     "package_vuln_scan": _package_vuln_scan,
     "event_partition_maintain": _event_partition_maintain,
     "event_retention": _event_retention,
     "approval_dormant_scan": _approval_dormant_scan,
     "metric_rollup": _metric_rollup,
+    "org_suggest_scan": _org_suggest_scan,
 }
 
 # 일정(주기 작업): 종류 -> 설정에서 주기(초)를 얻는 함수. 처리기가 있는 종류만 일정을 만든다.
@@ -353,11 +365,13 @@ SCHEDULES: dict[str, Callable[[Any], int]] = {
     "call_spike_scan": lambda s: 60,
     "bulk_extraction_scan": lambda s: 60,
     "content_finding_scan": lambda s: 60,
+    "result_unenforced_scan": lambda s: 60,
     "package_vuln_scan": lambda s: s.vuln_scan_seconds,
     "event_partition_maintain": lambda s: 3600,  # 1시간(고정)
     "event_retention": lambda s: 3600,  # 1시간(고정). 보관 일수가 없으면 아무것도 하지 않는다.
     "approval_dormant_scan": lambda s: 3600,  # 1시간(고정)
     "metric_rollup": lambda s: 60,
+    "org_suggest_scan": lambda s: s.org_suggest_seconds,
 }
 
 

@@ -142,5 +142,17 @@ class LiteLLMAdmin:
     def list_teams(self) -> list[dict]:
         return self._ok("/team/list", shape=list)
 
+    def list_users(self) -> list[dict]:
+        users: list[dict] = []
+        page = 1
+        while True:
+            body = self._ok(
+                "/user/list", {"page": page, "page_size": PAGE_SIZE}, key="users", shape=list
+            )
+            users.extend(u for u in body["users"] if isinstance(u, dict))
+            if page >= body.get("total_pages", 1):
+                return users
+            page += 1
+
     def list_guardrails(self) -> list[dict]:
         return self._ok("/guardrails/list", key="guardrails", shape=list)["guardrails"]

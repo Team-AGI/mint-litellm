@@ -200,6 +200,9 @@ class Stage2Settings:
     vuln_feed_timeout_seconds: int = 15
     # 사건 원장 보관 일수. 없으면(기본) 분할을 지우지 않는다. MINT는 기본값을 정하지 않는다.
     event_retention_days: int | None = None
+    # 조직 연결 제안: 팀 메타데이터에서 조직을 읽는 키와 점검 주기(초). 기본값은 MINT가 채운다.
+    org_meta_key: str = "mint_org"
+    org_suggest_seconds: int = 3600
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "Stage2Settings":
@@ -246,6 +249,8 @@ class Stage2Settings:
             vuln_scan_seconds=_seconds(env, "MINT_VULN_SCAN_SECONDS", 900, 60),
             instance_mismatch_grace_seconds=_seconds(
                 env, "MINT_INSTANCE_MISMATCH_GRACE_SECONDS", 900, 0),
+            org_meta_key=(env.get("MINT_ORG_META_KEY") or "").strip() or "mint_org",
+            org_suggest_seconds=_seconds(env, "MINT_ORG_SUGGEST_SECONDS", 3600, 60),
             vuln_feed_timeout_seconds=_seconds(env, "MINT_VULN_FEED_TIMEOUT_SECONDS", 15),
             event_retention_days=_retention_days(env),
             console_url=(env.get("MINT_CONSOLE_URL") or "").strip() or None,

@@ -411,6 +411,8 @@ class ResponseObservation(BaseModel):
     sensitive_findings: dict[str, int] = Field(default_factory=dict)
     # 계약 관리가 아닌 서버에서 막지 않고 관측만 한 검사 결과(결과 지시문 표지·인자 비밀).
     unmanaged_findings: tuple[str, ...] = ()
+    # 결과 단계 가드레일이 없는 LiteLLM(저하 운용): 걸려도 막지도 가리지도 못한 결과.
+    result_unenforced: bool = False
     # 새 행부터 남는 결과 분류(success·tool_error·output_blocked).
     outcome: Outcome | None = None
 
@@ -441,3 +443,4 @@ class AlertKind(StrEnum):
     CALL_SPIKE = "call_spike"
     BULK_EXTRACTION = "bulk_extraction"
     CONTENT_FINDING_UNMANAGED = "content_finding_unmanaged"
+    RESULT_UNENFORCED = "result_unenforced"

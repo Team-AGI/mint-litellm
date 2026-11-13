@@ -3,6 +3,7 @@
 from datetime import timedelta
 from typing import Any
 
+from mint_litellm.compat import capabilities
 from mint_litellm.compat import litellm_1_106 as compat
 from mint_litellm.control import approvals, checks, settings_store, todo
 from mint_litellm.control.config import ControlConfig
@@ -88,6 +89,8 @@ def collect(
             "grade": found.grade,
             "tested": found.tested,
             "missing": list(found.missing),
+            "degraded": capabilities.degraded_findings(found),
+            "affected_policies": list(capabilities.affected_policies(found.grade)),
         },
         "instance_id": ctx.instance_id,
         "mode": {
@@ -202,8 +205,21 @@ def _compat_line(found: dict[str, Any] | None) -> str:
     if not found["tested"]:
         line += " (검증되지 않은 판본)"
     if found["grade"] != "A":
-        line += f" - 빠진 능력: {', '.join(found['missing'])}; 등급 A만 기동한다"
+        line += f" - 빠진 능력: {', '.join(found['missing'])}"
+        line += (
+            "; 저하 운용(MINT_ALLOW_DEGRADED_LITELLM)이 켜진 경우에만 B·C가 기동한다"
+            if found["grade"] in ("B", "C")
+            else "; 등급 A만 기동한다"
+        )
     return line
+
+
+def _degraded_lines(found: dict[str, Any] | None) -> list[str]:
+    if not found or not found.get("degraded"):
+        return []
+    lines = [f"  저하 운용 - 보장하지 않는 것: {text}" for text in found["degraded"]]
+    lines.append(f"  집행이 약해지는 정책: {', '.join(found['affected_policies'])}")
+    return lines
 
 
 def render(info: dict[str, Any]) -> str:
@@ -214,6 +230,7 @@ def render(info: dict[str, Any]) -> str:
         f"기본 조직: {info['default_org_id'] or '없음'}",
         f"정책 판본: {info['policy_version'] or '없음'}",
         _compat_line(info.get("litellm_compat")),
+        *_degraded_lines(info.get("litellm_compat")),
         "서버: " + (", ".join(f"{k} {v}" for k, v in sorted(info["servers"].items())) or "없음"),
         "경보: " + ("없음" if not info["alerts"] else ""),
     ]
