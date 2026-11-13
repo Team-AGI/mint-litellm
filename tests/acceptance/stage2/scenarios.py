@@ -1421,7 +1421,8 @@ def confirmation_replica_unique(ctx):
                 "server_id": row["server_id"], "tool": row["tool"], "args_fp": row["args_fp"],
                 "fp_key_version": row["fp_key_version"],
                 "policy_version_id": row["policy_version_id"],
-                "state_version": row["state_version"]}).rowcount)
+                "state_version": row["state_version"],
+                "contract_id": None}).rowcount)
 
     threads = [threading.Thread(target=consume) for _ in range(2)]
     for thread in threads:
@@ -1869,7 +1870,9 @@ STAFF_FORBIDDEN_SQL = (
 
 
 def mutation_marks():
-    return [n(f"SELECT count(*) FROM mint.{t} WHERE instance_id={lit(iid())}")
+    # 경보 사건(alert_*)은 배경 작업이 낸다. 직원 쓰기 시도의 표식에서 뺀다.
+    return [n(f"SELECT count(*) FROM mint.{t} WHERE instance_id={lit(iid())}"
+              + (" AND kind NOT LIKE 'alert\_%'" if t == "events" else ""))
             for t in ("orgs", "denials", "events", "approvals")] + [
         n(f"SELECT count(*) FROM mint.approvals WHERE instance_id={lit(iid())} "
           "AND status='revoked'"), epoch()]
