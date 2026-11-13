@@ -40,13 +40,13 @@ def with_policy(conn):
         " VALUES (%s, 'v1', %s, %s)", (INSTANCE, HEX, HEX))
 
 
-def open_auto_request(conn):
+def open_auto_request(conn, requested_by=expiry.AUTO_REQUESTER):
     conn.execute(
         "INSERT INTO mint.call_approvals (id, instance_id, org_id, principal_type, principal_id,"
         " server_id, tool, args_fp, fp_key_version, policy_version_id, status, requested_by,"
         " expires_at) VALUES (gen_random_uuid(), %s, 'acme', 'user', 'alice', 'ctl-everything',"
         " 'echo', %s, 1, 'v1', 'pending', %s, now() + interval '1 day')",
-        (INSTANCE, HEX, expiry.AUTO_REQUESTER),
+        (INSTANCE, HEX, requested_by),
     )
 
 
@@ -65,9 +65,7 @@ def test_an_automatic_call_request_is_announced_once(ctx, litellm, conn):
 def test_an_operator_made_request_is_not_announced(ctx, litellm, conn):
     prepare(ctx, litellm)
     with_policy(conn)
-    conn.execute("UPDATE mint.call_approvals SET requested_by = 'x'")
-    open_auto_request(conn)
-    conn.execute("UPDATE mint.call_approvals SET requested_by = 'operator'")
+    open_auto_request(conn, requested_by="operator")
     assert expiry.announce_requests(conn, INSTANCE) == 0
 
 
