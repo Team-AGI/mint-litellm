@@ -64,6 +64,14 @@ def server(conn: psycopg.Connection, instance: str, server_id: str) -> dict | No
     )
     if row is None:
         return None
+    row["exec_drift"] = fetchone(
+        conn,
+        "SELECT subject -> 'axes' AS axes, subject -> 'widened' AS widened FROM mint.alerts"
+        " WHERE instance_id = %s AND kind = 'contract_drift' AND status <> 'resolved'"
+        " AND subject ->> 'kind' = 'exec' AND subject ->> 'server_id' = %s"
+        " ORDER BY last_at DESC LIMIT 1",
+        (instance, server_id),
+    )
     row["relations"] = relations(conn, instance, server_id)
     row["approvals"] = approvals(conn, instance, server_id=server_id)
     row["denials"] = [d for d in denials(conn, instance) if d["server_id"] == server_id]

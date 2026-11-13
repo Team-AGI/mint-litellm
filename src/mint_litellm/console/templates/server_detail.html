@@ -10,6 +10,12 @@
   {% if s.identity_kind == 'stdio' %}<dt>실행 계약 지문</dt><dd><code>{{ s.exec_contract_sha256 }}</code></dd>
   {% else %}<dt>주소 지문</dt><dd><code>{{ s.url_sha256 }}</code></dd>{% endif %}
 </dl>
+{% if s.exec_drift %}
+<h2>실행 계약 변경</h2>
+<table><thead><tr><th>구분</th><th>판정</th><th>더해진 항목</th><th>빠진 항목</th></tr></thead><tbody>
+{% for axis, label in [('file', '파일 접근'), ('exec', '실행'), ('network', '네트워크')] %}{% set r = s.exec_drift.axes[axis] %}<tr><td>{{ label }}</td><td>{{ {'widened': '확대', 'narrowed': '축소', 'unchanged': '변화 없음'}[r.verdict] }}</td><td>{{ r.added | join(', ') | blank }}</td><td>{{ r.removed | join(', ') | blank }}</td></tr>{% endfor %}
+</tbody></table>
+{% endif %}
 <h2>도구</h2>
 {% if s.tools %}
 <table><thead><tr><th>도구</th><th>위험 등급</th><th>동작 유형</th><th>변경</th></tr></thead><tbody>
