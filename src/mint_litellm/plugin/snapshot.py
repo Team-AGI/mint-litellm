@@ -16,7 +16,7 @@ import socket
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -642,6 +642,10 @@ def _sever(conn: Any) -> None:
         sock.detach()
 
 
+# 만료까지 이만큼 남았을 때부터 보고가 키의 만료 시각을 늘린다.
+RENEW_WINDOW = timedelta(days=14)
+
+
 @dataclass
 class PluginDatabase:
     """판정 프로세스 전용 연결. 상태 표 조회와 사건 추가, 호출별 승인 소비만 한다.
@@ -925,23 +929,43 @@ class PluginDatabase:
         mcp_servers: Sequence[str],
         processes: Sequence[dict[str, Any]] | None = None,
         autostart: Sequence[dict[str, Any]] | None = None,
-    ) -> bool:
-        """설치 묶음에 발급한 키의 설치 상태 보고를 남긴다. 해제되었거나 발급하지 않은 키면 거짓."""
+    ) -> str:
+        """설치 묶음에 발급한 키의 설치 상태 보고를 남기고 결과를 돌려준다.
+
+        ``unknown``: 해제되었거나 발급하지 않은 키. ``expired``: 만료된 키(아무것도 남기지 않는다).
+        ``renewed``: 기록하고 만료 시각을 ``ttl_days``만큼 늘렸다(만료 14일 안).
+        ``recorded``: 기록만 했다.
+        """
         from psycopg.types.json import Jsonb
 
         async def write(conn: Any) -> Any:
-            cursor = await conn.execute(
-                "UPDATE mint.endpoint_installs SET install_mode = %s, kit_version = %s,"
-                " claude_version = %s, mcp_servers = %s, processes = %s, autostart = %s,"
-                " reported_at = clock_timestamp()"
-                " WHERE instance_id = %s AND key_token = %s AND revoked_at IS NULL",
-                (mode, kit_version, claude_version, Jsonb(list(mcp_servers)),
-                 None if processes is None else Jsonb(list(processes)),
-                 None if autostart is None else Jsonb(list(autostart)), instance_id, key_token),
-            )
-            return cursor.rowcount
+            async with conn.transaction():
+                cursor = await conn.execute(
+                    "SELECT expires_at IS NOT NULL AND expires_at <= clock_timestamp(),"
+                    " expires_at IS NOT NULL AND expires_at <= clock_timestamp() + %s"
+                    " FROM mint.endpoint_installs WHERE instance_id = %s AND key_token = %s"
+                    " AND revoked_at IS NULL FOR UPDATE",
+                    (RENEW_WINDOW, instance_id, key_token),
+                )
+                row = await cursor.fetchone()
+                if row is None:
+                    return "unknown"
+                if row[0]:
+                    return "expired"
+                await conn.execute(
+                    "UPDATE mint.endpoint_installs SET install_mode = %s, kit_version = %s,"
+                    " claude_version = %s, mcp_servers = %s, processes = %s, autostart = %s,"
+                    " reported_at = clock_timestamp(), expires_at = CASE WHEN %s"
+                    " THEN clock_timestamp() + make_interval(days => ttl_days) ELSE expires_at END"
+                    " WHERE instance_id = %s AND key_token = %s",
+                    (mode, kit_version, claude_version, Jsonb(list(mcp_servers)),
+                     None if processes is None else Jsonb(list(processes)),
+                     None if autostart is None else Jsonb(list(autostart)), row[1], instance_id,
+                     key_token),
+                )
+                return "renewed" if row[1] else "recorded"
 
-        return bool(await self._run(write))
+        return str(await self._run(write))
 
     async def read_epoch(self, instance_id: str) -> int | None:
         async def read(conn: Any) -> Any:

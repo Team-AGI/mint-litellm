@@ -7,6 +7,11 @@
 사용자 수준으로 설치하고 MINT에 「관리되지 않음」으로 보고한다. 제거는 설치가 남긴 기록으로 원래
 상태를 되돌린다. 설치 상태는 MINT에 보고한다(실패해도 설치는 유지).
 
+설치한 묶음은 설치 상태를 주기적으로 다시 보고한다: Linux는 사용자 systemd 타이머, Windows는
+예약 작업이 ``report`` 하위 명령(설치된 이 파일)을 6시간마다 부르고, 서버 실행기가 시작될 때도
+한 번 부른다(1시간 안에 보냈으면 건너뛴다). 키가 만료되기 전 14일 안의 보고는 MINT가 키의 만료
+시각을 늘려 준다.
+
 대상 도구는 묶음의 ``harnesses``(claude, codex)가 정한다. Codex는 관리형이면 관리자 요구 파일
 (``requirements.toml``: 승인 서버 외 차단, 호출 전·후 훅)을, 사용자 수준이면 ``config.toml``의 표식
 구간을 쓴다. 서버 표는 승인 서버가 없어도 항상 둔다(표가 없으면 Codex는 서버를 제한하지 않는다).
@@ -23,12 +28,15 @@ import hashlib
 import io
 import json
 import os
+import random
 import re
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -46,6 +54,13 @@ BEGIN = "# >>> mint >>>"
 END = "# <<< mint <<<"
 NL = chr(10)
 REPORT_TIMEOUT = 5
+# 주기 보고: 간격(시), 시작 지연의 상한(초), 서버 실행기가 시작할 때 보고를 건너뛰는 최소 간격(초)
+REPORT_INTERVAL_HOURS = 6
+REPORT_JITTER = 1800
+REPORT_MIN_GAP = 3600
+LAST_REPORT = "last_report"
+UNIT = "mint-report"
+TASK_NAME = "MINT Endpoint Report"
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -85,8 +100,22 @@ def post(url: str, key: str, payload: dict, ca_file: str | None) -> bool:
     try:
         with urllib.request.urlopen(request, timeout=REPORT_TIMEOUT, context=context) as reply:
             return reply.status == 200
+    except urllib.error.HTTPError as error:
+        if error.code == 403:
+            sys.stderr.write("MINT 키가 만료되었습니다. 설치 묶음 재발급을 요청하세요." + NL)
+        return False
     except OSError:
         return False
+
+
+def jitter_delay(limit: int, rand=random.random) -> int:
+    """주기 보고 전에 기다릴 초(0 이상 ``limit`` 미만). 단말들이 같은 시각에 몰리지 않게 한다."""
+    return int(max(limit, 0) * rand())
+
+
+def report_due(last: float | None, now: float, min_gap: int = REPORT_MIN_GAP) -> bool:
+    """마지막 보고 뒤 ``min_gap``초가 지났거나, 기록이 없거나, 시계가 되돌아갔으면 참."""
+    return last is None or now < last or now - last >= min_gap
 
 
 # --- 읽기 전용 인벤토리: 실행 중인 MCP 서버 프로세스와 자동 시작 항목 -----------------------
@@ -466,6 +495,7 @@ class Kit:
             hooks = self.codex_hook_commands(python, agent, contracts)
             names |= set(self.install_codex(state, mcp, hooks))
         state["mcp_servers"] = sorted(names)
+        self.install_reporter(state, python)
         key = (self.config["key"] + "\n").encode()
         key_path = self.home / KEY_REL
         write_atomic(key_path, key, 0o600, self.owner)
@@ -475,6 +505,70 @@ class Kit:
             os.chown(key_path.parent, *self.owner)
         write_atomic(self.state_file, json.dumps(state, indent=1).encode(), 0o644)
         return state
+
+    def install_reporter(self, state: dict, python: str) -> None:
+        """주기 보고에 쓸 이 파일의 사본과 설정(키 제외)을 두고 타이머·예약 작업을 등록한다."""
+        tool = f"{self.logical_programs}/mint_kit.py"
+        self.write_tracked(
+            state, self.programs / "mint_kit.py", tool, (self.folder / "mint_kit.py").read_bytes(),
+            0o644,
+        )
+        config = {k: v for k, v in self.config.items() if k not in ("key", "servers")}
+        self.write_tracked(
+            state, self.programs / "kit.json", f"{self.logical_programs}/kit.json",
+            json.dumps(config, indent=1).encode(), 0o644,
+        )  # fmt: skip
+        command = [python, "-I", "-B", tool, "report", "--kit", self.logical_programs]
+        if self.windows:
+            self.schedule_task(state, command)
+        else:
+            self.schedule_timer(state, command)
+
+    def schedule_timer(self, state: dict, command: list[str]) -> None:
+        """사용자 systemd 타이머. 시작 지연의 무작위화는 systemd가 한다. 다음 로그인부터 돈다."""
+        folder = self.home / ".config/systemd/user"
+        units = {
+            f"{UNIT}.service": (
+                "[Unit]\nDescription=MINT endpoint report\n\n[Service]\nType=oneshot\n"
+                f"ExecStart={shlex.join(command)}\n"
+            ),
+            f"{UNIT}.timer": (
+                "[Unit]\nDescription=MINT endpoint report\n\n[Timer]\nOnBootSec=5min\n"
+                f"OnUnitActiveSec={REPORT_INTERVAL_HOURS}h\n"
+                f"RandomizedDelaySec={REPORT_JITTER}\n\n[Install]\nWantedBy=timers.target\n"
+            ),
+        }
+        for name, text in units.items():
+            self.write_tracked(state, folder / name, str(folder / name), text.encode(), 0o644)
+        wants = folder / "timers.target.wants" / f"{UNIT}.timer"
+        wants.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if not wants.is_symlink():
+                os.symlink(f"../{UNIT}.timer", wants)
+        except OSError:
+            return  # 링크를 만들 수 없는 곳(Windows 위의 시험 배치 등)에서는 타이머를 켜지 않는다.
+        state["links"] = [str(wants)]
+        if self.owner is not None:
+            for path in (folder.parent.parent, folder.parent, folder, wants.parent):
+                if path.is_relative_to(self.home) and path != self.home:
+                    os.chown(path, *self.owner)
+            for name in units:
+                os.chown(folder / name, *self.owner)
+            os.lchown(wants, *self.owner)
+        elif self.root is None and not self.dry_run:
+            capture(["systemctl", "--user", "enable", "--now", f"{UNIT}.timer"])
+
+    def schedule_task(self, state: dict, command: list[str]) -> None:
+        """Windows 예약 작업(설치한 계정으로 돈다). 시작 지연은 명령이 스스로 기다린다."""
+        if self.root is not None or self.dry_run:
+            return
+        line = subprocess.list2cmdline([*command, "--jitter", str(REPORT_JITTER)])
+        made = capture([
+            "schtasks", "/Create", "/TN", TASK_NAME, "/SC", "HOURLY",
+            "/MO", str(REPORT_INTERVAL_HOURS), "/TR", line, "/F",
+        ])  # fmt: skip
+        if made:
+            state["task"] = TASK_NAME
 
     def install_managed(self, state: dict, mcp: dict, hooks: dict) -> None:
         settings = {"allowManagedHooksOnly": True, "hooks": hooks}
@@ -588,6 +682,12 @@ class Kit:
             backup = state.get("backups", {}).get(logical)
             if backup and Path(backup).exists():
                 write_atomic(path, Path(backup).read_bytes(), 0o644)
+        for link in state.get("links", []):
+            Path(link).unlink(missing_ok=True)
+        if state.get("task") and self.root is None:
+            capture(["schtasks", "/Delete", "/TN", state["task"], "/F"])
+        elif state.get("links") and self.root is None and not self.owner:
+            capture(["systemctl", "--user", "disable", "--now", f"{UNIT}.timer"])
         if state.get("mode") == "user":
             self.uninstall_user(state)
         if "codex_config_sha" in state:
@@ -686,6 +786,45 @@ class Kit:
             os.unlink(handle.name)
 
 
+def report_installed(
+    folder: Path,
+    *,
+    if_due: bool = False,
+    jitter: int = 0,
+    now=time.time,
+    sleep=time.sleep,
+    rand=random.random,
+) -> int:
+    """설치된 묶음의 주기 보고. 설치되어 있지 않거나(키·상태 없음) 할 일이 없으면 조용히 0."""
+    home = Path(os.path.expanduser("~"))
+    stamp = home / STATE_REL / LAST_REPORT
+    try:
+        last = float(stamp.read_text())
+    except (OSError, ValueError):
+        last = None
+    if if_due and not report_due(last, now()):
+        return 0
+    try:
+        state = json.loads((folder / "state.json").read_text(encoding="utf-8"))
+        key = (home / KEY_REL).read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):
+        return 0
+    if state.get("mode") not in ("managed", "user") or not key:
+        return 0
+    import getpass
+
+    sleep(jitter_delay(jitter, rand))
+    stamp.parent.mkdir(parents=True, exist_ok=True)
+    stamp.write_text(str(now()))  # 곧바로 기록해 동시에 뜬 실행기들이 한 번만 보내게 한다.
+    account = Account(getpass.getuser(), home, 0, 0)
+    kit = Kit(folder, None, state["mode"] == "managed", account, False)
+    kit.config["key"] = key
+    if kit.report(state, "installed"):
+        return 0
+    stamp.unlink(missing_ok=True)  # 닿지 못했으면 다음 기회에 다시 보낸다.
+    return 1
+
+
 def ours(item: object) -> bool:
     """훅 항목 중 이 묶음이 넣은 것(에이전트 스크립트 파일 이름으로 식별)."""
     return any(
@@ -733,8 +872,10 @@ def codex_version(home: Path) -> str | None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="MINT endpoint kit")
     parser.add_argument(
-        "action", nargs="?", default="install", choices=["install", "uninstall", "status"]
+        "action", nargs="?", default="install", choices=["install", "uninstall", "status", "report"]
     )
+    parser.add_argument("--if-due", action="store_true")
+    parser.add_argument("--jitter", type=int, default=0)
     parser.add_argument("--user-level", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--user")
@@ -742,6 +883,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root")
     parser.add_argument("--kit", default=str(KIT))
     args = parser.parse_args(argv)
+    if args.action == "report":
+        return report_installed(Path(args.kit), if_due=args.if_due, jitter=args.jitter)
     windows = sys.platform == "win32"
     if windows:
         name = args.user or os.environ.get("USERNAME", "")

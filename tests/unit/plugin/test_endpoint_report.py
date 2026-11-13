@@ -20,7 +20,7 @@ def stored(monkeypatch):
 
     async def report_install(self, instance_id, key_token, **fields):
         calls.append((instance_id, key_token, fields))
-        return key_token == KEY
+        return "recorded" if key_token == KEY else "unknown"
 
     monkeypatch.setattr(FakeDatabase, "report_install", report_install, raising=False)
     return calls
@@ -28,7 +28,7 @@ def stored(monkeypatch):
 
 def test_a_managed_install_report_is_stored_for_the_calling_key(tmp_path, stored):
     client, _ = build(tmp_path)
-    assert post(client, REPORT, report()).json() == {"recorded": True}
+    assert post(client, REPORT, report()).json() == {"recorded": True, "renewed": False}
     (_, key_token, fields), = stored
     assert key_token == KEY
     assert fields == {"mode": "managed", "kit_version": "k" * 64,
@@ -94,3 +94,29 @@ def test_the_report_route_needs_a_key_and_a_ready_store(tmp_path, monkeypatch):
     assert post(client, REPORT, report()).status_code == 503
     big = " " * (64 * 1024 + 1)
     assert client.post(REPORT, content=big, headers=KEY_HEADER).status_code == 413
+
+
+@pytest.mark.parametrize(("outcome", "status", "body"), [
+    ("recorded", 200, {"recorded": True, "renewed": False}),
+    ("renewed", 200, {"recorded": True, "renewed": True}),
+])
+def test_a_report_near_expiry_says_the_key_was_extended(
+    tmp_path, monkeypatch, outcome, status, body
+):
+    async def report_install(self, *args, **fields):
+        return outcome
+
+    monkeypatch.setattr(FakeDatabase, "report_install", report_install, raising=False)
+    client, _ = build(tmp_path)
+    reply = post(client, REPORT, report())
+    assert (reply.status_code, reply.json()) == (status, body)
+
+
+def test_an_expired_key_is_refused_with_a_clear_error(tmp_path, monkeypatch):
+    async def report_install(self, *args, **fields):
+        return "expired"
+
+    monkeypatch.setattr(FakeDatabase, "report_install", report_install, raising=False)
+    client, _ = build(tmp_path)
+    reply = post(client, REPORT, report())
+    assert reply.status_code == 403 and "expired" in reply.text

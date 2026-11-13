@@ -341,4 +341,6 @@ class AlertKind(StrEnum):
     ENDPOINT_UNMANAGED = "endpoint_unmanaged"
     ENDPOINT_STALE_PROCESS = "endpoint_stale_process"
     ENDPOINT_STALE_AUTOSTART = "endpoint_stale_autostart"
+    ENDPOINT_SILENT = "endpoint_silent"
+    ENDPOINT_KEY_EXPIRING = "endpoint_key_expiring"
     CALL_SPIKE = "call_spike"

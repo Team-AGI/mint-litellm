@@ -504,6 +504,26 @@ def run_server(
         execve(executable, argv, env)
 
 
+def kick_report(folder: str) -> None:
+    """서버 실행기가 시작될 때 설치 상태 보고를 백그라운드로 부른다(1시간 안에 보냈으면 건너뜀).
+
+    설치된 ``mint_kit.py``가 없거나 띄우지 못해도 서버 시작에는 영향이 없다.
+    """
+    tool = os.path.join(folder, "mint_kit.py")
+    if not os.path.isfile(tool):
+        return
+    null = subprocess.DEVNULL
+    quiet = {"stdin": null, "stdout": null, "stderr": null}
+    detach = {"creationflags": 0x08000008} if os.name == "nt" else {"start_new_session": True}
+    try:
+        subprocess.Popen(
+            [sys.executable, "-I", "-B", tool, "report", "--kit", folder, "--if-due"],
+            **quiet, **detach,
+        )
+    except OSError:
+        pass
+
+
 def _give_up(code: int, message: str) -> None:
     sys.stderr.write(message + "\n")
     sys.stderr.flush()
@@ -531,6 +551,7 @@ def main(argv: list[str] | None = None) -> None:
         )
         return
     if args.command == "run":
+        kick_report(os.path.dirname(os.path.abspath(__file__)))
         try:
             run_server(args.server or "", args.contracts, os.environ)
         except Refuse as exc:

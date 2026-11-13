@@ -177,10 +177,65 @@ def test_the_decision_process_records_a_report_for_an_active_key_only(fresh_db, 
         finally:
             await database.close()
 
-    assert asyncio.run(run()) == [True, False, False]
+    assert asyncio.run(run()) == ["recorded", "unknown", "unknown"]
     with psycopg.connect(fresh_db) as admin:
         row = admin.execute(
             "SELECT install_mode, mcp_servers FROM mint.endpoint_installs"
             " WHERE key_token = 'tok-live'"
         ).fetchone()
     assert row == ("managed", ["srv-1"])
+
+
+def test_a_new_key_expires_after_its_lifetime_and_a_report_near_the_end_extends_it(
+    fresh_db, plugin_dsn
+):
+    pytest.importorskip("psycopg_pool")
+    with psycopg.connect(fresh_db) as admin:
+        for name, left in (("tok-new", "90 days"), ("tok-near", "10 days"), ("tok-old", "-1 day")):
+            admin.execute(
+                "INSERT INTO mint.endpoint_installs (instance_id, key_token, user_id, key_alias,"
+                " issued_by, expires_at, ttl_days) VALUES (%s, %s, 'u1', %s, 'u1',"
+                " now() + %s::interval, 90)",
+                (INSTANCE, name, f"mint-kit-{name}", left),
+            )
+
+    async def run():
+        database = PluginDatabase(plugin_dsn)
+        try:
+            fields = {"mode": "managed", "kit_version": "k", "claude_version": None,
+                      "mcp_servers": []}  # fmt: skip
+            return [
+                await database.report_install(INSTANCE, name, **fields)
+                for name in ("tok-new", "tok-near", "tok-old")
+            ]
+        finally:
+            await database.close()
+
+    assert asyncio.run(run()) == ["recorded", "renewed", "expired"]
+    with psycopg.connect(fresh_db) as admin:
+        days = dict(admin.execute(
+            "SELECT key_token, round(extract(epoch FROM expires_at - now()) / 86400)"
+            " FROM mint.endpoint_installs"
+        ).fetchall())
+        reported = dict(admin.execute(
+            "SELECT key_token, reported_at IS NOT NULL FROM mint.endpoint_installs"
+        ).fetchall())
+    assert (days["tok-new"], days["tok-near"], days["tok-old"]) == (90, 90, -1)
+    assert reported == {"tok-new": True, "tok-near": True, "tok-old": False}
+
+
+def test_issuing_a_key_sets_the_expiry_and_the_plugin_role_cannot_change_the_lifetime(conn):
+    key = endpoint_kits.issue_key(
+        conn, Issuer(), INSTANCE, user_id="u1", team_id=None, issued_by="u1", ttl_days=30
+    )
+    row = conn.execute(
+        "SELECT ttl_days, round(extract(epoch FROM expires_at - now()) / 86400)"
+        " FROM mint.endpoint_installs WHERE key_token = %s", (token(key),)
+    ).fetchone()
+    assert row == (30, 30)
+    conn.execute("SET LOCAL ROLE mint_plugin")
+    with pytest.raises(errors.InsufficientPrivilege), conn.transaction():
+        conn.execute("UPDATE mint.endpoint_installs SET ttl_days = 365")
+    with pytest.raises(errors.CheckViolation), conn.transaction():
+        conn.execute("UPDATE mint.endpoint_installs SET expires_at = NULL")
+    conn.execute("RESET ROLE")

@@ -47,8 +47,8 @@ def _seconds(env: Mapping[str, str], name: str, default: int, minimum: int = 1) 
     return value
 
 
-def _days(env: Mapping[str, str], name: str, default: int) -> int:
-    value = _seconds(env, name, default)
+def _days(env: Mapping[str, str], name: str, default: int, minimum: int = 1) -> int:
+    value = _seconds(env, name, default, minimum)
     if value > 365:
         raise ControlError(f"{name}은(는) 365 이하여야 합니다: {value}")
     return value
@@ -134,6 +134,10 @@ class Stage2Settings:
     # 승인 필요성 재확인 주기와 유예(일). 기본값은 MINT가 채우며 운영자 설정이 필요 없다.
     recert_days: int = 90
     recert_grace_days: int = 14
+    # 단말 설치 보고가 이 시간(시) 넘게 없으면 경보. 기본값은 MINT가 채운다(묶음은 6시간마다 보고).
+    endpoint_silent_hours: int = 24
+    # 새로 발급하는 단말 설치 묶음 키의 유효 기간(일, 30~365). 만료 전 14일 안의 보고가 늘려 준다.
+    endpoint_key_days: int = 90
     intake_allowed_ports: tuple[int, ...] = (443, 8443)
     console_url: str | None = None
     # 호출량 급증: 최근 구간, 지난 기간(평균을 내는 기간), 평균의 몇 배, 최소 호출 수
@@ -171,6 +175,8 @@ class Stage2Settings:
             staff_consent_max_days=_days(env, "MINT_STAFF_CONSENT_MAX_DAYS", 90),
             recert_days=_days(env, "MINT_RECERT_DAYS", 90),
             recert_grace_days=_days(env, "MINT_RECERT_GRACE_DAYS", 14),
+            endpoint_silent_hours=_seconds(env, "MINT_ENDPOINT_SILENT_HOURS", 24),
+            endpoint_key_days=_days(env, "MINT_ENDPOINT_KEY_DAYS", 90, 30),
             intake_allowed_ports=_ports(env.get("MINT_INTAKE_ALLOWED_PORTS")),
             spike_window_seconds=_seconds(env, "MINT_SPIKE_WINDOW_SECONDS", 300),
             spike_baseline_seconds=_seconds(env, "MINT_SPIKE_BASELINE_SECONDS", 86400),
