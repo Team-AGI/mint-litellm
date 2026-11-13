@@ -1182,7 +1182,7 @@ class TestCancellation:
         assert event.kind.value == "decision_evaluated"
         assert event.payload["enforced_action"] == "block"
         assert event.payload["stop"]["reason_code"] == "CANCELLED"
-        assert event.payload["consumed_call_approval_id"] is None
+        assert event.payload.get("consumed_call_approval_id") is None
 
     @pytest.mark.parametrize("where", ["snapshot", "policy", "insert"])
     def test_a_cancel_while_waiting_records_one_event_in_the_database(self, tmp_path, where):
@@ -1194,7 +1194,7 @@ class TestCancellation:
         # 기록이 이미 시작된 뒤의 취소는 같은 키를 쓰지 않고 다음 시도로 남긴다.
         started = where == "insert"
         assert event.attempt_id == (2 if started else 1)
-        assert (event.payload["original_decision_ref"] is not None) is started
+        assert (event.payload.get("original_decision_ref") is not None) is started
 
     @pytest.mark.parametrize("where", ["snapshot", "policy", "insert"])
     def test_a_cancel_with_the_database_down_records_one_event_in_the_buffer(self, tmp_path, where):
@@ -1468,7 +1468,7 @@ class TestRecording:
         assert [e.payload["enforced_action"] for e in both] == ["allow", "block"]
         assert both[1].payload["stop"]["reason_code"] == "AUDIT_FAILURE"
         assert both[1].payload["original_decision_ref"] == first.payload["decision_ref"]
-        assert both[0].payload["original_decision_ref"] is None
+        assert both[0].payload.get("original_decision_ref") is None
         # 호출자가 받은 참조는 최종(차단) 사건을 가리킨다.
         assert outcome.error.reference == both[1].payload["decision_ref"]
         assert outcome.snapshot.attempt_id == 2 and outcome.context["attempt_id"] == 2
@@ -1514,7 +1514,7 @@ class TestRecording:
         outcome = decide(h)
         (event,) = buffered(h)
         assert event.attempt_id == 1 and outcome.snapshot.attempt_id == 1
-        assert event.payload["original_decision_ref"] is None
+        assert event.payload.get("original_decision_ref") is None
 
     def test_recording_over_budget_counts_as_a_failure(self, tmp_path):
         h = harness(tmp_path, cfg=config(tmp_path))

@@ -62,6 +62,8 @@ class PluginConfig:
     restore_interval_seconds: float = 60.0
     default_max_result_bytes: int = DEFAULT_MAX_RESULT_BYTES
     default_max_result_items: int = DEFAULT_MAX_RESULT_ITEMS
+    # 도구 목록의 「보임·통과」 판정 반복을 다시 기록하지 않는 시간(초). 0이면 항상 기록한다.
+    list_dedup_seconds: int = 86400
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> PluginConfig:
@@ -105,6 +107,7 @@ class PluginConfig:
             default_max_result_items=_integer(
                 env, "MINT_DEFAULT_MAX_RESULT_ITEMS", DEFAULT_MAX_RESULT_ITEMS, 0
             ),
+            list_dedup_seconds=_integer(env, "MINT_LIST_DEDUP_SECONDS", 86400, 0),
             export_dir=Path(export_dir) if export_dir else None,
             export_hmac_key=_hmac_key(env, "MINT_EXPORT_HMAC_KEY"),
             export_hmac_key_previous=_hmac_key(env, "MINT_EXPORT_HMAC_KEY_PREVIOUS"),

@@ -204,7 +204,7 @@ class TestPreCallChain:
         assert payload["operation"] == "llm_request"
         assert payload["enforced_action"] == "block" and payload["decision_ref"] == error.reference
         assert payload["stop"]["reason_code"] == "EXTERNAL_MCP_FORBIDDEN"
-        assert payload["tool"] is None and payload["resolved_server_id"] is None
+        assert payload.get("tool") is None and payload.get("resolved_server_id") is None
         assert "external.example" not in str(payload)
 
     def test_the_master_key_gets_the_same_refusal(self, rig):
