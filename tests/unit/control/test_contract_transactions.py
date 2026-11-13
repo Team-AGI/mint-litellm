@@ -18,6 +18,7 @@ from mint_litellm.control.contract_pin import finalize_reapproval
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import AdminError
 from mint_litellm.control.services import contracts
+from mint_litellm.control.services import evidence as evidence_service
 from mint_litellm.plugin.pipeline import contract_result
 from mint_litellm.plugin.snapshot import ToolContractRow
 from mint_litellm.types.canonical import canonical_text, pin_sha256, sha256
@@ -745,3 +746,54 @@ def test_the_alert_closes_when_the_peer_leaves(contract_db):
     conn.execute("UPDATE mint.servers SET status='suspended' WHERE instance_id='j'")
     assert compare_instances(ctx) == 0
     assert instance_alerts(conn) == []
+
+
+def blocked(conn) -> bool:
+    row = fetchone(
+        conn, "SELECT instance_mismatch_at FROM mint.servers"
+        " WHERE instance_id='i' AND server_id='s'"
+    )
+    return row["instance_mismatch_at"] is not None
+
+
+def test_a_differing_peer_blocks_the_server_until_the_difference_goes(contract_db):
+    conn, ctx, _ = contract_db
+    seed_peer(conn, "https://other.test/api", NEW)
+    assert compare_instances(ctx) == 1
+    assert blocked(conn)
+    conn.execute("UPDATE mint.servers SET status='suspended' WHERE instance_id='j'")
+    assert compare_instances(ctx) == 0
+    assert not blocked(conn)
+
+
+def test_a_single_instance_is_never_blocked(contract_db):
+    conn, ctx, _ = contract_db
+    assert compare_instances(ctx) == 0
+    assert not blocked(conn)
+
+
+def test_differing_security_settings_count_as_a_mismatch(contract_db):
+    conn, ctx, _ = contract_db
+    seed_peer(conn, "https://mcp.test/api", TOOL)
+    conn.execute("INSERT INTO mint.settings(instance_id,mode) VALUES ('i','enforce')")
+    conn.execute("INSERT INTO mint.settings(instance_id,mode) VALUES ('j','observe')")
+    assert compare_instances(ctx) == 1
+    (alert,) = instance_alerts(conn)
+    assert alert["subject"]["items"] == ["setting:guardrail_mode"]
+    assert blocked(conn)
+    conn.execute("UPDATE mint.settings SET mode='enforce' WHERE instance_id='j'")
+    assert compare_instances(ctx) == 0
+    assert not blocked(conn)
+
+
+def test_an_admin_exception_releases_the_block_but_keeps_the_alert(contract_db):
+    conn, ctx, _ = contract_db
+    seed_peer(conn, "https://other.test/api", NEW)
+    with pytest.raises(AdminError):
+        evidence_service.attach(replace(ctx, operator=Operator("a", "approver", None)),
+                        "instance_exception", "s", summary="의도한 차이")
+    evidence_service.attach(replace(ctx, operator=Operator("a", "admin", None)),
+                    "instance_exception", "s", summary="의도한 차이")
+    assert compare_instances(ctx) == 1
+    assert not blocked(conn)
+    assert len(instance_alerts(conn)) == 1

@@ -4,6 +4,7 @@ import json
 import re
 import uuid
 from collections.abc import Collection, Iterable
+from datetime import UTC, datetime
 from typing import Any
 
 from mint_litellm.control import alerts, change_summary
@@ -429,14 +430,45 @@ _APPROVED_CONTRACTS = (
     " SELECT t.instance_id, 'tool', t.credential_scope || '/' || t.tool, t.sha256"
     " FROM mint.tool_contracts t WHERE t.server_id=%s AND t.status='approved'"
     " AND t.instance_id = ANY(%s)"
+    " UNION ALL"
+    " SELECT instance_id, 'setting', 'guardrail_mode', mode FROM mint.settings"
+    " WHERE instance_id = ANY(%s)"
+    " UNION ALL"
+    " SELECT instance_id, 'setting', 'policy_bundle', bundle_sha256 FROM mint.policy_versions"
+    " WHERE status='active' AND instance_id = ANY(%s)"
 )
 
 
-def compare_instances(ctx: Context) -> int:
-    """같은 서버를 계약 관리하는 다른 인스턴스의 승인 계약(배포·도구 정의)과 비교한다.
+def _excepted(ctx: Context, server_id: str) -> bool:
+    """이 서버에 지금 유효한 ``instance_exception`` 증빙(admin이 기록한 예외)이 있는가."""
+    row = fetchone(
+        ctx.conn,
+        "SELECT valid_until FROM mint.policy_evidence WHERE instance_id=%s"
+        " AND kind='instance_exception' AND subject_kind='server' AND subject_id=%s"
+        " ORDER BY attached_at DESC, id DESC LIMIT 1",
+        (ctx.instance_id, server_id),
+    )
+    until = row["valid_until"] if row else None
+    return row is not None and (until is None or until > datetime.now(UTC))
 
-    서로 다른 설정으로 운영되는 서버는 경보와 배포 변경 사건을 낸다. 차단하지는 않는다(각 인스턴스의
-    승인 계약이 그 인스턴스의 호출 기준이다). 어긋난 서버 수를 돌려준다.
+
+def _set_block(ctx: Context, server_id: str, blocked: bool) -> None:
+    """표지는 바뀔 때만 쓴다(서버 행 갱신은 판정 스냅숏을 새로 만든다)."""
+    ctx.conn.execute(
+        "UPDATE mint.servers SET instance_mismatch_at = CASE WHEN %s THEN now() END"
+        " WHERE instance_id=%s AND server_id=%s AND (instance_mismatch_at IS NOT NULL) <> %s",
+        (blocked, ctx.instance_id, server_id, blocked),
+    )
+
+
+def compare_instances(ctx: Context) -> int:
+    """같은 서버를 계약 관리하는 다른 인스턴스의 승인 계약(배포·도구 정의)과 보안 설정(가드레일
+    모드·활성 정책 묶음)을 비교한다.
+
+    어긋나면 경보와 배포 변경 사건을 내고, 이 인스턴스의 그 서버 호출을 막는다. 기준 인스턴스는 두지
+    않는다: 어긋난 쪽 모두가 막히며 admin의 ``instance_exception`` 증빙이 있거나
+    차이가 사라지면 풀린다.
+    같은 서버를 쓰는 인스턴스가 하나뿐이면 아무 영향이 없다. 어긋난 서버 수를 돌려준다.
     """
     mine = fetchall(
         ctx.conn,
@@ -464,7 +496,8 @@ def compare_instances(ctx: Context) -> int:
                     (
                         (r["instance_id"], r["kind"], r["item"], r["sha256"])
                         for r in fetchall(
-                            ctx.conn, _APPROVED_CONTRACTS, (server_id, peers, server_id, peers)
+                            ctx.conn, _APPROVED_CONTRACTS,
+                            (server_id, peers, server_id, peers, peers, peers),
                         )
                     ),
                 )
@@ -478,8 +511,10 @@ def compare_instances(ctx: Context) -> int:
             )
             if not differences:
                 alerts.resolve(ctx.conn, ctx.instance_id, key)
+                _set_block(ctx, server_id, False)
                 continue
             mismatched += 1
+            _set_block(ctx, server_id, not _excepted(ctx, server_id))
             body = {
                 "server_id": server_id,
                 "kind": "instance_mismatch",
