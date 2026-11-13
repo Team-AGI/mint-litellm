@@ -204,3 +204,20 @@ def test_the_scan_leaves_calls_that_are_reported_recent_remote_or_blocked(ctx, c
     assert endpoint_results.scan(conn, INSTANCE) == 0
     assert {recent, remote, blocked, reported}  # 모두 만들어졌다
     assert _events(conn, "call_outcome_unknown") == []
+
+
+def test_a_widened_execution_contract_opens_a_drift_alert_listing_the_axes(ctx, conn):
+    register_local(ctx)
+    wider = CONTRACT.model_copy(update={"argv": ("/opt/srv/index.js", "/etc/shadow")})
+    register_local(ctx, contract=wider)
+    alert = fetchone(conn, "SELECT * FROM mint.alerts WHERE kind = 'contract_drift'")
+    assert alert["severity"] == "high"
+    assert alert["subject"]["widened"] == ["file"]
+    assert "파일 접근 확대" in alert["subject"]["summary"]
+
+
+def test_a_narrowed_execution_contract_raises_only_a_low_alert(ctx, conn):
+    register_local(ctx)
+    register_local(ctx, contract=CONTRACT.model_copy(update={"argv": ()}))
+    alert = fetchone(conn, "SELECT * FROM mint.alerts WHERE kind = 'contract_drift'")
+    assert alert["severity"] == "low" and alert["subject"]["widened"] == []

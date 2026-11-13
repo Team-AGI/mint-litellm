@@ -8,6 +8,7 @@ LiteLLM 레지스트리 없이 실행 계약 해시만 MINT 표에 등록한다.
 from collections.abc import Mapping
 from typing import Any
 
+from mint_litellm.control import alerts, exec_drift
 from mint_litellm.control.context import Context
 from mint_litellm.control.db.connection import fetchone
 from mint_litellm.control.errors import ControlError, not_found
@@ -121,6 +122,32 @@ def register(
     ctx.emit(EventKind.SERVER_REGISTERED, row_id, row["state_version"], payload)
 
 
+def _exec_drift(ctx: Context, server_id: str, old_sha: str, contract: ExecContract) -> dict:
+    """계약 해시가 바뀌면 이전 계약과 축별로 비교해 경보를 낸다(호출 차단은 해시 결속이 맡는다)."""
+    if old_sha == contract.sha256():
+        return {}
+    previous = fetchone(
+        ctx.conn,
+        "SELECT payload -> 'exec_contract' AS contract FROM mint.events"
+        " WHERE instance_id = %s AND kind = 'server_registered'"
+        " AND payload ->> 'server_id' = %s AND payload ->> 'exec_contract_sha256' = %s"
+        " ORDER BY inserted_at DESC LIMIT 1",
+        (ctx.instance_id, server_id, old_sha),
+    )
+    if previous is None or not isinstance(previous["contract"], dict):
+        return {}  # 이전 계약 원문을 찾지 못하면 비교하지 못한다(해시 결속으로는 이미 차단된다)
+    result = exec_drift.classify(previous["contract"], contract.document())
+    widened = exec_drift.widened_axes(result)
+    subject = {
+        "kind": "exec", "server_id": server_id, "axes": result, "widened": widened,
+        "summary": exec_drift.summary(result),
+    }
+    alerts.raise_alert(
+        ctx.conn, ctx.instance_id, kind="contract_drift", severity="high" if widened else "low",
+        dedup_key=f"contract_drift:exec:{server_id}:{contract.sha256()}", subject=subject)
+    return {"exec_drift": {"axes": result, "widened": widened}}
+
+
 def register_local(ctx: Context, server_id: str, contract: ExecContract) -> None:
     """로컬 실행(stdio) 서버를 LiteLLM 없이 승인 대기 상태로 등록한다.
 
@@ -139,7 +166,7 @@ def register_local(ctx: Context, server_id: str, contract: ExecContract) -> None
     }
     existing = fetchone(
         ctx.conn,
-        "SELECT id, status, identity_kind FROM mint.servers"
+        "SELECT id, status, identity_kind, exec_contract_sha256 FROM mint.servers"
         " WHERE instance_id = %s AND server_id = %s FOR UPDATE",
         (ctx.instance_id, server_id),
     )
@@ -150,6 +177,7 @@ def register_local(ctx: Context, server_id: str, contract: ExecContract) -> None
             raise ControlError(
                 f"서버 {server_id}는 {existing['status']} 상태라 갱신할 수 없습니다."
             )
+        drift = _exec_drift(ctx, server_id, existing["exec_contract_sha256"], contract)
         row = fetchone(
             ctx.conn,
             "UPDATE mint.servers SET exec_contract_sha256 = %s, exec_contract_version = %s"
@@ -157,7 +185,7 @@ def register_local(ctx: Context, server_id: str, contract: ExecContract) -> None
             (digest, version, existing["id"]),
         )
         ctx.emit(EventKind.SERVER_REGISTERED, existing["id"], row["state_version"],
-                 {**payload, "updated": True})
+                 {**payload, "updated": True, **drift})
         return
     row_id = new_uuid7()
     row = fetchone(
