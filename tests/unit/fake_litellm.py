@@ -33,6 +33,9 @@ class FakeLiteLLM:
         self.ignore_allow_all_keys = False  # 서버 수정이 allow_all_keys 끄기를 무시하는 흉내
         self.generated: list[dict] = []  # /key/generate 본문
         self.fail_writes: dict[str, int] = {}  # 경로 -> 강제로 낼 상태 코드
+        self.credentials: dict[str, list[dict]] = {}  # 서버 -> [{user_id, credential_type}]
+        self.credentials_api = True  # False면 자격 목록 경로가 없는 판본을 흉내(404)
+        self.sticky_credentials = False  # True면 삭제 요청이 성공해도 자격이 남는다
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -125,6 +128,21 @@ class FakeLiteLLM:
             if not self.ignore_allow_all_keys:
                 server.update({k: v for k, v in body.items() if k != "server_id"})
             return 200, copy.deepcopy(server)
+        if path.startswith("/v1/mcp/server/") and path.endswith(
+            ("/user-credentials", "/user-credential", "/oauth-user-credential")
+        ):
+            server_id, _, action = path[len("/v1/mcp/server/"):].partition("/")
+            if method == "GET" and action == "user-credentials":
+                if not self.credentials_api:
+                    return 404, {"detail": "Not Found"}
+                return 200, [dict(c, updated_at="t") for c in self.credentials.get(server_id, [])]
+            if method == "DELETE" and action != "user-credentials":
+                if not self.sticky_credentials:
+                    kind = "oauth2" if action.startswith("oauth") else "byok"
+                    self.credentials[server_id] = [
+                        c for c in self.credentials.get(server_id, [])
+                        if (c["user_id"], c["credential_type"]) != (params["user_id"], kind)]
+                return 200, {"server_id": server_id, "has_credential": False}
         if path.startswith("/v1/mcp/server/"):
             rest = path[len("/v1/mcp/server/"):]
             server_id, _, action = rest.partition("/")

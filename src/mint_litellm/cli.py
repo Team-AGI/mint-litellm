@@ -790,6 +790,7 @@ HANDLERS: dict[str, Handler] = {
     "alert resolve": _done(alert_service.resolve, "alert_id"),
     "server suspend": _done(server_service.suspend, "server_id"),
     "server resume": _done(server_service.resume, "server_id"),
+    "server terminate": _done(server_service.terminate, "server_id"),
     "relation add": lambda r: _created(
         r, relation_service.add(r.context(), r.args.org, r.args.server, r.args.purpose,
                                 r.args.team)
@@ -928,6 +929,7 @@ ARGUMENTS: dict[str, list[Any]] = {
     ],
     "server suspend": [_SERVER_ID],
     "server resume": [_SERVER_ID],
+    "server terminate": [_SERVER_ID],
     "relation add": [
         _a("--org", required=True),
         _a("--server", required=True),

@@ -148,6 +148,12 @@ COMMANDS: tuple[CliCommand, ...] = (
         events=(EventKind.SERVER_SUSPENDED,),
     ),
     CliCommand(
+        path=("server", "terminate"),
+        summary="서버를 폐기 중으로 바꾸고, 저장된 사용자 자격을 지운 뒤 읽어 확인한다.",
+        roles=ADMIN_ONLY,
+        events=(EventKind.SERVER_TERMINATING, EventKind.SERVER_TERMINATED),
+    ),
+    CliCommand(
         path=("server", "resume"),
         summary="중지한 서버를 다시 승인 상태로 되돌린다.",
         roles=ADMIN_ONLY,

@@ -100,6 +100,16 @@ class LiteLLMAdmin:
         quoted = urllib.parse.quote(server_id, safe="")
         return self._ok(f"/v1/mcp/server/{quoted}", missing_ok=True)
 
+    def list_server_credentials(self, server_id: str) -> list[dict] | None:
+        """서버에 저장된 사용자별 자격(비밀 없는 목록: 사용자·종류). 경로가 없으면 None.
+
+        서버 행이 없어도 자격 표를 서버 식별자로 읽으므로 폐기 뒤 확인에도 쓴다. 404는 이 목록
+        경로가 없는 LiteLLM 판본이라는 뜻이다.
+        """
+        quoted = urllib.parse.quote(server_id, safe="")
+        body = self._ok(f"/v1/mcp/server/{quoted}/user-credentials", missing_ok=True, shape=list)
+        return None if body is None else [i for i in body if isinstance(i, dict)]
+
     def get_user(self, user_id: str) -> dict | None:
         """``user_info`` 객체. 사용자가 없으면 None."""
         body = self._ok("/user/info", {"user_id": user_id}, missing_ok=True, key="user_info")

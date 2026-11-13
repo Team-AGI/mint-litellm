@@ -411,3 +411,18 @@ def test_events_refuse_float_payloads():
     Event(**base, payload={"n": 1})
     with pytest.raises(ValueError):
         Event(**base, payload={"n": [1.5]})
+
+
+def test_an_export_job_does_not_recreate_a_vanished_latest_file(admin, worker_conn, settings):
+    from types import SimpleNamespace
+
+    from mint_litellm.control.jobs import RestoreBlocked
+
+    job = SimpleNamespace(conn=worker_conn, instance_id=INSTANCE, settings=settings)
+    exports._refuse_when_latest_vanished(job)  # 첫 설치: 쓴 내보내기가 없으면 통과한다
+    exports.write_export(worker_conn, INSTANCE, settings, "checkpoint")
+    exports._refuse_when_latest_vanished(job)
+    files.latest_path(settings.export_dir, INSTANCE).unlink()
+    with pytest.raises(RestoreBlocked):
+        exports._refuse_when_latest_vanished(job)
+    assert not files.latest_path(settings.export_dir, INSTANCE).exists()

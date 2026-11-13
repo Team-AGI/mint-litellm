@@ -8,6 +8,7 @@ from mint_litellm.control.context import Context
 from mint_litellm.control.litellm_admin import LiteLLMAdmin
 from mint_litellm.control.services.base import (
     Prefetched,
+    enqueue_job,
     lock_version,
     require_role,
     service,
@@ -45,3 +46,10 @@ def suspend(ctx: Context, server_id: str, *, expected_version: int | None = None
 def resume(ctx: Context, server_id: str, *, expected_version: int | None = None) -> None:
     lock_version(ctx, "servers", server_id, expected_version)
     domain.resume(ctx, server_id)
+
+
+@service("server terminate")
+def terminate(ctx: Context, server_id: str, *, expected_version: int | None = None) -> None:
+    lock_version(ctx, "servers", server_id, expected_version)
+    domain.terminate(ctx, server_id)
+    enqueue_job(ctx, "server_finalize", server_id)
