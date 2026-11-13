@@ -1,0 +1,1 @@
+- `MINT_LOG_LEVEL=DEBUG`의 판정 줄 뒤에 단계별 시간(`hook_ms` … `event_ms`)과 입출력 대기 횟수(`awaits`)가 붙고, 응답을 받은 호출은 `response_ms` 줄도 남긴다.

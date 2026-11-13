@@ -1,0 +1,1 @@
+- 결과 검사 코드가 오류를 내면 결과를 막는다(POL-E-04). LiteLLM은 후처리 훅의 예외를 삼키고 원래 결과를 내보내므로, MINT 훅은 던지지 않고 집행 모드에서 결과를 `MINT-OUTPUT-BLOCKED` 본문으로 바꾸고 응답 사건에 `MINT-RESULT-SCAN-ERROR`를 남긴다.

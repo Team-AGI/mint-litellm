@@ -1,0 +1,1 @@
+- 제어 평면 키의 토큰을 도구 목록 면제 키로 저장한다. `init`이 `MINT_LITELLM_KEY`로 자동 저장하고 `settings control-key`가 바꾸거나 해제한다. 저장되지 않아 도구를 고정하지 못하면 경보 `sync_divergence`(`control_key_not_set`)가 열린다.
