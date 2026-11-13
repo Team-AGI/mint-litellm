@@ -26,7 +26,7 @@ dependencies = [
 
 [project.optional-dependencies]
 litellm = [
-    "litellm[proxy]==1.106.6",
+    "litellm[proxy]>=1.106.6,<=1.108.5",
     "psycopg[binary,pool]>=3.3",
     "fastapi>=0.115",
     "jinja2>=3.1",
@@ -55,6 +55,10 @@ Repository = "https://github.com/MCP-governance/mint-litellm"
 
 [project.scripts]
 mint-litellm = "mint_litellm.cli:main"
+
+# 잠금 파일은 기준 판본(1.106.6)으로 고정한다. 확장 항목의 범위는 1.108.5까지 허용한다.
+[tool.uv]
+constraint-dependencies = ["litellm==1.106.6"]
 
 [tool.hatch.version]
 path = "src/mint_litellm/__init__.py"

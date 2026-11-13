@@ -55,6 +55,7 @@ REQUIRED_MODES = ("pre_call", "pre_mcp_call", "post_mcp_call")
 CONTROLLED_SERVER_STATUSES = frozenset({"approved", "suspended"})
 CONTRACT_FIELDS = ("url_sha256", "transport", "auth_type")
 REGISTRY_MISSING = "registry_missing"
+MODERN_MCP_VERSION = "2026-07-28"
 
 
 @dataclass(frozen=True)
@@ -138,6 +139,14 @@ def _ws_passthrough_on(general_settings: Mapping[str, Any]) -> bool:
     if isinstance(setting, str):
         return setting.strip().lower() in ("1", "true", "yes", "on")
     return setting is True
+
+
+def _modern_mcp_on(general_settings: Mapping[str, Any]) -> bool:
+    """새 MCP 규격을 내는지. 그 규격의 ``subscriptions/listen``은 MINT 훅을 거치지 않는다."""
+    versions = general_settings.get("mcp_advertised_versions")
+    if isinstance(versions, str):
+        versions = [versions]
+    return isinstance(versions, (list, tuple)) and MODERN_MCP_VERSION in [str(v) for v in versions]
 
 
 def check_items(
@@ -239,6 +248,12 @@ def check_items(
     # LiteLLM의 OpenAI WebSocket 패스스루는 사전 훅을 거치지 않으므로 실시간 허용을 명시해야 한다.
     if _ws_passthrough_on(view.general_settings) and not allow_realtime:
         problems.append("enable_openai_websocket_passthrough needs MINT_ALLOW_REALTIME=true")
+    # 구독 중계(subscriptions/listen)는 훅을 거치지 않고 끄는 설정도 없어 새 규격을 막는다.
+    if _modern_mcp_on(view.general_settings):
+        problems.append(
+            f"mcp_advertised_versions must not include {MODERN_MCP_VERSION} "
+            "(the subscription relay bypasses MINT hooks)"
+        )
     # LiteLLM이 구현하는 정책은 통제 서버와 전역 설정이 요구 값과 같을 때만 이행으로 센다.
     active = {s.server_id for s in controlled or () if s.status in CONTROLLED_SERVER_STATUSES}
     for violation in reuse_violations(
