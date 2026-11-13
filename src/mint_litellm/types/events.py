@@ -406,6 +406,9 @@ class ResponseObservation(BaseModel):
     output_blocked: bool = False
     output_masked: bool = False
     sensitive_findings: dict[str, int] = Field(default_factory=dict)
+    # 계약 관리가 아닌 서버에서 막지 않고 관측만 한 검사 결과(결과 지시문 표지·인자 비밀)와 그 서버.
+    unmanaged_findings: tuple[str, ...] = ()
+    server_id: str | None = None
     # 새 행부터 남는 결과 분류(success·tool_error·output_blocked).
     outcome: Outcome | None = None
 
@@ -433,3 +436,4 @@ class AlertKind(StrEnum):
     ENDPOINT_SILENT = "endpoint_silent"
     ENDPOINT_KEY_EXPIRING = "endpoint_key_expiring"
     CALL_SPIKE = "call_spike"
+    CONTENT_FINDING_UNMANAGED = "content_finding_unmanaged"

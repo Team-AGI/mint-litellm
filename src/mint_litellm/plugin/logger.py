@@ -77,6 +77,7 @@ class MintLogger(CustomLogger):
                 size=compat.content_size(content),
                 items=len(content),
                 texts=compat.content_texts(content),
+                structured=compat.structured_texts(kwargs.get("original_response")),
             ):
                 compat.replace_tool_content(response_obj, blocked_output_detail(ctx))
             elif ctx.get("output_masked"):

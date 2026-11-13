@@ -71,6 +71,8 @@ class PluginConfig:
     shadow_max_per_second: int = 50
     # 도구 목록의 「보임·통과」 판정 반복을 다시 기록하지 않는 시간(초). 0이면 항상 기록한다.
     list_dedup_seconds: int = 86400
+    # 계약 관리가 아닌 서버의 결과·인자 검사. observe는 기록·경보만, enforce는 막는다.
+    scan_unmanaged: str = "observe"
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> PluginConfig:
@@ -119,6 +121,7 @@ class PluginConfig:
             shadow_sample_percent=_integer(env, "MINT_SHADOW_SAMPLE_PERCENT", 100, 1, 100),
             shadow_max_per_second=_integer(env, "MINT_SHADOW_MAX_PER_SECOND", 50, 1, 1000),
             list_dedup_seconds=_integer(env, "MINT_LIST_DEDUP_SECONDS", 86400, 0),
+            scan_unmanaged=_scan_unmanaged(env.get("MINT_SCAN_UNMANAGED")),
             export_dir=Path(export_dir) if export_dir else None,
             export_hmac_key=_hmac_key(env, "MINT_EXPORT_HMAC_KEY"),
             export_hmac_key_previous=_hmac_key(env, "MINT_EXPORT_HMAC_KEY_PREVIOUS"),
@@ -132,6 +135,13 @@ class PluginConfig:
                 )
             ),
         )
+
+
+def _scan_unmanaged(raw: str | None) -> str:
+    value = (raw or "observe").strip().lower()
+    if value not in ("observe", "enforce"):
+        raise RuntimeError("MINT_SCAN_UNMANAGED must be observe or enforce")
+    return value
 
 
 def _target_profiles(raw: str) -> dict[str, str]:

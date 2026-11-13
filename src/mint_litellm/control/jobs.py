@@ -51,6 +51,7 @@ KINDS: dict[str, JobKind] = {
     "evidence_expiry_scan": JobKind(),
     "session_verify": JobKind(),
     "call_spike_scan": JobKind(),
+    "content_finding_scan": JobKind(),
     "package_vuln_scan": JobKind(),
     # 사건 분할을 미리 만들고 닫힌 달을 내보낸다 / 보관 기간이 지난 달을 지운다.
     "event_partition_maintain": JobKind(external_write=True),
@@ -223,6 +224,12 @@ def _call_spike_scan(job: JobContext) -> None:
     call_spike.run(job)
 
 
+def _content_finding_scan(job: JobContext) -> None:
+    from mint_litellm.control import content_finding
+
+    content_finding.run(job)
+
+
 def _approval_dormant_scan(job: JobContext) -> None:
     from mint_litellm.control import dormant
 
@@ -311,6 +318,7 @@ HANDLERS: dict[str, Callable[[JobContext], None]] = {
     "alert_deliver": _alert_deliver,
     "session_verify": _session_verify,
     "call_spike_scan": _call_spike_scan,
+    "content_finding_scan": _content_finding_scan,
     "package_vuln_scan": _package_vuln_scan,
     "event_partition_maintain": _event_partition_maintain,
     "event_retention": _event_retention,
@@ -329,6 +337,7 @@ SCHEDULES: dict[str, Callable[[Any], int]] = {
     "session_verify": lambda s: s.session_verify_seconds,
     "evidence_expiry_scan": lambda s: 3600,  # 1시간(고정)
     "call_spike_scan": lambda s: 60,
+    "content_finding_scan": lambda s: 60,
     "package_vuln_scan": lambda s: s.vuln_scan_seconds,
     "event_partition_maintain": lambda s: 3600,  # 1시간(고정)
     "event_retention": lambda s: 3600,  # 1시간(고정). 보관 일수가 없으면 아무것도 하지 않는다.
