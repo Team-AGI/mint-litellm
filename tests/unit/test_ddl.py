@@ -635,11 +635,13 @@ def add_event(conn, key=None, kind="approval_granted", **cols):
     }
     names = ", ".join(row)
     marks = ", ".join(["%s"] * len(row))
-    cur = conn.execute(
-        f"INSERT INTO mint.events ({names}) VALUES ({marks})"
-        " ON CONFLICT (instance_id, source_key) DO NOTHING",
-        list(row.values()),
-    )
+    # 같은 키의 재적재는 키를 먼저 잡은 쪽만 삽입한다(분할 표는 ON CONFLICT 대상이 없다).
+    claimed = conn.execute(
+        "SELECT mint.claim_event_key(%s, %s, %s)", (row["instance_id"], key, row["event_id"])
+    ).fetchone()[0]
+    if not claimed:
+        return key, 0
+    cur = conn.execute(f"INSERT INTO mint.events ({names}) VALUES ({marks})", list(row.values()))
     return key, cur.rowcount
 
 

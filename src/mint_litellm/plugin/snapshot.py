@@ -184,8 +184,8 @@ INSERT_EVENT_SQL = """
 INSERT INTO mint.events
     (event_id, instance_id, inserted_at, kind, source_key, invocation_id, attempt_id,
      actor, subject, payload)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-ON CONFLICT (instance_id, source_key) DO NOTHING
+SELECT %s::uuid, %s, %s::timestamptz, %s, %s, %s::uuid, %s::integer, %s, %s::jsonb, %s::jsonb
+WHERE mint.claim_event_key(%s, %s, %s::uuid)
 """
 
 _CONSUME_MATCH = """
@@ -842,6 +842,9 @@ class PluginDatabase:
             event.actor,
             None if event.subject is None else Jsonb(event.subject),
             Jsonb(event.payload),
+            event.instance_id,
+            event.source_key,
+            event.event_id,
         )
         consumes = consume is not None and (
             consume.call_approval_id is not None or consume.confirmation is not None
