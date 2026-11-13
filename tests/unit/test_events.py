@@ -140,8 +140,22 @@ def test_control_events_need_an_actor_but_system_events_do_not():
     )
 
 
-def test_event_kind_counts():
-    assert (len(CALL_KINDS), len(SYSTEM_KINDS), len(EventKind)) == (4, 5, 71)
+def test_call_and_system_kinds_are_the_listed_ones_and_disjoint():
+    assert CALL_KINDS == {
+        EventKind.DECISION_EVALUATED,
+        EventKind.DISCOVERY_EVALUATED,
+        EventKind.CALL_RESPONSE_RECEIVED,
+        EventKind.CALL_OUTCOME_UNKNOWN,
+    }
+    assert SYSTEM_KINDS == {
+        EventKind.ENFORCEMENT_UNVERIFIED,
+        EventKind.ENFORCEMENT_VERIFIED,
+        EventKind.SERVER_IDENTITY_MISMATCH_OBSERVED,
+        EventKind.BUFFER_OVERFLOW,
+        EventKind.BUFFER_REPLAYED,
+    }
+    assert not CALL_KINDS & SYSTEM_KINDS
+    assert SYSTEM_KINDS <= set(CONTROL_ENTITY)
 
 
 def test_control_source_key_must_match_the_kind():
