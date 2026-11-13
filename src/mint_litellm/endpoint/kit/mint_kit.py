@@ -68,6 +68,7 @@ REPORT_INTERVAL_HOURS = 6
 REPORT_JITTER = 1800
 REPORT_MIN_GAP = 3600
 LAST_REPORT = "last_report"
+REPORTER_KEY = "reporter.key"  # Windows 관리형: SYSTEM 보고기가 읽는 키 사본
 RETIRED_FILE = "retired.json"  # 마지막 보고 응답의 폐기 서버 목록(실행기가 읽는다)
 LAUNCHED = "launched"  # 실행기가 띄운 서버 프로세스의 기록
 SYSTEMD_DIR = "/etc/systemd/system"
@@ -224,7 +225,7 @@ def scan_processes(windows: bool) -> list[dict]:
     return [{"server": n, "count": c} for n, c in sorted(counts.items())][:MAX_ITEMS]
 
 
-def scan_autostart(home: Path, windows: bool, user: str) -> list[dict]:
+def scan_autostart(home: Path, windows: bool, user: str, profile: bool = True) -> list[dict]:
     found = []
 
     def add(kind: str, name: str, text: str) -> None:
@@ -240,7 +241,8 @@ def scan_autostart(home: Path, windows: bool, user: str) -> list[dict]:
         for name, command in parse_schtasks(capture(["schtasks", "/query", "/fo", "csv", "/v"])):
             add("scheduled_task", name, command)
         startup = home / "AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup"
-        for path in sorted(startup.glob("*")) if startup.is_dir() else []:
+        # 프로필(시작 프로그램 폴더)은 사용자 권한으로 도는 보고기만 읽는다.
+        for path in sorted(startup.glob("*")) if profile and startup.is_dir() else []:
             add("startup_folder", path.name, path.name + " " + read_text(path))
     else:
         for kind, folder, pattern in (
@@ -403,12 +405,13 @@ def as_user(uid: int, gid: int, fn):
         return None
 
 
-def save_retired(home: Path, names: list[str], now: float) -> None:
-    """응답의 폐기 서버 목록을 실행기가 읽을 캐시에 쓴다. 쓰지 못해도 보고는 계속한다."""
+def save_retired(home: Path, names: list[str], now: float, folder: Path | None = None) -> None:
+    """응답의 폐기 서버 목록을 실행기가 읽을 캐시에 쓴다(기본은 사용자 캐시, SYSTEM은 설치 폴더).
+    쓰지 못해도 보고는 계속한다."""
     try:
         write_atomic(
-            home / STATE_REL / RETIRED_FILE, json.dumps({"servers": names, "at": now}).encode(),
-            0o600,
+            (folder or home / STATE_REL) / RETIRED_FILE,
+            json.dumps({"servers": names, "at": now}).encode(), 0o644 if folder else 0o600,
         )
     except OSError:
         return
@@ -428,7 +431,6 @@ def unlink_if_ours(path: str, digest: str | None) -> bool:
 SAFE_OWNERS = ("NT AUTHORITY\\SYSTEM", "BUILTIN\\Administrators", "NT SERVICE\\TrustedInstaller")
 OPEN_GROUPS = ("builtin\\users", "authenticated users", "everyone")
 WRITE_RIGHTS = {"F", "M", "W", "WD", "AD", "GW", "GA", "WO", "WDAC"}
-REPARSE_POINT = 0x400
 
 
 def chain_of(path: str) -> list[str]:
@@ -497,31 +499,6 @@ def untrusted_run(folder: Path, windows: bool, python: str | None = None, run=No
 def windows_system() -> bool:
     """Windows에서 SYSTEM 계정(사용자 이름이 ``컴퓨터$``)으로 도는 예약 작업인가."""
     return os.name == "nt" and os.environ.get("USERNAME", "").endswith("$")
-
-
-def profile_unsafe(path: Path, home: Path, name: str, run=None) -> bool:
-    """SYSTEM이 사용자 프로필 경로를 만지기 전 점검: 홈에서 ``path``까지 재분석 지점(정션·링크)이
-    있거나 소유자가 그 계정(또는 관리자)이 아니면 참."""
-    run = run or capture
-    chain = []
-    cur = path
-    while cur != home and home in cur.parents:
-        chain.append(cur)
-        cur = cur.parent
-    chain.append(home)
-    for item in chain:
-        try:
-            info = os.lstat(item)
-        except FileNotFoundError:
-            continue
-        except OSError:
-            return True
-        if getattr(info, "st_file_attributes", 0) & REPARSE_POINT:
-            return True
-        owner = windows_owner(str(item), run)
-        if not (owner.lower().endswith("\\" + name.lower()) or owner in SAFE_OWNERS):
-            return True
-    return False
 
 
 def read_trusted(path: Path, need_root: bool) -> bytes:
@@ -611,7 +588,9 @@ class Kit:
         self.codex_managed_dir = self.physical(self.codex_dir)
         self.owner = (account.uid, account.gid) if chown else None
 
-    guard_profile = False  # SYSTEM이 사용자 프로필을 만질 때 경로를 점검한다
+    # Windows SYSTEM 보고기: 사용자 프로필은 읽지도 쓰지도 않는다(경로 점검과 사용 사이의 경합을
+    # 피하는 가장 단순한 방법). 키·보고 기록·폐기 서버 목록은 설치 폴더에 둔다.
+    system_mode = False
 
     def run_as_user(self, fn):
         """사용자 홈 일을 돌린다. 관리자 권한 보고기는 이를 사용자 권한의 자식 프로세스로 바꾼다."""
@@ -784,6 +763,13 @@ class Kit:
                 reason = (windows_untrusted_reason if self.windows else untrusted_reason)(str(path))
                 if reason:
                     raise SystemExit(f"managed install needs a trusted kit folder: {reason}")
+        if self.windows and self.managed:
+            # SYSTEM 보고기는 프로필을 읽지 않으므로 키 사본을 설치 폴더에 둔다(관리자만 읽음).
+            self.write_tracked(
+                state, self.programs / REPORTER_KEY, f"{self.logical_programs}/{REPORTER_KEY}",
+                (self.config["key"] + "\n").encode(), 0o600,
+            )  # fmt: skip
+            self.lock_programs()
         command = [python, "-I", "-B", tool, "report", "--kit", self.logical_programs]
         if self.managed:
             # 관리자 권한으로 돌므로 사용자의 키와 캐시가 있는 홈을 알려 준다.
@@ -792,6 +778,20 @@ class Kit:
             self.schedule_task(state, command)
         else:
             self.schedule_timer(state, command)
+
+    def lock_programs(self) -> None:
+        """설치 폴더의 접근 권한을 명시한다: SYSTEM·Administrators는 쓰기, Users는 읽기만, 키 사본은
+        SYSTEM·Administrators만."""
+        if self.root is not None or self.dry_run:
+            return
+        capture([
+            "icacls", str(self.programs), "/inheritance:r", "/grant:r",
+            "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F", "*S-1-5-32-545:(OI)(CI)RX",
+        ])  # fmt: skip
+        capture([
+            "icacls", str(self.programs / REPORTER_KEY), "/inheritance:r", "/grant:r",
+            "*S-1-5-18:F", "*S-1-5-32-544:F",
+        ])  # fmt: skip
 
     def schedule_timer(self, state: dict, command: list[str]) -> None:
         """systemd 타이머. 시작 지연의 무작위화는 systemd가 한다.
@@ -1069,7 +1069,8 @@ class Kit:
     def read_inventory(self) -> dict:
         try:
             processes = scan_processes(self.windows)
-            autostart = scan_autostart(self.home, self.windows, self.account.name)
+            extra = {"profile": False} if self.system_mode else {}
+            autostart = scan_autostart(self.home, self.windows, self.account.name, **extra)
         except Exception:
             return {}
         return {"processes": processes, "autostart": autostart}
@@ -1185,8 +1186,8 @@ class Kit:
     def edit_codex_block(self, state: dict, path: Path, names: set[str]) -> tuple[list[str], bool]:
         if not path.exists():
             return [], True
-        if self.guard_profile and profile_unsafe(path, self.home, self.account.name):
-            return [], False
+        if self.system_mode:
+            return [], True  # 사용자 설정 파일은 SYSTEM이 고치지 않는다(관리형 요구 파일은 고친다).
         try:
             current = path.read_bytes().decode("utf-8-sig")
             new, gone = drop_block_tables(current, names)
@@ -1235,6 +1236,9 @@ class Kit:
             if item.get("server") not in retired:
                 kept.append(item)
                 continue
+            if "task" not in item and self.system_mode:
+                kept.append(item)  # 프로필 안의 파일은 SYSTEM이 지우지 않는다.
+                continue
             if "task" in item:
                 done = self.root is not None or bool(
                     capture(["schtasks", "/Delete", "/TN", item["task"], "/F"])
@@ -1265,7 +1269,8 @@ class Kit:
         gone_names = set(retired)
         mine = set(state.get("mcp_servers", [])) & gone_names
         removed, failed = self.drop_configs(state, mine) if mine else ([], set())
-        removed += self.run_as_user(lambda: self.stop_launched(gone_names)) or []
+        if not self.system_mode:  # 실행기 기록은 사용자 프로필에 있다
+            removed += self.run_as_user(lambda: self.stop_launched(gone_names)) or []
         removed += self.drop_autostart(state, gone_names)
         state["mcp_servers"] = sorted(set(state.get("mcp_servers", [])) - (mine - failed))
         if removed:
@@ -1289,21 +1294,15 @@ def report_installed(
 ) -> int:
     """설치된 묶음의 주기 보고. 설치되어 있지 않거나(키·상태 없음) 할 일이 없으면 조용히 0.
 
-    관리자 권한(root·SYSTEM)으로 돌 때는 먼저 인터프리터·이 파일·설정·설치 폴더를 점검하고, 사용자
-    홈을 읽고 쓰는 일은 모두 그 사용자 권한으로 내려간 자식 프로세스에서 한다(Windows는 프로필
-    경로에 정션·링크가 없고 소유자가 그 계정인지 먼저 확인한다).
+    관리자 권한(root·SYSTEM)으로 돌 때는 먼저 인터프리터·이 파일·설정·설치 폴더를 점검한다. root는
+    사용자 홈을 읽고 쓰는 일을 모두 그 사용자 권한으로 내려간 자식 프로세스에서 하고, Windows
+    SYSTEM은 사용자 프로필을 아예 만지지 않는다(키 사본·기록·폐기 서버 목록은 설치 폴더).
     """
     home = home or Path(os.path.expanduser("~"))
     target = drop_target(user)
     system = windows_system()
     if target is not None or system:
         problem = untrusted_run(folder, system)
-        if not problem and system:
-            startup = home / "AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup"
-            for sub in (home / KEY_REL, home / STATE_REL, startup):
-                if profile_unsafe(sub, home, user or ""):
-                    problem = f"{sub} is not a plain folder owned by the user"
-                    break
         if problem:
             sys.stderr.write(f"MINT report refused: {problem}" + NL)
             return 1
@@ -1311,7 +1310,9 @@ def report_installed(
     def run(fn):
         return as_user(*target, fn) if target else fn()
 
-    stamp = home / STATE_REL / LAST_REPORT
+    # SYSTEM 보고기는 프로필 대신 설치 폴더의 키 사본과 기록만 쓴다.
+    stamp = (folder if system else home / STATE_REL) / LAST_REPORT
+    key_file = folder / REPORTER_KEY if system else home / KEY_REL
 
     def read_side() -> dict:
         try:
@@ -1319,7 +1320,7 @@ def report_installed(
         except (OSError, ValueError):
             last = None
         try:
-            key = (home / KEY_REL).read_text(encoding="utf-8").strip()
+            key = key_file.read_text(encoding="utf-8").strip()
         except OSError:
             key = ""
         return {"last": last, "key": key}
@@ -1347,14 +1348,14 @@ def report_installed(
     kit = Kit(folder, None, state["mode"] == "managed", account, False)
     kit.config["key"] = key
     kit.run_as_user = run
-    kit.guard_profile = system
+    kit.system_mode = system
     if not kit.report(state, "installed"):
         run(lambda: stamp.unlink(missing_ok=True))  # 닿지 못했으면 다음 기회에 다시 보낸다.
         return 1
     retired = kit.answer.get("retired")
     if isinstance(retired, list):
         names = [n for n in retired if isinstance(n, str)][:MAX_PENDING]
-        run(lambda: save_retired(home, names, now()))
+        run(lambda: save_retired(home, names, now(), folder if system else None))
         if kit.remediate(state, names):
             kit.report(state, "installed")  # 지운 것을 곧바로 알린다.
     return 0

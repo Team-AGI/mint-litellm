@@ -12,7 +12,8 @@
         중계에 닿지 못하면 훅이 직접 보내며(느릴 뿐 판정은 같다), 요청이 한동안 없으면 끝난다.
   run   MCP 서버 실행기. 승인된 실행 계약과 디스크의 실행 파일·스크립트 해시가 모두 같을 때만
         서버를 시작하고, 아니면 시작하지 않고 종료 코드 126으로 끝난다. 마지막 설치 보고 응답이
-        폐기·미승인으로 알린 서버(사용자 캐시의 ``retired.json``)도 시작하지 않는다. 캐시는
+        폐기·미승인으로 알린 서버(사용자 캐시나 설치 폴더의 ``retired.json``)도
+        시작하지 않는다. 캐시는
         오래되어도 그대로 쓰며(목록에 든 서버만 막는다), 시작한 프로세스는 보고기가 끌 수 있게
         PID와 시작 시각을 사용자 캐시에 기록한다.
 
@@ -58,6 +59,7 @@ SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 ENV_DENIED = re.compile(r"^(LD_|DYLD_|NODE_OPTIONS$|NODE_PATH$|PYTHON|BASH_ENV$|ENV$)")
 REFUSED = 126
 STATE_DIR = "~/.cache/mint"
+KIT_DIR = os.path.dirname(os.path.abspath(__file__))  # Windows SYSTEM 보고기는 목록을 여기 둔다
 RETIRED_FILE = "retired.json"
 LAUNCHED = "launched"
 # 연결 중계는 요청이 이 시간(초) 없으면 끝난다. 소켓 경로는 운영체제 상한 안이어야 한다.
@@ -130,13 +132,18 @@ def load_contract(path: str, server: str) -> dict[str, Any]:
 
 
 def load_retired(state_dir: str) -> set[str]:
-    """마지막 보고 응답의 폐기 서버 이름. 캐시가 없거나 읽을 수 없으면 비어 있다(알 수 없다)."""
-    try:
-        with open(os.path.join(os.path.expanduser(state_dir), RETIRED_FILE), encoding="utf-8") as h:
-            listed = json.load(h).get("servers")
-    except (OSError, ValueError, AttributeError):
-        return set()
-    return {name for name in listed if isinstance(name, str)} if isinstance(listed, list) else set()
+    """마지막 보고 응답의 폐기 서버 이름(사용자 캐시와 이 파일이 있는 설치 폴더의 목록을 합친다).
+    목록이 없거나 읽을 수 없으면 그 몫은 비어 있다(알 수 없다)."""
+    names: set[str] = set()
+    for folder in (os.path.expanduser(state_dir), KIT_DIR):
+        try:
+            with open(os.path.join(folder, RETIRED_FILE), encoding="utf-8") as handle:
+                listed = json.load(handle).get("servers")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(listed, list):
+            names |= {name for name in listed if isinstance(name, str)}
+    return names
 
 
 def proc_start(pid: int) -> str | None:

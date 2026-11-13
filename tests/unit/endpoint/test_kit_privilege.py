@@ -176,45 +176,94 @@ def test_a_managed_install_refuses_an_untrusted_interpreter(tmp_path, reports, m
 
 
 
-def test_a_windows_profile_path_with_a_junction_or_a_foreign_owner_is_refused(
-    tmp_path, monkeypatch
-):
-    home = tmp_path / "alice"
-    cache = home / ".cache/mint"
-    cache.mkdir(parents=True)
-    mine = lambda command: "PC\\alice"  # noqa: E731
-    assert kit_module.profile_unsafe(cache, home, "alice", mine) is False
-    assert kit_module.profile_unsafe(cache, home, "alice", lambda c: "PC\\mallory") is True
-    admin = lambda c: r"BUILTIN\Administrators"  # noqa: E731
-    assert kit_module.profile_unsafe(cache, home, "alice", admin) is False
-    real = os.lstat
+def test_a_system_reporter_never_touches_the_user_profile(tmp_path, monkeypatch):
+    programs, home, sent = stage(tmp_path, monkeypatch)
+    (programs / "reporter.key").write_text("sk-copy\n")
+    gone = tmp_path / "no-such-profile"  # 프로필은 없고, 있어도 읽지 않는다
+    autostart_args = []
+    monkeypatch.setattr(kit_module, "windows_system", lambda: True)
+    monkeypatch.setattr(kit_module, "untrusted_run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        kit_module, "scan_autostart", lambda h, w, u, **kw: autostart_args.append(kw) or []
+    )
+    monkeypatch.setattr(kit_module, "post", lambda u, k, p, c: sent.append((k, p)) or
+                        {"recorded": True, "retired": ["x"]})
+    code = kit_module.report_installed(
+        programs, home=gone, user="alice", sleep=lambda s: None, now=lambda: 9.0
+    )
+    assert code == 0
+    assert sent[0][0] == "sk-copy"  # 키는 설치 폴더의 사본에서 읽는다.
+    assert autostart_args == [{"profile": False}]
+    assert (programs / "last_report").read_text() == "9.0"
+    assert json.loads((programs / "retired.json").read_text())["servers"] == ["x"]
+    assert not gone.exists() and not (home / ".cache").exists()
 
-    def junction(path, *a, **k):
-        info = real(path, *a, **k)
-        values = {name: getattr(info, name) for name in dir(info) if name.startswith("st_")}
-        flagged = str(path).endswith(".cache")
-        values["st_file_attributes"] = kit_module.REPARSE_POINT if flagged else 0
-        return SimpleNamespace(**values)
 
-    monkeypatch.setattr(kit_module.os, "lstat", junction)
-    assert kit_module.profile_unsafe(cache, home, "alice", mine) is True
-
-
-def test_a_system_run_does_not_edit_a_user_config_whose_path_is_not_a_plain_user_folder(
+def test_a_system_reporter_leaves_profile_files_and_processes_alone(
     tmp_path, reports, monkeypatch
 ):
     monkeypatch.delenv("ProgramFiles", raising=False)
     monkeypatch.delenv("ProgramData", raising=False)
     folder = unpack(tmp_path, platform="windows", harnesses=("claude", "codex"))
     kit = make_kit(folder, tmp_path, managed=True, windows=True)
-    state = kit.install()
     config = kit.codex_config()
+    config.parent.mkdir(parents=True)
+    state = kit.install()
     before = config.read_bytes()
-    kit.guard_profile = True
-    monkeypatch.setattr(kit_module, "profile_unsafe", lambda *a, **k: True)
+    record = kit.home / ".cache/mint/launched/srv-1-5.json"
+    record.parent.mkdir(parents=True)
+    record.write_text(json.dumps({"server": "srv-1", "pid": 5, "start": "1"}))
+    mark = kit.home / "AppData/mark.txt"
+    mark.parent.mkdir(parents=True)
+    mark.write_text("x")
+    state["files"][str(mark)] = kit_module.sha256_file(mark)
+    state["autostart"] = [{"server": "srv-1", "file": str(mark)}]
+    kit.system_mode = True
+    monkeypatch.setattr(kit_module, "capture", lambda c: pytest.fail("no process work"))
     kit.remediate(state, ["srv-1"])
-    assert config.read_bytes() == before
-    assert "srv-1" in state["mcp_servers"]  # 지우지 못했으므로 다음 보고 때 다시 시도한다.
+    assert config.read_bytes() == before and record.exists() and mark.exists()
+    assert state["autostart"] == [{"server": "srv-1", "file": str(mark)}]
+    requirements = (kit.codex_managed_dir / "requirements.toml").read_text(encoding="utf-8")
+    assert "srv-1" not in requirements  # 관리자 소유 요구 파일은 고친다.
+
+
+def test_a_managed_windows_install_keeps_a_key_copy_for_the_reporter_and_locks_the_folder(
+    tmp_path, reports, monkeypatch
+):
+    monkeypatch.delenv("ProgramFiles", raising=False)
+    monkeypatch.delenv("ProgramData", raising=False)
+    kit = make_kit(unpack(tmp_path, platform="windows"), tmp_path, managed=True, windows=True)
+    state = kit.install()
+    copy = kit.programs / "reporter.key"
+    assert copy.read_text() == "sk-user\n"
+    assert str(copy).replace("\\", "/").endswith("MintEndpoint/reporter.key")
+    assert any(k.endswith("MintEndpoint/reporter.key") for k in state["files"])
+    calls = []
+    monkeypatch.setattr(kit_module, "capture", lambda command: calls.append(command) or "ok")
+    kit.root = None
+    kit.lock_programs()
+    folder, key = calls
+    assert folder[1] == str(kit.programs) and "*S-1-5-32-545:(OI)(CI)RX" in folder
+    assert "*S-1-5-32-544:(OI)(CI)F" in folder and not any("S-1-1-0" in a for a in folder)
+    assert key[1] == str(copy) and key[-2:] == ["*S-1-5-18:F", "*S-1-5-32-544:F"]
+    assert kit.uninstall()["kept"] == [] and not copy.exists()
+
+
+def test_the_launcher_also_reads_the_list_the_system_reporter_keeps_in_the_kit_folder(
+    tmp_path, monkeypatch
+):
+    from test_kit_install import agent
+
+    kit_dir = tmp_path / "kit"
+    kit_dir.mkdir()
+    (kit_dir / "retired.json").write_text(json.dumps({"servers": ["old"], "at": 1.0}))
+    monkeypatch.setattr(agent, "KIT_DIR", str(kit_dir))
+    assert agent.load_retired(str(tmp_path / "no-cache")) == {"old"}
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / "retired.json").write_text(json.dumps({"servers": ["other"]}))
+    assert agent.load_retired(str(cache)) == {"old", "other"}
+
 
 
 def test_a_managed_file_is_read_without_following_links_and_must_be_root_owned(tmp_path):
