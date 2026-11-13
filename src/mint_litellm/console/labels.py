@@ -460,6 +460,36 @@ def status(table: dict[str, Status], value: str | None) -> Status:
     return table.get(value, Status(value, "off"))
 
 
+def litellm_badge(info: dict | None) -> Status:
+    """복제본이 보고한 LiteLLM 판본과 보장 등급. 등급 A이고 검증된 판본만 정상이다."""
+    if not info:
+        return Status("보고 없음", "off")
+    grade = info.get("grade") or "D"
+    text = f"LiteLLM {info.get('version') or '미설치'} · 보장 등급 {grade}"
+    if grade != "A":
+        return Status(text, "error")
+    if not info.get("tested"):
+        return Status(f"{text} · 검증되지 않은 판본", "wait")
+    return Status(text, "ok")
+
+
+LITELLM_CAPABILITY = {
+    "call_guardrail_mode": "호출 전 가드레일 모드",
+    "call_type_call": "도구 호출 유형",
+    "pre_call_hook": "호출 전 훅",
+    "server_resolution": "서버 해석",
+    "result_logger_hook": "결과 로거 훅",
+    "result_guardrail_mode": "결과 단계 가드레일 모드",
+    "list_hook": "도구 목록 훅",
+    "name_resolution": "이름 해석",
+    "tool_prefix_registry": "도구 접두사 등록부",
+}
+
+
+def litellm_missing(info: dict | None) -> str:
+    return ", ".join(pick(LITELLM_CAPABILITY, name) for name in (info or {}).get("missing") or ())
+
+
 def pick(mapping: dict[str, str], value: str | None) -> str:
     return "—" if value in (None, "") else mapping.get(value, value)
 

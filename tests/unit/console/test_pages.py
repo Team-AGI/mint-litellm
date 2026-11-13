@@ -1,5 +1,6 @@
 """화면: 렌더링(응답 200·한국어 표시명), 역할별 버튼, 보안 헤더, 위험 동작 흐름."""
 
+import json
 import re
 import uuid
 from datetime import datetime, timedelta
@@ -486,3 +487,23 @@ def test_the_ledger_can_be_filtered_by_invocation(world, admin):
     html = admin.get("/ledger?invocation=0192f7a0-7c1e-7a10-8000-0123456789ab").text
     assert "조건에 맞는 기록이 없습니다" in html
     assert "형식이 올바르지 않습니다" in admin.get("/ledger?invocation=zzz").text
+
+
+def test_the_overview_shows_the_litellm_grade_each_replica_reported(world, admin):
+    def verified(worker, litellm):
+        world.query(
+            "INSERT INTO mint.events (event_id, instance_id, kind, source_key, payload)"
+            " VALUES (%s, %s, 'enforcement_verified', %s, %s::jsonb)",
+            uuid.uuid4(), INSTANCE, f"selfcheck:{worker}:1:enforcement_verified",
+            json.dumps({"worker_id": worker, "litellm": litellm}))
+
+    verified("r1:1", {"version": "1.106.6", "grade": "A", "tested": True, "missing": []})
+    verified("r2:1", {"version": "1.107.0", "grade": "A", "tested": False, "missing": []})
+    verified("r3:1", {"version": "1.99.0", "grade": "B", "tested": False,
+                      "missing": ["list_hook"]})
+    verified("r4:1", None)
+    html = admin.get("/").text
+    assert "LiteLLM 1.106.6 · 보장 등급 A" in html
+    assert "LiteLLM 1.107.0 · 보장 등급 A · 검증되지 않은 판본" in html
+    assert "LiteLLM 1.99.0 · 보장 등급 B" in html and "없는 능력: 도구 목록 훅" in html
+    assert "list_hook" not in html
