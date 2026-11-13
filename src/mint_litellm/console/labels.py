@@ -287,6 +287,7 @@ TIME_ZONE = {
 ALERT_KIND = {
     "contract_drift": "계약 변경",
     "call_spike": "호출량 급증",
+    "bulk_extraction": "대량 추출 의심",
     "content_finding_unmanaged": "미관리 서버 내용 검사",
     "result_unenforced": "결과를 막지 못함",
     "approval_dormant": "미사용 승인",

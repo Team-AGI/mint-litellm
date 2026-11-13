@@ -51,6 +51,7 @@ KINDS: dict[str, JobKind] = {
     "evidence_expiry_scan": JobKind(),
     "session_verify": JobKind(),
     "call_spike_scan": JobKind(),
+    "bulk_extraction_scan": JobKind(),
     "content_finding_scan": JobKind(),
     "result_unenforced_scan": JobKind(),
     "package_vuln_scan": JobKind(),
@@ -227,6 +228,10 @@ def _call_spike_scan(job: JobContext) -> None:
     call_spike.run(job)
 
 
+def _bulk_extraction_scan(job: JobContext) -> None:
+    from mint_litellm.control import bulk_extraction
+
+    bulk_extraction.run(job)
 def _content_finding_scan(job: JobContext) -> None:
     from mint_litellm.control import content_finding
 
@@ -335,6 +340,7 @@ HANDLERS: dict[str, Callable[[JobContext], None]] = {
     "alert_deliver": _alert_deliver,
     "session_verify": _session_verify,
     "call_spike_scan": _call_spike_scan,
+    "bulk_extraction_scan": _bulk_extraction_scan,
     "content_finding_scan": _content_finding_scan,
     "result_unenforced_scan": _result_unenforced_scan,
     "package_vuln_scan": _package_vuln_scan,
@@ -357,6 +363,7 @@ SCHEDULES: dict[str, Callable[[Any], int]] = {
     "session_verify": lambda s: s.session_verify_seconds,
     "evidence_expiry_scan": lambda s: 3600,  # 1시간(고정)
     "call_spike_scan": lambda s: 60,
+    "bulk_extraction_scan": lambda s: 60,
     "content_finding_scan": lambda s: 60,
     "result_unenforced_scan": lambda s: 60,
     "package_vuln_scan": lambda s: s.vuln_scan_seconds,

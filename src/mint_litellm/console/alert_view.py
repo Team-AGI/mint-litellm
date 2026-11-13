@@ -9,7 +9,9 @@ from mint_litellm.console.templating import local_time
 
 KEY = {
     "server_id": "서버", "tool": "도구", "calls": "최근 호출 수", "window_seconds": "관측 구간(초)",
-    "baseline_calls": "평소 호출 수", "failures": "연속 실패 횟수",
+    "baseline_calls": "평소 호출 수", "principal_id": "호출한 쪽", "bytes": "최근 받은 양(바이트)",
+    "baseline_bytes": "평소 받은 양(바이트)",
+    "baseline_items": "평소 받은 항목 수", "held": "호출 차단", "failures": "연속 실패 횟수",
     "instances": "비교한 인스턴스",
     "items": "항목", "observed_sha256": "관측 지문", "kind": "구분", "state_epoch": "상태 세대",
     "reason": "사유", "intake_id": "신청", "item": "항목", "check": "점검",
@@ -69,6 +71,10 @@ SUMMARY = {
         "최근 {window_seconds}초 동안 결과 {calls}건이 검사에 걸렸지만 막지 못했습니다."
     ),
     "call_spike": "서버 {server_id}의 {tool} 호출이 최근 {calls}건입니다(평소 {baseline_calls}건).",
+    "bulk_extraction": (
+        "서버 {server_id}에서 최근 {items}항목({bytes}바이트)을 받아 갔습니다"
+        "(평소 {baseline_items}항목)."
+    ),
     "oauth_flow_unreadable": "서버 {server_id}의 인증 흐름을 {failures}번 읽지 못했습니다.",
     "instance_mismatch": "서버 {server_id}의 계약·보안 설정이 다른 인스턴스와 다릅니다.",
     "export_failed": "내보내기에 실패했습니다.",

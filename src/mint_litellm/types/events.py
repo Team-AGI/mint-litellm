@@ -398,6 +398,9 @@ class ResponseObservation(BaseModel):
 
     is_error: bool
     size_bytes: int | None = Field(default=None, ge=0)
+    # 결과 항목 수와 호출한 서버(대량 추출 탐지가 읽는다). 새 행부터 남고 알 수 없으면 비운다.
+    items: int | None = Field(default=None, ge=0)
+    server_id: str | None = None
     snapshot_state_epoch: int | None = Field(default=None, ge=0)
     current_state_epoch: int | None = Field(default=None, ge=0)
     revocation_check: RevocationCheck
@@ -406,9 +409,8 @@ class ResponseObservation(BaseModel):
     output_blocked: bool = False
     output_masked: bool = False
     sensitive_findings: dict[str, int] = Field(default_factory=dict)
-    # 계약 관리가 아닌 서버에서 막지 않고 관측만 한 검사 결과(결과 지시문 표지·인자 비밀)와 그 서버.
+    # 계약 관리가 아닌 서버에서 막지 않고 관측만 한 검사 결과(결과 지시문 표지·인자 비밀).
     unmanaged_findings: tuple[str, ...] = ()
-    server_id: str | None = None
     # 결과 단계 가드레일이 없는 LiteLLM(저하 운용): 걸려도 막지도 가리지도 못한 결과.
     result_unenforced: bool = False
     # 새 행부터 남는 결과 분류(success·tool_error·output_blocked).
@@ -439,5 +441,6 @@ class AlertKind(StrEnum):
     ENDPOINT_SILENT = "endpoint_silent"
     ENDPOINT_KEY_EXPIRING = "endpoint_key_expiring"
     CALL_SPIKE = "call_spike"
+    BULK_EXTRACTION = "bulk_extraction"
     CONTENT_FINDING_UNMANAGED = "content_finding_unmanaged"
     RESULT_UNENFORCED = "result_unenforced"

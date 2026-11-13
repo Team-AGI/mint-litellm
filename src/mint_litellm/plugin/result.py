@@ -136,6 +136,7 @@ def screen_result(
     """
     if not ctx.get("allowed"):
         return False
+    ctx["result_items"] = items
     policy = ctx.get("result_policy")
     findings = inspect_result(policy, size=size, items=items, texts=[*texts, *structured])
     watched: list[str] = []
@@ -184,6 +185,8 @@ async def observe_response(
     observation = ResponseObservation(
         is_error=is_error,
         size_bytes=size_bytes,
+        items=ctx.get("result_items"),
+        server_id=ctx.get("server_id"),
         snapshot_state_epoch=ctx.get("state_epoch"),
         current_state_epoch=current,
         revocation_check=check,
@@ -194,7 +197,6 @@ async def observe_response(
         result_unenforced=bool(ctx.get("result_unenforced")),
         sensitive_findings=dict(ctx.get("sensitive_findings") or {}),
         unmanaged_findings=tuple(ctx.get("unmanaged_findings") or ()),
-        server_id=ctx.get("server_id") if ctx.get("unmanaged_findings") else None,
         outcome=response_outcome(
             is_error=is_error, output_blocked=bool(ctx.get("output_blocked"))
         ),

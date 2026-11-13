@@ -6,7 +6,12 @@ import pytest
 from plugin_helpers import FakeStore, config
 
 from mint_litellm.plugin.buffer import EvidenceRecorder, LocalBuffer
-from mint_litellm.plugin.result import ResultDeps, observe_response, observe_unknown_outcome
+from mint_litellm.plugin.result import (
+    ResultDeps,
+    observe_response,
+    observe_unknown_outcome,
+    screen_result,
+)
 from mint_litellm.types.decision import RevocationCheck
 
 INVOCATION = "0192f7a0-7c1e-7a10-8000-0123456789ab"
@@ -68,8 +73,11 @@ def response_event(store):
 def test_an_unchanged_epoch_needs_no_state_lookup(tmp_path):
     database = Database(epoch=7)
     d, store = deps(tmp_path, database)
-    asyncio.run(observe_response(context(), is_error=False, size_bytes=42, deps=d))
+    ctx = context()
+    screen_result(ctx, size=42, items=7, texts=[])  # 항목 수는 결과 검사가 남긴다
+    asyncio.run(observe_response(ctx, is_error=False, size_bytes=42, deps=d))
     payload = response_event(store).payload
+    assert (payload["items"], payload["server_id"]) == (7, "srv-1")
     assert payload["revocation_check"] == RevocationCheck.UNCHANGED.value
     assert payload["revoked_after_snapshot"] is False
     assert payload["snapshot_state_epoch"] == payload["current_state_epoch"] == 7

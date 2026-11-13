@@ -147,7 +147,7 @@ def test_the_worker_login_creates_the_schedules_it_has_handlers_for(make_worker,
 
 
 def test_job_kinds_follow_the_registration_rules(url, all_handlers):
-    assert len(jobs.KINDS) == 27  # 26종 + 해제 경로의 restore_publish
+    assert len(jobs.KINDS) == 28  # 27종 + 해제 경로의 restore_publish
     assert {k for k, v in jobs.KINDS.items() if v.convergent} == {
         "contract_observe", "sync_server", "sync_target", "activation_finalize",
         "relation_finalize", "server_finalize"}
