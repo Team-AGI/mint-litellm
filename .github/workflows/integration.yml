@@ -35,8 +35,15 @@ concurrency:
 
 jobs:
   integration:
+    # 기준 판본(1.106.6)은 항상, LTS 1.108.5는 PR을 느리게 하지 않도록 main 푸시와 수동 실행에서만 돈다.
+    name: ${{ matrix.litellm == '1.106.6' && 'integration' || format('integration (LiteLLM {0})', matrix.litellm) }}
     runs-on: ubuntu-latest
     timeout-minutes: 80
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(github.event_name == 'pull_request' && '{"include":[{"litellm":"1.106.6","image":"ghcr.io/berriai/litellm-database:v1.106.6@sha256:7ef0e78fe00ad5ea7ea45666cc1d1f02cb7076aee69091543bf397de52db33ce"}]}' || '{"include":[{"litellm":"1.106.6","image":"ghcr.io/berriai/litellm-database:v1.106.6@sha256:7ef0e78fe00ad5ea7ea45666cc1d1f02cb7076aee69091543bf397de52db33ce"},{"litellm":"1.108.5","image":"ghcr.io/berriai/litellm-database:v1.108.5@sha256:5e5f6cddbbf15e44538081caec703dc56501c91ad2f574cb1ad4fc68714bcce7"}]}') }}
+    env:
+      MINT_E_LITELLM_IMAGE: ${{ matrix.image }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
@@ -64,7 +71,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: integration-logs
+          name: integration-logs-${{ matrix.litellm }}
           path: integration-logs
           retention-days: 7
       - name: 스택 정리

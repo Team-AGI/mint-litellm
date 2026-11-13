@@ -1,4 +1,4 @@
-"""LiteLLM 1.106 계열과의 접점.
+"""LiteLLM 1.106.6·1.108.5와의 접점.
 
 LiteLLM의 비공개 심볼과 훅 데이터 형태에 대한 의존은 모두 이 모듈에 둔다. 다른 모듈은
 LiteLLM을 직접 가져오지 않는다. 함수는 가져오기를 호출 시점으로 미뤄, LiteLLM이 설치되지
@@ -31,7 +31,8 @@ from mint_litellm.types.reuse_policy import (
     ssl_verify_on,
 )
 
-SUPPORTED_LITELLM_VERSION = "1.106.6"
+# 보장하는 판본. 앞의 것이 기준 판본(잠금 파일·기본 이미지)이다.
+SUPPORTED_LITELLM_VERSIONS = ("1.106.6", "1.108.5")
 
 CALL_TOOL = "call_mcp_tool"
 LIST_TOOLS = "list_mcp_tools"
@@ -631,6 +632,7 @@ def missing_symbols(*, importer: Callable[[str], Any] = importlib.import_module)
         if not _lookup(module, path, importer)
     ]
     version = installed_litellm_version()
-    if version != SUPPORTED_LITELLM_VERSION:
-        missing.append(f"litellm=={SUPPORTED_LITELLM_VERSION} (installed: {version})")
+    if version not in SUPPORTED_LITELLM_VERSIONS:
+        supported = ", ".join(SUPPORTED_LITELLM_VERSIONS)
+        missing.append(f"litellm in {{{supported}}} (installed: {version})")
     return missing

@@ -327,6 +327,20 @@ def test_item_8_required_settings(override):
     assert failed(run_checks(view(**override))) == {SelfCheckItem.REQUIRED_SETTINGS}
 
 
+@pytest.mark.parametrize("versions", [["2025-11-25", "2026-07-28"], "2026-07-28"])
+def test_item_8_refuses_the_modern_mcp_revision_whose_subscription_relay_skips_the_hooks(versions):
+    general = {**GOOD_GENERAL, "mcp_advertised_versions": versions}
+    results = run_checks(view(general_settings=general))
+    assert failed(results) == {SelfCheckItem.REQUIRED_SETTINGS}
+    detail = next(r for r in results if r.item is SelfCheckItem.REQUIRED_SETTINGS).detail
+    assert "mcp_advertised_versions" in detail
+
+
+def test_item_8_accepts_legacy_only_advertised_versions():
+    legacy = {**GOOD_GENERAL, "mcp_advertised_versions": ["2025-06-18", "2025-11-25"]}
+    assert failed(run_checks(view(general_settings=legacy))) == set()
+
+
 @pytest.mark.parametrize(
     ("override", "policy"),
     [
