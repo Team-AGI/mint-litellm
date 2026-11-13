@@ -80,8 +80,9 @@ def test_the_five_class_count_is_pinned():
     # 재사용 2(R-17·E-24)를 더하고, 결과 상한 기본값으로 E-16이 무조건으로 옮겨 가며
     # 목적지 통제(O-12), 프로세스·자동 시작 점검(D-04), 선언 파일 접근(I-08),
     # 토큰 대상·전달(R-05·R-06), 패키지 기록·취약점 조회·치명 취약점 기한(O-06·O-07·O-08),
-    # 서버 폐기 때 사용자 자격 삭제와 읽어 확인(D-03)이 늘었다.
-    assert (_count("unconditional"), _count("conditional"), _count("partial")) == (37, 14, 22)
+    # 서버 폐기 때 사용자 자격 삭제와 읽어 확인(D-03)이 늘었다. 승인 재확인(O-14)은 기본 집행이라
+    # 무조건으로, 경보 시험(O-17)은 새 도구 경보가 계약 관리 서버에만 열려 조건부로 옮겼다.
+    assert (_count("unconditional"), _count("conditional"), _count("partial")) == (38, 15, 20)
     assert auto == 73
     # 목표(90개 중 72개 이상) 산정은 반자동 수동 증거를 함께 센다.
     assert _count("semi_auto_evidence") == 12
