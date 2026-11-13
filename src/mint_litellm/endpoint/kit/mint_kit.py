@@ -18,7 +18,9 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
+import io
 import json
 import os
 import re
@@ -85,6 +87,123 @@ def post(url: str, key: str, payload: dict, ca_file: str | None) -> bool:
             return reply.status == 200
     except OSError:
         return False
+
+
+# --- 읽기 전용 인벤토리: 실행 중인 MCP 서버 프로세스와 자동 시작 항목 -----------------------
+# 묶음의 실행기(``mint_agent.py run --server 이름``)로 뜬 프로세스와, 그 실행기나 MCP 서버를
+# 가리키는 자동 시작 항목만 이름으로 보고한다. 아무것도 바꾸지 않으며, 읽지 못하는 곳은 건너뛴다.
+LAUNCHER = re.compile(r"mint_agent\.py\"?\s+run\b.*?--server[ =]\"?([^\s\"]+)")
+MCP_WORD = re.compile(r"mint_agent\.py|\bmcp\b|mcp[-_]server", re.IGNORECASE)
+MAX_ITEMS = 64
+MAX_TEXT = 65536
+
+
+def server_of(command: str) -> str | None:
+    """실행기 명령줄이 시작하는 서버 이름. 실행기가 아니면 None."""
+    found = LAUNCHER.search(command)
+    return found.group(1)[:128] if found else None
+
+
+def autostart_item(kind: str, name: str, text: str) -> dict | None:
+    """자동 시작 항목의 내용이 MCP 실행기·서버를 가리키면 보고할 항목, 아니면 None."""
+    if not MCP_WORD.search(text):
+        return None
+    return {"kind": kind, "name": name[:256], "server": server_of(text)}
+
+
+def cron_reboot(text: str) -> list[str]:
+    return [line.strip() for line in text.splitlines() if line.strip().startswith("@reboot")]
+
+
+def parse_reg(text: str) -> list[tuple[str, str]]:
+    """``reg query`` 출력의 (값 이름, 값)."""
+    rows = []
+    for line in text.splitlines():
+        parts = re.split(r"\s{2,}", line.strip(), maxsplit=2)
+        if len(parts) == 3 and parts[1].startswith("REG_"):
+            rows.append((parts[0], parts[2]))
+    return rows
+
+
+def parse_schtasks(text: str) -> list[tuple[str, str]]:
+    """``schtasks /query /fo csv /v`` 출력의 (작업 이름, 실행할 명령)."""
+    rows = []
+    for row in csv.DictReader(io.StringIO(text)):
+        name, command = row.get("TaskName"), row.get("Task To Run")
+        if name and command:
+            rows.append((name, command))
+    return rows
+
+
+def capture(command: list[str]) -> str:
+    try:
+        done = subprocess.run(command, capture_output=True, text=True, timeout=20, errors="replace")
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return done.stdout if done.returncode == 0 else ""
+
+
+def read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")[:MAX_TEXT]
+    except OSError:
+        return ""
+
+
+def process_commands(windows: bool) -> list[str]:
+    if windows:
+        out = capture(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_Process | ForEach-Object { $_.CommandLine }"]
+        )  # fmt: skip
+        return out.splitlines()
+    commands = []
+    for entry in Path("/proc").glob("[0-9]*/cmdline"):
+        try:
+            commands.append(entry.read_bytes().replace(b"\0", b" ").decode(errors="replace"))
+        except OSError:
+            continue
+    return commands
+
+
+def scan_processes(windows: bool) -> list[dict]:
+    counts: dict[str, int] = {}
+    for command in process_commands(windows):
+        name = server_of(command)
+        if name:
+            counts[name] = counts.get(name, 0) + 1
+    return [{"server": n, "count": c} for n, c in sorted(counts.items())][:MAX_ITEMS]
+
+
+def scan_autostart(home: Path, windows: bool, user: str) -> list[dict]:
+    found = []
+
+    def add(kind: str, name: str, text: str) -> None:
+        item = autostart_item(kind, name, text)
+        if item:
+            found.append(item)
+
+    if windows:
+        for hive in ("HKCU", "HKLM"):
+            key = hive + r"\Software\Microsoft\Windows\CurrentVersion\Run"
+            for name, value in parse_reg(capture(["reg", "query", key])):
+                add("run_key", name, value)
+        for name, command in parse_schtasks(capture(["schtasks", "/query", "/fo", "csv", "/v"])):
+            add("scheduled_task", name, command)
+        startup = home / "AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup"
+        for path in sorted(startup.glob("*")) if startup.is_dir() else []:
+            add("startup_folder", path.name, path.name + " " + read_text(path))
+    else:
+        for kind, folder, pattern in (
+            ("systemd", home / ".config/systemd/user", "*.service"),
+            ("autostart", home / ".config/autostart", "*.desktop"),
+            ("autostart", Path("/etc/xdg/autostart"), "*.desktop"),
+        ):
+            for path in sorted(folder.glob(pattern)) if folder.is_dir() else []:
+                add(kind, path.name, read_text(path))
+        for line in cron_reboot(capture(["crontab", "-l", "-u", user])):
+            add("cron", "@reboot", line)
+    return found[:MAX_ITEMS]
 
 
 def toml(value: object) -> str:
@@ -535,6 +654,15 @@ class Kit:
         ]
         return " · ".join(found)[:64] or None
 
+    def inventory(self) -> dict:
+        """프로세스·자동 시작 인벤토리. 읽기에 실패해도 보고는 막지 않는다."""
+        try:
+            processes = scan_processes(self.windows)
+            autostart = scan_autostart(self.home, self.windows, self.account.name)
+        except Exception:
+            return {}
+        return {"processes": processes, "autostart": autostart}
+
     def report(self, state: dict, action: str) -> bool:
         installed = action == "installed"
         payload = {
@@ -543,6 +671,7 @@ class Kit:
             "mode": state.get("mode", "none") if installed else "none",
             "claude_version": self.harness_versions(),
             "mcp_servers": state.get("mcp_servers", []) if installed else [],
+            **self.inventory(),
         }
         url = self.config["decide_url"].rstrip("/") + REPORT_PATH
         ca_pem = self.config.get("ca_pem")

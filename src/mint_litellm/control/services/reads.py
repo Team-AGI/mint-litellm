@@ -72,6 +72,15 @@ def server(conn: psycopg.Connection, instance: str, server_id: str) -> dict | No
         " ORDER BY last_at DESC LIMIT 1",
         (instance, server_id),
     )
+    declared = None if row["identity_kind"] != "stdio" else fetchone(
+        conn,
+        "SELECT payload -> 'exec_contract' -> 'file_access' AS access FROM mint.events"
+        " WHERE instance_id = %s AND kind = 'server_registered'"
+        " AND payload ->> 'server_id' = %s AND payload ->> 'exec_contract_sha256' = %s"
+        " ORDER BY inserted_at DESC LIMIT 1",
+        (instance, server_id, row["exec_contract_sha256"]),
+    )
+    row["file_access"] = (declared or {}).get("access") or []
     row["relations"] = relations(conn, instance, server_id)
     row["approvals"] = approvals(conn, instance, server_id=server_id)
     row["denials"] = [d for d in denials(conn, instance) if d["server_id"] == server_id]

@@ -32,7 +32,22 @@ def test_a_managed_install_report_is_stored_for_the_calling_key(tmp_path, stored
     (_, key_token, fields), = stored
     assert key_token == KEY
     assert fields == {"mode": "managed", "kit_version": "k" * 64,
-                      "claude_version": "2.1.0 (Claude Code)", "mcp_servers": ["srv-1"]}
+                      "claude_version": "2.1.0 (Claude Code)", "mcp_servers": ["srv-1"],
+                      "processes": None, "autostart": None}
+
+
+def test_the_process_and_autostart_inventory_is_stored_as_plain_rows(tmp_path, stored):
+    client, _ = build(tmp_path)
+    body = report(
+        processes=[{"server": "srv-1", "count": 2}],
+        autostart=[{"kind": "cron", "name": "@reboot", "server": "srv-1"},
+                   {"kind": "systemd", "name": "mcp.service"}],
+    )
+    assert post(client, REPORT, body).status_code == 200
+    fields = stored[0][2]
+    assert fields["processes"] == [{"server": "srv-1", "count": 2}]
+    assert fields["autostart"] == [{"kind": "cron", "name": "@reboot", "server": "srv-1"},
+                                   {"kind": "systemd", "name": "mcp.service", "server": None}]
 
 
 @pytest.mark.parametrize(("body", "mode"), [
@@ -57,6 +72,10 @@ def test_a_key_the_kit_did_not_issue_is_not_recorded(tmp_path, stored):
     report(mode="root"),
     report(key="sk-x"),
     report(mcp_servers=["a"] * 65),
+    report(processes=[{"server": "a", "count": 0}]),
+    report(processes=[{"server": "a", "count": 1, "pid": 4}]),
+    report(autostart=[{"kind": "registry", "name": "x"}]),
+    report(autostart=[{"kind": "cron", "name": "x"}] * 65),
 ])
 def test_a_report_that_does_not_fit_the_shape_is_refused(tmp_path, stored, body):
     client, _ = build(tmp_path)

@@ -36,8 +36,8 @@ def test_endpoint_policies_are_counted_only_where_a_rule_or_a_check_backs_them()
     counted = {p for entry in entries for p in entry["reference_policies"]}
     # 로컬 서버 실행 계약(호출 통제 부분), 폐기 항목 잔존(보고 기반), 관리형 설치(관리형에서만)
     assert {"POL-R-18", "POL-R-20", "POL-D-02", "POL-E-06"} <= counted
-    # 실행 계약에 마운트·권한 필드가 없고 프로세스 점검이 없어 아직 세지 않는다.
-    assert not {"POL-I-08", "POL-D-04"} & counted
+    # 프로세스·자동 시작 점검(보고 기반)이 D-04를 받친다. I-08은 경보 없이 계약 해시에 묶인다.
+    assert "POL-D-04" in counted
     assert all(check["output"] == "alert" for check in catalog["checks"])
 
 
@@ -77,19 +77,19 @@ def test_the_five_class_count_is_pinned():
     auto = _count("unconditional") + _count("conditional") + _count("partial")
     # 2단계 완료 기준 42(확인 26·조건부 10·부분 6)에서 엔드포인트 4, 재사용 설정 점검 13,
     # 3단계로 미룬 집행 4, 입력 쪽 비밀 차단(E-05), 통합 시험으로 LiteLLM 동작을 확인해 닫은
-    # 재사용 2(R-17·E-24)를 더한 값이다.
-    assert (_count("unconditional"), _count("conditional"), _count("partial")) == (36, 14, 14)
-    assert auto == 64
+    # 재사용 2(R-17·E-24), 프로세스·자동 시작 점검(D-04)과 선언 파일 접근(I-08)을 더한 값이다.
+    assert (_count("unconditional"), _count("conditional"), _count("partial")) == (36, 14, 16)
+    assert auto == 66
     # 목표(90개 중 72개 이상) 산정은 반자동 수동 증거를 함께 센다.
     assert _count("semi_auto_evidence") == 10
-    assert auto + _count("semi_auto_evidence") == 74
+    assert auto + _count("semi_auto_evidence") == 76
 
 
 def test_policies_that_are_not_counted_stay_out_of_the_count():
     counted = {p["id"] for p in _policies()}
     not_counted = {p["id"]: p["reason"] for p in _catalog()["not_counted"]}
     assert not counted & set(not_counted)
-    assert {"POL-D-03", "POL-I-08", "POL-D-04"} == set(not_counted)
+    assert {"POL-D-03"} == set(not_counted)
     assert all(not_counted.values())
 
 

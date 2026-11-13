@@ -921,6 +921,8 @@ class PluginDatabase:
         kit_version: str,
         claude_version: str | None,
         mcp_servers: Sequence[str],
+        processes: Sequence[dict[str, Any]] | None = None,
+        autostart: Sequence[dict[str, Any]] | None = None,
     ) -> bool:
         """설치 묶음에 발급한 키의 설치 상태 보고를 남긴다. 해제되었거나 발급하지 않은 키면 거짓."""
         from psycopg.types.json import Jsonb
@@ -928,10 +930,12 @@ class PluginDatabase:
         async def write(conn: Any) -> Any:
             cursor = await conn.execute(
                 "UPDATE mint.endpoint_installs SET install_mode = %s, kit_version = %s,"
-                " claude_version = %s, mcp_servers = %s, reported_at = clock_timestamp()"
+                " claude_version = %s, mcp_servers = %s, processes = %s, autostart = %s,"
+                " reported_at = clock_timestamp()"
                 " WHERE instance_id = %s AND key_token = %s AND revoked_at IS NULL",
-                (mode, kit_version, claude_version, Jsonb(list(mcp_servers)), instance_id,
-                 key_token),
+                (mode, kit_version, claude_version, Jsonb(list(mcp_servers)),
+                 None if processes is None else Jsonb(list(processes)),
+                 None if autostart is None else Jsonb(list(autostart)), instance_id, key_token),
             )
             return cursor.rowcount
 

@@ -254,6 +254,10 @@ TIME_ZONE = {
 ALERT_KIND = {
     "contract_drift": "계약 변경",
     "call_spike": "호출량 급증",
+    "endpoint_stale_server": "폐기 서버 항목 잔존",
+    "endpoint_unmanaged": "관리되지 않는 설치",
+    "endpoint_stale_process": "폐기 서버 프로세스 잔존",
+    "endpoint_stale_autostart": "폐기 서버 자동 시작 잔존",
 }
 EVENT_KIND = {
     "decision_evaluated": "호출 판정",
