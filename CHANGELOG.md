@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- 승인 뒤 서버 정의의 OAuth 범위가 승인된 배포 계약보다 넓어지면 호출을 막는다(POL-O-15). 수용 때 LiteLLM 서버 정의에 설정된 범위를 배포 계약(`oauth_scopes`)에 기록하고, 계약 관측이 넓어진 범위를 보면 배포 드리프트 표지와 `contract_drift` 경보를 올리며, 플러그인은 호출마다 레지스트리 서버의 범위를 승인 범위와 대조해 승인에 없는 범위가 있으면 `CONTRACT_DRIFT_oauth_scope`로 닫는다. 같거나 좁아진 범위와 범위가 없는 서버의 동작은 바뀌지 않는다. 이미 승인된 계약은 범위가 비어 있으므로, 범위를 설정한 OAuth 서버는 업그레이드 뒤 재승인이 필요하다(마이그레이션 없음).
 - LiteLLM 재사용 정책 실측: 통합 시험 스택에 순정 LiteLLM 복제본(`litellm-reuse`)과 TLS 문(`tls-front`)을 더하고(프로필 `plain`), 환경 변수 로그인 거부·서버별 분당/동시/시간 제한·인증서 이름 검사·메타데이터 주소 제한·리다이렉트 출처·state·발급자 고정·신원 결속 enforce의 실제 동작을 고정했다(`test_reuse_runtime.py`). 이에 따라 POL-R-17·POL-E-24를 무조건으로, POL-E-05(입력 쪽 비밀 차단, 계약 관리 서버)를 조건부로 집계에 넣었다. 서버 사이 자격 공유 점검(POL-R-14)은 정적 헤더(`static_headers`)의 Authorization·API 키류 값도 비교한다. 병합 뒤 카탈로그가 바뀌므로 정책 판본을 새로 활성화해야 한다.
 - 정책 집계: `policy/catalog.json`에 정책별 구현 상태(`policies`: 무조건·조건부·부분·반자동 증빙, 집행 위치와 한계)와 세지 않는 정책(`not_counted`)을 적었다. 5분류 자동 집행은 63개(무조건 34·조건부 15·부분 14), 반자동 증빙 10개를 더하면 73개이다. 카탈로그 해시가 바뀌므로 업그레이드 뒤 정책 판본을 새로 활성화한다.
 - 정책 연결(엔드포인트): 로컬 실행(stdio) 서버 호출이 승인된 실행 계약이 없거나(POL-R-18) 보고된 계약이 승인본과 다르면(POL-R-20) 정책 규칙이 막는다. 정책 입력에 `server.exec_approved_sha256`이 더해지고 `server.identity_kind`가 필수 입력이 된다(새 번들을 활성화하기 전에 플러그인을 먼저 올린다. 이 규칙은 새 정책 번들을 `policy activate`로 활성화해야 적용된다). 설치 보고를 보는 작업이 폐기된 서버 항목 잔존(POL-D-02)은 `endpoint_stale_server`, 관리되지 않는 사용자 수준 설치(POL-E-06은 관리형에서만 적용)는 `endpoint_unmanaged` 경보로 남기고 조건이 풀리면 닫는다. `policy/catalog.json`의 `reference_policies`를 규칙 R2(POL-I-02·POL-I-10)·R4(POL-R-21·POL-R-22)의 실제 대상으로 바로잡고, 보고 기반 점검을 `checks`에 적었다.

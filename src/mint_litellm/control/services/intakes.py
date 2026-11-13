@@ -148,7 +148,7 @@ def _ensure_server(
 def _deployment_candidate(
     ctx: Context, server_id: str, url: str, transport: str, auth_type: str, issuer: str | None,
     allowed_tools: list[str] | None, image_digest: str | None, source_commit: str | None,
-    proposed_by: str | None = None,
+    proposed_by: str | None = None, oauth_scopes: list[str] | None = None,
 ) -> None:
     """배포 계약 후보를 새로 만든다. 이전 후보는 대체된다."""
     ctx.conn.execute(
@@ -156,9 +156,10 @@ def _deployment_candidate(
         " AND server_id = %s AND status = 'candidate'",
         (ctx.instance_id, server_id),
     )
+    scopes = sorted(oauth_scopes or ())
     values = {
         "url": url, "transport": transport, "auth_type": auth_type, "issuer": issuer,
-        "oauth_scopes": [], "allowed_tools": allowed_tools, "image_digest": image_digest,
+        "oauth_scopes": scopes, "allowed_tools": allowed_tools, "image_digest": image_digest,
         "source_commit": source_commit,
     }
     text = canonical_text(values)
@@ -168,7 +169,7 @@ def _deployment_candidate(
         " source_commit, proposed_by)"
         " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (new_uuid7(), ctx.instance_id, server_id, text, intake_checks.sha256_hex(text), url,
-         url_sha256(url), transport, auth_type, issuer, [], allowed_tools, image_digest,
+         url_sha256(url), transport, auth_type, issuer, scopes, allowed_tools, image_digest,
          source_commit, proposed_by),
     )
 
@@ -284,7 +285,8 @@ def create(
         _ensure_server(ctx, server_id, resolved, transport, auth_type, issuer, ctx.operator.name)
         if resolved:
             _deployment_candidate(ctx, server_id, resolved, transport, auth_type, issuer, None,
-                                  image_digest, source_commit)
+                                  image_digest, source_commit,
+                                  oauth_scopes=intake_checks.oauth_scopes_of(entry))
         intake_id = new_uuid7()
         row = fetchone(
             ctx.conn,
@@ -327,7 +329,8 @@ def _fill(
         if cand is not None:
             _deployment_candidate(ctx, existing["server_id"], cand["url"], cand["transport"],
                                   cand["auth_type"], cand["issuer"], cand["allowed_tools"],
-                                  image_digest, source_commit)
+                                  image_digest, source_commit,
+                                  oauth_scopes=cand["oauth_scopes"])
     if row["requested_by"] is not None:
         _enqueue_run(ctx, row)
     return str(row["id"])
@@ -370,7 +373,8 @@ def receive_submission(ctx: Context, item: dict) -> str | None:
         if url:
             allowed = [t for t in (item.get("allowed_tools") or []) if isinstance(t, str)]
             _deployment_candidate(ctx, server_id, url, transport, auth_type, issuer,
-                                  allowed or None, None, None)
+                                  allowed or None, None, None,
+                                  oauth_scopes=intake_checks.oauth_scopes_of(item))
         intake_id = new_uuid7()
         row = fetchone(
             ctx.conn,
@@ -542,8 +546,13 @@ def store_deployment_candidate(
         "transport"]
     auth_type = normalize_auth_type(entry.get("auth_type"))
     issuer = entry.get("issuer") or None
-    if not keep_same and (url, transport, auth_type, issuer) == (
-        approved["url"], approved["transport"], approved["auth_type"], approved["issuer"]
+    scopes = (
+        sorted(entry["oauth_scopes"]) if "oauth_scopes" in entry
+        else intake_checks.oauth_scopes_of(entry)
+    )
+    if not keep_same and (url, transport, auth_type, issuer, scopes) == (
+        approved["url"], approved["transport"], approved["auth_type"], approved["issuer"],
+        sorted(approved["oauth_scopes"])
     ):
         return False
     with transact(ctx):
@@ -553,7 +562,7 @@ def store_deployment_candidate(
             return False
         _deployment_candidate(ctx, server_id, url, transport, auth_type, issuer,
                               approved["allowed_tools"], approved["image_digest"],
-                              approved["source_commit"], proposed_by)
+                              approved["source_commit"], proposed_by, oauth_scopes=scopes)
     return True
 
 
@@ -589,7 +598,8 @@ def _operator_deployment_candidate(
     store_deployment_candidate(
         ctx, server_id, approved,
         {"url": url, "transport": transport,
-         "auth_type": approved["auth_type"], "issuer": approved["issuer"]},
+         "auth_type": approved["auth_type"], "issuer": approved["issuer"],
+         "oauth_scopes": approved["oauth_scopes"]},
         keep_same=True, proposed_by=ctx.operator.user_id,
     )
 
