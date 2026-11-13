@@ -6,6 +6,7 @@ import pytest
 from plugin_helpers import (
     NOW,
     approval,
+    config,
     evaluator,
     harness,
     request,
@@ -225,6 +226,27 @@ def test_result_policy_reaches_the_call_context(tmp_path):
         "scan": True,
         "enforce": True,
     }
+
+
+def test_managed_servers_get_default_result_limits_and_explicit_conditions_win(tmp_path):
+    cfg = config(tmp_path, default_max_result_bytes=2048, default_max_result_items=7)
+
+    def policy(conditions, server=MANAGED_SERVER):
+        approvals = (approval(conditions=conditions),)
+        snap = snapshot(server=server, tool_contracts=CONTRACTS, approvals=approvals)
+        outcome = decide(harness(tmp_path, snap, evaluate=evaluator(), cfg=cfg))
+        return outcome.context["result_policy"]
+
+    filled = policy({})
+    assert (filled["max_result_bytes"], filled["max_result_items"]) == (2048, 7)
+    mixed = policy({"max_result_bytes": 100})
+    assert (mixed["max_result_bytes"], mixed["max_result_items"]) == (100, 7)
+    off = decide(harness(tmp_path, snapshot(), evaluate=evaluator(), cfg=cfg))
+    assert off.context["result_policy"]["max_result_bytes"] is None
+    unset = config(tmp_path, default_max_result_bytes=0, default_max_result_items=0)
+    snap = snapshot(server=MANAGED_SERVER, tool_contracts=CONTRACTS, approvals=(approval(),))
+    got = decide(harness(tmp_path, snap, evaluate=evaluator(), cfg=unset)).context["result_policy"]
+    assert got["max_result_bytes"] is None and got["max_result_items"] is None
 
 
 def test_result_scan_is_off_for_servers_without_a_contract_and_when_the_approval_says_so(tmp_path):

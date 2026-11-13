@@ -17,6 +17,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from mint_litellm.compat import litellm_1_106 as compat
 from mint_litellm.plugin.policy.sensitive_scan import mask_text
 from mint_litellm.plugin.result import (
+    POL_RESULT_SCAN_ERROR,
     blocked_output_detail,
     observe_response,
     observe_unknown_outcome,
@@ -62,7 +63,9 @@ class MintLogger(CustomLogger):
 
         막아야 하면 결과 내용을 오류 본문으로 바꾸고, 가려야 하면 찾은 값만 바꾼다.
 
-        LiteLLM은 이 훅의 예외를 삼키므로 검사 오류는 기록만 하고 결과를 그대로 둔다.
+        LiteLLM은 이 훅의 예외를 삼키고 원래 결과를 그대로 내보낸다(litellm_logging.py의
+        ``async_post_mcp_tool_call_hook`` 루프). 그래서 검사 오류는 던지지 않고 이 훅 안에서
+        결과를 오류 본문으로 바꾼다(집행 모드일 때. 관측 모드는 결과를 건드리지 않는다).
         """
         ctx = kwargs.get(MINT_CTX_KEY)
         content = getattr(response_obj, "mcp_tool_call_response", None)
@@ -80,7 +83,21 @@ class MintLogger(CustomLogger):
                 self._mask_or_block(ctx, response_obj)
         except Exception as exc:
             log.error("결과 검사 오류: %s", type(exc).__name__)
+            self._block_on_scan_error(ctx, response_obj)
         return None
+
+    @staticmethod
+    def _block_on_scan_error(ctx: dict[str, Any], response_obj) -> None:
+        """검사를 끝내지 못한 결과는 원문을 주지 않는다. 본문을 바꾸지 못하면 비운다."""
+        policy = ctx.get("result_policy")
+        if not ctx.get("allowed") or not (isinstance(policy, dict) and policy.get("enforce")):
+            return
+        try:
+            compat.replace_tool_content(response_obj, blocked_output_detail(ctx))
+        except Exception:
+            response_obj.mcp_tool_call_response.clear()
+        ctx["output_findings"] = [POL_RESULT_SCAN_ERROR]
+        ctx["output_blocked"], ctx["output_masked"] = True, False
 
     @staticmethod
     def _mask_or_block(ctx, response_obj) -> None:

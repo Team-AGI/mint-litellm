@@ -77,12 +77,13 @@ def test_the_five_class_count_is_pinned():
     auto = _count("unconditional") + _count("conditional") + _count("partial")
     # 2단계 완료 기준 42(확인 26·조건부 10·부분 6)에서 엔드포인트 4, 재사용 설정 점검 13,
     # 3단계로 미룬 집행 4, 입력 쪽 비밀 차단(E-05), 통합 시험으로 LiteLLM 동작을 확인해 닫은
-    # 재사용 2(R-17·E-24)를 더한 값이다.
-    assert (_count("unconditional"), _count("conditional"), _count("partial")) == (36, 14, 14)
-    assert auto == 64
+    # 재사용 2(R-17·E-24)를 더하고, 결과 상한 기본값으로 E-16이 무조건으로 옮겨 가며
+    # 목적지 통제(O-12)가 부분으로 늘었다.
+    assert (_count("unconditional"), _count("conditional"), _count("partial")) == (37, 13, 15)
+    assert auto == 65
     # 목표(90개 중 72개 이상) 산정은 반자동 수동 증거를 함께 센다.
     assert _count("semi_auto_evidence") == 10
-    assert auto + _count("semi_auto_evidence") == 74
+    assert auto + _count("semi_auto_evidence") == 75
 
 
 def test_policies_that_are_not_counted_stay_out_of_the_count():

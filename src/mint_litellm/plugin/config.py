@@ -24,6 +24,9 @@ DEFAULT_BUFFER_DIR = "/var/lib/mint/buffer"
 DEFAULT_BUFFER_MAX_BYTES = 50 * 1024 * 1024
 DEFAULT_DECISION_BUDGET_MS = 300
 DEFAULT_SELFCHECK_GRACE_SECONDS = 120.0
+# 승인 조건에 결과 상한이 없을 때 계약 관리 서버에 채우는 기본 상한. 0이면 채우지 않는다.
+DEFAULT_MAX_RESULT_BYTES = 1024 * 1024
+DEFAULT_MAX_RESULT_ITEMS = 1000
 SELFCHECK_GRACE_RANGE = (10, 600)
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 
@@ -57,6 +60,8 @@ class PluginConfig:
     export_hmac_key: bytes | None = None
     export_hmac_key_previous: bytes | None = None
     restore_interval_seconds: float = 60.0
+    default_max_result_bytes: int = DEFAULT_MAX_RESULT_BYTES
+    default_max_result_items: int = DEFAULT_MAX_RESULT_ITEMS
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> PluginConfig:
@@ -94,6 +99,12 @@ class PluginConfig:
             observe_seconds=_integer(env, "MINT_OBSERVE_SECONDS", 3600, 20),
             allow_realtime=_boolean(env, "MINT_ALLOW_REALTIME", False),
             gc_freeze=_boolean(env, "MINT_GC_FREEZE", True),
+            default_max_result_bytes=_integer(
+                env, "MINT_DEFAULT_MAX_RESULT_BYTES", DEFAULT_MAX_RESULT_BYTES, 0
+            ),
+            default_max_result_items=_integer(
+                env, "MINT_DEFAULT_MAX_RESULT_ITEMS", DEFAULT_MAX_RESULT_ITEMS, 0
+            ),
             export_dir=Path(export_dir) if export_dir else None,
             export_hmac_key=_hmac_key(env, "MINT_EXPORT_HMAC_KEY"),
             export_hmac_key_previous=_hmac_key(env, "MINT_EXPORT_HMAC_KEY_PREVIOUS"),

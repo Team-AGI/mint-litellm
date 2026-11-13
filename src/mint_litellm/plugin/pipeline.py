@@ -973,6 +973,8 @@ class _Run:
     last_attempt: int = 0
     control_listing: bool = False
     timing: StageClock = OFF
+    # 승인 조건에 상한이 없을 때 계약 관리 서버에 채우는 결과 상한(바이트, 항목 수).
+    result_defaults: tuple[int | None, int | None] = (None, None)
 
 
 def _decision_snapshot(
@@ -1352,6 +1354,10 @@ async def evaluate_request(
         evaluated_at=deps.clock(),
         deadline=Deadline(deps.config.decision_budget_seconds),
         timing=timing,
+        result_defaults=(
+            deps.config.default_max_result_bytes or None,
+            deps.config.default_max_result_items or None,
+        ),
     )
     try:
         return await _evaluate(run, deps)
@@ -1481,7 +1487,7 @@ async def _evaluate(run: _Run, deps: PipelineDeps) -> Outcome:
 
 
 def _result_policy(run: _Run) -> dict[str, Any]:
-    """결과 검사 입력. 승인 조건의 상한과, 계약 관리 서버의 지시문 표지 검사 여부.
+    """결과 검사 입력. 승인 조건의 상한(없으면 기본 상한)과, 계약 관리 서버의 지시문 표지 검사 여부.
 
     관측 모드에서는 결과를 막지 않고 기록만 한다. 조건 형식이 틀린 호출은 이미 막혔으므로
     상한을 읽지 못하면 비운다.
@@ -1497,6 +1503,11 @@ def _result_policy(run: _Run) -> dict[str, Any]:
         except InputError:
             limits[key] = None
     managed = server is not None and server.contract_status == "managed"
+    if managed:
+        # 적은 값은 그대로 두고 빈 상한만 기본값으로 채운다(POL-E-16).
+        for key, default in zip(RESULT_LIMIT_KEYS, run.result_defaults, strict=True):
+            if limits[key] is None:
+                limits[key] = default
     try:
         response_scan = _response_scan_mode(conditions)
     except InputError:
