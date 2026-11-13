@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import gc
+import importlib.util
 import logging
 import multiprocessing
 import os
@@ -81,6 +82,8 @@ class LiteLLMView:
     allowed_hosts: Sequence[str] = ()
     default_timeout: float = DEFAULT_TOOL_TIMEOUT_SECONDS
     env: Mapping[str, str] = field(default_factory=dict, repr=False)
+    # llm-sandbox가 설치되어 스킬 훅이 Docker 샌드박스에서 코드를 실행할 수 있다.
+    sandbox_installed: bool = False
 
 
 def collect_view(env: Mapping[str, str] | None = None) -> LiteLLMView:
@@ -103,6 +106,7 @@ def collect_view(env: Mapping[str, str] | None = None) -> LiteLLMView:
         allowed_hosts=tuple(compat.litellm_attribute("user_url_allowed_hosts", None) or ()),
         default_timeout=compat.mcp_default_timeout(),
         env=dict(env),
+        sandbox_installed=importlib.util.find_spec("llm_sandbox") is not None,
     )
 
 
@@ -157,6 +161,7 @@ def check_items(
     controlled: Sequence[RegisteredServer] | None,
     fingerprint_key_set: bool = True,
     allow_realtime: bool = False,
+    allow_code_execution: bool = False,
 ) -> list[CheckResult]:
     """8개 항목을 확인한다. ``controlled``가 ``None``이면 MINT DB를 읽지 못한 것이다."""
     results: list[CheckResult] = []
@@ -248,6 +253,15 @@ def check_items(
     # LiteLLM의 OpenAI WebSocket 패스스루는 사전 훅을 거치지 않으므로 실시간 허용을 명시해야 한다.
     if _ws_passthrough_on(view.general_settings) and not allow_realtime:
         problems.append("enable_openai_websocket_passthrough needs MINT_ALLOW_REALTIME=true")
+    # 스킬 훅(항상 로드)의 Docker 샌드박스와 코드 인터프리터 가로채기는 MCP 훅을 지나지 않는다.
+    # 실행할 수 있는 구성이면 운영자가 허용을 명시해야 하고, 아니어도 요청은 사전 단계에서 막는다.
+    interception = any(type(cb).__name__ == "CodeInterpreterInterceptionLogger" for cb in callbacks)
+    if (interception or view.sandbox_installed) and not allow_code_execution:
+        problems.append(
+            "LiteLLM can run model-generated code "
+            f"({'code_interpreter_interception' if interception else 'llm-sandbox installed'}); "
+            "set MINT_ALLOW_CODE_EXECUTION=true or remove it"
+        )
     # 구독 중계(subscriptions/listen)는 훅을 거치지 않고 끄는 설정도 없어 새 규격을 막는다.
     if _modern_mcp_on(view.general_settings):
         problems.append(
@@ -484,6 +498,7 @@ class PluginRuntime:
             controlled=controlled,
             fingerprint_key_set=self.config.fingerprint_key is not None,
             allow_realtime=self.config.allow_realtime,
+            allow_code_execution=self.config.allow_code_execution,
         )
         self.last_results = results
         self.last_mismatches = contract_mismatches(view, controlled or [])

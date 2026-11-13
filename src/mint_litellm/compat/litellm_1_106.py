@@ -154,7 +154,19 @@ def principal_from_auth(
     alias = master_alias if master_alias is not None else master_key_alias()
     key_id = getattr(user_api_key_dict, "token", None)
     metadata = getattr(user_api_key_dict, "metadata", None)
+    # JWT 인증(handle_jwt.py의 user_api_key_auth_from_result)은 api_key=None이라 token이 없고
+    # user_id·team_id는 검증된 클레임이다. 관리형 에이전트 맥락과 게이트웨이 입장 표지는 서버만
+    # 설정하는 값이다. 이 중 하나가 있을 때만 키 없는 사용자를 신원으로 인정한다.
+    keyless = (
+        key_id is None
+        and (
+            bool(getattr(user_api_key_dict, "jwt_claims", None))
+            or getattr(user_api_key_dict, "managed_agent_context", None) is not None
+            or getattr(user_api_key_dict, "mcp_admitted_user_subject", False) is True
+        )
+    )
     return classify_principal(
+        keyless_verified=keyless,
         instance_id=instance_id,
         key_id=key_id,
         user_id=getattr(user_api_key_dict, "user_id", None),

@@ -136,11 +136,12 @@ def test_reasons_are_the_stage_one_set_plus_the_later_additions():
         "CONFIRMATION_STALE",
         "EXTERNAL_MCP_FORBIDDEN",
         "REALTIME_FORBIDDEN",
+        "CODE_EXECUTION_FORBIDDEN",
         "TOKEN_FORWARD_FORBIDDEN",
         "APPROVAL_RECERT_REQUIRED",
     }
     later = ("CONFIRMATION_REQUIRED", "CONFIRMATION_STALE", "EXTERNAL_MCP_FORBIDDEN")
-    for code in (*later, "REALTIME_FORBIDDEN"):
+    for code in (*later, "REALTIME_FORBIDDEN", "CODE_EXECUTION_FORBIDDEN"):
         assert Reason(code) in NON_CONVERTIBLE_REASONS
         assert not is_observation_candidate(code)
         error = error_for_reason(code, "ref-1")

@@ -53,6 +53,9 @@ class PluginConfig:
     observe_seconds: int = 3600
     # 실시간 경로의 연결 뒤 도구 추가는 사전 훅을 지나지 않으므로 기본으로 거부한다.
     allow_realtime: bool = False
+    # 모델이 만든 코드를 LiteLLM 샌드박스에서 실행하는 경로(스킬·코드 인터프리터)는 MCP 훅을 지나지
+    # 않으므로 기본으로 거부한다.
+    allow_code_execution: bool = False
     # 자가 점검을 통과하면 그때까지 만들어진 객체를 가비지 수거 대상에서 뺀다(긴 정지를 막는다).
     gc_freeze: bool = True
     # 되돌림 탐지(2단계). 읽기 전용으로 마운트한 내보내기 디렉터리와 서명 키.
@@ -98,6 +101,7 @@ class PluginConfig:
             log_level=_log_level(env.get("MINT_LOG_LEVEL")),
             observe_seconds=_integer(env, "MINT_OBSERVE_SECONDS", 3600, 20),
             allow_realtime=_boolean(env, "MINT_ALLOW_REALTIME", False),
+            allow_code_execution=_boolean(env, "MINT_ALLOW_CODE_EXECUTION", False),
             gc_freeze=_boolean(env, "MINT_GC_FREEZE", True),
             default_max_result_bytes=_integer(
                 env, "MINT_DEFAULT_MAX_RESULT_BYTES", DEFAULT_MAX_RESULT_BYTES, 0

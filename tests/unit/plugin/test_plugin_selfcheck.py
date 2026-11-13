@@ -1019,6 +1019,28 @@ def test_the_openai_websocket_passthrough_needs_the_explicit_realtime_allowance(
     assert failed(run_checks(off)) == set()
 
 
+class CodeInterpreterInterceptionLogger(FakeLogger):
+    """LiteLLM의 코드 인터프리터 가로채기 로거 이름만 흉내 낸 대역."""
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [
+        {"sandbox_installed": True},
+        {"callbacks": [LOGGER, GUARDRAIL, CodeInterpreterInterceptionLogger()]},
+    ],
+    ids=["llm_sandbox", "interception"],
+)
+def test_a_setup_that_can_run_model_code_needs_the_explicit_allowance(layout):
+    on = view(**layout)
+    assert SelfCheckItem.REQUIRED_SETTINGS in failed(run_checks(on))
+    allowed = check_items(
+        on, logger=LOGGER, guardrail=GUARDRAIL, controlled=[registered()], allow_code_execution=True
+    )
+    assert failed(allowed) == set()
+    assert failed(run_checks(view())) == set()
+
+
 def test_buffered_events_reach_the_database_from_the_judgement_loop_without_calls(tmp_path):
     from dataclasses import replace as replace_config
     from datetime import UTC, datetime
