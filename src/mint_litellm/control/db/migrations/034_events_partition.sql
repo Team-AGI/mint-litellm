@@ -236,8 +236,25 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, mint, pg_temp
 $$;
 REVOKE ALL ON FUNCTION mint.staff_list_events(integer) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION mint.staff_list_events(integer) TO mint_staff;
+-- 직원 함수의 소유 역할은 그대로 둔다(소유자를 바꾸려면 010과 같이 잠시 권한이 필요하다).
+GRANT CREATE ON SCHEMA mint TO mint_staff_owner;
+DO $$
+BEGIN
+    IF NOT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) THEN
+        EXECUTE format('GRANT mint_staff_owner TO %I WITH SET TRUE', current_user);
+    END IF;
+END $$;
+ALTER FUNCTION mint.staff_list_events(integer) OWNER TO mint_staff_owner;
+REVOKE CREATE ON SCHEMA mint FROM mint_staff_owner;
+DO $$
+BEGIN
+    IF NOT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) THEN
+        EXECUTE format('REVOKE SET OPTION FOR mint_staff_owner FROM %I', current_user);
+    END IF;
+END $$;
 
--- 직원 사건 함수는 ON CONFLICT 대신 키를 먼저 잡는다.
+-- 직원 사건 함수(소유 역할이 실행한다)는 ON CONFLICT 대신 키를 먼저 잡는다.
+GRANT EXECUTE ON FUNCTION mint.claim_event_key(text, text, uuid) TO mint_staff_owner;
 CREATE OR REPLACE FUNCTION mint.staff_event(
     p_kind text, p_entity text, p_id text, p_version bigint, p_actor text, p_payload jsonb
 ) RETURNS void
