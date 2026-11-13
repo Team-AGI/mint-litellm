@@ -86,7 +86,9 @@ def test_the_five_class_count_is_pinned():
     # 부분에서 조건부로, 인스턴스 사이 불일치(O-09)는 유예 뒤 차단으로 조건부로 옮겼다.
     # 서버 실행기가 계약에서 만든 격리 안에서 서버를 시작해 파일·네트워크 접근 통제(O-13)와
     # 선언 파일 접근(I-08)은 Linux 관리형 설치에서 조건부이다.
-    assert (_count("unconditional"), _count("conditional"), _count("partial")) == (38, 19, 16)
+    # 서버 실행기가 승인된 계약과 맞을 때만 서버를 시작하고 폐기 서버를 거부해 로컬 서버 시작
+    # 통제(R-18·R-20)는 관리형 설치에서 부분에서 조건부로 옮겼다.
+    assert (_count("unconditional"), _count("conditional"), _count("partial")) == (38, 21, 14)
     assert auto == 73
     # 목표(90개 중 72개 이상) 산정은 반자동 수동 증거를 함께 센다.
     assert _count("semi_auto_evidence") == 12
