@@ -69,6 +69,7 @@ STAGE_TWO_EVENTS = {
     "deployment_contract_superseded",
     "approval_recert_requested", "approval_held", "approval_recert_confirmed",
     "policy_shadow_set", "policy_shadow_cleared",
+    "event_partition_exported", "event_partition_dropped",
 }  # fmt: skip
 
 STAGE_ONE_REASONS = {

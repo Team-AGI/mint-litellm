@@ -52,6 +52,9 @@ KINDS: dict[str, JobKind] = {
     "session_verify": JobKind(),
     "call_spike_scan": JobKind(),
     "package_vuln_scan": JobKind(),
+    # 사건 분할을 미리 만들고 닫힌 달을 내보낸다 / 보관 기간이 지난 달을 지운다.
+    "event_partition_maintain": JobKind(external_write=True),
+    "event_retention": JobKind(external_write=True),
     # 해제 경로: 되돌림 차단 상태에서도 실행한다(외부 쓰기 목록에 넣지 않는다).
     "restore_publish": JobKind(),
 }
@@ -216,6 +219,18 @@ def _package_vuln_scan(job: JobContext) -> None:
     vuln.run(job)
 
 
+def _event_partition_maintain(job: JobContext) -> None:
+    from mint_litellm.control import event_partitions
+
+    event_partitions.maintain(job)
+
+
+def _event_retention(job: JobContext) -> None:
+    from mint_litellm.control import event_partitions
+
+    event_partitions.retain(job)
+
+
 def _contract_observe(job: JobContext) -> None:
     from mint_litellm.control.contract_observe import handle
 
@@ -281,6 +296,8 @@ HANDLERS: dict[str, Callable[[JobContext], None]] = {
     "session_verify": _session_verify,
     "call_spike_scan": _call_spike_scan,
     "package_vuln_scan": _package_vuln_scan,
+    "event_partition_maintain": _event_partition_maintain,
+    "event_retention": _event_retention,
 }
 
 # 일정(주기 작업): 종류 -> 설정에서 주기(초)를 얻는 함수. 처리기가 있는 종류만 일정을 만든다.
@@ -296,6 +313,8 @@ SCHEDULES: dict[str, Callable[[Any], int]] = {
     "evidence_expiry_scan": lambda s: 3600,  # 1시간(고정)
     "call_spike_scan": lambda s: 60,
     "package_vuln_scan": lambda s: s.vuln_scan_seconds,
+    "event_partition_maintain": lambda s: 3600,  # 1시간(고정)
+    "event_retention": lambda s: 3600,  # 1시간(고정). 보관 일수가 없으면 아무것도 하지 않는다.
 }
 
 
