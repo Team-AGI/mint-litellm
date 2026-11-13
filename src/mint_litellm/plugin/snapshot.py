@@ -313,6 +313,8 @@ class ApprovalRow:
     valid_until: datetime
     conditions: Mapping[str, Any]
     status: str
+    # 재확인 유예가 지나 보류됐다(운영자가 재확인할 때까지 이 승인은 쓰지 않는다).
+    recert_held: bool = False
 
 
 @dataclass(frozen=True)
@@ -491,6 +493,7 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
                 valid_until=_time(a["valid_until"]),
                 conditions=a["conditions"],
                 status=a["status"],
+                recert_held=a.get("recert_held_at") is not None,
             )
             for a in doc["approvals"]
         ),

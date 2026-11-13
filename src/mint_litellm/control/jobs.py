@@ -8,7 +8,7 @@
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -141,8 +141,17 @@ def guard_external_write(ctx: "JobContext") -> None:
 
 
 def _approval_expiry_scan(job: JobContext) -> None:
+    from mint_litellm.control.services import recert  # 서비스 틀이 jobs를 불러오므로 늦게 가져온다
+
     expiry.expire_due(job.conn, job.instance_id)
     expiry.warn_expiring(job.conn, job.instance_id)
+    settings = job.settings
+    recert.scan(
+        job.conn,
+        job.instance_id,
+        timedelta(days=getattr(settings, "recert_days", 90)),
+        timedelta(days=getattr(settings, "recert_grace_days", 14)),
+    )
 
 
 def _endpoint_result_scan(job: JobContext) -> None:

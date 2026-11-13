@@ -67,6 +67,7 @@ STAGE_TWO_EVENTS = {
     "alert_resolved", "console_session_started", "console_session_ended",
     "deployment_contract_approved", "deployment_drift_detected",
     "deployment_contract_superseded",
+    "approval_recert_requested", "approval_held", "approval_recert_confirmed",
 }  # fmt: skip
 
 STAGE_ONE_REASONS = {
@@ -82,7 +83,7 @@ STAGE_ONE_REASONS = {
 
 
 def test_event_kinds_are_the_stage_one_set_plus_exactly_the_stage_two_additions():
-    assert len(STAGE_ONE_EVENTS) == 34 and len(STAGE_TWO_EVENTS) == 27
+    assert len(STAGE_ONE_EVENTS) == 34 and len(STAGE_TWO_EVENTS) == 30
     assert {k.value for k in EventKind} == STAGE_ONE_EVENTS | STAGE_TWO_EVENTS
     assert {k.value for k in CALL_KINDS} | {k.value for k in SYSTEM_KINDS} <= STAGE_ONE_EVENTS
 
@@ -95,6 +96,7 @@ def test_every_event_kind_has_a_key_entity_and_the_new_entities_are_the_declared
     assert new == {
         "intake", "intake_check", "tool_contract", "deployment_contract", "litellm_grant",
         "export", "restore", "alert", "console_session", "operator", "evidence", "relation",
+        "approval",
     }  # fmt: skip
 
 
@@ -134,6 +136,7 @@ def test_reasons_are_the_stage_one_set_plus_the_later_additions():
         "CONFIRMATION_STALE",
         "EXTERNAL_MCP_FORBIDDEN",
         "REALTIME_FORBIDDEN",
+        "APPROVAL_RECERT_REQUIRED",
     }
     later = ("CONFIRMATION_REQUIRED", "CONFIRMATION_STALE", "EXTERNAL_MCP_FORBIDDEN")
     for code in (*later, "REALTIME_FORBIDDEN"):

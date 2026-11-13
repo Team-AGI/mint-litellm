@@ -286,6 +286,7 @@ def denial_and_approval(
         a
         for a in in_org
         if a.status == "active"
+        and not a.recert_held
         and a.valid_from <= now < a.valid_until
         and relation_status[a.id] == "active"
     ]
@@ -307,6 +308,8 @@ def denial_and_approval(
         return ApprovalSelection([StageResult.finding(Reason.APPROVAL_ABSENT)], None)
     if any(a.status == "revoked" for a in in_org):
         return ApprovalSelection([StageResult.stop(Reason.APPROVAL_REVOKED)], None)
+    if any(a.status == "active" and a.recert_held for a in in_org):
+        return ApprovalSelection([StageResult.stop(Reason.APPROVAL_RECERT_REQUIRED)], None)
     if any(_approval_expired(a, now) for a in in_org):
         return ApprovalSelection([StageResult.stop(Reason.APPROVAL_EXPIRED)], None)
     return ApprovalSelection([StageResult.finding(Reason.APPROVAL_ABSENT)], None)
