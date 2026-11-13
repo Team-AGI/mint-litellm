@@ -540,7 +540,15 @@ SANDBOX_ETC_NET = (
     "/etc/resolv.conf", "/etc/hosts", "/etc/nsswitch.conf", "/etc/ssl", "/etc/ca-certificates",
     "/etc/pki",
 )  # fmt: skip
-NET_VALUE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
+# 패키지 실행기는 내려받은 패키지를 캐시에 두므로 실행기별 캐시 폴더(홈 기준)만 읽기·쓰기로 붙인다.
+RUNNER_CACHES = {
+    "npx": (".npm",), "npm": (".npm",), "yarn": (".cache/yarn", ".yarn"),
+    "pnpm": (".local/share/pnpm", ".cache/pnpm", ".npm"), "bunx": (".bun", ".cache/bun"),
+    "bun": (".bun", ".cache/bun"), "uvx": (".cache/uv", ".local/share/uv"),
+    "uv": (".cache/uv", ".local/share/uv"), "pipx": (".local/share/pipx", ".cache/pipx"),
+}  # fmt: skip
+RUNNER_ARGS = {"npm": ("exec", "x"), "pnpm": ("dlx", "exec"), "yarn": ("dlx",), "bun": ("x",),
+               "pipx": ("run",), "uv": ("tool",)}  # fmt: skip
 
 
 class Sandbox(NamedTuple):
@@ -568,9 +576,18 @@ def sandbox_policy(folder: str = KIT_DIR) -> Sandbox:
 
 
 def declares_network(contract: Mapping[str, Any]) -> bool:
-    """계약 인자·환경 값에 주소(``://``)가 있으면 네트워크 선언이다(통제면의 분류와 같다)."""
-    values = [*(contract.get("argv") or []), *(contract.get("env") or {}).values()]
-    return any(isinstance(v, str) and NET_VALUE.search(v) for v in values)
+    """계약이 ``network: none``을 선언하지 않았으면 네트워크를 연다(선언이 없는 이전 계약 포함)."""
+    return contract.get("network") != "none"
+
+
+def runner_caches(contract: Mapping[str, Any], home: str) -> list[str]:
+    """패키지 실행기(npx·uvx·pipx run 등)면 그 실행기의 캐시 폴더(홈의 다른 것은 붙이지 않는다)."""
+    name = re.sub(r"\.(exe|cmd|bat)$", "", posixpath.basename(str(contract["executable"])).lower())
+    first = (contract.get("argv") or [""])[:1]
+    needs = RUNNER_ARGS.get(name)
+    if name not in RUNNER_CACHES or (needs and (not first or first[0] not in needs)):
+        return []
+    return [posixpath.join(home, rel) for rel in RUNNER_CACHES[name]] if home else []
 
 
 def _under(path: str, base: str) -> bool:
@@ -615,6 +632,8 @@ def sandbox_mounts(approved: Mapping[str, Any], home: str) -> list[tuple[str, st
         add(script if folder.count("/") < 2 or _under(home, folder) else folder, "ro")
     if approved.get("cwd"):
         add(approved["cwd"], "ro")
+    for cache in runner_caches(approved, home):
+        add(cache, "rw")
     for entry in approved.get("file_access") or ():
         add(entry["path"], "rw" if entry.get("mode") == "rw" else "ro")
     ordered = sorted(found.items(), key=lambda item: (item[0].count("/"), item[0]))

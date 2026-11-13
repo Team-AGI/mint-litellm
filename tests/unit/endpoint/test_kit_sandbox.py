@@ -44,16 +44,29 @@ def test_declared_paths_are_bound_with_their_declared_mode():
     assert args[args.index("--") + 1 :] == ["/opt/srv/bin/node", "/opt/srv/app/index.js"]
 
 
-def test_no_network_unless_the_contract_names_an_address():
-    args = build()
-    assert "--unshare-all" in args and "--share-net" not in args
-    assert "/etc/resolv.conf" not in args and "/etc/ssl" not in args
-    for key, doc in (
-        ("argv", {**CONTRACT, "argv": ["x", "https://api.example.test/v1"]}),
-        ("env", {**CONTRACT, "env": {"URL": "wss://hub.example.test"}}),
-    ):
+def test_the_network_is_closed_only_when_the_contract_declares_none():
+    closed = build({**CONTRACT, "network": "none"})
+    assert "--unshare-all" in closed and "--share-net" not in closed
+    assert "/etc/resolv.conf" not in closed and "/etc/ssl" not in closed
+    # 선언이 없는 이전 계약과 any는 열린다(주소가 인자에 없어도).
+    for doc in (CONTRACT, {**CONTRACT, "network": "any"}):
         wide = build(doc)
-        assert "--share-net" in wide and "/etc/resolv.conf" in wide, key
+        assert "--share-net" in wide and "/etc/resolv.conf" in wide
+
+
+def test_a_package_runner_gets_only_its_cache_directories_read_write():
+    npx = {**CONTRACT, "executable": "/usr/bin/npx", "argv": ["-y", "@scope/server@1.0.0"],
+           "cwd": None, "file_access": []}  # fmt: skip
+    assert agent.runner_caches(npx, HOME) == [f"{HOME}/.npm"]
+    rw = {src for src, _ in pairs(build(npx), "--bind-try")}
+    assert rw == {f"{HOME}/.npm"}
+    uvx = {**npx, "executable": "/usr/local/bin/uvx", "argv": ["mcp-server-x"]}
+    assert f"{HOME}/.cache/uv" in agent.runner_caches(uvx, HOME)
+    pipx = {**npx, "executable": "/usr/bin/pipx", "argv": ["run", "tool"]}
+    assert agent.runner_caches(pipx, HOME) == [f"{HOME}/.local/share/pipx", f"{HOME}/.cache/pipx"]
+    # 실행기가 아니거나 실행기의 다른 하위 명령이면 붙이지 않는다.
+    assert agent.runner_caches({**npx, "executable": "/usr/bin/node"}, HOME) == []
+    assert agent.runner_caches({**pipx, "argv": ["install", "x"]}, HOME) == []
 
 
 def test_the_process_is_tied_to_its_parent_and_its_terminal_session():
@@ -201,7 +214,7 @@ print(json.dumps(out))
 """
 
 
-def contract_for(tmp_path, listener_url=False):
+def contract_for(tmp_path, network="none"):
     secret = tmp_path / "secret.txt"
     secret.write_text("top")
     read_dir, write_dir = tmp_path / "in", tmp_path / "out"
@@ -216,10 +229,8 @@ def contract_for(tmp_path, listener_url=False):
     port = listener.getsockname()[1]
     argv = [str(script), str(secret), str(read_dir / "a.txt"),
             str(write_dir / "b.txt"), str(port)]  # fmt: skip
-    if listener_url:
-        argv.append("http://localhost")
     doc = {
-        "executable": SYSTEM_PYTHON, "argv": argv, "cwd": str(read_dir),
+        "executable": SYSTEM_PYTHON, "argv": argv, "cwd": str(read_dir), "network": network,
         "file_access": [{"path": str(read_dir), "mode": "ro"},
                         {"path": str(write_dir), "mode": "rw"}],
     }  # fmt: skip
@@ -249,8 +260,8 @@ def test_the_sandboxed_server_reaches_only_what_the_contract_declares(tmp_path):
 
 
 @real
-def test_a_declared_address_opens_the_network(tmp_path):
-    doc, listener, _ = contract_for(tmp_path, listener_url=True)
+def test_network_any_opens_the_network(tmp_path):
+    doc, listener, _ = contract_for(tmp_path, network="any")
     try:
         seen = run_inside(doc)
     finally:
@@ -277,3 +288,26 @@ def test_the_launcher_runs_the_server_inside_the_sandbox_and_exits_with_its_code
     assert done.returncode == 7
     (record,) = [json.loads(p.read_text()) for p in (tmp_path / "state/launched").iterdir()]
     assert record["sandbox"] == "bwrap"
+
+
+@real
+def test_a_package_runner_keeps_its_cache_and_leaves_the_rest_of_home_alone(tmp_path):
+    home = tmp_path / "home"
+    (home / ".npm").mkdir(parents=True)
+    (home / "secret").write_text("x")
+    runner = tmp_path / "tools" / "x" / "bin" / "npx"
+    runner.parent.mkdir(parents=True)
+    runner.write_text(
+        '#!/bin/sh\necho cached > "$HOME/.npm/marker"\necho leaked > "$HOME/other"\n'
+        '[ -e "$HOME/secret" ] && echo seen > "$HOME/.npm/secret-visible"\nexit 0\n'
+    )
+    runner.chmod(0o755)
+    doc = {"executable": str(runner), "argv": ["-y", "pkg@1.0.0"], "cwd": None,
+           "env": {"HOME": str(home)}, "network": "any"}  # fmt: skip
+    command = agent.bwrap_args(doc, [str(runner), *doc["argv"]], str(home), shutil.which("bwrap"))
+    env = {**os.environ, "HOME": str(home)}
+    done = subprocess.run(command, capture_output=True, text=True, timeout=60, env=env)
+    assert done.returncode == 0, done.stderr
+    assert (home / ".npm" / "marker").read_text() == "cached\n"
+    assert not (home / "other").exists()  # 홈의 나머지는 비어 있는 임시 폴더다.
+    assert not (home / ".npm" / "secret-visible").exists()

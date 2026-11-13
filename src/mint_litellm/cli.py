@@ -65,7 +65,7 @@ from mint_litellm.types.cli_commands import (
     CliCommand,
     OperatorRole,
 )
-from mint_litellm.types.exec_contract import ExecContract
+from mint_litellm.types.exec_contract import ExecContract, network_hints
 from mint_litellm.types.identity import SubjectType
 from mint_litellm.types.settings import Mode
 from mint_litellm.types.target import (
@@ -586,11 +586,15 @@ def _server_register_local(run: Run) -> None:
         document = json.loads(Path(run.args.contract).read_bytes())
         declared = [{"path": p, "mode": "ro"} for p in run.args.read or ()]
         declared += [{"path": p, "mode": "rw"} for p in run.args.read_write or ()]
+        if run.args.network:
+            document["network"] = run.args.network
         if declared:  # 플래그로 준 선언은 파일의 선언에 더한다(같은 경로는 거부된다)
             document["file_access"] = [*document.get("file_access", ()), *declared]
         contract = ExecContract.model_validate(document)
     except (OSError, ValueError, AttributeError) as exc:
         raise ControlError(f"실행 계약을 읽을 수 없습니다: {exc}") from exc
+    for hint in network_hints(contract):
+        print(hint, file=sys.stderr)
     server_service.register_local(run.context(), run.args.server_id, contract)
 
 
@@ -977,6 +981,8 @@ ARGUMENTS: dict[str, list[Any]] = {
         _a("--read", action="append", metavar="PATH", help="서버가 읽을 경로 선언(반복 가능)"),
         _a("--read-write", action="append", metavar="PATH",
            help="서버가 읽고 쓸 경로 선언(반복 가능)"),
+        _a("--network", choices=["none", "any"],
+           help="네트워크 선언. none이면 단말 격리가 네트워크를 막는다(생략하면 제한 없음)"),
     ],
     "server suspend": [_SERVER_ID],
     "server resume": [_SERVER_ID],

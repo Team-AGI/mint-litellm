@@ -703,7 +703,33 @@ class Kit:
         if reason:
             raise SystemExit(f"managed install needs a trusted interpreter: {reason}")
 
+    def ensure_sandbox_tool(self) -> None:
+        """관리형 Linux 설치는 서버 격리에 쓰는 bubblewrap이 있어야 한다. 없으면 설치를 시도하고,
+        못 하면 이유를 알리고 멈춘다(실행기는 격리할 수 없으면 서버를 시작하지 않는다)."""
+        if self.windows or not (self.managed and self.strict):
+            return
+        if self.config.get("allow_unsandboxed"):
+            return
+        if shutil.which("bwrap"):
+            return
+        for manager, command in (
+            ("apt-get", ["apt-get", "install", "-y", "bubblewrap"]),
+            ("dnf", ["dnf", "install", "-y", "bubblewrap"]),
+            ("yum", ["yum", "install", "-y", "bubblewrap"]),
+            ("zypper", ["zypper", "--non-interactive", "install", "bubblewrap"]),
+            ("pacman", ["pacman", "-S", "--noconfirm", "bubblewrap"]),
+        ):
+            if shutil.which(manager):
+                subprocess.run(command, check=False, stdin=subprocess.DEVNULL)
+                break
+        if not shutil.which("bwrap"):
+            raise SystemExit(
+                "관리형 설치에는 bubblewrap(bwrap)이 필요합니다. 자동으로 설치하지 못했습니다. "
+                "패키지 관리자로 bubblewrap을 설치한 뒤 다시 실행하세요."
+            )
+
     def install(self) -> dict:
+        self.ensure_sandbox_tool()
         previous = self.load_state()
         state = {
             "kit_version": self.config["kit_version"],
