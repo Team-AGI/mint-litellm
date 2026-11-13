@@ -87,13 +87,16 @@ class LiteLLMView:
 
 
 def collect_view(env: Mapping[str, str] | None = None) -> LiteLLMView:
-    missing = compat.missing_symbols()
+    missing = compat.missing_symbols(env=env)
     if not missing:
         witness = compat.arguments_witness_problem()
         missing = [witness] if witness else []
     if missing:
         return LiteLLMView((), {}, True, False, True, (), missing)
     env = os.environ if env is None else env
+    found = compat.litellm_assessment()
+    if not found.tested:
+        log.warning("%s: 시험하지 않은 판본이다. 보장은 감지된 능력에만 근거한다.", found.summary)
     return LiteLLMView(
         callbacks=compat.litellm_callbacks(),
         general_settings=compat.general_settings(),
