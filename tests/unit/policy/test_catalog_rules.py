@@ -1,3 +1,4 @@
+import ast
 import json
 import re
 from pathlib import Path
@@ -65,9 +66,26 @@ def test_every_counted_policy_is_listed_once_with_a_known_class():
     assert all(p.get("limit") for p in _policies() if p["class"] in {"conditional", "partial"})
 
 
+def _defined_names(path: Path) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
+    return names
+
+
 def test_enforcing_locations_point_inside_files_that_exist():
+    """경로:줄 또는 경로::이름(함수·클래스·대입 이름) 형식. 이름 형식은 줄이 밀려도 유지된다."""
     for policy in _policies():
         for ref in policy["enforced_by"]:
+            if "::" in ref:
+                path, _, symbol = ref.partition("::")
+                assert symbol in _defined_names(ROOT / path), (policy["id"], ref)
+                continue
             path, _, line = ref.rpartition(":")
             lines = (ROOT / path).read_text(encoding="utf-8").splitlines()
             assert 1 <= int(line) <= len(lines), (policy["id"], ref)

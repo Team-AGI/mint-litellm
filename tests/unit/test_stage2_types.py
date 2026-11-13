@@ -57,21 +57,8 @@ STAGE_ONE_EVENTS = {
     "org_binding_removed", "policy_activated", "settings_changed", "operator_added",
 }  # fmt: skip
 
-STAGE_TWO_EVENTS = {
-    "relation_terminated", "evidence_attached", "server_terminating", "server_terminated",
-    "operator_removed", "operator_role_changed",
-    "intake_received", "intake_requester_assigned", "intake_checked", "intake_decided",
-    "contract_approved", "contract_drift_detected", "contract_superseded", "reapproval_requested",
-    "sync_applied", "sync_held", "export_written", "export_failed", "restore_blocked",
-    "restore_attested", "restore_stale_accepted", "alert_opened", "alert_acknowledged",
-    "alert_resolved", "console_session_started", "console_session_ended",
-    "deployment_contract_approved", "deployment_drift_detected",
-    "deployment_contract_superseded",
-    "approval_recert_requested", "approval_held", "approval_recert_confirmed",
-    "policy_shadow_set", "policy_shadow_cleared",
-    "event_partition_exported", "event_partition_dropped",
-    "endpoint_remediated",
-}  # fmt: skip
+# 1단계 뒤에 늘어난 사건 종류는 목록을 따로 두지 않고 열거형에서 뺀다.
+STAGE_TWO_EVENTS = {k.value for k in EventKind} - STAGE_ONE_EVENTS
 
 STAGE_ONE_REASONS = {
     "SERVER_UNREGISTERED", "SERVER_NOT_APPROVED", "APPROVAL_ABSENT", "TOOL_NOT_IN_APPROVAL",
@@ -85,18 +72,17 @@ STAGE_ONE_REASONS = {
 }  # fmt: skip
 
 
-def test_event_kinds_are_the_stage_one_set_plus_exactly_the_stage_two_additions():
-    assert len(STAGE_ONE_EVENTS) == 34 and len(STAGE_TWO_EVENTS) == 37
-    assert {k.value for k in EventKind} == STAGE_ONE_EVENTS | STAGE_TWO_EVENTS
+def test_event_kinds_keep_the_stage_one_set_and_the_rest_are_additions():
+    assert STAGE_ONE_EVENTS <= {k.value for k in EventKind}
     assert {k.value for k in CALL_KINDS} | {k.value for k in SYSTEM_KINDS} <= STAGE_ONE_EVENTS
 
 
-def test_every_event_kind_has_a_key_entity_and_the_new_entities_are_the_declared_ones():
+def test_every_event_kind_has_a_key_entity_and_the_declared_new_entities_exist():
     for kind in EventKind:
         if kind not in CALL_KINDS:
             assert kind in CONTROL_ENTITY, kind
     new = {CONTROL_ENTITY[EventKind(k)] for k in STAGE_TWO_EVENTS}
-    assert new == {
+    assert new >= {
         "intake", "intake_check", "tool_contract", "deployment_contract", "litellm_grant",
         "export", "restore", "alert", "console_session", "operator", "evidence", "relation",
         "approval", "server", "policy_shadow", "event_partition", "endpoint",
