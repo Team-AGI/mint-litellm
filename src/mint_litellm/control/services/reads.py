@@ -150,7 +150,8 @@ def approvals(
         conn,
         "SELECT id, org_id, relation_id, class, server_id, tools, scope_type, scope_id, valid_from,"
         " valid_until, conditions, basis, granted_by, requested_by, status, revoked_at,"
-        " revoke_reason, state_version FROM mint.approvals WHERE instance_id = %s"
+        " revoke_reason, state_version, recert_confirmed_at, recert_confirmed_by,"
+        " recert_requested_at, recert_held_at FROM mint.approvals WHERE instance_id = %s"
         " AND (%s::text IS NULL OR server_id = %s) AND (%s::text IS NULL OR status = %s)"
         " ORDER BY valid_until DESC, id DESC LIMIT %s OFFSET %s",
         (instance, server_id, server_id, status, status, limit, offset),

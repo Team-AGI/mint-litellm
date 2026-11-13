@@ -121,6 +121,9 @@ class Stage2Settings:
         return 2 * self.session_verify_seconds
 
     staff_consent_max_days: int = 90
+    # 승인 필요성 재확인 주기와 유예(일). 기본값은 MINT가 채우며 운영자 설정이 필요 없다.
+    recert_days: int = 90
+    recert_grace_days: int = 14
     intake_allowed_ports: tuple[int, ...] = (443, 8443)
     console_url: str | None = None
 
@@ -147,6 +150,8 @@ class Stage2Settings:
             session_absolute_seconds=_seconds(env, "MINT_SESSION_ABSOLUTE_SECONDS", 28800),
             session_verify_seconds=_seconds(env, "MINT_SESSION_VERIFY_SECONDS", 300),
             staff_consent_max_days=_days(env, "MINT_STAFF_CONSENT_MAX_DAYS", 90),
+            recert_days=_days(env, "MINT_RECERT_DAYS", 90),
+            recert_grace_days=_days(env, "MINT_RECERT_GRACE_DAYS", 14),
             intake_allowed_ports=_ports(env.get("MINT_INTAKE_ALLOWED_PORTS")),
             console_url=(env.get("MINT_CONSOLE_URL") or "").strip() or None,
         )

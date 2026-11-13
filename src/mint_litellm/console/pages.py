@@ -23,6 +23,7 @@ from mint_litellm.control.services import intakes as intake_service
 from mint_litellm.control.services import operators as operator_service
 from mint_litellm.control.services import orgs as org_service
 from mint_litellm.control.services import reads
+from mint_litellm.control.services import recert as recert_service
 from mint_litellm.control.services import servers as server_service
 from mint_litellm.control.services import settings as settings_service
 from mint_litellm.types.cli_commands import OperatorRole
@@ -171,10 +172,24 @@ def resume_server(
 # --- 승인 대기열·상세 -------------------------------------------------------------------------
 
 
+def _with_recert(actor: Actor, rows: list[dict]) -> list[dict]:
+    """활성 승인마다 재확인 기한과 상태(기한 내·필요·기한 초과·보류)를 붙인다."""
+    settings = actor.config.stage2
+    period = timedelta(days=settings.recert_days)
+    grace = timedelta(days=settings.recert_grace_days)
+    now = datetime.now(UTC)
+    return [
+        {**r, "recert": recert_service.state(r, now, period, grace),
+         "recert_due": recert_service.due_at(r, period)}
+        for r in rows
+    ]
+
+
 def approvals_page(request: Request, actor: Actor, error=None, status=200, form=None):
+    rows = reads.approvals(actor.conn, actor.instance, page=page_number(request))
     ctx = {
         "queue": reads.queue(actor.conn, actor.instance),
-        "rows": reads.approvals(actor.conn, actor.instance, page=page_number(request)),
+        "rows": _with_recert(actor, rows),
         "form": form,
         "page": page_number(request),
         "error": error,
@@ -268,6 +283,20 @@ def revocations_page(request: Request, actor: Actor, error=None, status=200):
 @router.get("/revocations")
 def revocations(request: Request, actor: Actor = Depends(page_actor)):
     return revocations_page(request, actor)
+
+
+@router.post("/approvals/{approval_id}/recertify")
+def recertify_approval(
+    approval_id: str,
+    request: Request,
+    state_version: int = Form(...),
+    actor: Actor = Depends(page_actor),
+):
+    return act(
+        actor,
+        lambda: recert_service.confirm(actor.ctx, approval_id, expected_version=state_version),
+        "recertified", "/approvals", lambda **kw: approvals_page(request, actor, **kw),
+    )
 
 
 @router.post("/approvals/{approval_id}/revoke")

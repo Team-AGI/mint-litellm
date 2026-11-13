@@ -29,6 +29,7 @@ def test_defaults():
         300,
     )
     assert s.webhook_urls == () and s.webhook_hmac_key is None
+    assert (s.recert_days, s.recert_grace_days) == (90, 14)
 
 
 def test_overrides_and_previous_key():
@@ -37,12 +38,15 @@ def test_overrides_and_previous_key():
             **BASE,
             "MINT_EXPORT_HMAC_KEY_PREVIOUS": OTHER,
             "MINT_OBSERVE_SECONDS": "60",
+            "MINT_RECERT_DAYS": "30",
+            "MINT_RECERT_GRACE_DAYS": "7",
             "MINT_WEBHOOK_URLS": "https://a.example/hook, https://b.example/hook",
             "MINT_WEBHOOK_HMAC_KEY": OTHER,
         }
     )
     assert s.export_hmac_key_previous == b"o" * 40
     assert s.observe_seconds == 60
+    assert (s.recert_days, s.recert_grace_days) == (30, 7)
     assert s.webhook_urls == ("https://a.example/hook", "https://b.example/hook")
 
 
