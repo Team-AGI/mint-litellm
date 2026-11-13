@@ -36,6 +36,8 @@ log = logging.getLogger("mint_litellm.result")
 POL_RESULT_LIMIT = "POL-E-16"
 POL_RESULT_INSTRUCTION = "POL-E-04"
 POL_RESULT_SENSITIVE = "POL-E-05"
+# 결과 검사 코드 자체의 오류. 검사하지 못한 결과는 막는다.
+POL_RESULT_SCAN_ERROR = "MINT-RESULT-SCAN-ERROR"
 
 
 class RevocationSource(Protocol):

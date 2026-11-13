@@ -26,6 +26,16 @@ def test_defaults():
     assert config.selfcheck_grace_seconds == 120.0 and config.gc_freeze is True
 
 
+def test_default_result_limits_are_configurable_and_zero_turns_them_off():
+    assert PluginConfig.from_env(BASE).default_max_result_bytes == 1024 * 1024
+    assert PluginConfig.from_env(BASE).default_max_result_items == 1000
+    env = {**BASE, "MINT_DEFAULT_MAX_RESULT_BYTES": "0", "MINT_DEFAULT_MAX_RESULT_ITEMS": "50"}
+    got = PluginConfig.from_env(env)
+    assert (got.default_max_result_bytes, got.default_max_result_items) == (0, 50)
+    with pytest.raises(RuntimeError):
+        PluginConfig.from_env({**BASE, "MINT_DEFAULT_MAX_RESULT_BYTES": "-1"})
+
+
 def test_every_setting_can_be_given():
     env = {
         **BASE,

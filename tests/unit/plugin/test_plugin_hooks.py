@@ -680,6 +680,31 @@ class TestResponseAndFailureEvents:
         assert json.loads(block.text)["code"] == "MINT-OUTPUT-BLOCKED"
         assert ctx["output_blocked"] is True and ctx["output_masked"] is False
 
+    def test_a_scan_error_replaces_the_result_instead_of_passing_it(self, tmp_path, monkeypatch):
+        from litellm.types.mcp import MCPPostCallResponseObject
+        from mcp.types import TextContent
+
+        import mint_litellm.plugin.logger as logger_module
+
+        monkeypatch.setattr(logger_module, "screen_result", lambda *a, **k: 1 / 0)
+        for enforce in (True, False):
+            hook, store = self.hook(tmp_path)
+            ctx = self.context(result_policy={"enforce": enforce})
+            details = {MINT_CTX_KEY: ctx}
+            response = MCPPostCallResponseObject(
+                mcp_tool_call_response=[TextContent(type="text", text="secret body")],
+                hidden_params={},
+            )
+            run(hook.async_post_mcp_tool_call_hook(details, response, None, None))
+            text = response.mcp_tool_call_response[0].text
+            assert ("secret body" not in text) is enforce
+            if enforce:
+                assert json.loads(text)["code"] == "MINT-OUTPUT-BLOCKED"
+                run(hook.async_log_success_event(details, response, None, None))
+                (event,) = store.of_kind("call_response_received")
+                assert event.payload["output_blocked"] is True
+                assert event.payload["output_findings"] == ["MINT-RESULT-SCAN-ERROR"]
+
     def test_a_result_hook_never_raises_into_litellm(self, tmp_path):
         hook, _ = self.hook(tmp_path)
         bad = self.context(result_policy={"max_result_bytes": "ten", "enforce": True})

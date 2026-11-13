@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- 결과 크기·항목 수 상한(POL-E-16)에 기본값을 둔다. 승인 조건에 `max_result_bytes`·`max_result_items`가 없으면 계약 관리 서버 호출에 1 MiB·1000항목(`MINT_DEFAULT_MAX_RESULT_BYTES`·`MINT_DEFAULT_MAX_RESULT_ITEMS`, 0이면 끔)을 채운다. 승인에 적은 값이 우선한다.
+- 결과 검사 코드가 오류를 내면 결과를 막는다(POL-E-04). LiteLLM은 후처리 훅의 예외를 삼키고 원래 결과를 내보내므로, MINT 훅은 던지지 않고 집행 모드에서 결과를 `MINT-OUTPUT-BLOCKED` 본문으로 바꾸고 응답 사건에 `MINT-RESULT-SCAN-ERROR`를 남긴다.
+- 새 전송 목적지 통제(POL-O-12)를 카탈로그에 올린다. 서버 URL(원격)·실행 계약의 주소(로컬)가 승인과 달라지면 호출이 막히고 재승인 전까지 풀리지 않으며(계약 변경 경보), 인자의 URL은 승인 조건 `allowed_hosts` 밖이면 막힌다. 서버가 스스로 접속하는 목적지는 보지 못한다.
 - 호출량 급증 경보(POL-O-17): 작업 `call_spike_scan`이 1분마다 판정 사건에서 서버·도구별 최근 5분의 호출 수를 세어 지난 24시간의 구간 평균과 견주고, 평균의 3배 이상이면서 50건 이상이면 `call_spike` 경보를 열며(경보가 열려 있는 동안 다시 열지 않는다) 평소 수준으로 돌아오면 닫는다. 기준은 `MINT_SPIKE_WINDOW_SECONDS`·`MINT_SPIKE_BASELINE_SECONDS`·`MINT_SPIKE_FACTOR`·`MINT_SPIKE_MIN_CALLS`로 바꾼다. 콘솔 기록에 경보 종류(「계약 변경」「호출량 급증」)를 함께 보이고 웹훅 본문에 요지와 조치를 더했다. 새 도구 경보와 급증 경보가 실제로 열리는지를 통합 시험으로 고정했다(마이그레이션 `027_decision_time_index`: 판정 사건 시간 부분 색인).
 - 승인 필요성 재확인(마이그레이션 `025_approval_recertification`). 승인은 마지막 재확인(없으면 승인 시작)부터 90일(`MINT_RECERT_DAYS`)이 지나면 재확인 요청과 경보 `approval_recert_due`가 열리고, 요청 뒤 14일(`MINT_RECERT_GRACE_DAYS`) 안에 확인이 없으면 보류되어(`approval_held` 사건, 경보 `approval_recert_held`) 그 범위의 호출이 `APPROVAL_RECERT_REQUIRED`로 차단된다. 기본값은 MINT가 채우며 설정은 필요 없다. 승인 내역에서 관리자가 「재확인」하면 확인자를 기록하고 주기를 새로 시작하며 보류를 푼다(`approval_recert_confirmed` 사건). 주기 검사는 기존 승인 만료 검사 작업이 함께 돌린다. 플러그인보다 먼저 마이그레이션을 적용한다(새 열은 판정이 읽는다).
 - 로컬 실행(stdio) 서버의 실행 계약이 바뀌면(`server register-local` 재실행) 승인된 계약과 새 계약을 파일 접근·실행·네트워크 세 축으로 나눠 비교한다. 더해진 항목이 있는 축은 확대로 보고 `contract_drift` 경보(심각도 high, 본문에 확대된 축과 항목)를 열며, 축소·변화 없음은 확대가 아니라고 표시한 낮은 심각도 경보로 남긴다. 호출 차단은 기존 해시 결속이 그대로 맡고(승인은 재승인 전까지 쓸 수 없다), 서버 상세에 「실행 계약 변경」 표가 열린 경보의 축별 판정을 보인다. 계약에 선언된 값(실행 파일·인자·작업 디렉터리·환경 변수·비밀 참조)만 비교하며 실제 파일·네트워크 접근은 알 수 없다(POL-O-13). 마이그레이션 없음.
