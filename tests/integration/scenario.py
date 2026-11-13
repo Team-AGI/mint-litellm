@@ -22,6 +22,7 @@ from psycopg.rows import dict_row
 
 sys.path.insert(0, str(support.HERE.parents[1] / "src"))
 
+from mint_litellm.types.events import decoded_decision  # noqa: E402
 from mint_litellm.types.fingerprint import argument_fingerprint, decode_fingerprint_key  # noqa: E402
 
 FINGERPRINT_KEY = "BwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSY"
@@ -430,7 +431,7 @@ def _error(reply: httpx.Response) -> tuple[str | None, str | None]:
 
 def decision(event: dict) -> tuple[str, str, str | None]:
     """(evaluated_decision, enforced_action, 차단 사유 코드) 한 사건에서 읽는다."""
-    payload = event["payload"]
+    payload = decoded_decision(event["payload"])
     stop = payload.get("stop") or {}
     findings = payload.get("findings") or [{}]
     reason = stop.get("reason_code") or findings[0].get("reason_code")

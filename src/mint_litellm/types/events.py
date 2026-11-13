@@ -5,6 +5,7 @@ DB의 ``source_key`` 유일성이 재적재 시 한 건으로 수렴시킨다.
 """
 
 import re
+from collections.abc import Mapping
 from enum import StrEnum
 from typing import Any, Self
 from uuid import UUID
@@ -269,6 +270,81 @@ class Event(BaseModel):
         return cls.model_validate_json(line)
 
 
+PAYLOAD_VERSION = 2
+# 판정 사건에서 항상 같은 사유라 본문에 적지 않는 값 없음 사유(응답 사건이 실제 값을 남긴다).
+_CONSTANT_MISSING = ("revoked_after_snapshot", "revocation_check")
+# 필드가 없다는 사실만 되풀이하는 사유(값이 없으면 그 상태이다). 그 밖의 사유는 그대로 남긴다.
+_RESTATING_REASONS = frozenset(
+    {
+        ("consumed_call_approval_id", "not_consumed"),
+        ("selected_approval_id", "no_selected_approval"),
+        ("policy_version_id", "policy_not_evaluated"),
+        ("bundle_sha256", "policy_not_evaluated"),
+        ("policy_decision", "policy_not_evaluated"),
+    }
+)
+# 항상 같은 이유로 건너뛰는 단계(미지원 단계, 정지 뒤 남은 단계)는 다시 만들 수 있어 적지 않는다.
+_DERIVED_SKIPS = ("unsupported_stage", "after_stop")
+_PRINCIPAL_DROP = ("instance_id", "org_source", "provenance")
+
+
+def encode_decision_v2(snapshot: DecisionSnapshot) -> dict[str, Any]:
+    """판정 본문 2판. 빈 값·기본값, 모두 통과한 단계, 판본에서 다시 찾을 수 있는 값을 뺀다.
+
+    ``stages``에는 통과하지 않은 단계(걸림·정지·그 밖의 건너뜀)만 남고, 주체는 식별자만 남는다. 값이
+    비어 뺀 필드는 ``missing_reasons``가 사유를 말한다. 번들 해시는 ``policy_version_id``가 있으면
+    그 판본 행에서 찾는다. 읽는 쪽은 1판(``v`` 없음)과 2판을 모두 받아야 한다.
+    """
+    full = snapshot.model_dump(mode="json")
+    body: dict[str, Any] = {"v": PAYLOAD_VERSION}
+    for key, value in full.items():
+        if value is None or value == [] or value == {}:
+            continue
+        body[key] = value
+    principal = {
+        k: v for k, v in full["principal"].items() if v is not None and k not in _PRINCIPAL_DROP
+    }
+    body["principal"] = principal
+    stages = [
+        s
+        for s in full["stages"]
+        if s["status"] != "pass" and s.get("missing_reason") not in _DERIVED_SKIPS
+    ]
+    body.pop("stages", None)
+    if stages:
+        body["stages"] = [{k: v for k, v in s.items() if v is not None} for s in stages]
+    if body.get("mode") == "enforce":
+        del body["mode"]
+    if body.get("evaluated_decision") == body.get("enforced_action"):
+        del body["evaluated_decision"]
+    if "policy_version_id" in body:
+        body.pop("bundle_sha256", None)
+    reasons = {
+        k: v
+        for k, v in full["missing_reasons"].items()
+        if k not in _CONSTANT_MISSING and (k, v) not in _RESTATING_REASONS
+    }
+    body.pop("missing_reasons", None)
+    if reasons:
+        body["missing_reasons"] = reasons
+    return body
+
+
+def decoded_decision(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """1판·2판 판정 본문을 읽는 쪽이 같은 모양으로 보도록 뺀 값을 채운다."""
+    out = dict(payload)
+    if out.get("v", 1) < 2:
+        return out
+    out.setdefault("mode", "enforce")
+    out.setdefault("evaluated_decision", out.get("enforced_action"))
+    out.setdefault("stages", [])
+    out.setdefault("findings", [])
+    out.setdefault("policy_ids", [])
+    out.setdefault("obligation_types", [])
+    out.setdefault("missing_reasons", {})
+    return out
+
+
 def decision_event(
     snapshot: DecisionSnapshot, *, inserted_at: AwareDatetime | None = None
 ) -> Event:
@@ -282,7 +358,7 @@ def decision_event(
     else:
         kind = EventKind.DECISION_EVALUATED
     principal = snapshot.principal
-    payload = snapshot.model_dump(mode="json")
+    payload = encode_decision_v2(snapshot)
     if snapshot.cause is not None:
         payload["cause"] = snapshot.cause
     return Event(

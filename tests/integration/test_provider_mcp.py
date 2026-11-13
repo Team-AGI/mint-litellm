@@ -141,7 +141,10 @@ def test_external_mcp_in_a_model_request_is_refused_with_one_event(world, model,
     (event,) = decisions(world, subject, since)
     payload = event["payload"]
     assert payload["operation"] == "llm_request"
-    assert (payload["evaluated_decision"], payload["enforced_action"]) == ("block", "block")
+    assert (payload.get("evaluated_decision", "block"), payload["enforced_action"]) == (
+        "block",
+        "block",
+    )
     assert payload["stop"]["reason_code"] == "EXTERNAL_MCP_FORBIDDEN"
     assert "external.example" not in json.dumps(payload)
 
