@@ -22,6 +22,8 @@
 | `mint-litellm init` | 토큰 불필요 | LiteLLM 설정 조각(권장 설정 포함)을 만들고 기본 조직을 준비한다. `--no-spend-logs`를 주면 `disable_spend_logs: true`를 포함한다. `--fix-config <파일>`은 운영자 LiteLLM 설정의 MINT 가드레일 `mode`에 빠진 모드와 빠진 필수 설정(`disable_env_credential_login: true`, 서버별 기본 `rpm`·`max_concurrent_requests`)을 한 줄 수정으로 더한다(바꾸기 전 `<파일>.bak-<시각>` 사본을 남기고, 다른 항목과 주석은 그대로이며 이미 있으면 아무것도 하지 않는다). 안전하게 고칠 수 없는 모양이면 고칠 줄을 알리고 오류로 끝난다. `./mint.sh up`·`upgrade`가 `config/litellm.config.yaml`에 이 옵션을 쓴다. | - | - |
 | `mint-litellm check` | 모든 역할 | 필수 설정 위반이 있으면 종료 코드 0이 아닌 값으로 끝나고, 권장 설정은 경고하며, 관측 항목 4가지를 출력한다. | `/v1/mcp/server`, `/key/list`, `/team/list`, `/guardrails/list` | - |
 | `mint-litellm doctor` | 토큰 불필요 | 지금 비어 있거나 기다리는 일(운영자·제어 평면 키·정책 판본 없음, 승인 대기, 결정 대기 신청, 열린 경보, 실패한 작업, 보류된 동기화)과 다음에 실행할 명령을 보인다. 읽기 전용이며 데이터베이스만 읽는다. | - | - |
+| `mint-litellm upgrade policy` | `admin` | 저장소의 정책 카탈로그 해시가 적용 중인 판본과 다르면 `catalog-<해시 앞 12자>` 판본으로 활성화한다. `--check`는 바뀌었는지만 알린다. `./mint.sh upgrade`가 부른다. | - | `policy_activated` |
+| `mint-litellm upgrade report` | 모든 역할 | 업그레이드 뒤 사람이 정해야 하는 일(범위가 비어 막힌 OAuth 서버, `allow_token_forward`가 없는 전달 서버 승인, 재확인이 필요한 승인, 증빙이 없는 버전 미고정 패키지, 보고가 없거나 이전 판본인 단말 설치 묶음)을 데이터베이스에서 계산해 해결할 화면·명령과 함께 보인다. 읽기 전용이다. | - | - |
 | `mint-litellm status` | 모든 역할 | 모드, 정책 판본, 경보, 관측 항목과 같은 「할 일」 목록을 표시한다. | `/v1/mcp/server`, `/key/list`, `/team/list` | - |
 | `mint-litellm operator add` | `admin` | 운영자를 등록하고 토큰을 발급한다. `--save-token <파일>`을 주면 토큰을 화면에 보이지 않고 0600 파일로만 받는다(파일이 이미 있으면 운영자를 만들기 전에 거부한다). `admin`·`approver`는 LiteLLM 사용자 식별자 (`--user-id`) 결속이 필수이다. | `/user/info` | `operator_added` |
 | `mint-litellm operator bootstrap` | 토큰 불필요 | `operators` 표가 비어 있을 때만 토큰 없이 첫 `admin` 운영자를 만들고 토큰을 발급한다. `--name`과 `--user-id`가 필요하며, 사용자가 LiteLLM의 사람 사용자로 존재하는지 확인한다. 행위자는 `bootstrap`으로 기록하고, 운영자가 이미 있으면 거부한다. | `/user/info` | `operator_added` |
@@ -152,6 +154,7 @@
 | `version_review` 되돌릴 판본의 보안 문제 확인 | 서버 | 배포 계약이 바뀌는 재승인 | 30일 |
 | `unpinned_acceptance` 버전 미고정 패키지 사용 승인 | 서버 | 버전이 고정되지 않은 패키지를 실행하는 로컬 서버의 승인 | 30일 |
 | `vuln_exception` 취약점 조치 예외 | 서버 | 치명 취약점 조치 기한이 지난 서버의 호출 차단을 푸는 예외 | 30일 |
+| `instance_exception` 인스턴스 간 불일치 예외 | 서버 | 다른 인스턴스와 계약·설정이 달라 막힌 서버의 호출 차단을 푸는 예외(admin만) | 30일 |
 | `command_input_review` 명령·질의 입력 전달 방식 점검 결과 (문서 해시값 필수) | 신청 | 로컬 실행 서버이거나 도구 이름에 실행·질의 말이 든 서버의 신청 승인 | 180일 |
 | `access_revocation` 서버 계정·문서 공유 권한 회수 확인 | 서버 | 서버 폐기 마무리(없으면 서버가 폐기 중에 머물고 경보를 연다. 붙이면 마무리가 다시 실행된다) | 없음 |
 | `deletion_proof` 자료 삭제·반환 증빙 | 이용 관계 | 관계 종료 완료 | 없음 |
@@ -206,7 +209,9 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 | `MINT_RECERT_GRACE_DAYS` | 재확인 요청 뒤 보류까지의 유예(일, 1~365) | `14` |
 | `MINT_VULN_FEED_URL` | 알려진 취약점 조회 주소(OSV 형식 API). 사내 미러를 쓰려면 http(s) 주소를 준다 | `https://api.osv.dev` |
 | `MINT_VULN_SCAN_SECONDS` | 취약점 조회·조치 기한 판정 주기(초, 60 이상) | `900` |
+| `MINT_INSTANCE_MISMATCH_GRACE_SECONDS` | 다른 인스턴스와 계약·설정이 다른 상태가 이 시간(초)을 넘게 이어지면 그 서버 호출을 막는다. 경보는 바로 열린다. 0이면 바로 막는다. | `900` |
 | `MINT_VULN_FEED_TIMEOUT_SECONDS` | 조회 요청 한 번의 제한 시간(초) | `15` |
+| `MINT_EVENT_RETENTION_DAYS` | 사건 원장 보관 일수(31 이상). 설정하면 달 전체가 이보다 오래되고 내보내기 파일을 다시 읽어 확인한 월 분할을 지운다. 없으면 아무것도 지우지 않는다. MINT는 기본값을 정하지 않는다 | 없음(끔) |
 | `MINT_WEBHOOK_FORMATS` | 웹훅 주소마다 하나씩, 같은 순서로 적는 전송 형식(`json`·`slack`·`teams`). 수가 맞지 않거나 모르는 값이면 기동을 거부한다. | 모두 `json` |
 | `MINT_LINK_TTL_SECONDS` | 알림 속 콘솔 바로가기 링크의 유효 시간(초, 최소 60). | `86400` |
 | `MINT_DORMANT_DAYS` | 이 일수 동안 호출에 한 번도 쓰이지 않은 활성 승인을 「미사용」으로 본다. | `30` |

@@ -31,6 +31,7 @@
 </tbody></table>
 {% endif %}
 {% if s.vuln_blocked_at %}<p class="muted">치명 취약점의 조치 기한(48시간)이 지나 이 서버의 호출을 막고 있습니다. 패키지를 올려 다시 등록하거나, 관리자가 「취약점 조치 예외」 증빙을 붙여야 풀립니다.</p>{% endif %}
+{% if s.instance_mismatch_at %}<p class="muted">같은 서버를 쓰는 다른 인스턴스와 승인 계약 또는 보안 설정(가드레일 모드·활성 정책 묶음)이 달라 이 서버의 호출을 막고 있습니다. 차이는 알림에서 확인하고, 계약·설정을 맞추거나 관리자가 아래 「인스턴스 간 불일치 예외」 증빙을 붙이면 다음 점검 주기에 풀립니다.</p>{% endif %}
 {% if s.vulns %}
 <h2>알려진 취약점</h2>
 <table><thead><tr><th>패키지</th><th>취약점</th><th>심각도</th><th>확인 시각</th><th>조치 기한</th></tr></thead><tbody>

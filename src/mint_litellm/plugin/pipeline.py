@@ -391,10 +391,13 @@ def bound_to_current_contract(snapshot: Snapshot, tool: str, bound: str | None) 
 
 
 def vuln_result(snapshot: Snapshot) -> StageResult | None:
-    """치명 취약점 조치 기한이 지난 서버의 호출은 계약 관리 여부와 무관하게 막는다(닫힌 쪽)."""
+    """취약점 조치 기한이 지났거나 다른 인스턴스와 어긋난 서버의 호출을 막는다(닫힌 쪽)."""
     server = snapshot.server
     if server is not None and server.vuln_blocked:
         return StageResult.finding(Reason.CONTRACT_DRIFT, ContractDriftKind.VULN_OVERDUE.value)
+    if server is not None and server.instance_mismatch:
+        return StageResult.finding(
+            Reason.CONTRACT_DRIFT, ContractDriftKind.INSTANCE_MISMATCH.value)
     return None
 
 

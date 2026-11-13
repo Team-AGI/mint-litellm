@@ -44,7 +44,10 @@ VALUE = {
                "approval": "승인", "call_approval": "호출별 승인", "intake": "신청"},
     "verdict": {"widened": "확대", "narrowed": "축소", "unchanged": "변화 없음"},
     "kind": {"exec": "실행 계약", "deployment": "배포 계약", "instance_mismatch": "인스턴스 불일치",
-             "negative_state": "부정 상태 파일", "checkpoint": "체크포인트 파일"},
+             "negative_state": "부정 상태 파일", "checkpoint": "체크포인트 파일",
+             "setting": "보안 설정", "tool": "도구 계약"},
+    "items": {"deployment": "배포 계약", "setting:guardrail_mode": "가드레일 모드",
+              "setting:policy_bundle": "활성 정책 묶음"},
     "severity": {
         "critical": "심각", "high": "높음", "medium": "보통", "low": "낮음",
         "CRITICAL": "심각", "HIGH": "높음", "MEDIUM": "보통", "LOW": "낮음",
@@ -63,7 +66,7 @@ SUMMARY = {
     "contract_drift": "승인된 계약과 달라졌습니다. 서버 {server_id}",
     "call_spike": "서버 {server_id}의 {tool} 호출이 최근 {calls}건입니다(평소 {baseline_calls}건).",
     "oauth_flow_unreadable": "서버 {server_id}의 인증 흐름을 {failures}번 읽지 못했습니다.",
-    "instance_mismatch": "서버 {server_id}가 다른 인스턴스와 다릅니다.",
+    "instance_mismatch": "서버 {server_id}의 계약·보안 설정이 다른 인스턴스와 다릅니다.",
     "export_failed": "내보내기에 실패했습니다.",
     "sync_divergence": "서버 {server_id}의 LiteLLM 설정이 MINT와 다릅니다.",
     "sync_foreign_change": "LiteLLM 설정이 MINT 밖에서 바뀌었습니다.",
@@ -157,7 +160,7 @@ def link(kind: str, subject: dict[str, Any]) -> tuple[str, str] | None:
         return "/approvals", "승인 대기열"
     if kind in ("evidence_missing", "evidence_expiring") and subject.get("intake_id"):
         return f"/intakes/{quote(str(subject['intake_id']), safe='')}", "신청 상세"
-    if kind in ("contract_drift", "instance_mismatch") and server:
+    if kind == "contract_drift" and server:
         return "/contracts", "계약 변경"
     if kind.startswith("endpoint_") and not server:
         return "/endpoints", "단말 설치"

@@ -167,8 +167,7 @@ def test_client_cancel_during_decision_records_one_cancelled_decision(world, evi
 
     support.wait_until(cancelled, 60, 1, what="cancelled decision")
     assert len(cancelled()) == 1
-    event = cancelled()[0]["payload"]
-    assert (event["evaluated_decision"], event["enforced_action"]) == ("block", "block")
+    assert decision(cancelled()[0])[:2] == ("block", "block")
     evidence.assert_calls(mark, 0)
 
 
