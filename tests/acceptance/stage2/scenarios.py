@@ -1872,7 +1872,7 @@ STAFF_FORBIDDEN_SQL = (
 def mutation_marks():
     # 경보 사건(alert_*)은 배경 작업이 낸다. 직원 쓰기 시도의 표식에서 뺀다.
     return [n(f"SELECT count(*) FROM mint.{t} WHERE instance_id={lit(iid())}"
-              + (" AND kind NOT LIKE 'alert\_%'" if t == "events" else ""))
+              + (r" AND kind NOT LIKE 'alert\_%'" if t == "events" else ""))
             for t in ("orgs", "denials", "events", "approvals")] + [
         n(f"SELECT count(*) FROM mint.approvals WHERE instance_id={lit(iid())} "
           "AND status='revoked'"), epoch()]
