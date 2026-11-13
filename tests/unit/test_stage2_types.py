@@ -70,6 +70,7 @@ STAGE_TWO_EVENTS = {
     "approval_recert_requested", "approval_held", "approval_recert_confirmed",
     "policy_shadow_set", "policy_shadow_cleared",
     "event_partition_exported", "event_partition_dropped",
+    "endpoint_remediated",
 }  # fmt: skip
 
 STAGE_ONE_REASONS = {
@@ -85,7 +86,7 @@ STAGE_ONE_REASONS = {
 
 
 def test_event_kinds_are_the_stage_one_set_plus_exactly_the_stage_two_additions():
-    assert len(STAGE_ONE_EVENTS) == 34 and len(STAGE_TWO_EVENTS) == 36
+    assert len(STAGE_ONE_EVENTS) == 34 and len(STAGE_TWO_EVENTS) == 37
     assert {k.value for k in EventKind} == STAGE_ONE_EVENTS | STAGE_TWO_EVENTS
     assert {k.value for k in CALL_KINDS} | {k.value for k in SYSTEM_KINDS} <= STAGE_ONE_EVENTS
 
@@ -98,7 +99,7 @@ def test_every_event_kind_has_a_key_entity_and_the_new_entities_are_the_declared
     assert new == {
         "intake", "intake_check", "tool_contract", "deployment_contract", "litellm_grant",
         "export", "restore", "alert", "console_session", "operator", "evidence", "relation",
-        "approval", "server", "policy_shadow", "event_partition",
+        "approval", "server", "policy_shadow", "event_partition", "endpoint",
     }  # fmt: skip
 
 
