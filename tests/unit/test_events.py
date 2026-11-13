@@ -141,7 +141,7 @@ def test_control_events_need_an_actor_but_system_events_do_not():
 
 
 def test_event_kind_counts():
-    assert (len(CALL_KINDS), len(SYSTEM_KINDS), len(EventKind)) == (4, 5, 66)
+    assert (len(CALL_KINDS), len(SYSTEM_KINDS), len(EventKind)) == (4, 5, 68)
 
 
 def test_control_source_key_must_match_the_kind():

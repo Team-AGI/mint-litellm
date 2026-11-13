@@ -10,6 +10,7 @@
   <label>서버<select name="server_id"><option value="">전체</option>{% for s in servers %}<option value="{{ s }}"{% if q.server_id == s %} selected{% endif %}>{{ s }}</option>{% endfor %}</select></label>
   <label>결과<select name="result"><option value="">전체</option>{% for k, v in L.RESULT_FILTER.items() %}<option value="{{ k }}"{% if q.result == k %} selected{% endif %}>{{ v }}</option>{% endfor %}</select></label>
   <label>판정 참조<input type="text" name="ref" value="{{ q.ref }}" placeholder="차단 응답의 참조" autocomplete="off" spellcheck="false"></label>
+  <label>호출 식별자<input type="text" name="invocation" value="{{ q.invocation }}" maxlength="36" autocomplete="off"></label>
   <button type="submit" class="primary">조회</button>
   <a class="button" href="/api/v1/ledger/export?format=csv&amp;since={{ start.isoformat() | urlencode }}" hx-boost="false">CSV 내보내기</a>
   <a class="button" href="/api/v1/ledger/export?format=json&amp;since={{ start.isoformat() | urlencode }}" hx-boost="false">JSON 내보내기</a>
@@ -21,6 +22,6 @@
 <td>{{ e.server_id | blank }}</td><td>{{ L.pick(L.OUTCOME, e.outcome) if e.outcome else L.pick(L.RESULT, e.result) }}</td>
 </tr>{% endfor %}
 </tbody></table>
-{{ m.pager('/ledger?since=' ~ (q.since | urlencode) ~ '&until=' ~ (q.until | urlencode) ~ '&kind=' ~ (q.kind | urlencode) ~ '&actor=' ~ (q.actor | urlencode) ~ '&server_id=' ~ (q.server_id | urlencode) ~ '&result=' ~ (q.result | urlencode) ~ '&ref=' ~ (q.ref | urlencode), page, rows | length) }}
+{{ m.pager('/ledger?since=' ~ (q.since | urlencode) ~ '&until=' ~ (q.until | urlencode) ~ '&kind=' ~ (q.kind | urlencode) ~ '&actor=' ~ (q.actor | urlencode) ~ '&server_id=' ~ (q.server_id | urlencode) ~ '&result=' ~ (q.result | urlencode) ~ '&ref=' ~ (q.ref | urlencode) ~ '&invocation=' ~ (q.invocation | urlencode), page, rows | length) }}
 {% else %}{{ m.empty('조건에 맞는 기록이 없습니다', '/ledger', '조건 지우기') }}{% endif %}
 {% endblock %}

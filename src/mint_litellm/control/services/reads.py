@@ -272,6 +272,48 @@ def policy_versions(conn: psycopg.Connection, instance: str) -> list[dict]:
     )
 
 
+PERMITTING_RESULTS = frozenset({"Allow", "Alert"})
+
+
+def flip_kind(active: str, shadow: str) -> str:
+    """판정이 달라진 방향. 허용·경고는 통과, 승인 요구·차단은 막힘으로 본다."""
+    if (active in PERMITTING_RESULTS) and (shadow not in PERMITTING_RESULTS):
+        return "allow_to_deny"
+    if (active not in PERMITTING_RESULTS) and (shadow in PERMITTING_RESULTS):
+        return "deny_to_allow"
+    return "other"
+
+
+def policy_shadow(conn: psycopg.Connection, instance: str) -> dict | None:
+    """시험 중인 판본과 판정이 달라진 호출 집계. 시험 판본이 없으면 None이다."""
+    current = fetchone(
+        conn,
+        "SELECT version_id, bundle_sha256, set_by, set_at FROM mint.policy_shadow"
+        " WHERE instance_id = %s AND version_id IS NOT NULL",
+        (instance,),
+    )
+    if current is None:
+        return None
+    stats = fetchone(
+        conn,
+        "SELECT evaluated, same, errors, skipped, updated_at FROM mint.policy_shadow_stats"
+        " WHERE instance_id = %s AND version_id = %s",
+        (instance, current["version_id"]),
+    ) or {"evaluated": 0, "same": 0, "errors": 0, "skipped": 0, "updated_at": None}
+    flips = fetchall(
+        conn,
+        "SELECT server_id, tool, active_result, shadow_result, active_reason, shadow_reason,"
+        " calls, last_seen_at, samples FROM mint.policy_shadow_results"
+        " WHERE instance_id = %s AND version_id = %s ORDER BY calls DESC, server_id, tool",
+        (instance, current["version_id"]),
+    )
+    totals = {"allow_to_deny": 0, "deny_to_allow": 0, "other": 0}
+    for row in flips:
+        row["flip"] = flip_kind(row["active_result"], row["shadow_result"])
+        totals[row["flip"]] += row["calls"]
+    return {**current, "stats": stats, "flips": flips, "totals": totals}
+
+
 def settings(conn: psycopg.Connection, instance: str) -> dict | None:
     return fetchone(
         conn,
@@ -303,6 +345,7 @@ def _ledger_where(
     server_id: str | None,
     result: str | None,
     ref: str | None = None,
+    invocation_id: str | None = None,
 ) -> tuple[str, list[Any]]:
     clauses = ["instance_id = %s"]
     params: list[Any] = [instance]
@@ -322,6 +365,7 @@ def _ledger_where(
         ("kind = %s", kind),
         ("actor = %s", actor),
         ("(payload->>'resolved_server_id' = %s OR payload->>'server_id' = %s)", server_id),
+        ("invocation_id = %s", invocation_id),
     ):
         if value is not None:
             clauses.append(clause)
@@ -345,10 +389,11 @@ def ledger(
     ref: str | None = None,
     page: int = 1,
     limit: int | None = None,
+    invocation_id: str | None = None,
 ) -> list[dict]:
     where, params = _ledger_where(
         instance, since=since, until=until, kind=kind, actor=actor, server_id=server_id,
-        result=result, ref=ref,
+        result=result, ref=ref, invocation_id=invocation_id,
     )
     size, offset = (limit, 0) if limit is not None else _page(page)
     return fetchall(

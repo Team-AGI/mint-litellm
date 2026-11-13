@@ -40,6 +40,7 @@ from mint_litellm.plugin.pipeline import (
 from mint_litellm.plugin.policy.opa_client import Evaluation, OPAClient
 from mint_litellm.plugin.restore_watch import RestoreWatch
 from mint_litellm.plugin.result import ResultDeps
+from mint_litellm.plugin.shadow import ShadowWatch
 from mint_litellm.plugin.snapshot import PluginDatabase, RegisteredServer
 from mint_litellm.plugin.timing import OFF, StageClock
 from mint_litellm.types.canonical import sha256
@@ -391,6 +392,7 @@ class PluginRuntime:
     recheck_seconds: float = 30.0
     verified: bool = False
     restore_watch: Any = None
+    shadow: Any = None
     logger: Any = None
     guardrail: Any = None
     last_results: list[CheckResult] = field(default_factory=list)
@@ -401,6 +403,7 @@ class PluginRuntime:
     _task: asyncio.Task[None] | None = field(default=None, repr=False)
     _observe_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _restore_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    _shadow_task: asyncio.Task[None] | None = field(default=None, repr=False)
 
     @property
     def deps(self) -> PipelineDeps:
@@ -410,6 +413,7 @@ class PluginRuntime:
             recorder=self.recorder,
             evaluate=self.evaluate,
             secret_markers=self.secret_markers,
+            shadow=None if self.shadow is None else self.shadow.submit,
             verified=lambda: self.verified and self._restore_cause() is None,
             unverified_cause=self._restore_cause,
         )
@@ -577,6 +581,8 @@ class PluginRuntime:
         self._task = loop.create_task(self._startup())
         self._restore_task = loop.create_task(self._judge_loop())
         self._observe_task = loop.create_task(self._observe_contracts())
+        if self.shadow is not None:
+            self._shadow_task = loop.create_task(self.shadow.run())
 
     async def _judge_loop(self) -> None:
         """판정 주기마다 되돌림 판정을 갱신하고, 호출이 없어도 버퍼에 남은 사건을 DB에 올린다."""
@@ -800,11 +806,20 @@ def get_runtime(env: Mapping[str, str] | None = None) -> PluginRuntime:
             instance_id=config.instance_id,
         )
         engine = PolicyEngine(config.opa_url, config.decision_budget_seconds)
+        shadow = None
+        if config.shadow_opa_url:
+            shadow = ShadowWatch(
+                config.instance_id, database,
+                PolicyEngine(config.shadow_opa_url, config.decision_budget_seconds).evaluate,
+                sample_percent=config.shadow_sample_percent,
+                max_per_second=config.shadow_max_per_second,
+            )
         _runtime = PluginRuntime(
             config=config,
             database=database,
             recorder=recorder,
             restore_watch=RestoreWatch(config, database),
+            shadow=shadow,
             evaluate=engine.evaluate,
             secret_markers=engine.secret_markers,
         )

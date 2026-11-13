@@ -9,10 +9,24 @@ from mint_litellm.control.context import Context
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.litellm_admin import LiteLLMAdmin
 from mint_litellm.control.policy_check import PolicyState
+from mint_litellm.control.services import reads
 from mint_litellm.types.events import AlertKind, EventKind
 from mint_litellm.types.settings import OBSERVATION_ITEMS, Mode, effective_mode
 
 EXPIRY_WARNING = timedelta(days=7)
+
+
+def _shadow(ctx: Context) -> dict[str, Any] | None:
+    shadow = reads.policy_shadow(ctx.conn, ctx.instance_id)
+    if shadow is None:
+        return None
+    return {
+        "version": shadow["version_id"],
+        "evaluated": shadow["stats"]["evaluated"],
+        "errors": shadow["stats"]["errors"],
+        "skipped": shadow["stats"]["skipped"],
+        **shadow["totals"],
+    }
 
 
 def collect(
@@ -75,6 +89,7 @@ def collect(
         },
         "default_org_id": stored["default_org_id"],
         "policy_version": None if active is None else active["id"],
+        "policy_shadow": _shadow(ctx),
         "policy_bundle": None
         if policy_state is None
         else {"state": policy_state.state, "detail": policy_state.detail},
@@ -161,6 +176,15 @@ def _mismatch_alerts(ctx: Context) -> list[dict[str, Any]]:
     ]
 
 
+def shadow_line(shadow: dict[str, Any]) -> str:
+    return (
+        f"시험 판본: {shadow['version']} (평가 {shadow['evaluated']}건, "
+        f"허용에서 차단 {shadow['allow_to_deny']}건, 차단에서 허용 {shadow['deny_to_allow']}건, "
+        f"그 밖의 변경 {shadow['other']}건, 오류 {shadow['errors']}건, "
+        f"건너뜀 {shadow['skipped']}건)"
+    )
+
+
 def render(info: dict[str, Any]) -> str:
     mode = info["mode"]
     lines = [
@@ -174,6 +198,9 @@ def render(info: dict[str, Any]) -> str:
     for alert in info["alerts"]:
         detail = {k: v for k, v in alert.items() if k != "kind"}
         lines.append(f"  {alert['kind']} {detail}")
+    shadow = info.get("policy_shadow")
+    if shadow:
+        lines.append(shadow_line(shadow))
     bundle = info.get("policy_bundle")
     if bundle and bundle["state"] != "none":
         label = {"match": "일치", "mismatch": "불일치", "unverified": "확인 불가"}[bundle["state"]]

@@ -3,6 +3,7 @@
 import re
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -431,3 +432,57 @@ def test_the_alert_screen_lists_shows_and_acknowledges_an_alert(world, admin):
     assert done.status_code in (200, 303)
     assert world.query("SELECT status FROM mint.alerts WHERE id = %s", alert_id)[0][0] == (
         "acknowledged")
+
+
+def add_shadow(world):
+    world.query(
+        "INSERT INTO mint.policy_versions (instance_id, id, catalog_sha256, bundle_sha256)"
+        " VALUES (%s, 'v2', %s, %s)", INSTANCE, "ab" * 32, "ab" * 32)
+    world.query(
+        "INSERT INTO mint.policy_shadow (instance_id, version_id, bundle_sha256, set_by, set_at)"
+        " VALUES (%s, 'v2', %s, 'admin', now())", INSTANCE, "ab" * 32)
+    world.query(
+        "INSERT INTO mint.policy_shadow_results (instance_id, version_id, server_id, tool,"
+        " active_result, shadow_result, active_reason, shadow_reason, calls, samples)"
+        " VALUES (%s, 'v2', 'srv-ok', 'echo', 'Allow', 'Block', '', 'R1', 3, ARRAY[%s])",
+        INSTANCE, "0192f7a0-7c1e-7a10-8000-0123456789ab")
+
+
+def test_the_policy_screen_shows_how_many_calls_would_flip_with_ledger_links(world, admin):
+    add_shadow(world)
+    html = admin.get("/policy").text
+    assert "정책 시험 적용" in html and "허용에서 차단" in html and "srv-ok" in html
+    assert "/ledger?invocation=0192f7a0-7c1e-7a10-8000-0123456789ab" in html
+    assert ">적용<" in html and ">취소<" in html
+    assert ">적용<" not in world.session_client("viewer").get("/policy").text
+
+
+def test_the_shadow_version_is_cancelled_and_applied_from_the_screen(world, admin, monkeypatch):
+    from mint_litellm.control import policy_versions
+
+    add_shadow(world)
+    response = form_post(world, admin, "/policy/shadow/apply", version="v2")
+    assert response.status_code == 400 and "적용할 수 없습니다" in response.text
+    seen = []
+    monkeypatch.setattr(policy_versions, "activate", lambda *a: seen.append(a[4:5]))
+    object.__setattr__(world.config, "policy_source", policy_versions.PolicySource(
+        root=Path("."), opa="opa", bundle_path=Path("a.tar.gz"), opa_url="http://opa.test",
+        timeout_seconds=1))
+    assert form_post(world, admin, "/policy/shadow/apply", version="v2").status_code == 303
+    assert len(seen) == 1
+    assert "시험 중인 판본이 없습니다" in admin.get("/policy").text
+    add_shadow_row_only(world)
+    assert form_post(world, admin, "/policy/shadow/cancel").status_code == 303
+    assert "시험 중인 판본이 없습니다" in admin.get("/policy").text
+
+
+def add_shadow_row_only(world):
+    world.query(
+        "UPDATE mint.policy_shadow SET version_id = 'v2', bundle_sha256 = %s, set_by = 'admin',"
+        " set_at = now()", "ab" * 32)
+
+
+def test_the_ledger_can_be_filtered_by_invocation(world, admin):
+    html = admin.get("/ledger?invocation=0192f7a0-7c1e-7a10-8000-0123456789ab").text
+    assert "조건에 맞는 기록이 없습니다" in html
+    assert "형식이 올바르지 않습니다" in admin.get("/ledger?invocation=zzz").text

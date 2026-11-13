@@ -65,6 +65,10 @@ class PluginConfig:
     restore_interval_seconds: float = 60.0
     default_max_result_bytes: int = DEFAULT_MAX_RESULT_BYTES
     default_max_result_items: int = DEFAULT_MAX_RESULT_ITEMS
+    # 정책 시험 적용(선택). 주소가 없으면 시험 판본을 읽지도 평가하지도 않는다.
+    shadow_opa_url: str | None = None
+    shadow_sample_percent: int = 100
+    shadow_max_per_second: int = 50
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> PluginConfig:
@@ -109,6 +113,9 @@ class PluginConfig:
             default_max_result_items=_integer(
                 env, "MINT_DEFAULT_MAX_RESULT_ITEMS", DEFAULT_MAX_RESULT_ITEMS, 0
             ),
+            shadow_opa_url=(env.get("MINT_SHADOW_OPA_URL") or "").strip() or None,
+            shadow_sample_percent=_integer(env, "MINT_SHADOW_SAMPLE_PERCENT", 100, 1, 100),
+            shadow_max_per_second=_integer(env, "MINT_SHADOW_MAX_PER_SECOND", 50, 1, 1000),
             export_dir=Path(export_dir) if export_dir else None,
             export_hmac_key=_hmac_key(env, "MINT_EXPORT_HMAC_KEY"),
             export_hmac_key_previous=_hmac_key(env, "MINT_EXPORT_HMAC_KEY_PREVIOUS"),

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hmac
 import json
 import logging
@@ -129,6 +130,8 @@ class PipelineDeps:
     unverified_cause: Callable[[], str | None] = lambda: None
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
     secret_markers: Callable[..., Awaitable[tuple[str, ...] | None]] | None = None
+    # 정책 시험 적용. 실제 판정이 정해진 뒤 같은 입력을 후보 판본에도 보내며 판정에는 영향이 없다.
+    shadow: Callable[..., None] | None = None
 
 
 @dataclass(frozen=True)
@@ -1302,6 +1305,12 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         timing.wait()
     run.policy = await policy_stage(deps, snapshot, policy_input, run.deadline.remaining())
     timing.since("policy", started)
+    if deps.shadow is not None and run.policy.decision is not None:
+        with contextlib.suppress(Exception):
+            deps.shadow(
+                policy_input, invocation_id=req.invocation_id, server_id=resolved.server_id,
+                tool=tool, decision=run.policy.decision.value, policy_ids=run.policy.policy_ids,
+            )
     stages.dependency = run.policy.dependency
     for stage, result in run.policy.results:
         stages.add(stage, result)

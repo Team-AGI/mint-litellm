@@ -144,7 +144,7 @@ def test_command_roles_follow_the_operator_role_model():
         elif command.roles == frozenset(OperatorRole):
             assert command.name in {
                 "check", "status", "ledger list", "alert list", "sync status", "intake list",
-                "intake show", "contract show", "contract diff"}
+                "intake show", "contract show", "contract diff", "policy status"}
         else:
             assert command.roles == frozenset({OperatorRole.ADMIN}), command.name
 
