@@ -13,7 +13,7 @@ from mint_litellm.types.settings import Mode
 INSTANCE = "inst1"
 PAGES = [
     "/", "/servers", "/servers/srv-ok", "/approvals", "/revocations", "/call-approvals",
-    "/endpoints", "/ledger", "/policy", "/admin",
+    "/endpoints", "/alerts", "/ledger", "/policy", "/admin",
 ]
 # 화면에 그대로 나오면 안 되는 영어 열거값(상세의 「코드」 칸과 원장의 사건 키는 예외)
 ENUMS = ["awaiting_approval", "enforce", "approver", "terminated", "suspended", "pending"]
@@ -67,7 +67,7 @@ def test_the_menu_lists_only_screens_that_exist(admin):
     labels = re.findall(r'<nav class="sidebar".*?</nav>', html, re.S)[0]
     names = re.findall(r">([^<]+)</a>", labels)
     assert names == ["개요", "MCP 서버", "신청·수용검증", "승인 대기열", "계약 변경",
-                     "거부·철회", "호출별 승인", "단말 설치", "원장", "정책·관측 설정",
+                     "거부·철회", "호출별 승인", "단말 설치", "경보", "원장", "정책·관측 설정",
                      "운영자·조직"]
     for text in ("준비 중", "예정", "곧 제공", "TBD"):
         assert text not in html
@@ -414,3 +414,20 @@ def test_a_session_ends_when_its_operator_row_expires(world):
     world.query("UPDATE mint.operators SET expires_at = now() - interval '1 minute'"
                 " WHERE name = 'approver'")
     assert client.get("/").status_code == 303
+
+
+def test_the_alert_screen_lists_shows_and_acknowledges_an_alert(world, admin):
+    alert_id = str(uuid.uuid4())
+    world.query(
+        "INSERT INTO mint.alerts (id, instance_id, kind, severity, dedup_key, subject)"
+        " VALUES (%s, %s, 'sync_divergence', 'high', 'k1', %s::jsonb)",
+        alert_id, INSTANCE, '{"server_id": "srv-ok", "reason": "registry_missing"}')
+    listing = admin.get("/alerts")
+    assert "LiteLLM 설정 불일치" in listing.text and "srv-ok" in listing.text
+    assert "registry_missing" not in listing.text.replace('value="', "")
+    assert "레지스트리에 없음" in admin.get(f"/alerts/{alert_id}").text
+    assert admin.get("/alerts/not-an-id").status_code == 404
+    done = form_post(world, admin, f"/alerts/{alert_id}/acknowledge")
+    assert done.status_code in (200, 303)
+    assert world.query("SELECT status FROM mint.alerts WHERE id = %s", alert_id)[0][0] == (
+        "acknowledged")
