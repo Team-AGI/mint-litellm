@@ -129,6 +129,7 @@ def screen_result(
     """
     if not ctx.get("allowed"):
         return False
+    ctx["result_items"] = items
     policy = ctx.get("result_policy")
     findings = inspect_result(policy, size=size, items=items, texts=texts)
     mode = (policy or {}).get("response_scan")
@@ -166,6 +167,8 @@ async def observe_response(
     observation = ResponseObservation(
         is_error=is_error,
         size_bytes=size_bytes,
+        items=ctx.get("result_items"),
+        server_id=ctx.get("server_id"),
         snapshot_state_epoch=ctx.get("state_epoch"),
         current_state_epoch=current,
         revocation_check=check,

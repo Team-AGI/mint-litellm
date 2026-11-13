@@ -49,6 +49,13 @@ def _seconds(env: Mapping[str, str], name: str, default: int, minimum: int = 1) 
     return value
 
 
+def _bulk_action(raw: str | None) -> str:
+    value = (raw or "alert").strip().lower()
+    if value not in ("alert", "hold"):
+        raise ControlError(f"MINT_BULK_EXTRACTION_ACTION은 alert 또는 hold여야 합니다: {raw!r}")
+    return value
+
+
 def _days(env: Mapping[str, str], name: str, default: int, minimum: int = 1) -> int:
     value = _seconds(env, name, default, minimum)
     if value > 365:
@@ -179,6 +186,13 @@ class Stage2Settings:
     spike_baseline_seconds: int = 86400
     spike_factor: int = 3
     spike_min_calls: int = 50
+    # 대량 추출: 최근 구간·평균 기간(초), 평균의 몇 배, 바닥값(바이트·항목), 조치(alert|hold)
+    bulk_window_seconds: int = 900
+    bulk_baseline_seconds: int = 604800
+    bulk_factor: int = 5
+    bulk_min_bytes: int = 5 * 1024 * 1024
+    bulk_min_items: int = 2000
+    bulk_action: str = "alert"
     # 알려진 취약점 조회(OSV 형식 API): 주소, 조회 주기, 요청 제한 시간(초). 기본값은 MINT가 채운다.
     vuln_feed_url: str = "https://api.osv.dev"
     vuln_scan_seconds: int = 900
@@ -222,6 +236,12 @@ class Stage2Settings:
             spike_baseline_seconds=_seconds(env, "MINT_SPIKE_BASELINE_SECONDS", 86400),
             spike_factor=_seconds(env, "MINT_SPIKE_FACTOR", 3),
             spike_min_calls=_seconds(env, "MINT_SPIKE_MIN_CALLS", 50),
+            bulk_window_seconds=_seconds(env, "MINT_BULK_WINDOW_SECONDS", 900),
+            bulk_baseline_seconds=_seconds(env, "MINT_BULK_BASELINE_SECONDS", 604800),
+            bulk_factor=_seconds(env, "MINT_BULK_FACTOR", 5),
+            bulk_min_bytes=_seconds(env, "MINT_BULK_MIN_BYTES", 5 * 1024 * 1024),
+            bulk_min_items=_seconds(env, "MINT_BULK_MIN_ITEMS", 2000),
+            bulk_action=_bulk_action(env.get("MINT_BULK_EXTRACTION_ACTION")),
             vuln_feed_url=_feed_url(env.get("MINT_VULN_FEED_URL")),
             vuln_scan_seconds=_seconds(env, "MINT_VULN_SCAN_SECONDS", 900, 60),
             instance_mismatch_grace_seconds=_seconds(

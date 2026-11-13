@@ -398,6 +398,9 @@ class ResponseObservation(BaseModel):
 
     is_error: bool
     size_bytes: int | None = Field(default=None, ge=0)
+    # 결과 항목 수와 호출한 서버(대량 추출 탐지가 읽는다). 새 행부터 남고 알 수 없으면 비운다.
+    items: int | None = Field(default=None, ge=0)
+    server_id: str | None = None
     snapshot_state_epoch: int | None = Field(default=None, ge=0)
     current_state_epoch: int | None = Field(default=None, ge=0)
     revocation_check: RevocationCheck
@@ -433,3 +436,4 @@ class AlertKind(StrEnum):
     ENDPOINT_SILENT = "endpoint_silent"
     ENDPOINT_KEY_EXPIRING = "endpoint_key_expiring"
     CALL_SPIKE = "call_spike"
+    BULK_EXTRACTION = "bulk_extraction"
