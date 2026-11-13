@@ -43,6 +43,25 @@ class FileAccess(BaseModel):
         return _check_path(value)
 
 
+_ADDRESS = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
+_RUNNERS = {"npx", "bunx", "uvx", "pipx", "npm", "pnpm", "yarn", "bun", "uv"}
+
+
+def network_hints(contract: "ExecContract") -> list[str]:
+    """등록할 때 보이는 안내. 집행은 네트워크 선언이 하고, 주소·패키지 실행기는 단서일 뿐이다."""
+    if contract.network == "none":
+        return []
+    exe = posixpath.basename(contract.executable.replace("\\", "/")).lower()
+    exe = re.sub(r"\.(exe|cmd|bat)$", "", exe)
+    values = [*contract.argv, *contract.env.values()]
+    hints = []
+    if contract.network is None:
+        hints.append("네트워크 미제한: 선언이 없어 격리가 막지 않습니다(--network none).")
+    if exe in _RUNNERS or any(_ADDRESS.search(v) for v in values):
+        hints.append("이 계약은 네트워크를 쓸 것으로 보입니다.")
+    return hints
+
+
 class ExecContract(BaseModel):
     """승인 대상 로컬 서버의 실행 계약. 판본이 바뀌면 필드를 더하고 ``schema_version``을 올린다."""
 
@@ -60,6 +79,9 @@ class ExecContract(BaseModel):
 
     # 선언한 파일 접근. 비어 있으면(선언 없음) 계약 문서에 나타나지 않아 이전 해시가 그대로다.
     file_access: tuple[FileAccess, ...] = Field(default=(), max_length=64)
+    # 네트워크 선언: ``none``이면 단말 격리가 네트워크를 막고, ``any``이거나 선언이 없으면 제한이
+    # 없다. 선언이 없으면 계약 문서에 나타나지 않아 이전 해시가 그대로다.
+    network: Literal["none", "any"] | None = None
 
     @field_validator("executable", "cwd")
     @classmethod
@@ -79,6 +101,8 @@ class ExecContract(BaseModel):
         data = handler(self)
         if not data.get("file_access"):
             data.pop("file_access", None)
+        if data.get("network") is None:
+            data.pop("network", None)
         return data
 
     @field_validator("argv")

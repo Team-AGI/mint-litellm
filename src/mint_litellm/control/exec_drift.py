@@ -41,6 +41,9 @@ def items(doc: dict[str, Any]) -> dict[str, set[str]]:
         axes["file"].add(f"선언 {entry['path']} ({MODE_LABEL['ro']})")
         if entry["mode"] == "rw":
             axes["file"].add(f"선언 {entry['path']} ({MODE_LABEL['rw']})")
+    # 선언이 없으면 제한 없음과 같다. 차단에서 제한 없음이 되면 확대이다.
+    if doc.get("network") != "none":
+        axes["network"].add("네트워크 제한 없음")
     for arg in doc.get("argv") or ():
         _place(axes, arg, "인자 ")
     for key, value in sorted((doc.get("env") or {}).items()):

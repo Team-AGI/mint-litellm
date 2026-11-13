@@ -52,6 +52,7 @@ def test_the_comparison_counts_wrong_decisions_effects_revocation_and_storage(tm
         "schema_version": 1, "identity_kind": "stdio", "executable": sys.executable,
         "argv": [str(script)], "cwd": None, "executable_sha256": sha(sys.executable),
         "script_sha256": sha(script), "env": {}, "secret_refs": {},
+        "file_access": [{"path": str(tmp_path), "mode": "rw"}],  # 격리 안에서도 쓸 수 있게
     }  # fmt: skip
     contracts = tmp_path / "contracts.json"
     contracts.write_text(json.dumps({"servers": {"srv": contract}}))

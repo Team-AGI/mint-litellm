@@ -98,3 +98,13 @@ def test_a_declared_path_going_from_read_to_read_write_widens_and_back_narrows()
 def test_dropping_a_declared_path_narrows_and_declaring_none_to_some_widens():
     assert verdicts(_declared(), _declared(("/data", "ro")))["file"] == "narrowed"
     assert verdicts(_declared(("/data", "ro")), _declared())["file"] == "widened"
+
+
+def test_network_none_to_any_widens_the_network_axis_and_back_narrows_it():
+    closed = {**BASE, "network": "none"}
+    opened = {**BASE, "network": "any"}
+    assert exec_drift.classify(closed, opened)["network"]["verdict"] == "widened"
+    assert exec_drift.classify(opened, closed)["network"]["verdict"] == "narrowed"
+    # 선언이 없는 이전 계약은 any와 같다.
+    assert exec_drift.classify(BASE, opened)["network"]["verdict"] == "unchanged"
+    assert exec_drift.classify(BASE, closed)["network"]["verdict"] == "narrowed"

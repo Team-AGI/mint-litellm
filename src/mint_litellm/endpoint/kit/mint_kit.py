@@ -225,6 +225,30 @@ def scan_processes(windows: bool) -> list[dict]:
     return [{"server": n, "count": c} for n, c in sorted(counts.items())][:MAX_ITEMS]
 
 
+def with_sandbox(processes: list[dict], home: Path, windows: bool) -> list[dict]:
+    """프로세스 항목에 서버별 격리 상태를 더한다(실행기가 남긴 기록 중 아직 살아 있는 것만).
+
+    ``bwrap``은 기록된 모든 프로세스가 격리 안, ``none``은 하나라도 격리 없이, Windows는
+    ``unsupported``. 기록이 없는 서버는 비워 둔다(이전 실행기가 띄운 것).
+    """
+    seen: dict[str, str] = {}
+    folder = home / STATE_REL / LAUNCHED
+    for path in sorted(folder.glob("*.json")) if not windows and folder.is_dir() else []:
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+            server, pid, start = str(record["server"]), int(record["pid"]), record.get("start")
+            status = record.get("sandbox")
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if status in ("bwrap", "none") and start and proc_start(pid, False) == start:
+            seen[server] = "none" if "none" in (status, seen.get(server)) else "bwrap"
+    for item in processes:
+        status = "unsupported" if windows else seen.get(item["server"])
+        if status:
+            item["sandbox"] = status
+    return processes
+
+
 def scan_autostart(home: Path, windows: bool, user: str, profile: bool = True) -> list[dict]:
     found = []
 
@@ -679,7 +703,33 @@ class Kit:
         if reason:
             raise SystemExit(f"managed install needs a trusted interpreter: {reason}")
 
+    def ensure_sandbox_tool(self) -> None:
+        """관리형 Linux 설치는 서버 격리에 쓰는 bubblewrap이 있어야 한다. 없으면 설치를 시도하고,
+        못 하면 이유를 알리고 멈춘다(실행기는 격리할 수 없으면 서버를 시작하지 않는다)."""
+        if self.windows or not (self.managed and self.strict):
+            return
+        if self.config.get("allow_unsandboxed"):
+            return
+        if shutil.which("bwrap"):
+            return
+        for manager, command in (
+            ("apt-get", ["apt-get", "install", "-y", "bubblewrap"]),
+            ("dnf", ["dnf", "install", "-y", "bubblewrap"]),
+            ("yum", ["yum", "install", "-y", "bubblewrap"]),
+            ("zypper", ["zypper", "--non-interactive", "install", "bubblewrap"]),
+            ("pacman", ["pacman", "-S", "--noconfirm", "bubblewrap"]),
+        ):
+            if shutil.which(manager):
+                subprocess.run(command, check=False, stdin=subprocess.DEVNULL)
+                break
+        if not shutil.which("bwrap"):
+            raise SystemExit(
+                "관리형 설치에는 bubblewrap(bwrap)이 필요합니다. 자동으로 설치하지 못했습니다. "
+                "패키지 관리자로 bubblewrap을 설치한 뒤 다시 실행하세요."
+            )
+
     def install(self) -> dict:
+        self.ensure_sandbox_tool()
         previous = self.load_state()
         state = {
             "kit_version": self.config["kit_version"],
@@ -1068,7 +1118,7 @@ class Kit:
 
     def read_inventory(self) -> dict:
         try:
-            processes = scan_processes(self.windows)
+            processes = with_sandbox(scan_processes(self.windows), self.home, self.windows)
             extra = {"profile": False} if self.system_mode else {}
             autostart = scan_autostart(self.home, self.windows, self.account.name, **extra)
         except Exception:

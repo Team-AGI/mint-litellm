@@ -58,6 +58,10 @@ class Unauthenticated(AdminError):
         super().__init__(AdminCode.FORBIDDEN, message)
 
 
+def _truthy(value: str | None) -> bool:
+    return (value or "").strip().lower() in ("1", "true", "yes")
+
+
 def _policy_source(env: Mapping[str, str]) -> PolicySource | None:
     opa_url = (env.get("MINT_OPA_URL") or "").strip()
     if not opa_url:
@@ -88,6 +92,8 @@ class ConsoleConfig:
     # 단말이 판정 경로를 부르는 주소(없으면 LiteLLM 주소)와 그 서버 인증서(사설 인증 기관이면)
     endpoint_url: str | None = None
     endpoint_ca_pem: str | None = None
+    # 관리형 단말이 격리할 수 없을 때 서버를 격리 없이 시작해도 되는가(기본 아니오)
+    endpoint_allow_unsandboxed: bool = False
     # 정책 판본을 적용할 때 쓰는 번들 원본과 정책 엔진. 정책 엔진 주소가 없으면 적용하지 않는다.
     policy_source: PolicySource | None = None
 
@@ -116,6 +122,7 @@ class ConsoleConfig:
             kit_issuer=LiteLLMKitKeys(control.litellm_url, issuer_key) if issuer_key else None,
             endpoint_url=(env.get("MINT_ENDPOINT_PUBLIC_URL") or "").strip() or None,
             endpoint_ca_pem=ca_pem,
+            endpoint_allow_unsandboxed=_truthy(env.get("MINT_ENDPOINT_ALLOW_UNSANDBOXED")),
             policy_source=_policy_source(env),
         )
 
