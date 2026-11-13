@@ -57,6 +57,7 @@ def test_the_periodic_expiry_job_runs_the_recertification_scan_with_the_settings
     monkeypatch.setattr(expiry, "expire_due", lambda conn, instance: None)
     monkeypatch.setattr(expiry, "warn_expiring", lambda conn, instance: None)
     monkeypatch.setattr(expiry, "announce_requests", lambda conn, instance: None)
+    monkeypatch.setattr(expiry, "close_settled_requests", lambda conn, instance: None)
     monkeypatch.setattr(recert, "scan", lambda *args: seen.append(args))
     job = SimpleNamespace(
         conn="c", instance_id="i", settings=SimpleNamespace(recert_days=30, recert_grace_days=7)

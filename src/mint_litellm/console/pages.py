@@ -1,8 +1,10 @@
 """화면(서버 렌더링). 변경은 서비스 함수를 부르고, 실패하면 같은 화면에 오류를 보인다."""
 
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, Query, Request
@@ -11,7 +13,7 @@ from fastapi.responses import RedirectResponse, Response
 from mint_litellm.console import alert_view, api, compare
 from mint_litellm.console.core import STATUS, Actor, page_actor, require_csrf
 from mint_litellm.console.templating import render
-from mint_litellm.control import endpoint_kits, jobs
+from mint_litellm.control import dormant, endpoint_kits, jobs, links
 from mint_litellm.control import status as control_status
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import alerts as alert_service
@@ -60,7 +62,7 @@ def act(
     except ValueError:  # 선택 목록에 없는 값 등 잘못된 폼 값
         actor.conn.rollback()
         return rebuild(error="입력 값이 올바르지 않습니다.", status=400)
-    return RedirectResponse(f"{back}?ok={ok}", status_code=303)
+    return RedirectResponse(f"{back}{'&' if '?' in back else '?'}ok={ok}", status_code=303)
 
 
 # --- 개요 -----------------------------------------------------------------------------------
@@ -191,11 +193,29 @@ def _with_recert(actor: Actor, rows: list[dict]) -> list[dict]:
     ]
 
 
+def _focus(request: Request) -> str | None:
+    """링크로 미리 고른 항목(없으면 None). 형식이 틀리면 ``ValueError``(잘못된 입력)이다."""
+    value = request.query_params.get("focus")
+    return str(uuid.UUID(value)) if value else None
+
+
 def approvals_page(request: Request, actor: Actor, error=None, status=200, form=None):
-    rows = reads.approvals(actor.conn, actor.instance, page=page_number(request))
+    focus = _focus(request)
+    dormant_view = request.query_params.get("filter") == "dormant"
+    if dormant_view:
+        rows = dormant.find(actor.conn, actor.instance, actor.config.stage2.dormant_days)
+        server = request.query_params.get("server")
+        rows = [r for r in rows if not server or r["server_id"] == server]
+    else:
+        rows = reads.approvals(
+            actor.conn, actor.instance, page=page_number(request), only_id=focus
+        )
     ctx = {
-        "queue": reads.queue(actor.conn, actor.instance),
+        "queue": [] if focus or dormant_view else reads.queue(actor.conn, actor.instance),
         "rows": _with_recert(actor, rows),
+        "dormant_view": dormant_view,
+        "dormant_days": actor.config.stage2.dormant_days,
+        "focus": focus,
         "form": form,
         "page": page_number(request),
         "error": error,
@@ -304,6 +324,61 @@ def renew_expiring(request: Request, actor: Actor = Depends(page_actor)):
     )
 
 
+@router.get("/link/{token}")
+def open_link(token: str, actor: Actor = Depends(page_actor)):
+    """알림의 서명 링크. 해당 화면에서 항목을 미리 고르기만 하고 아무것도 승인하지 않는다."""
+    key = actor.config.stage2.webhook_hmac_key
+    parsed = links.parse(key, token) if key else None
+    target = None
+    if parsed is not None:
+        kind, ref = parsed
+        target = {
+            "call": f"/call-approvals?focus={quote(ref)}",
+            "recert": f"/approvals?focus={quote(ref)}",
+            "intake": f"/intakes/{quote(ref)}",
+            "dormant": f"/approvals?filter=dormant&server={quote(ref)}",
+        }.get(kind)
+    if target is None:
+        raise AdminError(AdminCode.NOT_FOUND, "링크가 만료되었거나 올바르지 않습니다.")
+    return RedirectResponse(target, status_code=303)
+
+
+def _dormant_action(request: Request, actor: Actor, ids: list[str], one) -> Response:
+    """미사용 승인 일괄 처리. 항목 값은 ``<승인 식별자>:<상태 버전>``이고 관리자만 쓴다."""
+
+    def action():
+        if actor.role != "admin":
+            raise AdminError(AdminCode.FORBIDDEN, "일괄 처리는 admin 역할만 할 수 있습니다.")
+        for item in ids:
+            approval_id, _, version = item.rpartition(":")
+            one(approval_id, int(version))
+
+    return act(actor, action, "dormant_done", "/approvals?filter=dormant",
+               lambda **kw: approvals_page(request, actor, **kw))
+
+
+@router.post("/approvals/dormant/keep")
+def keep_dormant(
+    request: Request, ids: list[str] = Form(default=[]), actor: Actor = Depends(page_actor)
+):
+    return _dormant_action(
+        request, actor, ids,
+        lambda i, v: recert_service.confirm(actor.ctx, i, expected_version=v),
+    )
+
+
+@router.post("/approvals/dormant/revoke")
+def revoke_dormant(
+    request: Request, ids: list[str] = Form(default=[]), actor: Actor = Depends(page_actor)
+):
+    return _dormant_action(
+        request, actor, ids,
+        lambda i, v: approval_service.revoke(
+            actor.ctx, i, "미사용 승인 정리", False, expected_version=v
+        ),
+    )
+
+
 @router.post("/approvals/{approval_id}/recertify")
 def recertify_approval(
     approval_id: str,
@@ -376,9 +451,12 @@ def lift_denial(
 
 
 def calls_page(request: Request, actor: Actor, error=None, status=200):
-    rows = reads.call_approvals(actor.conn, actor.instance, page=page_number(request))
-    return render(request, "call_approvals.html", {"rows": rows, "error": error}, actor=actor,
-                  status=status)
+    focus = _focus(request)
+    rows = reads.call_approvals(
+        actor.conn, actor.instance, page=page_number(request), only_id=focus
+    )
+    return render(request, "call_approvals.html",
+                  {"rows": rows, "error": error, "focus": focus}, actor=actor, status=status)
 
 
 @router.get("/call-approvals")
