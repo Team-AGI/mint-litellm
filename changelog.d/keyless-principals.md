@@ -1,0 +1,1 @@
+- 키 없는 주체(JWT, 관리형 에이전트, 게이트웨이 입장 사용자)를 올바르게 판정한다. 가상 키 `token`이 없어도 서버가 검증한 표지(`jwt_claims`·`managed_agent_context`·`mcp_admitted_user_subject`)와 `user_id`가 있으면 그 사용자로 다루고, 표지가 없거나 `user_id`가 없으면 `MINT-ANONYMOUS`로 막는다. 키 없는 사용자는 키 토큰이 필요한 본인 확인 요청을 만들 수 없다.
