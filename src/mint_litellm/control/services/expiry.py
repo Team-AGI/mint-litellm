@@ -17,7 +17,8 @@ def expire_due(conn: psycopg.Connection, instance_id: str) -> dict[str, int]:
     with conn.transaction():
         approvals = conn.execute(
             "UPDATE mint.call_approvals SET status = 'expired' WHERE instance_id = %s"
-            " AND status IN ('pending', 'approved') AND expires_at <= now()",
+            " AND status IN ('pending', 'approved')"
+            " AND coalesce(valid_until, expires_at) <= now()",
             (instance_id,),
         ).rowcount
         confirmations = conn.execute(

@@ -214,9 +214,15 @@ def call_approvals(
     return fetchall(
         conn,
         "SELECT id, org_id, principal_type, principal_id, server_id, tool, status, requested_by,"
-        " approved_by, expires_at, state_version FROM mint.call_approvals WHERE instance_id = %s"
-        " AND (%s::text IS NULL OR status = %s)"
-        " ORDER BY (status = 'pending') DESC, expires_at ASC, id LIMIT %s OFFSET %s",
+        " approved_by, expires_at, window_minutes, valid_until, state_version,"
+        " CASE WHEN c.valid_until IS NOT NULL AND c.status = 'approved'"
+        "  THEN greatest(extract(epoch FROM c.valid_until - now()), 0)::int END"
+        "  AS remaining_seconds,"
+        " (SELECT count(*) FROM mint.call_approval_uses u WHERE u.call_approval_id = c.id) AS uses"
+        " FROM mint.call_approvals c WHERE c.instance_id = %s"
+        " AND (%s::text IS NULL OR c.status = %s)"
+        " ORDER BY (c.status = 'pending') DESC, coalesce(c.valid_until, c.expires_at) ASC, c.id"
+        " LIMIT %s OFFSET %s",
         (instance, status, status, limit, offset),
     )
 

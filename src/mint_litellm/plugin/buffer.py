@@ -97,6 +97,8 @@ class ConsumeRequest:
     action: str | None = None
     # 로컬 실행 서버에서 승인이 묶인 실행 계약 해시. 소비 때 서버 행의 계약과 같아야 한다.
     exec_contract_sha256: str | None = None
+    # 기간을 고른 승인이면 소비하지 않고 사용 기록만 남긴다.
+    windowed: bool = False
 
 
 class EventStore(Protocol):

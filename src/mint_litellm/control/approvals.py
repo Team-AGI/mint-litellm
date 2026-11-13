@@ -636,14 +636,24 @@ def _call_update(
     kind: EventKind,
     *,
     approver: str | None = None,
+    window_minutes: int | None = None,
     extra: dict | None = None,
 ) -> dict:
     set_approver = ", approved_by = %s" if approver else ""
-    params = (target, *([approver] if approver else []), ctx.instance_id, call_id, list(sources))
+    set_window = (
+        ", window_minutes = %s, valid_until = clock_timestamp() + make_interval(mins => %s)"
+        if window_minutes else ""
+    )
+    params = (
+        target, *([approver] if approver else []),
+        *([window_minutes, window_minutes] if window_minutes else []),
+        ctx.instance_id, call_id, list(sources),
+    )
     row = fetchone(
         ctx.conn,
-        f"UPDATE mint.call_approvals SET status = %s{set_approver} WHERE instance_id = %s"
-        " AND id = %s AND status = ANY(%s) AND expires_at > now()"
+        f"UPDATE mint.call_approvals SET status = %s{set_approver}{set_window}"
+        " WHERE instance_id = %s AND id = %s AND status = ANY(%s)"
+        " AND coalesce(valid_until, expires_at) > clock_timestamp()"
         " RETURNING state_version, principal_type, principal_id, server_id, tool",
         params,
     )
@@ -662,7 +672,15 @@ def _call_update(
     return row
 
 
-def call_approve(ctx: Context, call_id: str, second: Operator | None) -> None:
+CALL_APPROVAL_WINDOWS = (10, 30)
+
+
+def call_approve(
+    ctx: Context, call_id: str, second: Operator | None, window_minutes: int | None = None
+) -> None:
+    """``window_minutes``가 없으면 1회 승인이고, 10·30이면 그 시간 동안 되풀이해 쓸 수 있다."""
+    if window_minutes is not None and window_minutes not in CALL_APPROVAL_WINDOWS:
+        raise ControlError("사용 기간은 1회, 10분, 30분 중 하나여야 합니다.")
     current = fetchone(
         ctx.conn,
         "SELECT principal_type, principal_id, requested_by FROM mint.call_approvals"
@@ -679,11 +697,13 @@ def call_approve(ctx: Context, call_id: str, second: Operator | None) -> None:
         ctx.operator, current["requested_by"], second, "호출별 승인"
     )
     extra = {"approved_by": ctx.operator.name, "second_approver": None}
+    if window_minutes:
+        extra["window_minutes"] = window_minutes
     if second_info:
         extra["second_approver"] = second_info["name"]
         extra["second_approver_user_id"] = second_info["user_id"]
     _call_update(ctx, call_id, "approved", ("pending",), EventKind.CALL_APPROVAL_APPROVED,
-                 approver=ctx.operator.name, extra=extra)
+                 approver=ctx.operator.name, window_minutes=window_minutes, extra=extra)
 
 
 def call_reject(ctx: Context, call_id: str) -> None:
