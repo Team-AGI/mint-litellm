@@ -30,3 +30,15 @@ def test_a_server_past_its_deadline_is_blocked(tmp_path, observe):
 
 def test_without_the_mark_the_call_is_unaffected(tmp_path):
     assert decide(tmp_path, blocked=False).allowed
+
+
+@pytest.mark.parametrize("observe", [False, True])
+def test_an_instance_mismatch_blocks_even_in_observe_mode(tmp_path, observe):
+    extra = {"settings": SettingsRow(mode=Mode.OBSERVE)} if observe else {}
+    snap = snapshot(server=server_row(instance_mismatch=True), approvals=(approval(),), **extra)
+    h = harness(tmp_path, snap, evaluate=evaluator())
+    if observe:
+        h.deps.config = replace(h.deps.config, mode_ceiling=Mode.OBSERVE)
+    out = asyncio.run(evaluate_request(request(), h.deps))
+    assert not out.allowed
+    assert out.error.code == "MINT-CONTRACT-DRIFT-instance-mismatch"

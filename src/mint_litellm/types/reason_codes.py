@@ -65,6 +65,7 @@ class ContractDriftKind(StrEnum):
     NO_CONTRACT = "no_contract"  # 관리 서버인데 승인 계약이 하나도 없다
     INPUT_KEYS_UNKNOWN = "input_keys_unknown"  # 허용 인자 키를 알 수 없다
     VULN_OVERDUE = "vuln_overdue"  # 치명 취약점의 조치 기한(48시간)이 지났다
+    INSTANCE_MISMATCH = "instance_mismatch"  # 같은 서버를 쓰는 다른 인스턴스와 계약·설정이 다르다
 
 
 # 관측 모드로 완화할 수 없는 계약 차단(고정 안전 조건). 설정과 무관하게 호출을 막는다.
@@ -74,6 +75,7 @@ NON_OBSERVABLE_DRIFT: frozenset[str] = frozenset(
         ContractDriftKind.NO_CONTRACT.value,
         ContractDriftKind.INPUT_KEYS_UNKNOWN.value,
         ContractDriftKind.VULN_OVERDUE.value,
+        ContractDriftKind.INSTANCE_MISMATCH.value,
     }
 )
 

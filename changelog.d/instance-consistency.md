@@ -1,0 +1,1 @@
+- 같은 서버를 계약 관리하는 인스턴스끼리 승인 계약과 보안 설정(가드레일 모드·활성 정책 묶음)이 다르면 경보만 내던 것을 차이가 `MINT_INSTANCE_MISMATCH_GRACE_SECONDS`(기본 900초) 넘게 이어지면 어긋난 인스턴스의 그 서버 호출을 막도록 바꿨다(`CONTRACT_DRIFT_instance_mismatch`, 관측 모드로 풀 수 없음). admin의 `instance_exception` 증빙으로 풀고, 서버 상세에 사유를 보이며, 인스턴스가 하나뿐이면 영향이 없다. 마이그레이션 035가 서버 표에 열 둘을 더한다.

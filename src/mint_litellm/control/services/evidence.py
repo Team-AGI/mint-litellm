@@ -48,6 +48,7 @@ _KIND_LIST = (
     Kind("unpinned_acceptance", "POL-O-06", "server", "버전 미고정 패키지 사용 승인", 30,
          "unpinned"),
     Kind("vuln_exception", "POL-O-08", "server", "취약점 조치 예외", 30, "exception"),
+    Kind("instance_exception", "POL-O-09", "server", "인스턴스 간 불일치 예외", 30, "exception"),
     Kind("deletion_proof", "POL-D-07", "relation", "자료 삭제·반환 증빙", None, "finish"),
     Kind("access_recheck", "POL-O-03", "server", "변경된 자료의 접근 권한 재확인", 90,
          "periodic", True),
@@ -201,6 +202,8 @@ def attach(
     if ctx.operator.role not in _ROLES:
         raise forbidden(f"증빙 첨부는 {ctx.operator.role} 역할로 실행할 수 없습니다.", exit_code=4)
     kind = kind_of(kind_key)
+    if kind.key == "instance_exception" and ctx.operator.role != "admin":
+        raise forbidden("인스턴스 간 불일치 예외는 admin만 붙일 수 있습니다.", exit_code=4)
     subject_id = str(subject_id)
     summary = (summary or "").strip()
     if not summary:

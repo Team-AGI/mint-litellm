@@ -30,7 +30,7 @@
 | `mint-litellm operator remove` | `admin` | 운영자를 삭제한다. 토큰이 끝나고 그 사용자의 콘솔 세션이 폐기된다. 마지막 관리자와 본인은 삭제할 수 없다. | 없음 | `operator_removed` |
 | `mint-litellm operator set-role` | `admin` | 운영자의 역할을 바꾼다(`--role`). 그 사용자의 콘솔 세션이 폐기된다. 마지막 관리자는 낮출 수 없다. | 없음 | `operator_role_changed` |
 | `mint-litellm server register` | `admin` | LiteLLM에 등록된 서버를 승인 대기 상태로 등록한다. | `/v1/mcp/server/{server_id}` | `server_registered` |
-| `mint-litellm server register-local` | `admin` | 로컬 실행(stdio) 서버를 LiteLLM 없이 실행 계약(`--contract` JSON 파일)으로 승인 대기 상태로 등록한다. 서버가 접근할 경로는 계약 파일의 `file_access`나 `--read`·`--read-write`(반복 가능)로 선언한다. | - | `server_registered` |
+| `mint-litellm server register-local` | `admin` | 로컬 실행(stdio) 서버를 LiteLLM 없이 실행 계약(`--contract` JSON 파일)으로 승인 대기 상태로 등록한다. 서버가 접근할 경로는 계약 파일의 `file_access`나 `--read`·`--read-write`(반복 가능)로 선언한다. 네트워크는 `--network none|any`(또는 계약 파일의 `network`)로 선언하며, `none`이면 단말 격리가 막고 생략하면 제한이 없다. | - | `server_registered` |
 | `mint-litellm server suspend` | `admin` | 서버를 중지한다. 중지된 서버의 호출은 차단된다. | - | `server_suspended` |
 | `mint-litellm server terminate` | `admin` | 승인 또는 중지된 서버를 폐기 중으로 바꾼다(호출은 즉시 차단). 작업 실행기가 LiteLLM 관리 API로 그 서버에 저장된 사용자별 OAuth2·API 키 자격을 지우고, 목록을 다시 읽어 하나도 남지 않은 것을 확인하고, 서버 계정·문서 공유 권한 회수 확인 증빙(`access_revocation`)이 있으면 폐기됨으로 닫고(없으면 폐기 중에 머물고 경보 `evidence_missing`을 연다) `server_terminated`에 지운 개수를 남긴다. 남아 있으면 폐기 중에 머물며 재시도하고 경보 `server_credentials_remain`을 연다. 서버 자체 비밀·사용자별 환경 변수·동적 등록 클라이언트는 LiteLLM이 목록·삭제 경로를 주지 않아 읽어 확인하지 못한다. | - | `server_terminating`, `server_terminated` |
 | `mint-litellm server resume` | `admin` | 중지한 서버를 다시 승인 상태로 되돌린다. | - | `server_resumed` |
@@ -155,6 +155,7 @@
 | `version_review` 되돌릴 판본의 보안 문제 확인 | 서버 | 배포 계약이 바뀌는 재승인 | 30일 |
 | `unpinned_acceptance` 버전 미고정 패키지 사용 승인 | 서버 | 버전이 고정되지 않은 패키지를 실행하는 로컬 서버의 승인 | 30일 |
 | `vuln_exception` 취약점 조치 예외 | 서버 | 치명 취약점 조치 기한이 지난 서버의 호출 차단을 푸는 예외 | 30일 |
+| `instance_exception` 인스턴스 간 불일치 예외 | 서버 | 다른 인스턴스와 계약·설정이 달라 막힌 서버의 호출 차단을 푸는 예외(admin만) | 30일 |
 | `command_input_review` 명령·질의 입력 전달 방식 점검 결과 (문서 해시값 필수) | 신청 | 로컬 실행 서버이거나 도구 이름에 실행·질의 말이 든 서버의 신청 승인 | 180일 |
 | `access_revocation` 서버 계정·문서 공유 권한 회수 확인 | 서버 | 서버 폐기 마무리(없으면 서버가 폐기 중에 머물고 경보를 연다. 붙이면 마무리가 다시 실행된다) | 없음 |
 | `deletion_proof` 자료 삭제·반환 증빙 | 이용 관계 | 관계 종료 완료 | 없음 |
@@ -209,6 +210,7 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 | `MINT_RECERT_GRACE_DAYS` | 재확인 요청 뒤 보류까지의 유예(일, 1~365) | `14` |
 | `MINT_VULN_FEED_URL` | 알려진 취약점 조회 주소(OSV 형식 API). 사내 미러를 쓰려면 http(s) 주소를 준다 | `https://api.osv.dev` |
 | `MINT_VULN_SCAN_SECONDS` | 취약점 조회·조치 기한 판정 주기(초, 60 이상) | `900` |
+| `MINT_INSTANCE_MISMATCH_GRACE_SECONDS` | 다른 인스턴스와 계약·설정이 다른 상태가 이 시간(초)을 넘게 이어지면 그 서버 호출을 막는다. 경보는 바로 열린다. 0이면 바로 막는다. | `900` |
 | `MINT_VULN_FEED_TIMEOUT_SECONDS` | 조회 요청 한 번의 제한 시간(초) | `15` |
 | `MINT_EVENT_RETENTION_DAYS` | 사건 원장 보관 일수(31 이상). 설정하면 달 전체가 이보다 오래되고 내보내기 파일을 다시 읽어 확인한 월 분할을 지운다. 없으면 아무것도 지우지 않는다. MINT는 기본값을 정하지 않는다 | 없음(끔) |
 | `MINT_WEBHOOK_FORMATS` | 웹훅 주소마다 하나씩, 같은 순서로 적는 전송 형식(`json`·`slack`·`teams`). 수가 맞지 않거나 모르는 값이면 기동을 거부한다. | 모두 `json` |

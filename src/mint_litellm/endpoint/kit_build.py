@@ -61,6 +61,7 @@ def build_kit(
     ca_pem: str | None = None,
     platform: str = "linux",
     harnesses: Sequence[str] = ("claude",),
+    allow_unsandboxed: bool = False,
 ) -> bytes:
     if platform not in LAUNCHERS or not harnesses or not set(harnesses) <= set(HARNESSES):
         raise ValueError("unknown platform or harness")
@@ -72,6 +73,8 @@ def build_kit(
         "ca_pem": ca_pem,
         "servers": approved_contracts(documents),
     }
+    if allow_unsandboxed:
+        config["allow_unsandboxed"] = True  # 관리형 단말이 격리 없이 서버를 시작해도 된다.
     members = [(name, _text(path), mode) for name, path, mode in (*LAUNCHERS[platform], *PROGRAMS)]
     members.append(("kit.json", json.dumps(config, indent=1).encode(), 0o600))
     raw = io.BytesIO()
