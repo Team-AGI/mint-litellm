@@ -39,7 +39,7 @@
 | `mint-litellm denial lift` | `admin`, `approver` | 거부를 해제한다. | - | `denial_lifted` |
 | `mint-litellm revoke` | `admin`, `approver` | 승인을 철회한다. `--deny`를 주면 같은 범위의 거부를 함께 만든다. | - | `approval_revoked`, `denial_created` |
 | `mint-litellm call-approval request` | `admin`, `approver` | 특정 주체·서버·도구·인자에 대한 호출별 승인을 요청한다. | - | `call_approval_requested` |
-| `mint-litellm call-approval approve` | `admin`, `approver` | 호출별 승인을 승인한다. 호출 주체와 같은 사용자의 운영자는 승인할 수 없다. | - | `call_approval_approved` |
+| `mint-litellm call-approval approve` | `admin`, `approver` | 호출별 승인을 승인한다. 호출 주체와 같은 사용자의 운영자는 승인할 수 없다. `--for 10m`·`--for 30m`을 주면 그 시간 동안 같은 호출을 되풀이해 쓸 수 있고, 없으면 1회용이다. | - | `call_approval_approved` |
 | `mint-litellm call-approval reject` | `admin`, `approver` | 호출별 승인 요청을 거절한다. | - | `call_approval_rejected` |
 | `mint-litellm call-approval cancel` | `admin`, `approver` | 요청 중이거나 승인된 호출별 승인을 취소한다. | - | `call_approval_cancelled` |
 | `mint-litellm consent add` | `admin` | 사용자 동의를 등록한다. 운영자 증명은 증거 참조와 증거 해시가 필수이다. | - | `consent_granted` |
@@ -242,6 +242,8 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 | `--max-result-items 수` | `max_result_items` | 도구 결과 한 건의 내용 블록 수 상한. 넘으면 위와 같이 막는다. |
 | `--no-result-scan` | `scan_result` | 결과 본문의 지시문 표지 검사를 끈다. 계약 관리 서버는 이 옵션이 없으면 검사하며, 표지가 있으면 결과를 `MINT-OUTPUT-BLOCKED`로 막고 `output_findings`에 `POL-E-04`를 남긴다. 관측 모드에서는 막지 않고 응답 사건에만 남긴다. |
 | `--response-scan block\|mask\|observe` | `response_scan` | 결과 본문의 비밀(개인 키, 클라우드 접근 키, GitHub 토큰, Bearer 토큰, JWT)과 개인정보(주민등록번호, 전화번호, 이메일, 카드 번호)를 찾았을 때의 처리. `mask`(기본)는 찾은 값만 `[MASKED:종류]`로 바꿔 주고, `block`은 결과 대신 `MINT-OUTPUT-BLOCKED`를 돌려주며, `observe`는 기록만 한다. 응답 사건의 `sensitive_findings`에 종류별 건수만 남기고 값은 남기지 않으며 `output_findings`에 `POL-E-05`를 남긴다. 관측 모드에서는 어느 값이든 기록만 한다. |
+
+호출별 승인은 승인할 때 사용 기간을 고른다(콘솔 승인 폼의 1회·10분·30분, `call-approval approve --for 10m|30m`, HTTP API `window_minutes`). 기본인 1회는 첫 일치 호출에서 소비된다. 10분·30분 승인은 소비되지 않고 승인 시각부터 그 시간이 끝날 때까지 같은 주체·서버·도구·인자 지문·계약·대상의 호출에 되풀이해 쓰이며, 쓸 때마다 `call_approval_uses` 표에 호출 식별자별 한 행이 남고 호출의 판정 사건에도 승인 식별자가 남는다. 기간이 끝나면 더는 맞지 않고(작업이 `expired`로 표시), 취소하면 즉시 멈춘다. 콘솔 목록은 사용 기간·남은 시간·사용 횟수를 보인다. 이 기간 동안은 인자가 달라지면 새 승인이 필요하다.
 
 계약 관리 서버의 호출별 승인(`call-approval request`)과 본인 확인은 요청할 때 승인된 도구 계약에 묶인다. 계약이 교체되거나 철회되면 아직 쓰지 않은 승인은 만료되고, 승인된 계약이 없는 도구에는 호출별 승인을 요청할 수 없다.
 
