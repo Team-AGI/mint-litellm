@@ -8,6 +8,34 @@
 {% for v in versions %}<tr><td>{{ v.id }}</td><td>{{ m.badge(L.POLICY_VERSION, v.status) }}</td><td class="nowrap">{{ v.activated_at | when }}</td><td>{{ v.activated_by | who }}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}{{ m.empty('적용된 정책 판본이 없습니다', '/', '개요로 이동') }}{% endif %}
+<h2>정책 시험 적용</h2>
+{% if shadow %}
+{% set t = shadow.totals %}{% set st = shadow.stats %}
+<dl class="detail">
+  <dt>시험 판본</dt><dd>{{ shadow.version_id }}</dd>
+  <dt>시작</dt><dd>{{ shadow.set_at | when }} · {{ shadow.set_by | who }}</dd>
+  <dt>평가한 호출</dt><dd>{{ st.evaluated }}건</dd>
+  <dt>허용에서 차단</dt><dd>{{ t.allow_to_deny }}건</dd>
+  <dt>차단에서 허용</dt><dd>{{ t.deny_to_allow }}건</dd>
+  <dt>그 밖의 변경</dt><dd>{{ t.other }}건</dd>
+  <dt>평가 오류</dt><dd>{{ st.errors }}건</dd>
+  <dt>건너뜀</dt><dd>{{ st.skipped }}건</dd>
+</dl>
+{% if actor.role == 'admin' %}
+<div class="filters">
+  <form method="post" action="/policy/shadow/apply">{{ m.csrf(actor) }}<input type="hidden" name="version" value="{{ shadow.version_id }}"><button type="submit" class="primary">적용</button></form>
+  <form method="post" action="/policy/shadow/cancel">{{ m.csrf(actor) }}<button type="submit">취소</button></form>
+</div>
+{% endif %}
+{% if shadow.flips %}
+<table><thead><tr><th>서버</th><th>도구</th><th>변경</th><th>현재 결과</th><th>시험 결과</th><th>현재 사유</th><th>시험 사유</th><th>호출 수</th><th>기록</th></tr></thead><tbody>
+{% for f in shadow.flips %}<tr>
+<td>{{ f.server_id }}</td><td>{{ f.tool }}</td><td>{{ L.pick(L.SHADOW_FLIP, f.flip) }}</td><td>{{ L.pick(L.POLICY_RESULT, f.active_result) }}</td><td>{{ L.pick(L.POLICY_RESULT, f.shadow_result) }}</td><td>{{ f.active_reason | blank }}</td><td>{{ f.shadow_reason | blank }}</td><td>{{ f.calls }}</td>
+<td>{% for i in f.samples %}<a href="/ledger?invocation={{ i | urlencode }}&amp;since={{ shadow_day }}">기록 {{ loop.index }}</a>{{ ' ' if not loop.last }}{% endfor %}</td>
+</tr>{% endfor %}
+</tbody></table>
+{% else %}<p>판정이 달라진 호출이 없습니다.</p>{% endif %}
+{% else %}<p>시험 중인 판본이 없습니다.</p>{% endif %}
 <h2>관측 설정</h2>
 {% if s %}
 <dl class="detail">

@@ -13,6 +13,7 @@ from jinja2 import pass_context
 
 from mint_litellm.console import labels
 from mint_litellm.console.core import DEFAULT_TIME_ZONE
+from mint_litellm.control.services import reads
 
 HERE = Path(__file__).parent
 templates = Jinja2Templates(directory=HERE / "templates")
@@ -26,6 +27,7 @@ MENU = (
     ("/revocations", "거부·철회"),
     ("/call-approvals", "호출별 승인"),
     ("/endpoints", "단말 설치"),
+    ("/alerts", "경보"),
     ("/ledger", "원장"),
     ("/policy", "정책·관측 설정"),
     ("/admin", "운영자·조직"),
@@ -115,6 +117,8 @@ def render(
         "actor": actor, "path": request.url.path, "notice": notice, "error": None,
         "zone_label": labels.pick(labels.TIME_ZONE, zone),
     }
+    if actor is not None and not name.startswith("staff"):
+        base["alert_badge"] = reads.urgent_alert_count(actor.conn, actor.instance)
     return templates.TemplateResponse(
         request, name, {**base, **(context or {})}, status_code=status
     )

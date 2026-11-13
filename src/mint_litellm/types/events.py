@@ -15,6 +15,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validato
 from mint_litellm.types.decision import DecisionSnapshot, OperationType, RevocationCheck
 from mint_litellm.types.frozen import json_value, no_floats
 from mint_litellm.types.ids import new_uuid7
+from mint_litellm.types.outcome import Outcome
 
 
 class Evidence(StrEnum):
@@ -94,6 +95,8 @@ class EventKind(StrEnum):
     APPROVAL_RECERT_REQUESTED = "approval_recert_requested"
     APPROVAL_HELD = "approval_held"
     APPROVAL_RECERT_CONFIRMED = "approval_recert_confirmed"
+    POLICY_SHADOW_SET = "policy_shadow_set"
+    POLICY_SHADOW_CLEARED = "policy_shadow_cleared"
 
 
 CALL_KINDS: frozenset[EventKind] = frozenset(
@@ -179,6 +182,8 @@ CONTROL_ENTITY: dict[EventKind, str] = {
     EventKind.APPROVAL_RECERT_REQUESTED: "approval",
     EventKind.APPROVAL_HELD: "approval",
     EventKind.APPROVAL_RECERT_CONFIRMED: "approval",
+    EventKind.POLICY_SHADOW_SET: "policy_shadow",
+    EventKind.POLICY_SHADOW_CLEARED: "policy_shadow",
 }
 
 _ENTITY_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
@@ -395,6 +400,8 @@ class ResponseObservation(BaseModel):
     output_blocked: bool = False
     output_masked: bool = False
     sensitive_findings: dict[str, int] = Field(default_factory=dict)
+    # 새 행부터 남는 결과 분류(success·tool_error·output_blocked).
+    outcome: Outcome | None = None
 
     @model_validator(mode="after")
     def _check(self) -> Self:
@@ -417,4 +424,6 @@ class AlertKind(StrEnum):
     ENDPOINT_UNMANAGED = "endpoint_unmanaged"
     ENDPOINT_STALE_PROCESS = "endpoint_stale_process"
     ENDPOINT_STALE_AUTOSTART = "endpoint_stale_autostart"
+    ENDPOINT_SILENT = "endpoint_silent"
+    ENDPOINT_KEY_EXPIRING = "endpoint_key_expiring"
     CALL_SPIKE = "call_spike"

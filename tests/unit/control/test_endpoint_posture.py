@@ -4,6 +4,7 @@
 """
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -89,6 +90,46 @@ def test_the_catalog_names_the_policies_these_alerts_report():
     assert by_id["endpoint_unmanaged"]["reference_policies"] == ["POL-E-06"]
     assert by_id["endpoint_stale_process"]["reference_policies"] == ["POL-D-04"]
     assert by_id["endpoint_stale_autostart"]["reference_policies"] == ["POL-D-04"]
+    assert "POL-D-04" in by_id["endpoint_silent"]["reference_policies"]
+    assert by_id["endpoint_key_expiring"]["reference_policies"] == ["POL-E-06"]
+
+
+NOW = datetime(2030, 1, 10, 12, tzinfo=UTC)
+
+
+def timed(mode, reported_hours_ago=1, expires_in_days=60):
+    return {**row(mode), "now": NOW,
+            "reported_at": None if reported_hours_ago is None
+            else NOW - timedelta(hours=reported_hours_ago),
+            "expires_at": None if expires_in_days is None
+            else NOW + timedelta(days=expires_in_days)}
+
+
+def test_an_install_that_stopped_reporting_is_silent_until_it_reports_again():
+    assert endpoint_posture.findings([timed("managed", 23)], {}) == {}
+    wanted = endpoint_posture.findings([timed("managed", 25)], {})
+    kind, severity, subject = wanted["endpoint_silent:mint-kit-a"]
+    assert (kind, severity) == ("endpoint_silent", "medium")
+    assert subject["last_reported_at"] == (NOW - timedelta(hours=25)).isoformat()
+    assert "endpoint_silent:mint-kit-a" in endpoint_posture.findings([timed("user", 25)], {})
+    # 기준 시간은 설정으로 바꾼다.
+    assert endpoint_posture.findings([timed("managed", 25)], {}, timedelta(hours=48)) == {}
+
+
+def test_removed_and_never_reported_installs_are_not_silent():
+    assert endpoint_posture.findings([timed("removed", 500)], {}) == {}
+    assert endpoint_posture.findings([timed("managed", None)], {}) == {}
+
+
+def test_a_key_within_seven_days_of_expiry_is_flagged_and_a_renewed_one_is_not():
+    assert endpoint_posture.findings([timed("managed", 1, 8)], {}) == {}
+    wanted = endpoint_posture.findings([timed("managed", 1, 6)], {})
+    assert list(wanted) == ["endpoint_key_expiring:mint-kit-a"]
+    assert wanted["endpoint_key_expiring:mint-kit-a"][:2] == ("endpoint_key_expiring", "medium")
+    # 이미 만료된 키도 계속 알린다. 만료가 없는 옛 키와 제거 보고는 제외한다.
+    assert endpoint_posture.findings([timed("managed", 1, -2)], {})
+    assert endpoint_posture.findings([timed("managed", 1, None)], {}) == {}
+    assert endpoint_posture.findings([timed("removed", 1, 1)], {}) == {}
 
 
 psycopg = pytest.importorskip("psycopg")
@@ -196,3 +237,29 @@ def test_the_scan_opens_and_closes_alerts_for_a_leftover_process_and_autostart(c
     )
     endpoint_posture.scan(conn, INSTANCE)
     assert open_alerts(conn) == []
+
+
+def test_silence_and_expiry_alerts_open_and_close_with_the_reports(conn):
+    endpoint_kits.issue_key(conn, Issuer(), INSTANCE, user_id="u1", team_id=None, issued_by="u1")
+    report(conn, "managed", [])
+    alias = _alias(conn)
+    assert endpoint_posture.scan(conn, INSTANCE) == 0
+    conn.execute(
+        "UPDATE mint.endpoint_installs SET reported_at = now() - interval '25 hours',"
+        " expires_at = now() + interval '3 days'"
+    )
+    assert endpoint_posture.scan(conn, INSTANCE) == 2
+    assert open_alerts(conn) == [f"endpoint_key_expiring:{alias}", f"endpoint_silent:{alias}"]
+    # 보고가 다시 와서 키가 늘어나면 둘 다 닫힌다.
+    conn.execute(
+        "UPDATE mint.endpoint_installs SET reported_at = now(),"
+        " expires_at = now() + interval '90 days'"
+    )
+    assert endpoint_posture.scan(conn, INSTANCE) == 0
+    assert open_alerts(conn) == []
+    # 제거 보고는 침묵으로 보지 않는다.
+    conn.execute(
+        "UPDATE mint.endpoint_installs SET install_mode = 'removed',"
+        " reported_at = now() - interval '300 hours'"
+    )
+    assert endpoint_posture.scan(conn, INSTANCE) == 0

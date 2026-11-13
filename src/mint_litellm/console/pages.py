@@ -3,16 +3,18 @@
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import RedirectResponse, Response
 
-from mint_litellm.console import api, compare
+from mint_litellm.console import alert_view, api, compare
 from mint_litellm.console.core import STATUS, Actor, page_actor, require_csrf
 from mint_litellm.console.templating import render
 from mint_litellm.control import endpoint_kits, jobs
 from mint_litellm.control import status as control_status
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
+from mint_litellm.control.services import alerts as alert_service
 from mint_litellm.control.services import allowlists as allowlist_service
 from mint_litellm.control.services import approvals as approval_service
 from mint_litellm.control.services import call_approvals as call_approval_service
@@ -22,8 +24,10 @@ from mint_litellm.control.services import evidence as evidence_service
 from mint_litellm.control.services import intakes as intake_service
 from mint_litellm.control.services import operators as operator_service
 from mint_litellm.control.services import orgs as org_service
+from mint_litellm.control.services import policy as policy_service
 from mint_litellm.control.services import reads
 from mint_litellm.control.services import recert as recert_service
+from mint_litellm.control.services import renewals as renewal_service
 from mint_litellm.control.services import servers as server_service
 from mint_litellm.control.services import settings as settings_service
 from mint_litellm.types.cli_commands import OperatorRole
@@ -196,6 +200,7 @@ def approvals_page(request: Request, actor: Actor, error=None, status=200, form=
         "page": page_number(request),
         "error": error,
         "can_grant": actor.config.litellm_admin is not None,
+        "renewal": renewal_service.candidates(actor.conn, actor.instance),
     }
     return render(request, "approvals.html", ctx, actor=actor, status=status)
 
@@ -285,6 +290,18 @@ def revocations_page(request: Request, actor: Actor, error=None, status=200):
 @router.get("/revocations")
 def revocations(request: Request, actor: Actor = Depends(page_actor)):
     return revocations_page(request, actor)
+
+
+@router.post("/approvals/renew")
+def renew_expiring(request: Request, actor: Actor = Depends(page_actor)):
+    def action():
+        _, failed = api.renew_approvals(actor)
+        if failed:
+            raise ControlError(f"갱신하지 못한 승인이 {len(failed)}건 있습니다. {failed[0]}")
+
+    return act(
+        actor, action, "renewed", "/approvals", lambda **kw: approvals_page(request, actor, **kw),
+    )
 
 
 @router.post("/approvals/{approval_id}/recertify")
@@ -408,6 +425,8 @@ def ledger(
     actor_name: str = Query("", alias="actor"),
     server_id: str = "",
     result: str = "",
+    ref: str = "",
+    invocation: str = "",
     page: int = 1,
     actor: Actor = Depends(page_actor),
 ):
@@ -427,15 +446,31 @@ def ledger(
         begin = finish = None
         since = until = ""
         error = "날짜는 연-월-일 형식으로 입력하십시오."
+    try:
+        invocation_id = str(UUID(invocation)) if invocation else None
+    except ValueError:
+        invocation_id, invocation = None, ""
+        error = "호출 식별자 형식이 올바르지 않습니다."
     first = datetime.now(zone) - timedelta(days=reads.LEDGER_DEFAULT_DAYS)
     start = begin or first.replace(hour=0, minute=0, second=0, microsecond=0)
+    ref = ref.strip()
+    try:
+        if ref:
+            reads.parse_ref(ref)
+    except ValueError:
+        ref = ""
+        error = "판정 참조 형식이 올바르지 않습니다."
+    # 판정 참조로 찾을 때 기간을 바꾸지 않았다면 기간 제한 없이 찾는다.
+    unbounded = bool(ref) and (not begin or since == first.strftime("%Y-%m-%d"))
     rows = reads.ledger(
-        actor.conn, actor.instance, since=start, until=finish, kind=kind or None,
-        actor=actor_name or None, server_id=server_id or None, result=result or None, page=page,
+        actor.conn, actor.instance, since=None if unbounded else start, until=finish,
+        kind=kind or None, actor=actor_name or None, server_id=server_id or None,
+        result=result or None, ref=ref or None, page=page,
+        invocation_id=invocation_id,
     )
     query = {
         "since": since, "until": until, "kind": kind, "actor": actor_name, "server_id": server_id,
-        "result": result,
+        "result": result, "ref": ref, "invocation": invocation,
     }
     ctx = {
         "rows": rows,
@@ -450,12 +485,73 @@ def ledger(
     return render(request, "ledger.html", ctx, actor=actor, status=400 if error else 200)
 
 
+# --- 경보 -----------------------------------------------------------------------------------
+
+
+@router.get("/alerts")
+def alerts_list(
+    request: Request,
+    status: str = "",
+    severity: str = "",
+    kind: str = "",
+    server_id: str = "",
+    page: int = 1,
+    actor: Actor = Depends(page_actor),
+):
+    rows = reads.alerts(
+        actor.conn, actor.instance, status=status, severity=severity, kind=kind,
+        server_id=server_id, page=page,
+    )
+    zone = actor.config.time_zone
+    for row in rows:
+        row["summary"] = alert_view.summary(row["kind"], row["subject"])
+        row["link"] = alert_view.link(row["kind"], row["subject"])
+    ctx = {
+        "rows": rows, "page": page, "zone": zone,
+        "filters": reads.alert_filters(actor.conn, actor.instance),
+        "q": {"status": status, "severity": severity, "kind": kind, "server_id": server_id},
+    }
+    return render(request, "alerts.html", ctx, actor=actor)
+
+
+def alert_page(request: Request, actor: Actor, alert_id: str, error=None, status=200):
+    try:
+        row = reads.alert(actor.conn, actor.instance, str(UUID(alert_id)))
+    except ValueError:
+        row = None
+    if row is None:
+        raise AdminError(AdminCode.NOT_FOUND, "경보를 찾을 수 없습니다.")
+    ctx = {
+        "a": row, "error": error,
+        "summary": alert_view.summary(row["kind"], row["subject"]),
+        "fields": alert_view.subject_rows(row["subject"], actor.config.time_zone),
+        "link": alert_view.link(row["kind"], row["subject"]),
+    }
+    return render(request, "alert_detail.html", ctx, actor=actor, status=status)
+
+
+@router.get("/alerts/{alert_id}")
+def alert_detail(alert_id: str, request: Request, actor: Actor = Depends(page_actor)):
+    return alert_page(request, actor, alert_id)
+
+
+@router.post("/alerts/{alert_id}/acknowledge")
+def alert_acknowledge(alert_id: str, request: Request, actor: Actor = Depends(page_actor)):
+    return act(
+        actor, lambda: alert_service.acknowledge(actor.ctx, alert_id), "alert_acknowledged",
+        f"/alerts/{alert_id}", lambda **kw: alert_page(request, actor, alert_id, **kw),
+    )
+
+
 # --- 정책·관측 설정 ---------------------------------------------------------------------------
 
 
 def policy_page(request: Request, actor: Actor, error=None, status=200):
+    shadow = reads.policy_shadow(actor.conn, actor.instance)
     ctx = {
         "versions": reads.policy_versions(actor.conn, actor.instance),
+        "shadow": shadow,
+        "shadow_day": shadow and f"{shadow['set_at'].astimezone(actor.config.zone):%Y-%m-%d}",
         "s": reads.settings(actor.conn, actor.instance),
         "ceiling": actor.config.control.mode_ceiling.value,
         "error": error,
@@ -466,6 +562,29 @@ def policy_page(request: Request, actor: Actor, error=None, status=200):
 @router.get("/policy")
 def policy(request: Request, actor: Actor = Depends(page_actor)):
     return policy_page(request, actor)
+
+
+@router.post("/policy/shadow/apply")
+def apply_shadow(
+    request: Request, version: str = Form(...), actor: Actor = Depends(page_actor)
+):
+    def action():
+        source = actor.config.policy_source
+        if source is None:
+            raise ControlError("이 콘솔에서는 정책 판본을 적용할 수 없습니다.")
+        policy_service.activate(actor.ctx, actor.config.database_url, version, source)
+
+    return act(
+        actor, action, "policy_applied", "/policy", lambda **kw: policy_page(request, actor, **kw)
+    )
+
+
+@router.post("/policy/shadow/cancel")
+def cancel_shadow(request: Request, actor: Actor = Depends(page_actor)):
+    return act(
+        actor, lambda: policy_service.shadow_cancel(actor.ctx), "shadow_cancelled", "/policy",
+        lambda **kw: policy_page(request, actor, **kw),
+    )
 
 
 @router.post("/policy/mode")

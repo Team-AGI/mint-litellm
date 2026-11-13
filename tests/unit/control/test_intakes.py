@@ -364,6 +364,9 @@ def test_submission_poll_creates_received_intakes_only_for_pending_submissions(w
     ]
     assert rows[0]["owner_user_id"] == "staff-1" and rows[0]["org_id"] == "acme"
     assert len(world.events("intake_received")) == 2
+    # 제출에서 알 수 있는 입력은 채워지고 승인자에게 경보가 간다. 목적 등은 사람이 정한다.
+    assert rows[0]["provider"] == "up.test" and rows[0]["purpose"] is None
+    assert len(fetchall(world.conn, "SELECT 1 FROM mint.alerts WHERE kind = 'intake_pending'")) == 2
     assert world.server("sub-1")["status"] == "pending"
     contract = fetchone(
         world.conn, "SELECT * FROM mint.deployment_contracts WHERE server_id = 'sub-1'"
@@ -620,7 +623,7 @@ def test_registry_first_closes_allow_all_keys_right_after_the_approval_and_reads
     assert updates == [{"server_id": "sub-1", "allow_all_keys": False}] * 2
     assert world.stub.submissions[0]["allow_all_keys"] is False
     assert world.intake(intake_id)["status"] == "passed"
-    assert fetchall(world.conn, "SELECT * FROM mint.alerts") == []
+    assert fetchall(world.conn, "SELECT * FROM mint.alerts WHERE kind <> 'intake_pending'") == []
 
 
 def test_when_allow_all_keys_cannot_be_closed_the_intake_stops_and_an_alert_opens(world):
@@ -633,13 +636,14 @@ def test_when_allow_all_keys_cannot_be_closed_the_intake_stops_and_an_alert_open
         ("connection", "indeterminate", "ALL_KEYS_NOT_CLOSED"),
     ]  # 뒤 검사는 진행하지 않는다
     assert world.intake(intake_id)["status"] == "indeterminate"
-    [alert] = fetchall(world.conn, "SELECT * FROM mint.alerts")
+    [alert] = fetchall(world.conn, "SELECT * FROM mint.alerts WHERE kind <> 'intake_pending'")
     assert (alert["kind"], alert["severity"], alert["subject"]["server_id"]) == (
         "sync_divergence",
         "high",
         "sub-1",
     )
-    assert [e["payload"]["kind"] for e in world.events("alert_opened")] == ["sync_divergence"]
+    assert [e["payload"]["kind"] for e in world.events("alert_opened")
+            if e["payload"]["kind"] != "intake_pending"] == ["sync_divergence"]
 
 
 def test_a_close_that_fails_after_the_approval_isolates_the_submission_with_a_reject(world):
@@ -650,8 +654,8 @@ def test_a_close_that_fails_after_the_approval_isolates_the_submission_with_a_re
     assert ("PUT", "/v1/mcp/server/sub-1/approve") in writes
     assert writes[-1] == ("PUT", "/v1/mcp/server/sub-1/reject")  # 승인 뒤 못 끄면 격리한다
     assert world.stub.submissions[0]["approval_status"] == "rejected"
-    assert {a["kind"] for a in fetchall(world.conn, "SELECT kind FROM mint.alerts")} == {
-        "sync_divergence"}
+    rows = fetchall(world.conn, "SELECT kind FROM mint.alerts WHERE kind <> 'intake_pending'")
+    assert {a["kind"] for a in rows} == {"sync_divergence"}
 
 
 def test_a_failed_close_blocks_approve_and_except_but_not_reject(world):
@@ -715,7 +719,7 @@ def test_a_refused_litellm_reject_is_not_retried_and_raises_an_alert(world):
     assert [(r[0], r[1]) for r in world.stub.requests if r[0] == "PUT"] == [
         ("PUT", "/v1/mcp/server/sub-1/reject")
     ]  # 한 번만
-    [alert] = fetchall(world.conn, "SELECT * FROM mint.alerts")
+    [alert] = fetchall(world.conn, "SELECT * FROM mint.alerts WHERE kind <> 'intake_pending'")
     assert (alert["kind"], alert["subject"]["item"]) == (
         "sync_divergence",
         "submission_reject_refused",

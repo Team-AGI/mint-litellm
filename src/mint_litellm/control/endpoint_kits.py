@@ -15,6 +15,7 @@ from mint_litellm.control.errors import ControlError
 from mint_litellm.control.litellm_write import KIT_ALIAS_PREFIX, LiteLLMKitKeys
 
 LIST_LIMIT = 200
+KEY_DAYS = 90  # 키 유효 기간 기본값(일). 만료 전 14일 안의 보고가 같은 기간만큼 늘린다.
 
 
 def approved_contracts(conn: psycopg.Connection, instance_id: str) -> dict[str, dict[str, Any]]:
@@ -61,8 +62,11 @@ def issue_key(
     user_id: str,
     team_id: str | None,
     issued_by: str,
+    ttl_days: int = KEY_DAYS,
 ) -> str:
     """사용자의 이전 설치 묶음 키를 지우고 새 키를 발급해 기록한다. 키 값을 돌려준다.
+
+    키는 ``ttl_days`` 뒤에 만료된다(만료 전 보고가 늘려 준다).
 
     같은 사용자의 발급은 한 번에 하나씩이다(트랜잭션이 끝날 때까지 잠금을 쥔다). 동시에 두 번
     내려받아도 활성 키는 하나만 남는다.
@@ -78,8 +82,10 @@ def issue_key(
     _mark_revoked(conn, instance_id, user_id)
     conn.execute(
         "INSERT INTO mint.endpoint_installs (instance_id, key_token, user_id, team_id, key_alias,"
-        " issued_by) VALUES (%s, %s, %s, %s, %s, %s)",
-        (instance_id, hashlib.sha256(key.encode()).hexdigest(), user_id, team_id, alias, issued_by),
+        " issued_by, expires_at, ttl_days)"
+        " VALUES (%s, %s, %s, %s, %s, %s, clock_timestamp() + make_interval(days => %s), %s)",
+        (instance_id, hashlib.sha256(key.encode()).hexdigest(), user_id, team_id, alias, issued_by,
+         ttl_days, ttl_days),
     )
     return key
 
@@ -103,7 +109,7 @@ def installs(
     rows = fetchall(
         conn,
         "SELECT user_id, team_id, issued_at, revoked_at, install_mode, kit_version,"
-        " claude_version, mcp_servers, reported_at FROM mint.endpoint_installs"
+        " claude_version, mcp_servers, reported_at, expires_at FROM mint.endpoint_installs"
         " WHERE instance_id = %s AND (%s::text IS NULL OR user_id = %s)"
         " ORDER BY issued_at DESC LIMIT %s",
         (instance_id, user_id, user_id, LIST_LIMIT),

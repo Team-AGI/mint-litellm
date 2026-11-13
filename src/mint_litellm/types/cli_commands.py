@@ -304,6 +304,24 @@ COMMANDS: tuple[CliCommand, ...] = (
         events=(EventKind.POLICY_ACTIVATED,),
     ),
     CliCommand(
+        path=("policy", "shadow"),
+        summary="정책 판본을 시험용 정책 엔진에 올려 활성 판본과 나란히 평가한다. 호출의 판정은 "
+        "달라지지 않고 판정이 달라지는 호출만 센다.",
+        roles=ADMIN_ONLY,
+        events=(EventKind.POLICY_SHADOW_SET,),
+    ),
+    CliCommand(
+        path=("policy", "shadow-cancel"),
+        summary="시험 중인 정책 판본을 내린다.",
+        roles=ADMIN_ONLY,
+        events=(EventKind.POLICY_SHADOW_CLEARED,),
+    ),
+    CliCommand(
+        path=("policy", "status"),
+        summary="적용 중인 판본과 시험 중인 판본, 판정이 달라지는 호출 수를 조회한다.",
+        roles=ALL_ROLES,
+    ),
+    CliCommand(
         path=("sync", "status"),
         summary="LiteLLM에 반영한 키·팀·서버 권한의 확인 상태, 외부 삭제 횟수, 보류 여부를 "
         "조회한다.",

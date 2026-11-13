@@ -218,3 +218,101 @@ def test_the_endpoint_install_screens_show_korean_states_only():
     assert "team-a" in render("staff_endpoint.html", rows=rows, active=True)
     assert "설치 묶음 내려받기" in render("staff_endpoint.html", rows=[], active=False)
     assert "다시 내려받기" in render("staff_endpoint.html", rows=rows, active=True)
+
+
+# --- 경보 화면 --------------------------------------------------------------------------------
+
+ALERT_ID = "0197c0de-0000-7000-8000-000000000001"
+
+
+def alert_row(**cols):
+    row = {
+        "id": ALERT_ID, "kind": "sync_divergence", "severity": "high", "status": "open",
+        "subject": {"server_id": "srv", "reason": "registry_missing", "unknown_key": "x"},
+        "first_at": datetime(2026, 11, 3, tzinfo=UTC), "last_at": datetime(2026, 11, 3, tzinfo=UTC),
+        "count": 2, "acknowledged_by": None, "resolved_at": None, "server_id": "srv",
+        "summary": "요약", "link": ("/servers/srv", "서버 상세"),
+    }
+    return {**row, **cols}
+
+
+def alerts_html(rows=()):
+    return render(
+        "alerts.html", rows=list(rows), page=1,
+        filters={"kinds": ["job_failed"], "servers": ["srv"]},
+        q={k: "" for k in ("status", "severity", "kind", "server_id")},
+    )
+
+
+def test_every_raised_alert_kind_has_a_korean_name():
+    import mint_litellm.control as control
+    from mint_litellm.types.events import AlertKind
+
+    found = set(re.findall(r'kind="([a-z_]+)"', "".join(
+        p.read_text(encoding="utf-8") for p in Path(control.__file__).parent.rglob("*.py")
+    )))
+    found |= {k.value for k in AlertKind}
+    found |= {"approval_recert_due", "approval_recert_held", "package_vulnerable",
+              "package_vuln_due", "vuln_feed_unreachable"}
+    assert found - {"exec", "deployment", "negative_state", "checkpoint"} <= set(labels.ALERT_KIND)
+    assert all(re.search("[가-힣]", t) for t in labels.ALERT_KIND.values())
+
+
+def test_the_alert_list_shows_korean_values_and_a_link():
+    html = alerts_html([alert_row()])
+    shown = re.sub(r"<[^>]+>", "\n", html)
+    for raw in ("sync_divergence", "registry_missing", "open", "high"):
+        assert raw not in shown
+    assert "LiteLLM 설정 불일치" in shown and "높음" in shown and "열림" in shown
+    assert 'href="/servers/srv"' in html and f'href="/alerts/{ALERT_ID}"' in html
+    assert "<code>" not in html and "<th>키</th>" not in html
+
+
+def test_the_alert_list_has_an_empty_state():
+    assert "조건에 맞는 경보가 없습니다" in alerts_html()
+
+
+def alert_detail_html(status="open", role="admin", **cols):
+    from mint_litellm.console import alert_view
+
+    row = alert_row(status=status, **cols)
+    actor = SimpleNamespace(csrf="t", role=role, session=SimpleNamespace(operator_name="n"))
+    return render(
+        "alert_detail.html", a=row, actor=actor,
+        summary=alert_view.summary(row["kind"], row["subject"]),
+        fields=alert_view.subject_rows(row["subject"], "Asia/Seoul"),
+        link=alert_view.link(row["kind"], row["subject"]),
+    )
+
+
+def test_the_alert_detail_is_a_labelled_table_without_raw_keys_or_json():
+    html = alert_detail_html()
+    shown = re.sub(r"<[^>]+>", "\n", html)
+    assert "레지스트리에 없음" in shown and "unknown_key" not in shown
+    assert "registry_missing" not in shown and "server_id" not in shown and "{" not in shown
+    assert '/acknowledge"' in html
+
+
+def test_acknowledge_is_only_offered_to_admins_on_open_alerts():
+    assert "/acknowledge" not in alert_detail_html(role="viewer")
+    assert "/acknowledge" not in alert_detail_html(status="acknowledged", acknowledged_by="kim")
+
+
+def test_nested_subject_values_are_flattened_to_korean_lines():
+    from mint_litellm.console import alert_view
+
+    rows = dict(alert_view.subject_rows({
+        "axes": {"exec": {"verdict": "widened", "added": ["a"], "removed": []}},
+        "valid_until": "2026-11-03T00:00:00+00:00", "exploited": True,
+        "packages": [{"ecosystem": "npm", "name": "x", "version": None}],
+    }, "Asia/Seoul"))
+    assert rows["축별 변화"] == ["실행: 판정: 확대, 추가: a, 제거: —"]
+    assert rows["유효 기한"] == [f"{Y}11-03 09:00"] and rows["악용 확인"] == ["예"]
+    assert rows["패키지"] == ["제공처: npm · 이름: x · 버전: —"]
+
+
+def test_the_menu_has_the_alert_screen_with_a_badge_for_urgent_alerts():
+    assert ("/alerts", "경보") in MENU
+    assert ">3</span>" in render("alerts.html", rows=[], page=1, alert_badge=3,
+                                 filters={"kinds": [], "servers": []},
+                                 q={k: "" for k in ("status", "severity", "kind", "server_id")})

@@ -272,6 +272,48 @@ def policy_versions(conn: psycopg.Connection, instance: str) -> list[dict]:
     )
 
 
+PERMITTING_RESULTS = frozenset({"Allow", "Alert"})
+
+
+def flip_kind(active: str, shadow: str) -> str:
+    """판정이 달라진 방향. 허용·경고는 통과, 승인 요구·차단은 막힘으로 본다."""
+    if (active in PERMITTING_RESULTS) and (shadow not in PERMITTING_RESULTS):
+        return "allow_to_deny"
+    if (active not in PERMITTING_RESULTS) and (shadow in PERMITTING_RESULTS):
+        return "deny_to_allow"
+    return "other"
+
+
+def policy_shadow(conn: psycopg.Connection, instance: str) -> dict | None:
+    """시험 중인 판본과 판정이 달라진 호출 집계. 시험 판본이 없으면 None이다."""
+    current = fetchone(
+        conn,
+        "SELECT version_id, bundle_sha256, set_by, set_at FROM mint.policy_shadow"
+        " WHERE instance_id = %s AND version_id IS NOT NULL",
+        (instance,),
+    )
+    if current is None:
+        return None
+    stats = fetchone(
+        conn,
+        "SELECT evaluated, same, errors, skipped, updated_at FROM mint.policy_shadow_stats"
+        " WHERE instance_id = %s AND version_id = %s",
+        (instance, current["version_id"]),
+    ) or {"evaluated": 0, "same": 0, "errors": 0, "skipped": 0, "updated_at": None}
+    flips = fetchall(
+        conn,
+        "SELECT server_id, tool, active_result, shadow_result, active_reason, shadow_reason,"
+        " calls, last_seen_at, samples FROM mint.policy_shadow_results"
+        " WHERE instance_id = %s AND version_id = %s ORDER BY calls DESC, server_id, tool",
+        (instance, current["version_id"]),
+    )
+    totals = {"allow_to_deny": 0, "deny_to_allow": 0, "other": 0}
+    for row in flips:
+        row["flip"] = flip_kind(row["active_result"], row["shadow_result"])
+        totals[row["flip"]] += row["calls"]
+    return {**current, "stats": stats, "flips": flips, "totals": totals}
+
+
 def settings(conn: psycopg.Connection, instance: str) -> dict | None:
     return fetchone(
         conn,
@@ -284,6 +326,15 @@ def settings(conn: psycopg.Connection, instance: str) -> dict | None:
 # --- 원장 -----------------------------------------------------------------------------------
 
 
+def parse_ref(text: str) -> tuple[UUID, int | None]:
+    """차단 응답의 판정 참조(``<호출 식별자>`` 또는 ``<호출 식별자>:<시도 번호>``)를 푼다."""
+    head, _, tail = text.strip().partition(":")
+    attempt = int(tail) if tail else None
+    if attempt is not None and attempt < 1:
+        raise ValueError("attempt")
+    return UUID(head), attempt
+
+
 def _ledger_where(
     instance: str,
     *,
@@ -293,15 +344,28 @@ def _ledger_where(
     actor: str | None,
     server_id: str | None,
     result: str | None,
+    ref: str | None = None,
+    invocation_id: str | None = None,
 ) -> tuple[str, list[Any]]:
-    since = since or datetime.now(UTC) - timedelta(days=LEDGER_DEFAULT_DAYS)
-    clauses = ["instance_id = %s", "inserted_at >= %s"]
-    params: list[Any] = [instance, since]
+    clauses = ["instance_id = %s"]
+    params: list[Any] = [instance]
+    # 판정 참조로 찾을 때는 기본 조회 기간을 두지 않는다.
+    if since is not None or ref is None:
+        clauses.append("inserted_at >= %s")
+        params.append(since or datetime.now(UTC) - timedelta(days=LEDGER_DEFAULT_DAYS))
+    if ref is not None:
+        invocation, attempt = parse_ref(ref)
+        clauses.append("invocation_id = %s")
+        params.append(invocation)
+        if attempt is not None:
+            clauses.append("attempt_id = %s")
+            params.append(attempt)
     for clause, value in (
         ("inserted_at < %s", until),
         ("kind = %s", kind),
         ("actor = %s", actor),
         ("(payload->>'resolved_server_id' = %s OR payload->>'server_id' = %s)", server_id),
+        ("invocation_id = %s", invocation_id),
     ):
         if value is not None:
             clauses.append(clause)
@@ -322,19 +386,21 @@ def ledger(
     actor: str | None = None,
     server_id: str | None = None,
     result: str | None = None,
+    ref: str | None = None,
     page: int = 1,
     limit: int | None = None,
+    invocation_id: str | None = None,
 ) -> list[dict]:
     where, params = _ledger_where(
         instance, since=since, until=until, kind=kind, actor=actor, server_id=server_id,
-        result=result,
+        result=result, ref=ref, invocation_id=invocation_id,
     )
     size, offset = (limit, 0) if limit is not None else _page(page)
     return fetchall(
         conn,
         "SELECT event_id, inserted_at, kind, source_key, actor,"
         " COALESCE(payload->>'resolved_server_id', payload->>'server_id') AS server_id,"
-        " payload->>'enforced_action' AS result, payload"
+        " payload->>'enforced_action' AS result, payload->>'outcome' AS outcome, payload"
         f" FROM mint.events WHERE {where} ORDER BY inserted_at DESC, event_id DESC"
         " LIMIT %s OFFSET %s",
         (*params, size, offset),
@@ -353,6 +419,75 @@ def ledger_filters(conn: psycopg.Connection, instance: str) -> dict[str, list[st
         (instance,),
     )
     return {"kinds": [r["kind"] for r in kinds], "actors": [r["actor"] for r in actors]}
+
+
+# --- 경보 ----------------------------------------------------------------------------------
+
+ALERT_COLUMNS = (
+    "id, kind, severity, status, subject, first_at, last_at, count, acknowledged_by, resolved_at,"
+    " subject->>'server_id' AS server_id"
+)
+
+
+def alerts(
+    conn: psycopg.Connection,
+    instance: str,
+    *,
+    status: str | None = None,
+    severity: str | None = None,
+    kind: str | None = None,
+    server_id: str | None = None,
+    page: int = 1,
+) -> list[dict]:
+    """해결되지 않은 경보를 먼저, 심각한 순서로, 그다음 최근 순서로 낸다."""
+    where, params = ["instance_id = %s"], [instance]
+    for column, value in (("status", status), ("severity", severity), ("kind", kind),
+                          ("subject->>'server_id'", server_id)):
+        if value:
+            where.append(f"{column} = %s")
+            params.append(value)
+    size, offset = _page(page)
+    return fetchall(
+        conn,
+        f"SELECT {ALERT_COLUMNS} FROM mint.alerts WHERE {' AND '.join(where)}"
+        " ORDER BY (status = 'resolved'),"
+        " array_position(ARRAY['critical', 'high', 'medium', 'low'], severity),"
+        " last_at DESC, id LIMIT %s OFFSET %s",
+        (*params, size, offset),
+    )
+
+
+def alert(conn: psycopg.Connection, instance: str, alert_id: str) -> dict | None:
+    return fetchone(
+        conn,
+        f"SELECT {ALERT_COLUMNS} FROM mint.alerts WHERE instance_id = %s AND id = %s",
+        (instance, alert_id),
+    )
+
+
+def alert_filters(conn: psycopg.Connection, instance: str) -> dict[str, list[str]]:
+    kinds = fetchall(
+        conn, "SELECT DISTINCT kind FROM mint.alerts WHERE instance_id = %s ORDER BY kind",
+        (instance,),
+    )
+    servers = fetchall(
+        conn,
+        "SELECT DISTINCT subject->>'server_id' AS server_id FROM mint.alerts"
+        " WHERE instance_id = %s AND subject->>'server_id' IS NOT NULL ORDER BY 1",
+        (instance,),
+    )
+    return {"kinds": [r["kind"] for r in kinds], "servers": [r["server_id"] for r in servers]}
+
+
+def urgent_alert_count(conn: psycopg.Connection, instance: str) -> int:
+    """아직 확인하지 않은 높음·심각 경보의 수(메뉴 표지)."""
+    row = fetchone(
+        conn,
+        "SELECT count(*) AS n FROM mint.alerts WHERE instance_id = %s AND status = 'open'"
+        " AND severity IN ('high', 'critical')",
+        (instance,),
+    )
+    return row["n"] if row else 0
 
 
 # --- 개요 -----------------------------------------------------------------------------------

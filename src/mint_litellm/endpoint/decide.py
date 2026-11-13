@@ -271,7 +271,7 @@ def make_router(
         who = principal_factory(auth, instance_id=runtime.config.instance_id)
         try:
             # 설치 묶음에 발급한 키(해제되지 않은 것)의 보고만 받는다.
-            found = who.key_id is not None and await runtime.database.report_install(
+            outcome = "unknown" if who.key_id is None else await runtime.database.report_install(
                 runtime.config.instance_id,
                 who.key_id,
                 mode=body.install_mode(),
@@ -283,9 +283,11 @@ def make_router(
             )
         except Exception as exc:
             raise HTTPException(status_code=503, detail="install store is not ready") from exc
-        if not found:
+        if outcome == "unknown":
             raise HTTPException(status_code=404, detail="no such kit key")
-        return {"recorded": True}
+        if outcome == "expired":
+            raise HTTPException(status_code=403, detail="kit key expired; ask an admin to reissue")
+        return {"recorded": True, "renewed": outcome == "renewed"}
 
     return router
 

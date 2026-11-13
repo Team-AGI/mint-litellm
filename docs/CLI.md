@@ -55,6 +55,9 @@
 | `mint-litellm settings control-key` | `admin` | 환경 변수 `MINT_LITELLM_KEY`의 제어 평면 키를 도구 목록 면제 키로 저장한다(`--clear`는 해제). `init`도 키가 있으면 저장되지 않은 경우 같은 일을 한다. | - | `settings_changed` |
 | `mint-litellm settings observable` | `admin` | 관측 모드로 전환할 수 있는 사유 계열과 정책을 정한다. | - | `settings_changed` |
 | `mint-litellm policy activate` | `admin` | 정책 번들을 검증하고 정책 엔진에 적재한 뒤 활성 판본으로 전환한다. | - | `policy_activated` |
+| `mint-litellm policy shadow` | `admin` | 정책 판본을 시험용 정책 엔진에 올려 활성 판본과 나란히 평가한다. 호출의 판정은 달라지지 않고 판정이 달라지는 호출만 센다. | - | `policy_shadow_set` |
+| `mint-litellm policy shadow-cancel` | `admin` | 시험 중인 정책 판본을 내린다. | - | `policy_shadow_cleared` |
+| `mint-litellm policy status` | 모든 역할 | 적용 중인 판본과 시험 중인 판본, 판정이 달라지는 호출 수를 조회한다. | - | - |
 | `mint-litellm ledger list` | 모든 역할 | 원장 사건을 종류·기간·호출 식별자로 조회한다. | - | - |
 | `mint-litellm sync status` | 모든 역할 | LiteLLM에 반영한 키·팀·서버 권한의 확인 상태, 외부 삭제 횟수, 보류 여부를 조회한다. | - | - |
 | `mint-litellm sync resume` | `admin` | 반복 외부 삭제로 보류된 항목을 풀고 다시 부여한다. | - | `sync_applied` |
@@ -75,6 +78,10 @@
 목록에 나온 식별자(경보·신청·호출별 승인·동기화 항목·승인·거부·동의·허용 목록)는 끝 8자리(또는 충분히 긴 앞부분)만 써도 이 배치 안에서 한 건으로 정해지면 찾아 준다(`alert ack 3f9c1a2b`). 둘 이상이면 더 길게 입력하라고 알리고, 없으면 그대로 없다고 알린다. 토큰 없이 인증이 필요한 명령을 실행하면 운영자가 한 명도 없을 때는 첫 관리자를 만드는 명령(`operator bootstrap ... --save-token`)을, 있을 때는 토큰을 받는 방법을 안내한다.
 
 ## 정책 활성화 실패와 복원
+
+### 정책 시험 적용
+
+새 판본을 바로 적용하기 전에 `policy shadow <판본>`으로 시험용 정책 엔진(`opa-shadow`, `docker compose --profile shadow up -d opa-shadow`)에 올린다. LiteLLM 컨테이너의 `MINT_SHADOW_OPA_URL`을 시험용 정책 엔진 주소(`http://opa-shadow:8181`)로 정하면 호출마다 활성 판본이 판정을 마친 뒤 같은 입력을 시험 판본에도 보낸다. 시험 결과는 호출의 판정에 쓰이지 않고, 오류는 평가 오류 수로만 센다. 판정 결과나 사유가 달라진 호출은 (서버, 도구, 현재 결과, 시험 결과, 사유)별로 세고 호출 식별자를 다섯 개까지만 남긴다. `policy status`와 콘솔 정책 화면의 「정책 시험 적용」에서 허용에서 차단, 차단에서 허용으로 바뀌는 호출 수를 본다. 마음에 들면 `policy activate <판본>`(콘솔의 「적용」)으로 평소 활성화 경로를 거쳐 적용하고, 아니면 `policy shadow-cancel`(콘솔의 「취소」)로 내린다.
 
 `policy activate`가 시간 초과나 취소로 끝나면 이전 활성 번들을 복원하려고 시도하며, 결과를 `restore_outcome` 필드에 담는다(`--json`). 성공하면 값은 `null`이다. 복원도 확인하지 못했다면 그 사실이 필드에 남으므로 운영자가 현재 적재된 번들을 `status`로 다시 확인해야 한다.
 
@@ -171,7 +178,7 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 `intake` 명령은 신청 → 검사 → 승인을 다룬다. 검사는 작업 실행기가 한다(`intake_run`). 제어 평면 키(`MINT_LITELLM_KEY`)는 `allowed_routes`에 `/key/update`, `/team/update`, `/mcp-rest/test/connection`, `/mcp-rest/test/tools/list`를 더해야 한다.
 
 - `mint-litellm intake list [--status <상태>]`, `mint-litellm intake show <신청>`: 신청, 검사 결과(검사마다 최근 시도), 도구 계약 후보를 본다.
-- `mint-litellm intake create <server_id> --purpose … --data-grade … --allowed-resources <JSON> --provider … --owner … --credential-notice … --revocation-record … --audit-access-days … --data-return-terms …`: 신청을 만든다. 같은 서버에 LiteLLM 제출에서 온 `received` 신청이 있으면 그 신청의 필수 입력을 채운다. 필수 입력이 모두 있고 신청자가 있어야 검사가 시작된다. 다만 제출 주소가 거부 대상 리터럴 IP(사설·루프백 등, 허용 목록 예외 제외)이면 입력을 기다리지 않고 제출을 조회할 때 `url_guard`(`IP_FORBIDDEN`)로 자동 거절한다.
+- `mint-litellm intake create <server_id> --purpose … --data-grade … --allowed-resources <JSON> --provider … --owner … --credential-notice … --revocation-record … --audit-access-days … --data-return-terms …`: 신청을 만든다. 같은 서버에 LiteLLM 제출에서 온 `received` 신청이 있으면 그 신청의 필수 입력을 채운다. 제출 접수 때 제공자(서버 주소의 호스트)·허용 자원(도구 목록)·책임자(제출자)는 미리 채워지고 경보 `intake_pending`이 열리므로 이 세 항목은 생략할 수 있다(목적·자료 등급·종료 준비도·반환 조건은 사람이 정한다). 필수 입력이 모두 있고 신청자가 있어야 검사가 시작된다. 다만 제출 주소가 거부 대상 리터럴 IP(사설·루프백 등, 허용 목록 예외 제외)이면 입력을 기다리지 않고 제출을 조회할 때 `url_guard`(`IP_FORBIDDEN`)로 자동 거절한다.
 - `mint-litellm intake assign <신청> --requester <사용자>`: 제출의 `submitted_by`가 비어 있을 때(서비스 계정 제출) 사람 사용자를 신청자로 지정한다. 지정한 운영자는 그 신청을 결정할 수 없다.
 - `mint-litellm intake recheck <신청> [--registry-first] [--url <새 주소> [--transport <방식>]]`: 검사를 다시 한다. `--registry-first`는 연결 검사가 `CREDENTIALS_REQUIRED`로 판별 불가였던 제출 서버를 LiteLLM 레지스트리에 올리고(승인은 제출의 `allow_all_keys`를 그대로 두므로, 켜진 제출은 승인 직후 같은 작업에서 `allow_all_keys=false`로 고치고 다시 읽어 확인한다. 끄지 못하면 신청은 더 진행하지 않고 경보 `sync_divergence`가 열린다) 저장된 자격으로 연결·정의 검사를 다시 한다. 키·팀 권한은 주지 않는다. 승인된 신청(승인·예외로 결정되고 관리 중인 서버)도 받는다. 이 재검사는 신청 상태를 `decided`로 둔 채 검사를 승인된 배포 계약(배포 드리프트면 레지스트리의 현재 값으로 만든 배포 후보)으로 다시 실행하고, 서버에 재승인을 기다리는 드리프트가 있으면 후보 계약과 그 후보에 결속된 증거를 저장한다. 계약 관측이 새 드리프트를 처음 기록하면 같은 작업이 자동으로 등록되므로, 운영자는 `contract diff`로 후보를 확인한 뒤 `contract reapprove`로 재승인하면 된다LiteLLM이 서버 URL을 돌려주지 않아 배포 후보를 만들 수 없으면 `--url`로 새 주소를 준다(관측된 배포 URL 해시와 다르거나, 전송 방식이 관측값(관측이 없으면 승인된 값)과 다르면 거부한다. 재승인 계획이 진행 중이어도 거부한다. 입력한 운영자는 그 후보의 제시자로 기록된다. 콘솔 재검사에도 같은 입력칸이 있다). 서버 자격 흐름(`oauth2_flow`) 드리프트는 승인된 배포 값 그대로 배포 후보를 두고 발급자 허용 목록·흐름 검사를 다시 하며, 흐름이 여전히 틀리면 통과하지 못해 차단이 유지된다. 도구 삭제는 재검사를 등록하지 않는다.
 - `mint-litellm intake approve <신청> [--valid-until <시각>] [--scope key|user|team --scope-id <식별자> --team <팀>]`: 모든 검사가 통과한 신청을 승인한다. 신청자와 같은 사용자는 승인할 수 없고, 연결·정의 증거는 24시간 안이어야 한다(아니면 `MINT-ADMIN-STALE-EVIDENCE`, 재검사). 승인은 도구 계약 후보와 배포 계약 후보를 승인하고 서버 행에 계약 값을 복사하고(`contract_status=managed`) 이용 관계와 `pending` 승인을 만들며 동기화 작업을 등록한다. 승인 범위의 기본은 책임자 사용자이고, 유효 기간의 기본은 90일(high·critical 도구가 있으면 30일)이다.
@@ -208,6 +215,8 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 | `MINT_PLUGIN_DB_PASSWORD`, `MINT_CONTROL_DB_PASSWORD` | `init`이 판정 프로세스용·제어 평면용 로그인 역할(`mint_plugin_app`, `mint_control_app`)을 만들 때 쓰는 비밀번호 | 없음(역할을 만들지 않음) |
 | `MINT_WORKER_DB_PASSWORD`, `MINT_STAFF_DB_PASSWORD` | `init`이 작업 실행기용(`mint_worker_app`: 제어·작업·봉인 그룹)·콘솔 직원 화면 연결 풀용(`mint_staff_app`: 직원 그룹) 로그인 역할을 만들 때 쓰는 비밀번호 | 없음(역할을 만들지 않음) |
 | `MINT_EXPORT_DIR`, `MINT_EXPORT_HMAC_KEY`, `MINT_WORKER_LEASE_SECONDS` 등 | `worker`가 읽는 2단계 설정(`MINT_EXPORT_HMAC_KEY`는 디코딩하면 32바이트 이상인 base64url). | `MINT_EXPORT_DIR`·`MINT_EXPORT_HMAC_KEY`는 필수, 임대 길이 60초 |
+| `MINT_SHADOW_OPA_URL`, `MINT_OPA_SHADOW_BUNDLE_PATH` | `policy shadow`의 시험용 정책 엔진 주소와 그 엔진이 감시하는 번들 파일. 각 옵션(`--opa-url`, `--bundle-path`)으로 대신할 수 있다. LiteLLM 컨테이너에도 `MINT_SHADOW_OPA_URL`을 주어야 시험 판본을 평가한다. | 없음, `/bundles/shadow.tar.gz` |
+| `MINT_SHADOW_SAMPLE_PERCENT`, `MINT_SHADOW_MAX_PER_SECOND` | LiteLLM 컨테이너가 시험 판본을 평가하는 호출의 비율(1~100)과 워커당 초당 평가 수 상한. 어느 쪽에 걸려도 호출은 그대로 처리되고 건너뛴 수로만 센다. | `100`, `50` |
 | `MINT_OPA_URL`, `MINT_POLICY_ROOT`, `MINT_OPA_BUNDLE_PATH` | `policy activate`의 정책 엔진 주소, `policy/`를 담은 루트, 정책 엔진이 감시하는 번들 파일. 각 옵션(`--opa-url`, `--policy-root`, `--bundle-path`)으로 대신할 수 있다. | `/opt/mint`, `/bundles/mint.tar.gz` |
 
 ## 설정 조각
@@ -264,7 +273,7 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 | --- | --- |
 | `init` | `migrations`(이번에 적용한 마이그레이션), `login_roles`(설정한 로그인 역할), `snippet_path`(설정 조각 파일) 또는 `snippet`(`--out -`일 때 본문) |
 | `check` | `incomplete`(확인하지 못한 필수 행), `findings`(각 항목 `item`, `level`=`OK`·`INFO`·`WARN`·`FAIL`·`SKIP`, `message`), `observations`(관측 4항목) |
-| `status` | `instance_id`, `mode`(`stored`, `ceiling`, `effective`), `default_org_id`, `policy_version`, `policy_bundle`(`state`: `match`·`mismatch`·`unverified`·`none`, `detail`), `servers`(상태별 개수), `enforcement`(워커별 최근 집행 점검 전환: `worker_id`, `passed`, `failed`, `last_transition_at`, `run_id`), `alerts`, `observations` |
+| `status` | `instance_id`, `mode`(`stored`, `ceiling`, `effective`), `default_org_id`, `policy_version`, `policy_shadow`(시험 판본이 있을 때만: `version`, `evaluated`, `allow_to_deny`, `deny_to_allow`, `other`, `errors`, `skipped`), `policy_bundle`(`state`: `match`·`mismatch`·`unverified`·`none`, `detail`), `servers`(상태별 개수), `enforcement`(워커별 최근 집행 점검 전환: `worker_id`, `passed`, `failed`, `last_transition_at`, `run_id`), `alerts`, `observations` |
 | `sync status` | `grants`(각 항목 `id`, `target_type`, `target_id`, `item`, `server_id`, `tools`, `preexisting`, `observed`, `missing_count`, `held`, `held_at`, `last_applied_at`, `state_version`) |
 | `ledger list` | `events`(각 항목 `event_id`, `inserted_at`, `kind`, `source_key`, `invocation_id`, `attempt_id`, `actor`, `subject`, `payload`, `final`) |
 
@@ -307,7 +316,7 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 
 ## 경보와 웹훅
 
-경보는 종류와 대상으로 묶인다. 같은 묶음의 미해결 경보가 있으면 새로 만들지 않고 `count`와 `last_at`만 올린다. `job_failed`는 작업이 최대 시도 횟수를 넘겨 실패할 때, 같은 종류·대상의 작업이 이후 성공하면 해결된다. `approval_expiring`은 7일 안에 만료될 대기·확정 건마다 한 번 열리며, 운영자가 닫은 뒤에는 다시 열리지 않는다. `approval_recert_due`는 승인이 재확인 주기에 닿으면, `approval_recert_held`는 유예 안에 확인이 없어 승인이 보류되면 열리고, 콘솔 승인 내역의 「재확인」으로 확인하면 닫힌다.
+경보는 종류와 대상으로 묶인다. `intake_pending`은 제출로 도입 신청이 만들어질 때, `call_approval_requested`는 승인이 없어 막힌 호출이 호출별 승인 요청을 자동으로 열 때 열린다(요청은 대기 상태이며 승인은 사람이 한다. 같은 주체·서버·도구·인자의 대기 요청이 있으면 새로 열지 않는다). 같은 묶음의 미해결 경보가 있으면 새로 만들지 않고 `count`와 `last_at`만 올린다. `job_failed`는 작업이 최대 시도 횟수를 넘겨 실패할 때, 같은 종류·대상의 작업이 이후 성공하면 해결된다. `approval_expiring`은 7일 안에 만료될 대기·확정 건과 활성 승인(같은 범위·도구로 더 늦게 끝나는 승인이 없는 것)마다 한 번 열리며, 운영자가 닫은 뒤에는 다시 열리지 않는다. `approval_recert_due`는 승인이 재확인 주기에 닿으면, `approval_recert_held`는 유예 안에 확인이 없어 승인이 보류되면 열리고, 콘솔 승인 내역의 「재확인」으로 확인하면 닫힌다.
 
 경보가 열리면 `alert_opened`(순번 0), 확인되면 `alert_acknowledged`(순번 1), 해결되면 `alert_resolved`(순번 2) 사건을 같은 트랜잭션에 남긴다.
 

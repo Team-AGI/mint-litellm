@@ -6,6 +6,7 @@ from uuid import UUID
 
 from psycopg.types.json import Jsonb
 
+from mint_litellm.control import change_summary
 from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import (
@@ -61,7 +62,8 @@ def diff(ctx: Context, server_id: str) -> dict:
     current = show(ctx, server_id)
     current["observations"] = fetchall(
         ctx.conn,
-        "SELECT kind,scope,name,observed_sha256,canonical_text,change_seq,observed_at"
+        "SELECT kind,scope,name,observed_sha256,canonical_text,change_seq,observed_at,"
+        "change_summary"
         " FROM mint.contract_observations WHERE instance_id=%s AND server_id=%s"
         " ORDER BY kind,scope,name",
         (ctx.instance_id, server_id),
@@ -125,6 +127,7 @@ def request_deployment(
         "identity",
         old["id"],
         {"candidate_sha256": candidate["sha256"]},
+        summary=change_summary.deployment_summary(fields, old, candidate),
     )
     merged = sorted(set(server["deployment_drift_fields"] or ()) | set(fields))
     if not server["deployment_drift"] or merged != server["deployment_drift_fields"]:

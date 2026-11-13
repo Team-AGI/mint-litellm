@@ -83,6 +83,18 @@ POLICY_VERSION = {
     "active": Status("적용 중", "ok"),
     "superseded": Status("교체됨", "off"),
 }
+# 정책 판정 결과(시험 적용의 현재 결과와 시험 결과)와 판정이 달라지는 방향
+POLICY_RESULT = {
+    "Allow": "허용",
+    "Alert": "경고",
+    "RequireApproval": "승인 필요",
+    "Block": "차단",
+}
+SHADOW_FLIP = {
+    "allow_to_deny": "허용에서 차단",
+    "deny_to_allow": "차단에서 허용",
+    "other": "그 밖의 변경",
+}
 JOB = {
     "pending": Status("대기", "wait"),
     "running": Status("실행 중", "wait"),
@@ -218,6 +230,18 @@ RESULT = {
     "transform": "변환",
     "observe": "관측",
 }
+OUTCOME = {
+    "allowed": "허용",
+    "observed": "관측 통과",
+    "blocked": "정책 차단",
+    "pending_approval": "승인 대기",
+    "contract_drift": "계약 변경 차단",
+    "dependency_failure": "검사 실패 차단",
+    "success": "도구 성공",
+    "tool_error": "도구 오류",
+    "output_blocked": "결과 차단",
+    "unknown": "결과 불명",
+}
 RESULT_FILTER = {"allow": "허용", "deny": "차단", "transform": "변환", "observe": "관측"}
 OBSERVATION = {
     "spend_log_arguments_stored": "지출 기록에 인자 저장",
@@ -259,10 +283,39 @@ ALERT_KIND = {
     "endpoint_unmanaged": "관리되지 않는 설치",
     "endpoint_stale_process": "폐기 서버 프로세스 잔존",
     "endpoint_stale_autostart": "폐기 서버 자동 시작 잔존",
+    "endpoint_silent": "단말 보고 끊김",
+    "endpoint_key_expiring": "단말 키 만료 임박",
     "package_unpinned": "버전 미고정 패키지",
     "package_vulnerable": "패키지 취약점",
     "package_vuln_due": "취약점 조치 기한",
     "vuln_feed_unreachable": "취약점 조회 실패",
+    "oauth_flow_unreadable": "인증 흐름 읽기 실패",
+    "instance_mismatch": "인스턴스 간 불일치",
+    "export_failed": "내보내기 실패",
+    "sync_divergence": "LiteLLM 설정 불일치",
+    "sync_foreign_change": "LiteLLM 설정 외부 변경",
+    "evidence_missing": "증빙 누락",
+    "evidence_expiring": "증빙 만료 임박",
+    "job_failed": "작업 실패",
+    "restore_request_rejected": "복원 요청 거부",
+    "restore_blocked": "복원 대기로 호출 차단",
+    "approval_expiring": "승인 만료 임박",
+    "approval_recert_due": "승인 재확인 필요",
+    "approval_recert_held": "승인 보류",
+    "litellm_unreachable": "LiteLLM 연결 실패",
+    "termination_unconfirmed": "폐기 확인 불가",
+    "server_credentials_remain": "서버 자격 잔존",
+    "server_credentials_unverifiable": "서버 자격 확인 불가",
+    "control_key_mismatch": "제어 키 불일치",
+    "enforcement_unverified": "집행 확인 불가",
+    "server_identity_conflict": "서버 신원 충돌",
+    "intake_pending": "도입 신청 대기",
+    "call_approval_requested": "호출 승인 요청",
+}
+ALERT_STATUS = {
+    "open": Status("열림", "error"),
+    "acknowledged": Status("확인함", "wait"),
+    "resolved": Status("해결", "ok"),
 }
 EVENT_KIND = {
     "decision_evaluated": "호출 판정",
@@ -331,6 +384,8 @@ EVENT_KIND = {
     "approval_recert_requested": "승인 재확인 요청",
     "approval_held": "승인 보류",
     "approval_recert_confirmed": "승인 재확인",
+    "policy_shadow_set": "정책 시험 적용 시작",
+    "policy_shadow_cleared": "정책 시험 적용 취소",
 }
 
 CONFIRMATION_EVENT = {
@@ -366,6 +421,7 @@ NOTICES = {
     "approved": "승인했습니다.",
     "revoked": "승인을 철회했습니다.",
     "recertified": "승인을 재확인했습니다.",
+    "renewed": "만료가 가까운 승인을 갱신했습니다.",
     "revoked_denied": "승인을 철회하고 거부를 등록했습니다.",
     "denied": "거부를 등록했습니다.",
     "lifted": "해제했습니다.",
@@ -376,6 +432,8 @@ NOTICES = {
     "org_closed": "조직을 닫았습니다.",
     "allowlist_added": "허용 목록에 추가했습니다.",
     "mode_set": "모드를 변경했습니다.",
+    "policy_applied": "정책 판본을 적용했습니다.",
+    "shadow_cancelled": "정책 시험 적용을 취소했습니다.",
     "operator_role": "운영자의 역할을 변경했습니다.",
     "requester_assigned": "신청자를 지정했습니다.",
     "evidence_attached": "증빙을 첨부했습니다.",
@@ -390,6 +448,7 @@ NOTICES = {
     "consent_given": "동의를 등록했습니다.",
     "consent_withdrawn": "동의를 철회했습니다.",
     "kit_revoked": "단말 연결을 해제했습니다.",
+    "alert_acknowledged": "경보를 확인 처리했습니다.",
 }
 
 

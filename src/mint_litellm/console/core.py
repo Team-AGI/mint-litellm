@@ -20,6 +20,7 @@ from mint_litellm.control.db.connection import connect
 from mint_litellm.control.errors import AdminCode, AdminError, AuthError, ControlError
 from mint_litellm.control.litellm_admin import LiteLLMAdmin
 from mint_litellm.control.litellm_write import LiteLLMKitKeys
+from mint_litellm.control.policy_versions import PolicySource
 from mint_litellm.control.services import console_sessions
 from mint_litellm.control.stage2_config import Stage2Settings
 
@@ -57,6 +58,19 @@ class Unauthenticated(AdminError):
         super().__init__(AdminCode.FORBIDDEN, message)
 
 
+def _policy_source(env: Mapping[str, str]) -> PolicySource | None:
+    opa_url = (env.get("MINT_OPA_URL") or "").strip()
+    if not opa_url:
+        return None
+    return PolicySource(
+        root=Path(env.get("MINT_POLICY_ROOT") or "/opt/mint"),
+        opa="opa",
+        bundle_path=Path(env.get("MINT_OPA_BUNDLE_PATH") or "/bundles/mint.tar.gz"),
+        opa_url=opa_url,
+        timeout_seconds=30.0,
+    )
+
+
 @dataclass(frozen=True)
 class ConsoleConfig:
     control: ControlConfig
@@ -74,6 +88,8 @@ class ConsoleConfig:
     # 단말이 판정 경로를 부르는 주소(없으면 LiteLLM 주소)와 그 서버 인증서(사설 인증 기관이면)
     endpoint_url: str | None = None
     endpoint_ca_pem: str | None = None
+    # 정책 판본을 적용할 때 쓰는 번들 원본과 정책 엔진. 정책 엔진 주소가 없으면 적용하지 않는다.
+    policy_source: PolicySource | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "ConsoleConfig":
@@ -100,6 +116,7 @@ class ConsoleConfig:
             kit_issuer=LiteLLMKitKeys(control.litellm_url, issuer_key) if issuer_key else None,
             endpoint_url=(env.get("MINT_ENDPOINT_PUBLIC_URL") or "").strip() or None,
             endpoint_ca_pem=ca_pem,
+            policy_source=_policy_source(env),
         )
 
     @property

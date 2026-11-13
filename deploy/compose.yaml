@@ -27,6 +27,16 @@ services:
       - bundles:/bundles:ro
     restart: unless-stopped
 
+  # 정책 시험 적용용 정책 엔진. `mint policy shadow`가 번들을 게시하기 전에는 시작하지 못하고
+  # 다시 시도하므로 미리 띄워 두어도 된다(docker compose --profile shadow up -d opa-shadow).
+  opa-shadow:
+    image: openpolicyagent/opa:1.21.4@sha256:12420358d3f22a0cd2424ddc44a16e292ecb42825d3dfbca779986006822a3f6
+    profiles: ["shadow"]
+    command: ["run", "--server", "--addr", ":8181", "--bundle", "--watch", "/bundles/shadow.tar.gz"]
+    volumes:
+      - bundles:/bundles:ro
+    restart: unless-stopped
+
   litellm:
     build:
       context: ..
@@ -47,6 +57,9 @@ services:
       MINT_MODE: ${MINT_MODE:-enforce}
       MINT_DATABASE_URL: postgresql://mint_plugin_app:${MINT_PLUGIN_DB_PASSWORD}@postgres:5432/mint
       MINT_OPA_URL: http://opa:8181
+      MINT_SHADOW_OPA_URL: ${MINT_SHADOW_OPA_URL:-}
+      MINT_SHADOW_SAMPLE_PERCENT: ${MINT_SHADOW_SAMPLE_PERCENT:-100}
+      MINT_SHADOW_MAX_PER_SECOND: ${MINT_SHADOW_MAX_PER_SECOND:-50}
       MINT_BUFFER_DIR: /var/lib/mint/buffer
       MINT_BUFFER_MAX_BYTES: ${MINT_BUFFER_MAX_BYTES:-52428800}
       MINT_DB_POOL_SIZE: ${MINT_DB_POOL_SIZE:-4}
@@ -100,6 +113,8 @@ services:
       MINT_LITELLM_WORKERS: ${MINT_LITELLM_WORKERS:-2}
       MINT_POLICY_ROOT: /opt/mint
       MINT_OPA_BUNDLE_PATH: /bundles/mint.tar.gz
+      MINT_SHADOW_OPA_URL: http://opa-shadow:8181
+      MINT_OPA_SHADOW_BUNDLE_PATH: /bundles/shadow.tar.gz
       MINT_EXPORT_DIR: /var/lib/mint/export
       MINT_EXPORT_HMAC_KEY: ${MINT_EXPORT_HMAC_KEY:-}
       MINT_EXPORT_HMAC_KEY_PREVIOUS: ${MINT_EXPORT_HMAC_KEY_PREVIOUS:-}
@@ -158,10 +173,14 @@ services:
       MINT_ENDPOINT_PUBLIC_URL: ${MINT_ENDPOINT_PUBLIC_URL:-}
       MINT_EXPORT_DIR: /var/lib/mint/export
       MINT_EXPORT_HMAC_KEY: ${MINT_EXPORT_HMAC_KEY:?MINT_EXPORT_HMAC_KEY를 .env에 설정하십시오}
+      MINT_OPA_URL: http://opa:8181
+      MINT_POLICY_ROOT: /opt/mint
+      MINT_OPA_BUNDLE_PATH: /bundles/mint.tar.gz
     ports:
       - "${MINT_CONSOLE_PORT:-8080}:8080"
     volumes:
       - export:/var/lib/mint/export:ro
+      - bundles:/bundles
     depends_on:
       postgres:
         condition: service_healthy
