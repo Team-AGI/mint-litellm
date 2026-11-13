@@ -36,6 +36,7 @@ LiteLLM v1.106.6
 - [보장과 한계](docs/보장과-한계.md)
 - [설정](docs/설정.md)
 - [CLI](docs/CLI.md)
+- [업그레이드](docs/업그레이드.md)
 
 ## 라이선스
 
