@@ -176,18 +176,29 @@ def _gate(job: JobContext, client: Any, server_id: str, mode: str) -> str | None
     return None
 
 
-def _oauth2_flow_read(
+def _oauth_config_read(
     client: Any, server_id: str, statuses: frozenset[str]
-) -> tuple[str | None, bool]:
-    """(``oauth2_flow``, 읽었는가). 현재 서버 설정을 먼저, 없으면 ``statuses``의 제출을 본다."""
+) -> tuple[str | None, list[str], bool]:
+    """(``oauth2_flow``, OAuth 범위, 읽었는가).
+
+    현재 서버 설정을 먼저, 없으면 ``statuses``의 제출을 본다.
+    """
     try:
         entry = client.get_server(server_id) or next(
             (i for i in client.list_submissions()
              if i.get("server_id") == server_id and i.get("approval_status") in statuses), None)
     except LiteLLMError:
-        return None, False
+        return None, [], False
     flow = (entry or {}).get("oauth2_flow")
-    return (flow if isinstance(flow, str) else None), True
+    return (flow if isinstance(flow, str) else None), checks.oauth_scopes_of(entry), True
+
+
+def _oauth2_flow_read(
+    client: Any, server_id: str, statuses: frozenset[str]
+) -> tuple[str | None, bool]:
+    """(``oauth2_flow``, 읽었는가)."""
+    flow, _, readable = _oauth_config_read(client, server_id, statuses)
+    return flow, readable
 
 
 def _oauth2_flow(client: Any, server_id: str) -> str | None:
@@ -324,7 +335,8 @@ def _evidence_run(job: JobContext, ctx: Context, row: dict, attempt: int) -> Non
                 # 서버 자격 흐름 드리프트: 승인된 값 그대로 후보를 두고 OAuth 검사를 다시 한다
                 intakes.store_deployment_candidate(
                     ctx, row["server_id"], approved,
-                    {k: approved[k] for k in ("url", "transport", "auth_type", "issuer")},
+                    {k: approved[k] for k in ("url", "transport", "auth_type", "issuer",
+                                              "oauth_scopes")},
                     keep_same=True, only_if_none=True)
     _run_checks(job, ctx, row, attempt, "evidence", persist=persist)
 

@@ -39,6 +39,24 @@ SERVER_CREDENTIAL_FLOW = "client_credentials"
 OAUTH_AUTH_TYPES = frozenset({"oauth2", "oauth2_token_exchange", "oauth2_id_jag", "oauth_delegate"})
 
 
+def oauth_scopes_of(entry: Any) -> list[str]:
+    """LiteLLM 서버 정의에서 관리자가 설정한 OAuth 범위(정렬·중복 제거).
+
+    최상위와 자격 정보 둘 다 본다.
+
+    어느 한쪽에라도 있으면 포함한다(닫힌 쪽). 문자열 항목만 쓰고, 공백으로 이은 값은 나눈다.
+    """
+    if not isinstance(entry, dict):
+        return []
+    creds = entry.get("credentials")
+    found: set[str] = set()
+    for raw in (entry.get("scopes"), creds.get("scopes") if isinstance(creds, dict) else None):
+        for item in raw if isinstance(raw, list) else ():
+            if isinstance(item, str):
+                found.update(item.split())
+    return sorted(found)
+
+
 def sha256_hex(data: bytes | str) -> str:
     return hashlib.sha256(data.encode("utf-8") if isinstance(data, str) else data).hexdigest()
 
