@@ -162,7 +162,11 @@ def _endpoint_result_scan(job: JobContext) -> None:
 
     with job.conn.transaction():
         endpoint_results.scan(job.conn, job.instance_id)
-        endpoint_posture.scan(job.conn, job.instance_id)
+        endpoint_posture.scan(
+            job.conn,
+            job.instance_id,
+            timedelta(hours=getattr(job.settings, "endpoint_silent_hours", 24)),
+        )
 
 
 def _alert_deliver(job: JobContext) -> None:

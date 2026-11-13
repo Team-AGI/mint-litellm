@@ -351,6 +351,7 @@ def endpoint_kit(
         key = endpoint_kits.issue_key(
             sctx.control, config.kit_issuer, sctx.instance_id, user_id=actor.user_id,
             team_id=sctx.team_ids[0] if sctx.team_ids else None, issued_by=actor.user_id,
+            ttl_days=config.stage2.endpoint_key_days,
         )
     except LiteLLMError:
         log.exception("단말 설치 묶음 키 발급 실패")

@@ -271,6 +271,8 @@ ALERT_KIND = {
     "endpoint_unmanaged": "관리되지 않는 설치",
     "endpoint_stale_process": "폐기 서버 프로세스 잔존",
     "endpoint_stale_autostart": "폐기 서버 자동 시작 잔존",
+    "endpoint_silent": "단말 보고 끊김",
+    "endpoint_key_expiring": "단말 키 만료 임박",
     "package_unpinned": "버전 미고정 패키지",
     "package_vulnerable": "패키지 취약점",
     "package_vuln_due": "취약점 조치 기한",
