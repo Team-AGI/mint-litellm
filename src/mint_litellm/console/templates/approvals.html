@@ -2,6 +2,7 @@
 {% block title %}승인 대기열 · MINT{% endblock %}
 {% block body %}
 <h1>승인 대기열</h1>
+{% if focus %}<p><a class="button" href="/approvals">전체 보기</a></p>{% endif %}
 {% if queue %}
 <table><thead><tr><th>서버</th><th>조직</th><th>팀</th><th>목적</th><th>전송</th><th>등록자</th><th></th></tr></thead><tbody>
 {% for q in queue %}<tr>
@@ -13,7 +14,27 @@
 </tbody></table>
 {% else %}{{ m.empty('승인을 기다리는 서버가 없습니다', '/servers', '서버 목록 보기') }}{% endif %}
 <h2>승인 내역</h2>
-{% if rows %}
+<p class="actions"><a class="button{% if not dormant_view %} primary{% endif %}" href="/approvals">전체</a>
+<a class="button{% if dormant_view %} primary{% endif %}" href="/approvals?filter=dormant">미사용 ({{ dormant_days }}일)</a></p>
+{% if dormant_view and rows %}
+<form method="post">
+{{ m.csrf(actor) }}
+<table><thead><tr><th></th><th>서버</th><th>대상</th><th>도구</th><th>구분</th><th>유효 기간</th><th>승인자</th></tr></thead><tbody>
+{% for a in rows %}<tr>
+<td>{% if actor.role == 'admin' %}<input type="checkbox" name="ids" value="{{ a.id }}:{{ a.state_version }}" aria-label="선택">{% endif %}</td>
+<td><a href="/servers/{{ a.server_id | urlencode }}">{{ a.server_id }}</a></td>
+<td>{{ L.pick(L.SCOPE, a.scope_type) }} {{ a.scope_id }}</td><td>{{ a.tools | join }}</td>
+<td>{{ L.pick(L.APPROVAL_CLASS, a.class) }}</td><td>{{ a.valid_from | when }} ~ {{ a.valid_until | when }}</td>
+<td>{{ a.granted_by | who }}</td>
+</tr>{% endfor %}
+</tbody></table>
+{% if actor.role == 'admin' %}<div class="actions">
+  <button type="submit" class="primary" formaction="/approvals/dormant/keep">선택 유지</button>
+  <button type="submit" formaction="/approvals/dormant/revoke">선택 철회</button>
+</div>{% endif %}
+</form>
+{% elif dormant_view %}{{ m.empty('미사용 승인이 없습니다', '/approvals', '전체 보기') }}
+{% elif rows %}
 <table><thead><tr><th>서버</th><th>대상</th><th>도구</th><th>구분</th><th>유효 기간</th><th>승인자</th><th>상태</th><th>재확인 기한</th><th></th></tr></thead><tbody>
 {% for a in rows %}<tr>
 <td><a href="/servers/{{ a.server_id | urlencode }}">{{ a.server_id }}</a></td>

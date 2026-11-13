@@ -8,7 +8,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from mint_litellm.control import intake_checks
+from mint_litellm.control import alerts, intake_checks
 from mint_litellm.control.approvals import _derive_org
 from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import fetchall, fetchone
@@ -787,6 +787,11 @@ def conclude(ctx: Context, intake_id: str, *, needs_registry_credentials: bool) 
             _supersede_candidates(ctx, row["server_id"])
         else:
             _server_to(ctx, row["server_id"], "awaiting_approval", ("validating",))
+            alerts.raise_alert(
+                ctx.conn, ctx.instance_id, kind="intake_pending", severity="medium",
+                dedup_key=f"intake_pending:{row['id']}",
+                subject={"intake_id": str(row["id"]), "server_id": row["server_id"]},
+            )
         return verdict
 
 

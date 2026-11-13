@@ -255,6 +255,9 @@ TIME_ZONE = {
 ALERT_KIND = {
     "contract_drift": "계약 변경",
     "call_spike": "호출량 급증",
+    "call_approval_requested": "호출별 승인 요청",
+    "intake_pending": "신청 승인 대기",
+    "approval_dormant": "미사용 승인",
     "endpoint_stale_server": "폐기 서버 항목 잔존",
     "endpoint_unmanaged": "관리되지 않는 설치",
     "endpoint_stale_process": "폐기 서버 프로세스 잔존",
@@ -366,6 +369,7 @@ NOTICES = {
     "approved": "승인했습니다.",
     "revoked": "승인을 철회했습니다.",
     "recertified": "승인을 재확인했습니다.",
+    "dormant_done": "선택한 미사용 승인을 처리했습니다.",
     "revoked_denied": "승인을 철회하고 거부를 등록했습니다.",
     "denied": "거부를 등록했습니다.",
     "lifted": "해제했습니다.",

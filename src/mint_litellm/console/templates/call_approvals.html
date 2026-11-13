@@ -2,9 +2,10 @@
 {% block title %}호출별 승인 · MINT{% endblock %}
 {% block body %}
 <h1>호출별 승인 요청</h1>
+{% if focus %}<p><a class="button" href="/call-approvals">전체 보기</a></p>{% endif %}
 {% if rows %}
 <table><thead><tr><th>서버</th><th>도구</th><th>주체</th><th>요청자</th><th>만료</th><th>상태</th><th></th></tr></thead><tbody>
-{% for c in rows %}<tr>
+{% for c in rows %}<tr{% if focus %} class="selected"{% endif %}>
 <td><a href="/servers/{{ c.server_id | urlencode }}">{{ c.server_id }}</a></td><td>{{ c.tool }}</td>
 <td>{{ L.pick(L.PRINCIPAL, c.principal_type) }} {{ c.principal_id }}</td><td>{{ c.requested_by }}</td>
 <td class="nowrap">{{ c.expires_at | when }}</td><td>{{ m.badge(L.CALL_APPROVAL, c.status) }}</td>

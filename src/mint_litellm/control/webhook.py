@@ -162,8 +162,106 @@ DEFAULT_GUIDE = (
 )
 
 
-def build_body(row: Mapping[str, Any], console_url: str | None) -> bytes:
+# 승인 요청에 가까운 경보 종류의 문구. 링크는 항목을 미리 골라 줄 뿐 승인하지 않는다.
+GUIDE.update(
+    {
+        "call_approval_requested": (
+            "호출별 승인 요청이 들어왔습니다. 승인 전에는 해당 호출이 진행되지 않습니다.",
+            "링크로 콘솔에 로그인해 요청 내용을 확인하고 승인 또는 거부합니다.",
+        ),
+        "intake_pending": (
+            "수용검증을 마친 서버 신청이 승인을 기다립니다. 승인 전에는 호출할 수 없습니다.",
+            "링크로 콘솔에 로그인해 검사 결과를 확인하고 승인 또는 거절합니다.",
+        ),
+        "approval_dormant": (
+            "오래 쓰이지 않은 승인이 있습니다. 필요 없는 승인이 남아 있으면 공격면이 됩니다.",
+            "링크로 콘솔 승인 내역의 「미사용」 목록을 열어 계속 필요한 승인은 유지하고, "
+            "아닌 승인은 철회합니다.",
+        ),
+    }
+)
+
+SEVERITY_LABEL = {"critical": "치명", "high": "높음", "medium": "보통", "low": "낮음"}
+
+
+def _server(row: Mapping[str, Any]) -> str | None:
+    subject = row.get("subject") or {}
+    value = subject.get("server_id") or subject.get("server")
+    return str(value) if value else None
+
+
+def _slack_escape(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _slack(row: Mapping[str, Any], summary: str, action: str, link: str | None) -> dict:
+    severity = SEVERITY_LABEL.get(row["severity"], row["severity"])
+    server = _server(row)
+    fields = [{"type": "mrkdwn", "text": f"*심각도*\n{_slack_escape(severity)}"}]
+    if server:
+        fields.append({"type": "mrkdwn", "text": f"*서버*\n{_slack_escape(server)}"})
+    blocks: list[dict] = [
+        {"type": "header", "text": {"type": "plain_text", "text": "MINT 경보"}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": _slack_escape(summary)}},
+        {"type": "section", "fields": fields},
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"*조치*\n{_slack_escape(action)}"}},
+    ]
+    if link:
+        blocks.append(
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "콘솔에서 열기"},
+                        "url": link,
+                    }
+                ],
+            }
+        )
+    return {"text": f"MINT 경보({severity}): {summary}", "blocks": blocks}
+
+
+def _teams(row: Mapping[str, Any], summary: str, action: str, link: str | None) -> dict:
+    severity = SEVERITY_LABEL.get(row["severity"], row["severity"])
+    server = _server(row)
+    facts = [{"title": "심각도", "value": severity}]
+    if server:
+        facts.append({"title": "서버", "value": server})
+    card: dict[str, Any] = {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.4",
+        "body": [
+            {"type": "TextBlock", "text": "MINT 경보", "weight": "Bolder", "size": "Medium"},
+            {"type": "TextBlock", "text": summary, "wrap": True},
+            {"type": "FactSet", "facts": facts},
+            {"type": "TextBlock", "text": f"조치: {action}", "wrap": True},
+        ],
+    }
+    if link:
+        card["actions"] = [{"type": "Action.OpenUrl", "title": "콘솔에서 열기", "url": link}]
+    return {
+        "type": "message",
+        "attachments": [
+            {"contentType": "application/vnd.microsoft.card.adaptive", "content": card}
+        ],
+    }
+
+
+def build_body(
+    row: Mapping[str, Any],
+    console_url: str | None,
+    fmt: str = "json",
+    link: str | None = None,
+) -> bytes:
+    """전송 본문. ``fmt``는 json(기본)·slack·teams. ``link``는 해당 항목으로 가는 서명 링크."""
     summary, action = GUIDE.get(row["kind"], DEFAULT_GUIDE)
+    if fmt in ("slack", "teams"):
+        chat = (_slack if fmt == "slack" else _teams)(row, summary, action, link or console_url)
+        return json.dumps(chat, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
     payload = {
         "summary": summary,
         "action": action,
@@ -175,6 +273,8 @@ def build_body(row: Mapping[str, Any], console_url: str | None) -> bytes:
         "last_at": row["last_at"].isoformat(),
         "console_url": console_url,
     }
+    if link:
+        payload["action_url"] = link
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
         "utf-8"
     )

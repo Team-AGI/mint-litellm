@@ -173,6 +173,7 @@ def approvals(
     server_id: str | None = None,
     status: str | None = None,
     page: int = 1,
+    only_id: str | None = None,
 ) -> list[dict]:
     limit, offset = _page(page)
     return fetchall(
@@ -182,8 +183,9 @@ def approvals(
         " revoke_reason, state_version, recert_confirmed_at, recert_confirmed_by,"
         " recert_requested_at, recert_held_at FROM mint.approvals WHERE instance_id = %s"
         " AND (%s::text IS NULL OR server_id = %s) AND (%s::text IS NULL OR status = %s)"
+        " AND (%s::uuid IS NULL OR id = %s::uuid)"
         " ORDER BY valid_until DESC, id DESC LIMIT %s OFFSET %s",
-        (instance, server_id, server_id, status, status, limit, offset),
+        (instance, server_id, server_id, status, status, only_id, only_id, limit, offset),
     )
 
 
@@ -208,7 +210,12 @@ def denials(conn: psycopg.Connection, instance: str, *, active_only: bool = Fals
 
 
 def call_approvals(
-    conn: psycopg.Connection, instance: str, *, status: str | None = None, page: int = 1
+    conn: psycopg.Connection,
+    instance: str,
+    *,
+    status: str | None = None,
+    page: int = 1,
+    only_id: str | None = None,
 ) -> list[dict]:
     limit, offset = _page(page)
     return fetchall(
@@ -216,8 +223,9 @@ def call_approvals(
         "SELECT id, org_id, principal_type, principal_id, server_id, tool, status, requested_by,"
         " approved_by, expires_at, state_version FROM mint.call_approvals WHERE instance_id = %s"
         " AND (%s::text IS NULL OR status = %s)"
+        " AND (%s::uuid IS NULL OR id = %s::uuid)"
         " ORDER BY (status = 'pending') DESC, expires_at ASC, id LIMIT %s OFFSET %s",
-        (instance, status, status, limit, offset),
+        (instance, status, status, only_id, only_id, limit, offset),
     )
 
 

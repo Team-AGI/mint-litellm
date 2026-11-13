@@ -6,7 +6,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from mint_litellm.control import operators, sync_state
+from mint_litellm.control import alerts, operators, sync_state
 from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import ControlError, forbidden, not_found, separation_of_duties
@@ -624,6 +624,11 @@ def call_request(
          "principal_id": principal_id, "server_id": server_id, "tool": tool,
          "policy_version_id": policy_version_id, "requested_by": requested_by,
          **({"target": target, "action": action} if action is not None else {})},
+    )
+    alerts.raise_alert(
+        ctx.conn, ctx.instance_id, kind="call_approval_requested", severity="medium",
+        dedup_key=f"call_approval_requested:{call_id}",
+        subject={"call_approval_id": str(call_id), "server_id": server_id, "tool": tool},
     )
     return str(call_id)
 

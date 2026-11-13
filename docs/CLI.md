@@ -200,6 +200,9 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 | `MINT_VULN_FEED_URL` | 알려진 취약점 조회 주소(OSV 형식 API). 사내 미러를 쓰려면 http(s) 주소를 준다 | `https://api.osv.dev` |
 | `MINT_VULN_SCAN_SECONDS` | 취약점 조회·조치 기한 판정 주기(초, 60 이상) | `900` |
 | `MINT_VULN_FEED_TIMEOUT_SECONDS` | 조회 요청 한 번의 제한 시간(초) | `15` |
+| `MINT_WEBHOOK_FORMATS` | 웹훅 주소마다 하나씩, 같은 순서로 적는 전송 형식(`json`·`slack`·`teams`). 수가 맞지 않거나 모르는 값이면 기동을 거부한다. | 모두 `json` |
+| `MINT_LINK_TTL_SECONDS` | 알림 속 콘솔 바로가기 링크의 유효 시간(초, 최소 60). | `86400` |
+| `MINT_DORMANT_DAYS` | 이 일수 동안 호출에 한 번도 쓰이지 않은 활성 승인을 「미사용」으로 본다. | `30` |
 | `MINT_CONSOLE_URL` | 경보 본문의 `console_url`에 넣을 콘솔 주소(선택). 없으면 `null`이다. | 없음 |
 | `MINT_LITELLM_CONFIG` | `check`·`status`가 읽는 LiteLLM `config.yaml` 경로. `--config`로 대신할 수 있다. | 없음 |
 | `MINT_MODE` | 모드 상한. `enforce`이면 `settings mode observe`가 거부된다. | `enforce` |
@@ -321,6 +324,12 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 - 수신 쪽은 `t`와 현재 시각의 차이가 5분을 넘으면 거부하고, 서명을 상수 시간 비교로 확인한다. 구현 예시는 `mint_litellm.control.webhook.verify`다.
 
 본문 `console_url`은 `MINT_CONSOLE_URL`(선택)을 그대로 쓰며, 설정이 없으면 `null`이다. 본문 `summary`는 위험 요지, `action`은 담당자가 취할 조치 절차이며 경보 종류마다 정해진 문구다(알 수 없는 종류는 일반 문구).
+
+`MINT_WEBHOOK_FORMATS`로 주소마다 형식을 고른다. `json`은 위 본문 그대로이고, `slack`은 Slack 수신 웹훅(블록), `teams`는 Microsoft Teams 수신 웹훅·Workflows(적응형 카드)용이다. 두 채팅 형식 모두 한국어 요지, 심각도, 서버, 조치 문구를 담고 콘솔 링크 버튼을 붙인다. 서명 헤더는 형식과 관계없이 같다.
+
+승인 요청 경보(`call_approval_requested` 호출별 승인 요청, `intake_pending` 수용검증을 마친 신청, `approval_recert_due`·`approval_recert_held` 승인 재확인, `approval_dormant` 미사용 승인)에는 `MINT_CONSOLE_URL`이 있을 때 해당 화면으로 가는 서명 링크(`/link/<토큰>`)가 붙는다(`json` 본문에서는 `action_url`). 토큰은 웹훅 서명 키에서 파생한 키로 서명하고 `MINT_LINK_TTL_SECONDS`(기본 24시간) 뒤 만료된다. 링크는 항목을 미리 골라 보여 줄 뿐이며 승인·철회를 하지 않는다. 열려면 평소처럼 콘솔에 로그인해야 하고, 승인은 콘솔에서 확인 단계(CSRF 포함)를 거쳐야 한다. 호출별 승인 요청과 신청 승인 대기 경보는 결정되거나 만료되면 승인 만료 검사 작업이 닫는다.
+
+작업 `approval_dormant_scan`은 1시간마다 `MINT_DORMANT_DAYS`(기본 30일) 동안 판정에 한 번도 선택되지 않은 활성 승인을 찾는다. 기준 시각은 마지막 재확인(없으면 승인 시작)이라 갓 승인한 건은 들지 않는다. 서버마다 요약 경보 `approval_dormant`를 하나 열고(열려 있는 동안 다시 열지 않는다), 해당 승인이 없어지면 닫는다. 콘솔 승인 내역의 「미사용」 필터에서 관리자가 선택한 승인을 한꺼번에 「유지」(재확인으로 기준 시각을 새로 시작)하거나 「철회」(기존 철회 경로)한다.
 
 ## 패키지·취약점 통제
 
