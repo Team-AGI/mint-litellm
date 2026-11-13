@@ -13,6 +13,8 @@ from urllib.parse import urlsplit
 from mint_litellm.control.errors import ControlError
 from mint_litellm.types.fingerprint import MIN_KEY_BYTES, decode_fingerprint_key
 
+WEBHOOK_FORMATS = ("json", "slack", "teams")
+
 
 def _key(env: Mapping[str, str], name: str, *, required: bool) -> bytes | None:
     raw = env.get(name)
@@ -98,6 +100,19 @@ def _webhook_urls(raw: str | None) -> tuple[str, ...]:
     return urls
 
 
+def _webhook_formats(raw: str | None, count: int) -> tuple[str, ...]:
+    """주소마다 하나씩, 같은 순서로 적는 전송 형식. 비우면 모두 ``json``이다."""
+    if raw is None or not raw.strip():
+        return ("json",) * count
+    formats = tuple(part.strip().lower() for part in raw.split(",") if part.strip())
+    if len(formats) != count or any(f not in WEBHOOK_FORMATS for f in formats):
+        raise ControlError(
+            "MINT_WEBHOOK_FORMATS는 MINT_WEBHOOK_URLS와 같은 수·같은 순서로 "
+            f"{', '.join(WEBHOOK_FORMATS)} 중 하나씩 적어야 합니다: {raw!r}"
+        )
+    return formats
+
+
 def _feed_url(raw: str | None) -> str:
     """취약점 조회 주소. 비우면 공개 OSV이고, 내부 미러를 쓰려면 http(s) 주소를 준다."""
     if raw is None or not raw.strip():
@@ -116,6 +131,11 @@ class Stage2Settings:
     sync_hold_window_seconds: int = 3600
     webhook_urls: tuple[str, ...] = ()
     webhook_hmac_key: bytes | None = None
+    # webhook_urls와 같은 순서의 전송 형식(json·slack·teams)
+    webhook_formats: tuple[str, ...] = ()
+    # 콘솔 바로가기 링크 유효 시간(초)과 미사용 승인 기준(일). 기본값은 MINT가 채운다.
+    link_ttl_seconds: int = 86400
+    dormant_days: int = 30
     worker_lease_seconds: int = 60
     reconcile_seconds: int = 300
     observe_seconds: int = 3600
@@ -124,6 +144,12 @@ class Stage2Settings:
     session_idle_seconds: int = 1800
     session_absolute_seconds: int = 28800
     session_verify_seconds: int = 300
+
+    def webhook_format(self, url: str) -> str:
+        try:
+            return self.webhook_formats[self.webhook_urls.index(url)]
+        except (ValueError, IndexError):
+            return "json"
 
     @property
     def session_verify_window_seconds(self) -> int:
@@ -164,6 +190,9 @@ class Stage2Settings:
             sync_hold_window_seconds=_seconds(env, "MINT_SYNC_HOLD_WINDOW_SECONDS", 3600),
             webhook_urls=urls,
             webhook_hmac_key=webhook_key,
+            webhook_formats=_webhook_formats(env.get("MINT_WEBHOOK_FORMATS"), len(urls)),
+            link_ttl_seconds=_seconds(env, "MINT_LINK_TTL_SECONDS", 86400, 60),
+            dormant_days=_days(env, "MINT_DORMANT_DAYS", 30),
             worker_lease_seconds=_seconds(env, "MINT_WORKER_LEASE_SECONDS", 60),
             reconcile_seconds=_seconds(env, "MINT_RECONCILE_SECONDS", 300),
             observe_seconds=_seconds(env, "MINT_OBSERVE_SECONDS", 3600, 20),
