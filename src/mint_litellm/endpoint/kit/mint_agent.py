@@ -10,7 +10,8 @@
   serve 연결 중계(내부용). 훅은 호출마다 새 프로세스라 연결을 이어 쓸 수 없으므로, 사용자
         전용 소켓을 가진 작은 프로세스가 결정 서버와의 연결을 유지하고 훅이 이를 거쳐 보낸다.
         중계에 닿지 못하면 훅이 직접 보내며(느릴 뿐 판정은 같다), 요청이 한동안 없으면 끝난다.
-  run   MCP 서버 실행기(Linux는 승인된 계약에서 만든 bubblewrap 격리 안에서 시작한다).
+  run   MCP 서버 실행기(Linux는 승인된 계약에서 만든 bubblewrap, Windows는 AppContainer 격리 안에서
+        시작한다).
         승인된 실행 계약과 디스크의 실행 파일·스크립트 해시가 모두 같을 때만
         서버를 시작하고, 아니면 시작하지 않고 종료 코드 126으로 끝난다. 마지막 설치 보고 응답이
         폐기·미승인으로 알린 서버(사용자 캐시나 설치 폴더의 ``retired.json``)도
@@ -35,6 +36,7 @@ import hashlib
 import http.client
 import ipaddress
 import json
+import ntpath
 import os
 import posixpath
 import re
@@ -155,15 +157,7 @@ def load_retired(state_dir: str) -> set[str]:
 def proc_start(pid: int) -> str | None:
     """프로세스의 시작 시각 표지(보고기가 재사용된 PID를 가려내는 데 쓴다). 모르면 None."""
     if os.name == "nt":
-        try:
-            done = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 f"(Get-Process -Id {int(pid)}).StartTime.ToFileTimeUtc()"],
-                capture_output=True, text=True, timeout=10,
-            )  # fmt: skip
-        except (OSError, subprocess.SubprocessError):
-            return None
-        return done.stdout.strip() or None if done.returncode == 0 else None
+        return _win_proc_start(pid)
     try:
         with open(f"/proc/{int(pid)}/stat", encoding="utf-8", errors="replace") as handle:
             stat = handle.read()
@@ -557,7 +551,7 @@ def verify_launch(approved: Mapping[str, Any], fd: int) -> None:
 # --- 서버 격리(Linux bubblewrap) ------------------------------------------------------------
 # 승인된 실행 계약에서 격리 명령을 만든다. 네트워크는 전부 허용(any)·전부 차단(none)·선언한
 # 호스트만(hosts) 중 하나이다. hosts는 격리 안에 네트워크를 두지 않고 실행기가 띄운 거름 중계로만
-# 나가게 한다. Windows는 격리하지 않고 ``unsupported``로 보고한다.
+# 나가게 한다. Windows는 아래 AppContainer 격리를 쓰며 호스트별 거름은 하지 않는다.
 SANDBOX_SYSTEM = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32")
 SANDBOX_ETC = (
     "/etc/ld.so.cache", "/etc/ld.so.conf", "/etc/ld.so.conf.d", "/etc/alternatives",
@@ -998,6 +992,447 @@ def bwrap_ready(bwrap: str) -> bool:
         return False
 
 
+# --- 서버 격리(Windows AppContainer) --------------------------------------------------------
+# 서버를 시작할 때마다 AppContainer 프로필을 만들고(이름에 실행기 PID가 든다), 그 SID에
+# 선언한 경로와
+# 실행 파일 폴더·패키지 실행기 캐시의 접근 권한(ACE)을 더한 뒤 서버를 시작한다. 서버가 끝나면
+# ACE와 프로필을 지우고, 실행기가 죽어 남은 것은 다음 시작 때 정리한다. 서버는 작업 개체에
+# 들어가므로 실행기가 끝나면 함께 끝난다. 네트워크는 ``none``이면 기능이 없고, ``hosts``이면
+# ``internetClient``만(호스트 거름 없음: 기록과 출력에 ``egress_unfiltered``), 그 밖에는
+# ``internetClient``·
+# ``privateNetworkClientServer``를 준다. 한계: AppContainer의 루프백(localhost) 차단은 기본값이고
+# 이 실행기는 시스템 설정을 바꾸지 않으므로, 선언이 ``any``여도 같은 단말의 로컬 수신기에는 닿지
+# 못한다. 호스트별 거름은 하지 않는다.
+WIN_SYSTEM_ENV = ("SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432")
+WIN_CAPS = {"internetClient": "S-1-15-3-1", "privateNetworkClientServer": "S-1-15-3-3"}
+WIN_RUNNER_CACHES = {
+    "npx": ("AppData/Roaming/npm", "AppData/Local/npm-cache"),
+    "npm": ("AppData/Roaming/npm", "AppData/Local/npm-cache"),
+    "yarn": ("AppData/Local/Yarn", ".yarn"),
+    "pnpm": ("AppData/Local/pnpm", "AppData/Local/pnpm-cache"),
+    "bunx": (".bun",), "bun": (".bun",),
+    "uvx": ("AppData/Local/uv", "AppData/Roaming/uv"),
+    "uv": ("AppData/Local/uv", "AppData/Roaming/uv"),
+    "pipx": (".local/pipx", "AppData/Local/pipx"),
+}  # fmt: skip
+ACL_TRACK = "appcontainer"
+EGRESS_UNFILTERED_LINE = (
+    "mint-egress unfiltered: Windows에서는 허용 호스트 목록을 집행하지 못해 인터넷 전체에 열려 있음"
+)
+ALREADY_EXISTS = 0x800700B7
+WIN_RANK = {"R": 0, "RX": 1, "M": 2}
+
+
+class SandboxUnavailable(Exception):
+    """AppContainer를 만들거나 그 안에서 시작하지 못했다(서버는 아직 시작되지 않았다)."""
+
+
+def win_capabilities(contract: Mapping[str, Any]) -> list[str]:
+    """계약의 네트워크 선언에서 AppContainer 기능 SID. ``none``이면 없다.
+
+    ``hosts``는 AppContainer가 실행기의 루프백 중계에 닿지 못하고 호스트별 거름도 없으므로,
+    사설망 기능 없이 ``internetClient``만 준다(거름 없음. 실행은 ``egress_unfiltered``로 알린다).
+    """
+    mode = network_mode(contract)
+    if mode == "none":
+        return []
+    if mode == "hosts":
+        return [WIN_CAPS["internetClient"]]
+    return list(WIN_CAPS.values())
+
+
+def _wunder(path: str, base: str) -> bool:
+    path, base = ntpath.normcase(ntpath.normpath(path)), ntpath.normcase(ntpath.normpath(base))
+    return path == base or path.startswith(base.rstrip("\\") + "\\")
+
+
+def win_runner_caches(contract: Mapping[str, Any], home: str) -> list[str]:
+    name = re.sub(r"\.(exe|cmd|bat)$", "", ntpath.basename(str(contract["executable"])).lower())
+    first = (contract.get("argv") or [""])[:1]
+    needs = RUNNER_ARGS.get(name)
+    if name not in WIN_RUNNER_CACHES or (needs and (not first or first[0] not in needs)):
+        return []
+    join = ntpath.join
+    return [ntpath.normpath(join(home, rel)) for rel in WIN_RUNNER_CACHES[name]] if home else []
+
+
+def win_grants(
+    approved: Mapping[str, Any],
+    home: str,
+    environ: Mapping[str, str],
+    *,
+    exists: Callable[[str], bool] = os.path.exists,
+    real: Callable[[str], str] = os.path.realpath,
+    read_text: Callable[[str], str] | None = None,
+) -> list[tuple[str, str, bool]]:
+    """AppContainer에 줄 (경로, 권한, 선언한 경로인가). 권한은 ``R``읽기·``RX``읽고 실행·``M``수정.
+
+    상위 폴더가 같거나 더 센 권한으로 이미 있으면 건너뛴다. 시스템 폴더(Windows·Program Files)는
+    이미 읽을 수 있고 쓸 수 없으므로 선언하지 않은 경로에서는 뺀다. 없는 경로는 붙이지 않는다.
+    """
+    found: dict[str, tuple[str, str, bool]] = {}
+    system = [environ[k] for k in WIN_SYSTEM_ENV if environ.get(k)]
+
+    def add(path: str, mode: str, declared: bool = False) -> None:
+        if not path or not ntpath.isabs(path) or not exists(path):
+            return
+        if not declared and any(_wunder(path, base) for base in system):
+            return
+        key = ntpath.normcase(ntpath.normpath(path))
+        old = found.get(key)
+        if old is None or WIN_RANK[mode] > WIN_RANK[old[1]]:
+            found[key] = (ntpath.normpath(path), mode, declared or bool(old and old[2]))
+        elif declared:
+            found[key] = (*old[:2], True)
+
+    folder = ntpath.dirname(real(approved["executable"]))
+    add(folder, "RX")
+    try:  # 가상 환경이면 그 바탕 인터프리터 폴더도 읽어야 한다.
+        cfg = ntpath.join(ntpath.dirname(folder), "pyvenv.cfg")
+        text = read_text(cfg) if read_text else open(cfg, encoding="utf-8").read()
+        for line in text.splitlines():
+            if line.lower().startswith("home") and "=" in line:
+                add(line.split("=", 1)[1].strip(), "RX")
+    except OSError:
+        pass
+    script = script_path(approved)
+    if script:
+        add(ntpath.dirname(script), "R")
+    if approved.get("cwd"):
+        add(approved["cwd"], "R")
+    for cache in win_runner_caches(approved, home):
+        add(cache, "M")
+    for entry in approved.get("file_access") or ():
+        add(str(entry["path"]), "M" if entry.get("mode") == "rw" else "R", True)
+    kept = []
+    for key, item in sorted(found.items(), key=lambda kv: kv[0].count("\\")):
+        covered = any(
+            _wunder(key, base) and WIN_RANK[other[1]] >= WIN_RANK[item[1]]
+            for base, other in found.items()
+            if base != key
+        )
+        if not covered:
+            kept.append(item)
+    return kept
+
+
+def icacls_args(path: str, sid: str, mode: str | None, directory: bool) -> list[str]:
+    """``mode``가 있으면 그 SID에 권한을 더하고, 없으면 그 SID의 항목을 지우는 icacls 명령."""
+    if mode is None:
+        return ["icacls", path, "/remove", "*" + sid, "/Q"]
+    flags = "(OI)(CI)" if directory else ""
+    return ["icacls", path, "/grant", f"*{sid}:{flags}({mode})", "/Q"]
+
+
+def _icacls(args: Sequence[str]) -> bool:
+    try:
+        return subprocess.run(args, capture_output=True, timeout=300).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _win_api():
+    """ctypes 함수 묶음. Windows 8 이상이 아니면 ``SandboxUnavailable``."""
+    if os.name != "nt":
+        raise SandboxUnavailable("not Windows")
+    import ctypes
+    from ctypes import wintypes as w
+
+    class SidAttr(ctypes.Structure):
+        _fields_ = [("Sid", ctypes.c_void_p), ("Attributes", w.DWORD)]
+
+    class SecCaps(ctypes.Structure):
+        _fields_ = [("AppContainerSid", ctypes.c_void_p), ("Capabilities", ctypes.c_void_p),
+                    ("CapabilityCount", w.DWORD), ("Reserved", w.DWORD)]  # fmt: skip
+
+    class StartupInfo(ctypes.Structure):
+        _fields_ = [
+            ("cb", w.DWORD), ("lpReserved", w.LPWSTR), ("lpDesktop", w.LPWSTR),
+            ("lpTitle", w.LPWSTR), ("dwX", w.DWORD), ("dwY", w.DWORD), ("dwXSize", w.DWORD),
+            ("dwYSize", w.DWORD), ("dwXCountChars", w.DWORD), ("dwYCountChars", w.DWORD),
+            ("dwFillAttribute", w.DWORD), ("dwFlags", w.DWORD), ("wShowWindow", w.WORD),
+            ("cbReserved2", w.WORD), ("lpReserved2", ctypes.c_void_p),
+            ("hStdInput", ctypes.c_void_p), ("hStdOutput", ctypes.c_void_p),
+            ("hStdError", ctypes.c_void_p), ("lpAttributeList", ctypes.c_void_p),
+        ]  # fmt: skip
+
+    class ProcInfo(ctypes.Structure):
+        _fields_ = [("hProcess", ctypes.c_void_p), ("hThread", ctypes.c_void_p),
+                    ("dwProcessId", w.DWORD), ("dwThreadId", w.DWORD)]  # fmt: skip
+
+    class JobLimits(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+            ("LimitFlags", w.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", w.DWORD),
+            ("Affinity", ctypes.c_size_t), ("PriorityClass", w.DWORD),
+            ("SchedulingClass", w.DWORD), ("IoCounters", ctypes.c_uint64 * 6),
+            ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]  # fmt: skip
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    adv = ctypes.WinDLL("advapi32", use_last_error=True)
+    userenv = ctypes.WinDLL("userenv")
+    if not hasattr(userenv, "CreateAppContainerProfile"):
+        raise SandboxUnavailable("AppContainer API missing")
+    vp, ws, size = ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_size_t
+    k32.OpenProcess.restype = vp
+    k32.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+    k32.CloseHandle.argtypes = [vp]
+    k32.GetProcessTimes.argtypes = [vp, vp, vp, vp, vp]
+    k32.GetExitCodeProcess.argtypes = [vp, vp]
+    k32.CreateJobObjectW.restype = vp
+    k32.CreateJobObjectW.argtypes = [vp, ws]
+    k32.SetInformationJobObject.argtypes = [vp, ctypes.c_int, vp, w.DWORD]
+    k32.AssignProcessToJobObject.argtypes = [vp, vp]
+    k32.InitializeProcThreadAttributeList.argtypes = [vp, w.DWORD, w.DWORD, vp]
+    k32.UpdateProcThreadAttribute.argtypes = [vp, w.DWORD, size, vp, size, vp, vp]
+    k32.DeleteProcThreadAttributeList.argtypes = [vp]
+    k32.CreateProcessW.argtypes = [ws, ws, vp, vp, w.BOOL, w.DWORD, vp, ws, vp, vp]
+    k32.ResumeThread.argtypes = [vp]
+    k32.TerminateProcess.argtypes = [vp, w.UINT]
+    k32.WaitForSingleObject.argtypes = [vp, w.DWORD]
+    k32.LocalFree.argtypes = [vp]
+    adv.ConvertStringSidToSidW.argtypes = [ws, vp]
+    adv.ConvertSidToStringSidW.argtypes = [vp, vp]
+    userenv.CreateAppContainerProfile.argtypes = [ws, ws, ws, vp, w.DWORD, vp]
+    userenv.DeriveAppContainerSidFromAppContainerName.argtypes = [ws, vp]
+    userenv.DeleteAppContainerProfile.argtypes = [ws]
+    userenv.GetAppContainerFolderPath.argtypes = [ws, vp]
+    return ctypes, k32, adv, userenv, (SidAttr, SecCaps, StartupInfo, ProcInfo, JobLimits)
+
+
+def _win_proc_start(pid: int) -> str | None:
+    """Windows 프로세스 생성 시각(FILETIME). 보고기의 ``StartTime.ToFileTimeUtc()``와 같은 값."""
+    try:
+        ctypes, k32, *_ = _win_api()
+    except SandboxUnavailable:
+        return None
+    handle = k32.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return None
+    try:
+        code = ctypes.c_uint32()
+        if not k32.GetExitCodeProcess(handle, ctypes.byref(code)) or code.value != 259:
+            return None  # 끝난 프로세스(남은 핸들 때문에 개체만 남은 경우 포함)
+        times = (ctypes.c_uint64 * 4)()
+        found = k32.GetProcessTimes(
+            ctypes.c_void_p(handle), *[ctypes.byref(times, 8 * i) for i in range(4)]
+        )
+        return str(times[0]) if found else None
+    finally:
+        k32.CloseHandle(handle)
+
+
+def appcontainer_ready() -> bool:
+    """이 단말에서 AppContainer API를 쓸 수 있는가(Windows 8 이상)."""
+    try:
+        _win_api()
+    except SandboxUnavailable:
+        return False
+    return True
+
+
+def _track_dir(state_dir: str | None) -> str | None:
+    return os.path.join(os.path.expanduser(state_dir), ACL_TRACK) if state_dir else None
+
+
+def _revoke(record: Mapping[str, Any]) -> None:
+    for path in record.get("paths") or ():
+        _icacls(icacls_args(path, record["sid"], None, False))
+    if record.get("profile") and os.name == "nt":
+        try:
+            _win_api()[3].DeleteAppContainerProfile(record["profile"])
+        except SandboxUnavailable:
+            pass
+
+
+def reconcile_appcontainers(state_dir: str | None) -> None:
+    """실행기가 죽어 남은 AppContainer 항목(ACE·프로필)을 지운다. 살아 있는 실행기의 것은 둔다."""
+    folder = _track_dir(state_dir)
+    if not folder or not os.path.isdir(folder):
+        return
+    for name in os.listdir(folder):
+        path = os.path.join(folder, name)
+        try:
+            with open(path, encoding="utf-8") as handle:
+                record = json.load(handle)
+            if proc_start(int(record["pid"])) == record["start"]:
+                continue
+            _revoke(record)
+            os.unlink(path)
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+
+
+class AppContainerRun:
+    """AppContainer 안의 서버. ``prepare``가 멈춘 채로 만들고 ``run``이 끝까지 돌린다."""
+
+    def __init__(self) -> None:
+        self.record: dict[str, Any] = {"paths": []}
+        self.track: str | None = None
+        self.job = self.process = self.thread = None
+        self.api: Any = None
+
+    @classmethod
+    def prepare(
+        cls, server: str, approved: Mapping[str, Any], argv: Sequence[str],
+        env: Mapping[str, str], home: str, state_dir: str | None,
+    ) -> AppContainerRun:  # fmt: skip
+        self = cls()
+        self.api = _win_api()
+        ctypes, k32, adv, userenv, _types = self.api
+        reconcile_appcontainers(state_dir)
+        profile = "mint." + re.sub(r"[^A-Za-z0-9_-]", "_", server)[:32] + f".{os.getpid()}"
+        sid = ctypes.c_void_p()
+        hr = userenv.CreateAppContainerProfile(
+            profile, profile, "MINT server sandbox", None, 0, ctypes.byref(sid)
+        )
+        if hr & 0xFFFFFFFF == ALREADY_EXISTS:
+            hr = userenv.DeriveAppContainerSidFromAppContainerName(profile, ctypes.byref(sid))
+        if hr != 0:
+            raise SandboxUnavailable(f"AppContainer profile failed ({hr & 0xFFFFFFFF:#x})")
+        text = ctypes.c_void_p()
+        if not adv.ConvertSidToStringSidW(sid, ctypes.byref(text)):
+            raise SandboxUnavailable("SID conversion failed")
+        self.record.update(pid=os.getpid(), start=proc_start(os.getpid()), profile=profile,
+                           sid=ctypes.wstring_at(text))  # fmt: skip
+        k32.LocalFree(text)
+        track = _track_dir(state_dir)
+        try:
+            if track:
+                os.makedirs(track, exist_ok=True)
+                self.track = os.path.join(track, profile + ".json")
+            self._save()
+            for path, mode, declared in win_grants(approved, home, os.environ):
+                self.record["paths"].append(path)
+                self._save()
+                granted = _icacls(icacls_args(path, self.record["sid"], mode, os.path.isdir(path)))
+                if declared and not granted:
+                    raise SandboxUnavailable(f"cannot grant access to {path}")
+            self._start(approved, argv, env, sid)
+        except BaseException:
+            self.close()
+            raise
+        return self
+
+    def _save(self) -> None:
+        if self.track:
+            with open(self.track, "w", encoding="utf-8") as handle:
+                json.dump(self.record, handle)
+
+    def _start(self, approved, argv, env, sid) -> None:
+        ctypes, k32, adv, userenv, types = self.api
+        SidAttr, SecCaps, StartupInfo, ProcInfo, JobLimits = types
+        wanted = win_capabilities(approved)
+        caps = []
+        for text in wanted:
+            caps.append(ctypes.c_void_p())
+            adv.ConvertStringSidToSidW(text, ctypes.byref(caps[-1]))
+        cap_array = (SidAttr * max(len(caps), 1))(*[SidAttr(c, 4) for c in caps])  # 4 = 사용 중
+        listed = ctypes.cast(cap_array, ctypes.c_void_p) if caps else None
+        security = SecCaps(sid, listed, len(caps), 0)
+        handles = []
+        for fd in (0, 1, 2):
+            try:
+                handle = __import__("msvcrt").get_osfhandle(fd)
+                os.set_handle_inheritable(handle, True)
+            except (OSError, ValueError):
+                handle = None
+            handles.append(handle)
+        unique = list(dict.fromkeys(h for h in handles if h))
+        handle_array = (ctypes.c_void_p * max(len(unique), 1))(*unique)
+        length = ctypes.c_size_t(0)
+        k32.InitializeProcThreadAttributeList(None, 2, 0, ctypes.byref(length))
+        buffer = ctypes.create_string_buffer(length.value)
+        if not k32.InitializeProcThreadAttributeList(buffer, 2, 0, ctypes.byref(length)):
+            raise SandboxUnavailable("attribute list failed")
+        try:
+            # 20009 = SECURITY_CAPABILITIES, 20002 = HANDLE_LIST
+            if not k32.UpdateProcThreadAttribute(
+                buffer, 0, 0x20009, ctypes.byref(security), ctypes.sizeof(security), None, None
+            ) or not k32.UpdateProcThreadAttribute(
+                buffer, 0, 0x20002, handle_array, ctypes.sizeof(handle_array), None, None
+            ):
+                raise SandboxUnavailable("attribute update failed")
+            info = StartupInfo()
+            info.cb = ctypes.sizeof(StartupInfo)
+            info.dwFlags = 0x100  # STARTF_USESTDHANDLES
+            info.hStdInput, info.hStdOutput, info.hStdError = handles
+            info.lpAttributeList = ctypes.cast(buffer, ctypes.c_void_p)
+            block = {str(k): str(v) for k, v in env.items()}
+            temp = self._temp_dir()
+            if temp:
+                block["TEMP"] = block["TMP"] = temp
+            pairs = sorted(block.items(), key=lambda i: i[0].lower())
+            joined = "".join(f"{k}={v}\0" for k, v in pairs)
+            env_buffer = ctypes.create_unicode_buffer(joined + "\0", len(joined) + 2)
+            command = ctypes.create_unicode_buffer(
+                subprocess.list2cmdline([approved["executable"], *argv[1:]])
+            )
+            proc = ProcInfo()
+            flags = 0x80000 | 0x4 | 0x400  # 확장 시작 정보, 멈춘 채로 생성, 유니코드 환경
+            if not k32.CreateProcessW(
+                approved["executable"], command, None, None, True, flags, env_buffer,
+                approved.get("cwd") or None, ctypes.byref(info), ctypes.byref(proc),
+            ):  # fmt: skip
+                raise SandboxUnavailable(f"CreateProcess failed ({ctypes.get_last_error()})")
+        finally:
+            k32.DeleteProcThreadAttributeList(buffer)
+        self.process, self.thread = proc.hProcess, proc.hThread
+        self.job = k32.CreateJobObjectW(None, None)
+        limits = JobLimits()
+        limits.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not (
+            self.job
+            and k32.SetInformationJobObject(
+                self.job, 9, ctypes.byref(limits), ctypes.sizeof(limits)
+            )
+            and k32.AssignProcessToJobObject(self.job, self.process)
+        ):
+            k32.TerminateProcess(self.process, 1)
+            raise SandboxUnavailable("job object failed")
+
+    def _temp_dir(self) -> str | None:
+        ctypes, _k32, _adv, userenv, _types = self.api
+        out = ctypes.c_void_p()
+        if userenv.GetAppContainerFolderPath(self.record["sid"], ctypes.byref(out)) != 0:
+            return None
+        try:
+            folder = os.path.join(ctypes.wstring_at(out), "AC", "Temp")
+        finally:
+            ctypes.WinDLL("ole32").CoTaskMemFree(out)
+        return folder if os.path.isdir(folder) else None
+
+    def run(self) -> int:
+        """서버를 풀어 끝날 때까지 기다리고 종료 코드를 돌려준다. 끝나면 권한·프로필을 정리한다."""
+        ctypes, k32, *_ = self.api
+        try:
+            k32.ResumeThread(self.thread)
+            while k32.WaitForSingleObject(self.process, 500) == 0x102:  # 시간 초과면 다시 기다린다.
+                pass
+            code = ctypes.c_uint32()
+            k32.GetExitCodeProcess(self.process, ctypes.byref(code))
+            return int(code.value)
+        finally:
+            self.close()
+
+    def close(self) -> None:
+        if self.api:
+            # 작업 개체를 닫으면 남은 자식도 끝난다.
+            for handle in (self.thread, self.process, self.job):
+                if handle:
+                    self.api[1].CloseHandle(handle)
+            self.thread = self.process = self.job = None
+        _revoke(self.record)
+        if self.track:
+            try:
+                os.unlink(self.track)
+            except OSError:
+                pass
+
+
 def plan_sandbox(
     approved: Mapping[str, Any],
     argv: Sequence[str],
@@ -1007,22 +1442,36 @@ def plan_sandbox(
     which: Callable[[str], str | None] = shutil.which,
     ready: Callable[[str], bool] = bwrap_ready,
     windows: bool | None = None,
+    win_ready: Callable[[], bool] = appcontainer_ready,
     egress_dir: str | None = None,
 ) -> tuple[list[str] | None, str]:
-    """(격리 명령 또는 None, 상태). 상태는 ``bwrap``·``none``(격리 못 함)·``unsupported``(Windows).
+    """(격리 명령 또는 None, 상태). 상태는 ``bwrap``·``appcontainer``·``none``(격리 못 함).
 
-    관리형 설치는 격리할 수 없으면 시작을 거부한다(``allow_unsandboxed``가 아니면).
+    Windows(``appcontainer``)는 명령이 아니라 실행기가 직접 AppContainer를 만들어 시작하므로 명령은
+    None이다. 관리형 설치는 격리할 수 없으면 시작을 거부한다(``allow_unsandboxed``가 아니면).
     """
     if os.name == "nt" if windows is None else windows:
-        return None, "unsupported"
+        if win_ready():
+            return None, "appcontainer"
+        return unsandboxed(
+            policy,
+            "AppContainer를 쓸 수 없어 서버를 시작하지 않았습니다. 관리자에게 알려 "
+            "Windows 버전을 확인하게 하세요.",
+        )
     bwrap = which("bwrap")
     if bwrap and ready(bwrap):
         return bwrap_args(approved, argv, home, bwrap, egress_dir), "bwrap"
+    return unsandboxed(
+        policy,
+        "격리 도구(bubblewrap)를 쓸 수 없어 서버를 시작하지 않았습니다. 관리자에게 알려 "
+        "bubblewrap을 설치하거나 사용자 이름공간을 허용하게 하세요.",
+    )
+
+
+def unsandboxed(policy: Sandbox, message: str) -> tuple[None, str]:
+    """격리할 수 없을 때: 관리형은 시작하지 않고(허용하지 않는 한), 그 밖에는 격리 없이 시작한다."""
     if policy.managed and not policy.allow_unsandboxed:
-        raise Refuse(
-            "격리 도구(bubblewrap)를 쓸 수 없어 서버를 시작하지 않았습니다. 관리자에게 알려 "
-            "bubblewrap을 설치하거나 사용자 이름공간을 허용하게 하세요."
-        )
+        raise Refuse(message)
     return None, "none"
 
 
@@ -1042,8 +1491,8 @@ def run_server(
     """승인된 서버만 시작한다. 검증을 통과하지 못하면 ``Refuse``이고 서버는 시작되지 않는다.
 
     ``state_dir``가 있으면 폐기 서버 목록을 확인하고 시작한 프로세스를 기록한다. ``sandbox``가
-    있으면 Linux에서는 계약에서 만든 격리 안에서 시작하고(실행기가 부모로 남는다), 관리형이면
-    격리할 수 없을 때 ``Refuse``이다. 없으면(시험용) 격리하지 않는다.
+    있으면 계약에서 만든 격리(Linux bubblewrap, Windows AppContainer) 안에서 시작하고(실행기가
+    부모로 남는다), 관리형이면 격리할 수 없을 때 ``Refuse``이다. 없으면(시험용) 격리하지 않는다.
     """
     if state_dir is not None and server in load_retired(state_dir):
         raise Refuse(f"server {server} was retired by MINT")
@@ -1058,18 +1507,35 @@ def run_server(
     env = launch_env(approved, environ)
     if approved.get("cwd"):
         os.chdir(approved["cwd"])
-    wrapped, status = None, None
+    wrapped, status, box = None, None, None
+    home = env.get("HOME") or os.path.expanduser("~")
     hosts = network_mode(approved) == "hosts" and os.name != "nt" and sandbox is not None
     egress_dir = tempfile.mkdtemp(prefix="mint-egress-") if hosts else None
     proxy = None
     try:
         if sandbox is not None:
             wrapped, status = plan_sandbox(
-                approved, argv, sandbox, home=env.get("HOME") or os.path.expanduser("~"),
-                egress_dir=egress_dir,
-            )  # fmt: skip
-        extra = {"egress_refused": 0} if wrapped is not None and hosts else None
+                approved, argv, sandbox, home=home, egress_dir=egress_dir
+            )
+        if status == "appcontainer":
+            try:
+                box = AppContainerRun.prepare(server, approved, argv, env, home, state_dir)
+            except SandboxUnavailable as exc:
+                _, status = unsandboxed(
+                    sandbox,
+                    f"AppContainer 격리를 만들지 못해 서버를 시작하지 않았습니다({exc}). "
+                    "관리자에게 알려 주세요.",
+                )
+        extra = None
+        if wrapped is not None and hosts:
+            extra = {"egress_refused": 0}
+        elif box is not None and network_mode(approved) == "hosts":
+            extra = {"egress_unfiltered": True}
+            sys.stderr.write(EGRESS_UNFILTERED_LINE + "\n")
         record = record_launch(state_dir, server, status, extra) if state_dir is not None else None
+        if box is not None:
+            os.close(fd)
+            sys.exit(box.run())
         if wrapped is not None:
             if hosts and egress_dir:
                 proxy = EgressProxy(

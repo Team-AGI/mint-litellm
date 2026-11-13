@@ -307,3 +307,14 @@ def test_refused_egress_raises_an_alert_only_when_the_count_is_positive():
     assert list(wanted) == ["endpoint_egress_refused:mint-kit-a:a"]
     kind, severity, subject = wanted["endpoint_egress_refused:mint-kit-a:a"]
     assert (kind, severity, subject["count"]) == ("endpoint_egress_refused", "medium", 2)
+
+
+def test_unfiltered_egress_raises_an_alert_for_the_flagged_server_only():
+    processes = [
+        {"server": "a", "count": 1, "sandbox": "appcontainer", "egress_unfiltered": True},
+        {"server": "b", "count": 1, "sandbox": "appcontainer"},
+    ]
+    statuses = {n: "approved" for n in "ab"}
+    wanted = endpoint_posture.findings([{**row("managed"), "processes": processes}], statuses)
+    assert list(wanted) == ["endpoint_egress_unfiltered:mint-kit-a:a"]
+    assert wanted["endpoint_egress_unfiltered:mint-kit-a:a"][1] == "medium"

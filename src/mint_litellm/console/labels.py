@@ -25,7 +25,9 @@ SERVER = {
     "terminated": Status("종료됨", "off"),
 }
 # 단말 설치 묶음의 설치 상태: 관리형만 정상이고, 사용자 수준은 관리되지 않는 단말이다.
-SANDBOX = {"bwrap": "격리됨", "none": "격리 없음", "unsupported": "격리 미지원"}
+SANDBOX = {
+    "bwrap": "격리됨", "appcontainer": "격리됨", "none": "격리 없음", "unsupported": "격리 미지원",
+}  # fmt: skip
 INSTALL = {
     "managed": Status("관리형", "ok"),
     "user": Status("관리되지 않음", "error"),
@@ -296,6 +298,7 @@ ALERT_KIND = {
     "endpoint_stale_process": "폐기 서버 프로세스 잔존",
     "endpoint_stale_autostart": "폐기 서버 자동 시작 잔존",
     "endpoint_unsandboxed": "격리 없이 실행 중인 서버",
+    "endpoint_egress_unfiltered": "허용 호스트 제한 미집행",
     "endpoint_egress_refused": "허용 호스트 밖 접속 거절",
     "endpoint_silent": "단말 보고 끊김",
     "endpoint_key_expiring": "단말 키 만료 임박",
