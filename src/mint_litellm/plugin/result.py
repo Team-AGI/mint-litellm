@@ -120,32 +120,50 @@ def inspect_result(
 
 
 def screen_result(
-    ctx: dict[str, Any], *, size: int | None, items: int, texts: Sequence[str]
+    ctx: dict[str, Any],
+    *,
+    size: int | None,
+    items: int,
+    texts: Sequence[str],
+    structured: Sequence[str] = (),
 ) -> bool:
     """결과를 검사해 호출 컨텍스트에 걸린 정책을 남긴다. 호출자에게 주지 않고 막아야 하면 참.
 
     허용된 호출만 본다. 남긴 값은 같은 호출의 응답 관측 사건이 읽는다. 비밀·개인정보는
     탐지 종류와 건수만 남기고, 가리기(``output_masked``)는 호출한 쪽이 결과 본문에 적용한다.
+    ``structured``(구조화된 결과의 문자열)는 지시문 표지 검사에만 더한다. 계약 관리가 아닌 서버의
+    지시문 표지는 설정이 enforce일 때만 막고, 아니면 걸린 사실만 ``unmanaged_findings``에 남긴다.
     """
     if not ctx.get("allowed"):
         return False
     policy = ctx.get("result_policy")
-    findings = inspect_result(policy, size=size, items=items, texts=texts)
+    findings = inspect_result(policy, size=size, items=items, texts=[*texts, *structured])
+    watched: list[str] = []
+    if (
+        policy
+        and policy.get("unmanaged")
+        and not policy.get("scan_enforce")
+        and POL_RESULT_INSTRUCTION in findings
+    ):
+        findings.remove(POL_RESULT_INSTRUCTION)
+        watched.append(POL_RESULT_INSTRUCTION)
     mode = (policy or {}).get("response_scan")
     sensitive = scan_sensitive(texts) if mode else {}
     if sensitive:
         findings.append(POL_RESULT_SENSITIVE)
         ctx["sensitive_findings"] = sensitive
-    if not findings:
+    if watched:
+        ctx["unmanaged_findings"] = sorted({*(ctx.get("unmanaged_findings") or ()), *watched})
+    if not findings and not watched:
         return False
-    ctx["output_findings"] = findings
+    ctx["output_findings"] = [*findings, *watched]
     enforce = bool(policy and policy.get("enforce"))
     # 한도·지시문 표지는 늘 막고, 비밀·개인정보는 승인 조건대로 한다. 끝까지 볼 수 없었던
     # 결과(scan_limit)는 가릴 수 없으므로 관측이 아니면 막는다.
     others = any(f != POL_RESULT_SENSITIVE for f in findings)
     block = others or mode == "block" or (mode == "mask" and SCAN_LIMIT in sensitive)
-    ctx["output_blocked"] = enforce and block
-    ctx["output_masked"] = enforce and not block and mode == "mask"
+    ctx["output_blocked"] = bool(findings) and enforce and block
+    ctx["output_masked"] = bool(findings) and enforce and not block and mode == "mask"
     return ctx["output_blocked"]
 
 
@@ -174,6 +192,8 @@ async def observe_response(
         output_blocked=bool(ctx.get("output_blocked")),
         output_masked=bool(ctx.get("output_masked")),
         sensitive_findings=dict(ctx.get("sensitive_findings") or {}),
+        unmanaged_findings=tuple(ctx.get("unmanaged_findings") or ()),
+        server_id=ctx.get("server_id") if ctx.get("unmanaged_findings") else None,
         outcome=response_outcome(
             is_error=is_error, output_blocked=bool(ctx.get("output_blocked"))
         ),
@@ -204,6 +224,9 @@ async def observe_unknown_outcome(
         "http_status": http_status,
         "outcome": Outcome.UNKNOWN.value,
     }
+    if ctx.get("unmanaged_findings"):
+        payload["unmanaged_findings"] = list(ctx["unmanaged_findings"])
+        payload["server_id"] = ctx.get("server_id")
     consumed = ctx.get("consumed_call_approval")
     if isinstance(consumed, Mapping):
         # 판정 뒤 다른 병렬 가드레일이 막은 호출도 여기에 닿는다. 소비된 승인을 사건에 묶어 둔다.
