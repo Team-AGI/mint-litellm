@@ -1,0 +1,1 @@
+- 저하 운용 선택 기능(`MINT_ALLOW_DEGRADED_LITELLM`, 기본 꺼짐): 도구 목록 훅이 없는 LiteLLM(등급 B)과 결과 단계 가드레일이 없는 LiteLLM(등급 C)에서 잃는 보장을 기동 로그·`mint status`·기동 점검 통과 사건에 밝히고 기동한다. 등급 C는 결과 검사를 관측만 하며 걸린 결과는 응답 사건의 `result_unenforced`와 경보 `result_unenforced`로 알린다.

@@ -65,6 +65,9 @@ VALUE = {
 SUMMARY = {
     "contract_drift": "승인된 계약과 달라졌습니다. 서버 {server_id}",
     "content_finding_unmanaged": "서버 {server_id}의 호출이 내용 검사에 걸렸습니다(계약 관리 전).",
+    "result_unenforced": (
+        "최근 {window_seconds}초 동안 결과 {calls}건이 검사에 걸렸지만 막지 못했습니다."
+    ),
     "call_spike": "서버 {server_id}의 {tool} 호출이 최근 {calls}건입니다(평소 {baseline_calls}건).",
     "oauth_flow_unreadable": "서버 {server_id}의 인증 흐름을 {failures}번 읽지 못했습니다.",
     "instance_mismatch": "서버 {server_id}의 계약·보안 설정이 다른 인스턴스와 다릅니다.",

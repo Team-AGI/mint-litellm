@@ -71,6 +71,12 @@ class MintLogger(CustomLogger):
         content = getattr(response_obj, "mcp_tool_call_response", None)
         if not isinstance(ctx, dict) or not isinstance(content, list):
             return None
+        if not self._runtime.result_enforced:
+            # 결과 단계 가드레일이 없는 LiteLLM: 걸린 것을 기록만 하고 결과는 건드리지 않는다.
+            policy = ctx.get("result_policy")
+            ctx["result_unenforced"] = True
+            if isinstance(policy, dict):
+                ctx["result_policy"] = {**policy, "enforce": False}
         try:
             if screen_result(
                 ctx,
