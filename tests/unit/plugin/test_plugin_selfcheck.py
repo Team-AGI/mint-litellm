@@ -864,6 +864,7 @@ class TestVerifiedEvent:
             assert event.source_key.startswith("selfcheck:")
             assert event.source_key.endswith(":1:enforcement_verified")
             assert event.payload["worker_id"] == worker_id()
+            assert set(event.payload["litellm"]) == {"version", "grade", "tested", "missing"}
             assert [c["item"] for c in event.payload["checks"]] == list(range(1, 9))
             assert all(c["ok"] for c in event.payload["checks"])
             assert event.payload["checks"][2]["name"] == SelfCheckItem.GUARDRAIL_ORDER.name
@@ -926,7 +927,8 @@ def test_without_readiness_in_time_the_startup_is_recorded_and_stopped(tmp_path)
     asyncio.run(runtime._startup())
     assert stopped == [1] and not runtime.verified
     (event,) = store.of_kind("enforcement_unverified")
-    assert event.payload == {"worker_id": worker_id(), "failed": [], "error": "readiness_timeout"}
+    assert set(event.payload) == {"worker_id", "litellm", "failed", "error"}
+    assert event.payload["error"] == "readiness_timeout" and event.payload["failed"] == []
 
 
 def test_readiness_and_checks_share_one_time_limit(tmp_path):
@@ -936,7 +938,8 @@ def test_readiness_and_checks_share_one_time_limit(tmp_path):
     asyncio.run(runtime._startup())
     assert stopped == [1] and not runtime.verified
     (event,) = store.of_kind("enforcement_unverified")
-    assert event.payload == {"worker_id": worker_id(), "failed": [], "error": "startup_timeout"}
+    assert set(event.payload) == {"worker_id", "litellm", "failed", "error"}
+    assert event.payload["error"] == "startup_timeout" and event.payload["failed"] == []
 
 
 def test_a_check_that_finishes_after_the_limit_is_not_a_pass(tmp_path):

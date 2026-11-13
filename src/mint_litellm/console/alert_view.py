@@ -66,6 +66,7 @@ VALUE = {
 # 요약 문장. 없는 값은 줄표로 채운다.
 SUMMARY = {
     "contract_drift": "승인된 계약과 달라졌습니다. 서버 {server_id}",
+    "content_finding_unmanaged": "서버 {server_id}의 호출이 내용 검사에 걸렸습니다(계약 관리 전).",
     "call_spike": "서버 {server_id}의 {tool} 호출이 최근 {calls}건입니다(평소 {baseline_calls}건).",
     "bulk_extraction": (
         "서버 {server_id}에서 최근 {items}항목({bytes}바이트)을 받아 갔습니다"
@@ -99,6 +100,7 @@ SUMMARY = {
     "endpoint_unmanaged": "단말 {key_alias}에 관리되지 않는 설치가 있습니다.",
     "endpoint_stale_process": "단말 {key_alias}에서 폐기된 서버 {server_id}가 실행 중입니다.",
     "endpoint_stale_autostart": "단말 {key_alias}에 폐기된 서버 {server_id}의 자동 시작 있음",
+    "endpoint_unsandboxed": "단말 {key_alias}에서 서버 {server_id}가 격리 없이 실행 중입니다.",
 }
 TIME_KEYS = ("valid_until", "expires_at", "deadline_at")
 

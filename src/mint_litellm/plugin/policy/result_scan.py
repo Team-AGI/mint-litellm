@@ -1,15 +1,15 @@
 """도구 결과 본문에서 지시문 표지를 찾는다.
 
 결과에 심은 지시를 사용자 명령으로 처리하지 않으려는 휴리스틱 검사이며, 탐지를 완전히 보장하지
-않는다. 정규식은 모두 반복 횟수를 제한해 결과 길이에 곱으로 늘지 않게 하고, 앞쪽
-``MAX_SCAN_CHARS`` 글자만 훑는다(이를 넘는 부분은 보지 않는다).
+않는다. 정규식은 모두 반복 횟수를 제한해 결과 길이에 곱으로 늘지 않게 한다. 훑는 글자 수는 합쳐서
+``MAX_SCAN_CHARS``까지이고, 이를 넘는 결과는 앞쪽 절반과 뒤쪽 절반만 본다(가운데는 보지 않는다).
 """
 
 import re
 import unicodedata
 from collections.abc import Iterable
 
-MAX_SCAN_CHARS = 256 * 1024
+MAX_SCAN_CHARS = 1024 * 1024
 
 _FLAGS = re.IGNORECASE
 _MARKERS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -53,6 +53,14 @@ _MARKERS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 
+def _windows(text: str, budget: int) -> tuple[str, ...]:
+    """예산 안이면 전체, 넘으면 앞쪽과 뒤쪽 절반."""
+    if len(text) <= budget:
+        return (text,)
+    head = budget // 2
+    return (text[:head], text[len(text) - (budget - head) :])
+
+
 def scan_instructions(texts: Iterable[str]) -> tuple[str, ...]:
     """걸린 지시문 표지의 종류를 정렬해 돌려준다.
 
@@ -63,8 +71,9 @@ def scan_instructions(texts: Iterable[str]) -> tuple[str, ...]:
     for text in texts:
         if budget <= 0:
             break
-        # 전각 문자나 호환 문자로 표지를 피하지 못하게 한다.
-        head = unicodedata.normalize("NFKC", text[:budget])
+        for part in _windows(text, budget):
+            # 전각 문자나 호환 문자로 표지를 피하지 못하게 한다.
+            normalized = unicodedata.normalize("NFKC", part)
+            found.update(kind for kind, pattern in _MARKERS if pattern.search(normalized))
         budget -= len(text)
-        found.update(kind for kind, pattern in _MARKERS if pattern.search(head))
     return tuple(sorted(found))

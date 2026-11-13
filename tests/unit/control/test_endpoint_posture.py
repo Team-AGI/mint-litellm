@@ -90,6 +90,7 @@ def test_the_catalog_names_the_policies_these_alerts_report():
     assert by_id["endpoint_unmanaged"]["reference_policies"] == ["POL-E-06"]
     assert by_id["endpoint_stale_process"]["reference_policies"] == ["POL-D-04"]
     assert by_id["endpoint_stale_autostart"]["reference_policies"] == ["POL-D-04"]
+    assert by_id["endpoint_unsandboxed"]["reference_policies"] == ["POL-O-13", "POL-I-08"]
     assert "POL-D-04" in by_id["endpoint_silent"]["reference_policies"]
     assert by_id["endpoint_key_expiring"]["reference_policies"] == ["POL-E-06"]
 
@@ -275,3 +276,20 @@ def test_the_alerts_for_a_retired_server_close_once_the_kit_reports_what_it_remo
     assert len(endpoint_posture.findings(before, statuses)) == 3
     after = [{**row("managed"), "processes": [], "autostart": []}]
     assert endpoint_posture.findings(after, statuses) == {}
+
+
+def test_a_managed_install_running_a_server_without_isolation_raises_an_alert():
+    processes = [
+        {"server": "live", "count": 1, "sandbox": "none"},
+        {"server": "other", "count": 1, "sandbox": "bwrap"},
+        {"server": "win", "count": 1, "sandbox": "unsupported"},
+        {"server": "old", "count": 1},
+    ]
+    statuses = {n: "approved" for n in ("live", "other", "win", "old")}
+    wanted = endpoint_posture.findings([{**row("managed"), "processes": processes}], statuses)
+    assert list(wanted) == ["endpoint_unsandboxed:mint-kit-a:live"]
+    kind, severity, subject = wanted["endpoint_unsandboxed:mint-kit-a:live"]
+    assert (kind, severity, subject["server_id"]) == ("endpoint_unsandboxed", "high", "live")
+    # 사용자 수준 설치는 격리를 요구하지 않는다(관리되지 않는 설치 경보가 따로 있다).
+    user = endpoint_posture.findings([{**row("user"), "processes": processes}], statuses)
+    assert not any(k.startswith("endpoint_unsandboxed") for k in user)

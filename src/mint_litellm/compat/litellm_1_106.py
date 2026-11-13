@@ -486,6 +486,25 @@ def content_texts(content: object) -> list[str]:
     return texts
 
 
+def structured_texts(result: object, *, limit: int = 4096, depth: int = 20) -> list[str]:
+    """도구 결과의 ``structuredContent`` 문자열 값과 키. 개수·깊이를 넘는 부분은 보지 않는다."""
+    root = getattr(result, "structured_content", None)
+    if root is None and isinstance(result, Mapping):
+        root = result.get("structuredContent")
+    texts: list[str] = []
+    stack: list[tuple[object, int]] = [(root, 0)]
+    while stack and len(texts) < limit:
+        item, level = stack.pop()
+        if isinstance(item, str):
+            texts.append(item)
+        elif level < depth and isinstance(item, Mapping):
+            for key, child in item.items():
+                stack += [(str(key), level + 1), (child, level + 1)]
+        elif level < depth and isinstance(item, (list, tuple)):
+            stack += [(child, level + 1) for child in item]
+    return texts
+
+
 def content_size(content: object) -> int | None:
     if not isinstance(content, (list, tuple)):
         return None

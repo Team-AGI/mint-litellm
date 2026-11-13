@@ -25,6 +25,7 @@ SERVER = {
     "terminated": Status("종료됨", "off"),
 }
 # 단말 설치 묶음의 설치 상태: 관리형만 정상이고, 사용자 수준은 관리되지 않는 단말이다.
+SANDBOX = {"bwrap": "격리됨", "none": "격리 없음", "unsupported": "격리 미지원"}
 INSTALL = {
     "managed": Status("관리형", "ok"),
     "user": Status("관리되지 않음", "error"),
@@ -280,11 +281,13 @@ ALERT_KIND = {
     "contract_drift": "계약 변경",
     "call_spike": "호출량 급증",
     "bulk_extraction": "대량 추출 의심",
+    "content_finding_unmanaged": "미관리 서버 내용 검사",
     "approval_dormant": "미사용 승인",
     "endpoint_stale_server": "폐기 서버 항목 잔존",
     "endpoint_unmanaged": "관리되지 않는 설치",
     "endpoint_stale_process": "폐기 서버 프로세스 잔존",
     "endpoint_stale_autostart": "폐기 서버 자동 시작 잔존",
+    "endpoint_unsandboxed": "격리 없이 실행 중인 서버",
     "endpoint_silent": "단말 보고 끊김",
     "endpoint_key_expiring": "단말 키 만료 임박",
     "package_unpinned": "버전 미고정 패키지",
@@ -462,6 +465,36 @@ def status(table: dict[str, Status], value: str | None) -> Status:
     if value is None:
         return Status("—", "off")
     return table.get(value, Status(value, "off"))
+
+
+def litellm_badge(info: dict | None) -> Status:
+    """복제본이 보고한 LiteLLM 판본과 보장 등급. 등급 A이고 검증된 판본만 정상이다."""
+    if not info:
+        return Status("보고 없음", "off")
+    grade = info.get("grade") or "D"
+    text = f"LiteLLM {info.get('version') or '미설치'} · 보장 등급 {grade}"
+    if grade != "A":
+        return Status(text, "error")
+    if not info.get("tested"):
+        return Status(f"{text} · 검증되지 않은 판본", "wait")
+    return Status(text, "ok")
+
+
+LITELLM_CAPABILITY = {
+    "call_guardrail_mode": "호출 전 가드레일 모드",
+    "call_type_call": "도구 호출 유형",
+    "pre_call_hook": "호출 전 훅",
+    "server_resolution": "서버 해석",
+    "result_logger_hook": "결과 로거 훅",
+    "result_guardrail_mode": "결과 단계 가드레일 모드",
+    "list_hook": "도구 목록 훅",
+    "name_resolution": "이름 해석",
+    "tool_prefix_registry": "도구 접두사 등록부",
+}
+
+
+def litellm_missing(info: dict | None) -> str:
+    return ", ".join(pick(LITELLM_CAPABILITY, name) for name in (info or {}).get("missing") or ())
 
 
 def pick(mapping: dict[str, str], value: str | None) -> str:

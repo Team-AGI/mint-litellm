@@ -255,7 +255,8 @@ def script_server(world, body: bytes, approved: bytes):
     tool.write_bytes(body)
     tool.chmod(0o755)
     doc = {**world.doc, "executable": str(tool), "argv": [], "script_sha256": None,
-           "executable_sha256": sha(approved)}  # fmt: skip
+           "executable_sha256": sha(approved),
+           "file_access": [{"path": str(world.tmp), "mode": "rw"}]}  # fmt: skip
     return tool, world.write_listing("tool.json", doc)
 
 

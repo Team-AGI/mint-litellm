@@ -667,15 +667,20 @@ def input_secret_result(
     selected: ApprovalRow | None,
     arguments: Mapping[str, Any],
     policy_input: Mapping[str, Any],
+    *,
+    scan_unmanaged: str = "observe",
+    observed: list[str] | None = None,
 ) -> StageResult | None:
-    """호출 인자에 비밀이 있으면 막는 결과(POL-E-05, 도구로 보내기 전 입력). 계약 관리 서버만 본다.
+    """호출 인자에 비밀이 있으면 막는 결과(POL-E-05, 도구로 보내기 전 입력).
 
     승인 조건 ``allow_input_secrets``에 적은 탐지 종류는 이 승인의 도구에 한해 허용한다. 사유에는
     탐지 종류와 건수만 남기고 값은 남기지 않는다. 운영자가 정한 비밀 표지(``secret_like``)도 본다.
+    계약 관리가 아닌 서버는 ``scan_unmanaged``가 ``enforce``일 때만 막고, 아니면 막지 않고 정책
+    식별자만 ``observed``에 더한다.
     """
     server = snapshot.server
-    if server is None or server.contract_status != "managed":
-        return None
+    managed = server is not None and server.contract_status == "managed"
+    watch_only = not managed and scan_unmanaged != "enforce"
     patterns = policy_input["arguments"].get("patterns") or {}
     # 크기·깊이 상한을 넘으면 네 패턴이 모두 참이 되어 다른 패턴 규칙이 이미 막는다. 훑지 않는다.
     if patterns and all(patterns.values()):
@@ -691,6 +696,10 @@ def input_secret_result(
     if patterns.get("secret_like") and CUSTOM_MARKER not in allowed:
         found[CUSTOM_MARKER] = 1
     if not found:
+        return None
+    if watch_only:
+        if observed is not None:
+            observed.append(POL_INPUT_SENSITIVE)
         return None
     detail = "input " + ",".join(f"{kind}={count}" for kind, count in sorted(found.items()))
     return StageResult.finding(Reason.POLICY_DETECT, POL_INPUT_SENSITIVE, detail)
@@ -1018,6 +1027,9 @@ class _Run:
     started_at: int = field(default_factory=time.perf_counter_ns)
     # 막힌 호출이 연(또는 다시 쓴) 호출별 승인 요청의 식별자
     call_approval_request: str | None = None
+    # 계약 관리가 아닌 서버에서 관측만 한 검사 결과의 정책 식별자(입력 쪽)와 검사 설정
+    unmanaged_findings: list[str] = field(default_factory=list)
+    scan_unmanaged: str = "observe"
 
 
 def _decision_snapshot(
@@ -1299,7 +1311,10 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
             secret_markers=markers,
             timing=timing,
         )
-        secret = input_secret_result(snapshot, run.selected, hook.arguments, policy_input)
+        secret = input_secret_result(
+            snapshot, run.selected, hook.arguments, policy_input,
+            scan_unmanaged=config.scan_unmanaged, observed=run.unmanaged_findings,
+        )
     except InputError as exc:
         stages.add(Stage.POLICY, StageResult.stop(Reason.SCHEMA_ERROR, detail=str(exc)[:200]))
         return
@@ -1468,6 +1483,7 @@ async def evaluate_request(
             deps.config.default_max_result_bytes or None,
             deps.config.default_max_result_items or None,
         ),
+        scan_unmanaged=deps.config.scan_unmanaged,
     )
     try:
         return await _evaluate(run, deps)
@@ -1658,8 +1674,11 @@ def _result_policy(run: _Run) -> dict[str, Any]:
     return {
         **limits,
         "response_scan": response_scan,
-        "scan": managed and conditions.get("scan_result") is not False,
+        "scan": conditions.get("scan_result") is not False,
         "enforce": run.mode is Mode.ENFORCE,
+        # 계약 관리가 아닌 서버는 지시문 표지를 기본으로 기록만 하고, 설정이 enforce일 때 막는다.
+        "unmanaged": not managed,
+        "scan_enforce": run.scan_unmanaged == "enforce",
     }
 
 
@@ -1688,6 +1707,7 @@ def _context_document(
         "team_id": principal.team_id,
         "org_id": principal.org_id,
         "result_policy": _result_policy(run),
+        "unmanaged_findings": list(dict.fromkeys(run.unmanaged_findings)),
     }
 
 

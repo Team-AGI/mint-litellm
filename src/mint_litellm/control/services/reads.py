@@ -74,13 +74,15 @@ def server(conn: psycopg.Connection, instance: str, server_id: str) -> dict | No
     )
     declared = None if row["identity_kind"] != "stdio" else fetchone(
         conn,
-        "SELECT payload -> 'exec_contract' -> 'file_access' AS access FROM mint.events"
+        "SELECT payload -> 'exec_contract' -> 'file_access' AS access,"
+        " payload -> 'exec_contract' ->> 'network' AS network FROM mint.events"
         " WHERE instance_id = %s AND kind = 'server_registered'"
         " AND payload ->> 'server_id' = %s AND payload ->> 'exec_contract_sha256' = %s"
         " ORDER BY inserted_at DESC LIMIT 1",
         (instance, server_id, row["exec_contract_sha256"]),
     )
     row["file_access"] = (declared or {}).get("access") or []
+    row["network"] = (declared or {}).get("network") or "any"
     row["packages"] = fetchall(
         conn,
         "SELECT p.ecosystem, p.name, p.version, p.pinned, p.registry FROM mint.servers s"

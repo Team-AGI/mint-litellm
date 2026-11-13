@@ -484,6 +484,7 @@ class PluginRuntime:
                 source_key=keys.next(kind),
                 payload={
                     "worker_id": worker_id(),
+                    "litellm": litellm_summary(),
                     "checks": [
                         {"item": int(r.item), "name": r.item.name, "ok": r.ok}
                         for r in self.last_results
@@ -694,7 +695,11 @@ class PluginRuntime:
             for r in self.last_results
             if not r.ok
         ]
-        payload: dict[str, Any] = {"worker_id": worker_id(), "failed": failed}
+        payload: dict[str, Any] = {
+            "worker_id": worker_id(),
+            "litellm": litellm_summary(),
+            "failed": failed,
+        }
         if error is not None:
             payload["error"] = error
         event = Event(
@@ -721,6 +726,17 @@ def freeze_collector() -> None:
     """
     gc.collect()
     gc.freeze()
+
+
+def litellm_summary() -> dict[str, Any]:
+    """이 복제본의 LiteLLM 보장 등급. 점검 결과와 함께 한 번 남기므로 호출 경로에 DB 접근이 없다."""
+    found = compat.litellm_assessment()
+    return {
+        "version": found.version,
+        "grade": found.grade,
+        "tested": found.tested,
+        "missing": list(found.missing),
+    }
 
 
 def worker_id() -> str:

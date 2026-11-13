@@ -10,45 +10,29 @@ from typing import Any
 
 import psycopg
 
+from mint_litellm.control import metric_rollup
 from mint_litellm.control.db.connection import fetchall
 
-# 판정 시간 구간(초). 마이크로초 값과 비교하므로 정수로 바꿔 둔다.
-BUCKETS = (0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5)
+BUCKETS = metric_rollup.BUCKETS
 CACHE_SECONDS = 15.0
 
 _cache: dict[str, tuple[float, str]] = {}
 
 
 def collect(conn: psycopg.Connection, instance: str) -> dict[str, Any]:
-    decisions = fetchall(
-        conn,
-        "SELECT COALESCE(payload->>'resolved_server_id', '') AS server_id,"
-        " COALESCE(payload->>'outcome', CASE WHEN payload->>'enforced_action' = 'allow'"
-        " THEN 'allowed' ELSE 'blocked' END) AS result, count(*) AS n"
-        " FROM mint.events WHERE instance_id = %s AND kind = 'decision_evaluated' GROUP BY 1, 2",
-        (instance,),
-    )
-    buckets = ", ".join(
-        f"count(*) FILTER (WHERE us <= {round(b * 1_000_000)}) AS b{i}"
-        for i, b in enumerate(BUCKETS)
-    )
-    latency = fetchall(
-        conn,
-        f"SELECT count(*) AS n, COALESCE(sum(us), 0) AS total, {buckets} FROM ("
-        " SELECT (payload->>'decision_us')::bigint AS us FROM mint.events"
-        " WHERE instance_id = %s AND kind = 'decision_evaluated'"
-        " AND payload->>'decision_us' IS NOT NULL) t",
-        (instance,),
-    )[0]
-    results = fetchall(
-        conn,
-        "SELECT COALESCE(payload->>'outcome', CASE WHEN kind = 'call_outcome_unknown'"
-        " THEN 'unknown' WHEN payload->>'is_error' = 'true' THEN 'tool_error'"
-        " ELSE 'success' END) AS result, count(*) AS n FROM mint.events"
-        " WHERE instance_id = %s AND kind IN ('call_response_received', 'call_outcome_unknown')"
-        " GROUP BY 1",
-        (instance,),
-    )
+    """판정·결과·판정 시간은 롤업과 워터마크 뒤 꼬리에서 읽는다(사건 표 전체를 세지 않는다)."""
+    decisions, results, latency = [], [], {"n": 0, "total": 0}
+    for i in range(len(BUCKETS)):
+        latency[f"b{i}"] = 0
+    for family, a, b, n, total in metric_rollup.totals(conn, instance):
+        if family == "decision":
+            decisions.append({"server_id": a, "result": b, "n": n})
+        elif family == "call_result":
+            results.append({"result": b, "n": n})
+        elif b == "all":
+            latency["n"], latency["total"] = n, total
+        else:
+            latency[b] = n
     jobs = fetchall(
         conn,
         "SELECT kind, count(*) AS n, max(EXTRACT(EPOCH FROM now() - created_at)) AS oldest"

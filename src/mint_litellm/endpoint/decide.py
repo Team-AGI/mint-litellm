@@ -67,6 +67,8 @@ class ProcessItem(BaseModel):
 
     server: str = Field(min_length=1, max_length=128)
     count: int = Field(ge=1, le=100000)
+    # 서버 프로세스의 격리 상태(단말의 주장). 이전 묶음은 보내지 않는다.
+    sandbox: Literal["bwrap", "none", "unsupported"] | None = None
 
 
 class AutostartItem(BaseModel):
