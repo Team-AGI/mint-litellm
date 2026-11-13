@@ -185,6 +185,26 @@ def test_a_requester_who_is_the_operator_needs_a_second_approver(world):
     assert world.query("SELECT status FROM mint.call_approvals")[0][0] == "approved"
 
 
+def test_an_approver_can_choose_a_validity_window_for_a_call_approval(world):
+    call_id = add_call_approval(world, principal="human-7", requested_by="human-2")
+    version = world.query("SELECT state_version FROM mint.call_approvals")[0][0]
+    body = {"state_version": version, "second_approver_token": TOKENS["admin"]}
+    refused = world.client.post(
+        f"/api/v1/call-approvals/{call_id}/approve", headers=bearer("approver"),
+        json={**body, "window_minutes": 15})
+    assert refused.status_code >= 400
+    assert world.query("SELECT status FROM mint.call_approvals")[0][0] == "pending"
+    approved = world.client.post(
+        f"/api/v1/call-approvals/{call_id}/approve", headers=bearer("approver"),
+        json={**body, "window_minutes": 10})
+    assert approved.status_code == 200
+    assert world.query("SELECT window_minutes FROM mint.call_approvals")[0][0] == 10
+    (item,) = world.client.get(
+        "/api/v1/call-approvals", headers=bearer("approver")).json()["items"]
+    assert item["window_minutes"] == 10 and 0 < item["remaining_seconds"] <= 600
+    assert item["uses"] == 0
+
+
 # --- CSRF ------------------------------------------------------------------------------------
 
 

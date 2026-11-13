@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 import psycopg
 from psycopg.errors import UniqueViolation
 
-from mint_litellm.control import alerts, seal, webhook
+from mint_litellm.control import alerts, links, seal, webhook
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.services import expiry
 from mint_litellm.types.ids import new_uuid7
@@ -55,6 +55,7 @@ KINDS: dict[str, JobKind] = {
     # 사건 분할을 미리 만들고 닫힌 달을 내보낸다 / 보관 기간이 지난 달을 지운다.
     "event_partition_maintain": JobKind(external_write=True),
     "event_retention": JobKind(external_write=True),
+    "approval_dormant_scan": JobKind(),
     # 해제 경로: 되돌림 차단 상태에서도 실행한다(외부 쓰기 목록에 넣지 않는다).
     "restore_publish": JobKind(),
 }
@@ -152,6 +153,7 @@ def _approval_expiry_scan(job: JobContext) -> None:
     expiry.expire_due(job.conn, job.instance_id)
     expiry.warn_expiring(job.conn, job.instance_id)
     expiry.announce_requests(job.conn, job.instance_id)
+    expiry.close_settled_requests(job.conn, job.instance_id)
     settings = job.settings
     recert.scan(
         job.conn,
@@ -198,7 +200,15 @@ def _alert_deliver(job: JobContext) -> None:
                 url,
                 settings.webhook_hmac_key,
                 job.job["target_ref"],
-                webhook.build_body(row, settings.console_url),
+                webhook.build_body(
+                    row,
+                    settings.console_url,
+                    settings.webhook_format(url),
+                    links.for_alert(
+                        row, settings.console_url, settings.webhook_hmac_key,
+                        settings.link_ttl_seconds,
+                    ),
+                ),
             )
     job.conn.execute(
         "UPDATE mint.alert_deliveries SET status = %s, attempts = %s,"
@@ -211,6 +221,12 @@ def _call_spike_scan(job: JobContext) -> None:
     from mint_litellm.control import call_spike
 
     call_spike.run(job)
+
+
+def _approval_dormant_scan(job: JobContext) -> None:
+    from mint_litellm.control import dormant
+
+    dormant.run(job)
 
 
 def _package_vuln_scan(job: JobContext) -> None:
@@ -298,6 +314,7 @@ HANDLERS: dict[str, Callable[[JobContext], None]] = {
     "package_vuln_scan": _package_vuln_scan,
     "event_partition_maintain": _event_partition_maintain,
     "event_retention": _event_retention,
+    "approval_dormant_scan": _approval_dormant_scan,
 }
 
 # 일정(주기 작업): 종류 -> 설정에서 주기(초)를 얻는 함수. 처리기가 있는 종류만 일정을 만든다.
@@ -315,6 +332,7 @@ SCHEDULES: dict[str, Callable[[Any], int]] = {
     "package_vuln_scan": lambda s: s.vuln_scan_seconds,
     "event_partition_maintain": lambda s: 3600,  # 1시간(고정)
     "event_retention": lambda s: 3600,  # 1시간(고정). 보관 일수가 없으면 아무것도 하지 않는다.
+    "approval_dormant_scan": lambda s: 3600,  # 1시간(고정)
 }
 
 

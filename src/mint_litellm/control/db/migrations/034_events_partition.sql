@@ -125,24 +125,64 @@ CREATE INDEX events_unsealed ON mint.events (inserted_at, event_id) WHERE seal_s
 CREATE INDEX events_decisions_by_time ON mint.events (instance_id, inserted_at)
     WHERE kind = 'decision_evaluated';
 
--- 분할 만들기. 월 경계는 UTC다. 기본 분할이 이미 그 달의 행을 갖고 있으면 만들 수 없다(오류).
+-- 분할 만들기. 월 경계는 UTC다. 기본 분할에 이미 그 달의 행이 있으면 같은 트랜잭션에서 그 행을
+-- 새 분할로 옮긴다: 기본 분할을 떼고, 틀 없는 표(트리거 없음)에 달의 행과 나머지 행을 그대로
+-- 복사해(봉인 열 포함) 새 분할과 새 기본 분할로 붙이고 옛 기본 분할을 버린다. 복사한 행 수가
+-- 다르면 오류로 되돌린다. 이 과정은 표 잠금을 잡으므로 쓰기가 잠시 기다린다.
 CREATE FUNCTION mint.ensure_event_partition(p_month date) RETURNS boolean
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = mint, pg_catalog AS $$
 DECLARE
     first_day date := date_trunc('month', p_month)::date;
     part text := 'events_' || to_char(first_day, 'YYYYMM');
+    lo text := to_char(first_day, 'YYYY-MM-DD') || ' 00:00:00+00';
+    hi text := to_char((first_day + interval '1 month')::date, 'YYYY-MM-DD') || ' 00:00:00+00';
+    held boolean;
+    moved bigint;
+    kept bigint;
+    total bigint;
 BEGIN
     IF to_regclass('mint.' || part) IS NOT NULL THEN
         RETURN false;
     END IF;
     EXECUTE format(
-        'CREATE TABLE mint.%I PARTITION OF mint.events FOR VALUES FROM (%L) TO (%L)',
-        part, to_char(first_day, 'YYYY-MM-DD') || ' 00:00:00+00',
-        to_char((first_day + interval '1 month')::date, 'YYYY-MM-DD') || ' 00:00:00+00');
-    -- 문장 수준 트리거는 분할로 복제되지 않으므로 분할마다 직접 건다.
+        'SELECT EXISTS (SELECT 1 FROM mint.events_default WHERE inserted_at >= %L AND inserted_at < %L)',
+        lo, hi) INTO held;
+    IF NOT held THEN
+        EXECUTE format(
+            'CREATE TABLE mint.%I PARTITION OF mint.events FOR VALUES FROM (%L) TO (%L)',
+            part, lo, hi);
+        -- 문장 수준 트리거는 분할로 복제되지 않으므로 분할마다 직접 건다.
+        EXECUTE format(
+            'CREATE TRIGGER events_guard_truncate BEFORE TRUNCATE ON mint.%I '
+            'FOR EACH STATEMENT EXECUTE FUNCTION mint.guard_events_truncate()', part);
+        RETURN true;
+    END IF;
+    LOCK TABLE mint.events IN ACCESS EXCLUSIVE MODE;
+    SELECT count(*) INTO total FROM mint.events_default;
+    ALTER TABLE mint.events DETACH PARTITION mint.events_default;
+    ALTER TABLE mint.events_default RENAME TO events_default_old;
+    EXECUTE format('CREATE TABLE mint.%I (LIKE mint.events INCLUDING DEFAULTS INCLUDING CONSTRAINTS)', part);
+    EXECUTE format(
+        'INSERT INTO mint.%I SELECT * FROM mint.events_default_old WHERE inserted_at >= %L AND inserted_at < %L',
+        part, lo, hi);
+    GET DIAGNOSTICS moved = ROW_COUNT;
+    EXECUTE format('ALTER TABLE mint.events ATTACH PARTITION mint.%I FOR VALUES FROM (%L) TO (%L)',
+                   part, lo, hi);
     EXECUTE format(
         'CREATE TRIGGER events_guard_truncate BEFORE TRUNCATE ON mint.%I '
         'FOR EACH STATEMENT EXECUTE FUNCTION mint.guard_events_truncate()', part);
+    CREATE TABLE mint.events_default (LIKE mint.events INCLUDING DEFAULTS INCLUDING CONSTRAINTS);
+    EXECUTE format(
+        'INSERT INTO mint.events_default SELECT * FROM mint.events_default_old '
+        'WHERE NOT (inserted_at >= %L AND inserted_at < %L)', lo, hi);
+    GET DIAGNOSTICS kept = ROW_COUNT;
+    IF moved + kept <> total THEN
+        RAISE EXCEPTION 'moving default partition rows lost rows' USING ERRCODE = 'data_exception';
+    END IF;
+    DROP TABLE mint.events_default_old;
+    ALTER TABLE mint.events ATTACH PARTITION mint.events_default DEFAULT;
+    CREATE TRIGGER events_guard_truncate BEFORE TRUNCATE ON mint.events_default
+        FOR EACH STATEMENT EXECUTE FUNCTION mint.guard_events_truncate();
     RETURN true;
 END $$;
 REVOKE ALL ON FUNCTION mint.ensure_event_partition(date) FROM PUBLIC;

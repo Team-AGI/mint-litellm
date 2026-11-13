@@ -88,22 +88,14 @@ def send_test(ctx: Context, settings: Stage2Settings) -> list[dict[str, Any]]:
     if ctx.operator.role != "admin":
         raise forbidden("시험 발송은 admin 역할만 할 수 있습니다.", exit_code=4)
     now = datetime.now(UTC)
-    body = webhook.build_body(
-        {
-            "kind": "test",
-            "severity": "low",
-            "subject": {},
-            "count": 1,
-            "first_at": now,
-            "last_at": now,
-        },
-        settings.console_url,
-    )
+    row = {"kind": "test", "severity": "low", "subject": {}, "count": 1,
+           "first_at": now, "last_at": now}
     hosts = [urlsplit(u).hostname for u in settings.webhook_urls]
     results = []
     with webhook.client() as http:
         for url in settings.webhook_urls:
             webhook.check_url(url, hosts)
+            body = webhook.build_body(row, settings.console_url, settings.webhook_format(url))
             sent, attempts = webhook.post(
                 http, url, settings.webhook_hmac_key, str(uuid.uuid4()), body
             )

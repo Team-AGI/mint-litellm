@@ -162,6 +162,7 @@ class ApprovalBody(Versioned):
 
 class ApproveCallBody(Versioned):
     second_approver_token: str | None = None
+    window_minutes: int | None = None
 
 
 class DenialBody(BaseModel):
@@ -561,7 +562,7 @@ def lift_denial(denial_id: str, body: Versioned, actor: Actor = Depends(api_acto
 def approve_call(call_id: str, body: ApproveCallBody, actor: Actor = Depends(api_actor)):
     call_approval_service.approve(
         actor.ctx, call_id, second_approver(actor, body.second_approver_token),
-        expected_version=body.state_version,
+        expected_version=body.state_version, window_minutes=body.window_minutes,
     )
     return done(actor, id=call_id)
 

@@ -17,7 +17,8 @@ def expire_due(conn: psycopg.Connection, instance_id: str) -> dict[str, int]:
     with conn.transaction():
         approvals = conn.execute(
             "UPDATE mint.call_approvals SET status = 'expired' WHERE instance_id = %s"
-            " AND status IN ('pending', 'approved') AND expires_at <= now()",
+            " AND status IN ('pending', 'approved')"
+            " AND coalesce(valid_until, expires_at) <= now()",
             (instance_id,),
         ).rowcount
         confirmations = conn.execute(
@@ -26,6 +27,26 @@ def expire_due(conn: psycopg.Connection, instance_id: str) -> dict[str, int]:
             (instance_id,),
         ).rowcount
     return {"call_approvals": approvals, "self_confirmations": confirmations}
+
+
+def close_settled_requests(conn: psycopg.Connection, instance_id: str) -> int:
+    """결정되거나 만료·취소된 승인 요청의 열린 경보(호출별 승인 요청, 신청 승인 대기)를 닫는다."""
+    closed = 0
+    with conn.transaction():
+        for kind, table, pending, key in (
+            ("call_approval_requested", "call_approvals", "t.status = 'pending'",
+             "id"),
+            ("intake_pending", "intakes", "t.status <> 'decided'", "intake_id"),
+        ):
+            for (dedup_key,) in conn.execute(
+                "SELECT a.dedup_key FROM mint.alerts a WHERE a.instance_id = %s"
+                " AND a.kind = %s AND a.status <> 'resolved' AND NOT EXISTS ("
+                f"SELECT 1 FROM mint.{table} t WHERE t.instance_id = a.instance_id"
+                f" AND t.id::text = a.subject->>'{key}' AND {pending})",
+                (instance_id, kind),
+            ).fetchall():
+                closed += alerts.resolve(conn, instance_id, dedup_key)
+    return closed
 
 
 # 만료 전 경보를 내는 기간. 호출별 승인과 본인 확인(대기·확정 상태)에만 건다.

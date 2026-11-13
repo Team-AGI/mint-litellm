@@ -835,7 +835,7 @@ def match_call_approval(
             and row.target == bound_target
             and row.action == bound_action
             and row.exec_contract_sha256 == resolved.exec_contract_sha256
-            and row.expires_at > snapshot.now
+            and (row.valid_until or row.expires_at) > snapshot.now
         )
 
     candidates = [row for row in snapshot.call_approvals if same_call(row)]
@@ -859,6 +859,7 @@ def match_call_approval(
             target=row.target,
             action=row.action,
             exec_contract_sha256=row.exec_contract_sha256,
+            windowed=row.valid_until is not None,
         )
     if candidates:
         return StageResult.stop(Reason.CALL_APPROVAL_STALE), None

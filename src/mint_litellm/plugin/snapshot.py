@@ -187,14 +187,10 @@ SELECT %s::uuid, %s, %s::timestamptz, %s, %s, %s::uuid, %s::integer, %s, %s::jso
 WHERE mint.claim_event_key(%s, %s, %s::uuid)
 """
 
-CONSUME_SQL = """
-UPDATE mint.call_approvals
-SET status = 'consumed', consumed_invocation_id = %(invocation_id)s
-WHERE instance_id = %(iid)s AND id = %(id)s AND status = 'approved'
-  AND expires_at > clock_timestamp()
+_CONSUME_MATCH = """
   AND principal_type = %(principal_type)s AND principal_id = %(principal_id)s
   AND server_id = %(server_id)s AND tool = %(tool)s AND args_fp = %(args_fp)s
-  AND policy_version_id = %(policy_version_id)s AND contract_version IS NULL
+  AND policy_version_id = %(policy_version_id)s AND {contract}
   AND state_version = %(state_version)s
   AND exec_contract_sha256 IS NOT DISTINCT FROM %(exec_contract_sha256)s::text
   AND (%(exec_contract_sha256)s::text IS NULL OR EXISTS (
@@ -203,25 +199,62 @@ WHERE instance_id = %(iid)s AND id = %(id)s AND status = 'approved'
          AND s.exec_contract_sha256 = %(exec_contract_sha256)s::text))
 """
 
+CONSUME_SQL = """
+UPDATE mint.call_approvals
+SET status = 'consumed', consumed_invocation_id = %(invocation_id)s
+WHERE instance_id = %(iid)s AND id = %(id)s AND status = 'approved'
+  AND valid_until IS NULL AND expires_at > clock_timestamp()
+""" + _CONSUME_MATCH.format(contract="contract_version IS NULL")
+
+# 기간을 고른 승인의 사용: 승인 행은 그대로 두고 호출마다 사용 표에 한 행을 넣는다. 같은 결속
+# 조건이 지금도 맞고 기간 안일 때만 한 행이 들어가며, 한 호출은 한 번만 기록된다.
+WINDOW_CONSUME_HEAD = """
+INSERT INTO mint.call_approval_uses (instance_id, call_approval_id, invocation_id)
+SELECT instance_id, id, %(invocation_id)s::uuid FROM mint.call_approvals
+WHERE instance_id = %(iid)s AND id = %(id)s AND status = 'approved'
+  AND valid_until > clock_timestamp()
+"""
+WINDOW_CONSUME_TAIL = " ON CONFLICT DO NOTHING"
+
 # 로컬 실행 서버의 호출별 승인: 받은 때의 실행 계약이 서버 행의 지금 계약일 때만 소비한다.
-CONSUME_EXEC_SQL = CONSUME_SQL + """
+_EXEC_BOUND = """
   AND exec_contract_sha256 = %(exec_contract_sha256)s::text
   AND EXISTS (SELECT 1 FROM mint.servers s
               WHERE s.instance_id = %(iid)s AND s.server_id = %(server_id)s
                 AND s.exec_contract_sha256 = %(exec_contract_sha256)s::text)
 """
+CONSUME_EXEC_SQL = CONSUME_SQL + _EXEC_BOUND
 
 # 계약 관리 서버의 호출별 승인: 받은 때의 계약이 지금도 승인된 계약일 때만 소비한다.
-CONSUME_BOUND_SQL = CONSUME_SQL.replace(
-    "contract_version IS NULL",
+_CONTRACT_BOUND = (
     "contract_id = %(contract_id)s::uuid AND EXISTS (SELECT 1 FROM mint.tool_contracts t"
-    " WHERE t.instance_id = %(iid)s AND t.id = %(contract_id)s::uuid AND t.status = 'approved')",
+    " WHERE t.instance_id = %(iid)s AND t.id = %(contract_id)s::uuid AND t.status = 'approved')"
 )
+CONSUME_BOUND_SQL = CONSUME_SQL.replace("contract_version IS NULL", _CONTRACT_BOUND)
 
 # 프로필이 있는 서버의 호출별 승인: 받은 때의 대상·행위와 같을 때만 소비한다.
 CONSUME_TARGET_SQL = (
     " AND target IS NOT DISTINCT FROM %(target)s::text AND action = %(action)s::text"
 )
+
+
+def consume_sql(consume: ConsumeRequest) -> str:
+    """소비 요청의 결속에 맞는 문장. 기간 승인은 사용 표 삽입, 1회 승인은 소비 전이이다."""
+    target = CONSUME_TARGET_SQL if consume.action is not None else ""
+    if consume.windowed:
+        exec_bound = _EXEC_BOUND if consume.exec_contract_sha256 is not None else ""
+        contract = (
+            "contract_version IS NULL" if consume.contract_id is None or exec_bound
+            else _CONTRACT_BOUND
+        )
+        return (WINDOW_CONSUME_HEAD + _CONSUME_MATCH.format(contract=contract) + exec_bound
+                + target + WINDOW_CONSUME_TAIL)
+    return (
+        CONSUME_EXEC_SQL if consume.exec_contract_sha256 is not None
+        else CONSUME_SQL if consume.contract_id is None
+        else CONSUME_BOUND_SQL
+    ) + target
+
 
 NEGATIVE_STATE_SQL = """
 SELECT
@@ -349,6 +382,8 @@ class CallApprovalRow:
     target: str | None = None
     action: str | None = None
     exec_contract_sha256: str | None = None
+    # 승인할 때 고른 사용 기간의 끝. 비어 있으면 1회 승인이다.
+    valid_until: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -534,6 +569,7 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
                 target=c.get("target"),
                 action=c.get("action"),
                 exec_contract_sha256=c.get("exec_contract_sha256"),
+                valid_until=_maybe_time(c.get("valid_until")),
             )
             for c in doc["call_approvals"]
         ),
@@ -825,11 +861,7 @@ class PluginDatabase:
                 inserted = cursor.rowcount == 1
                 if consume is not None and consume.call_approval_id is not None:
                     cursor = await conn.execute(
-                        (
-                            CONSUME_EXEC_SQL if consume.exec_contract_sha256 is not None
-                            else CONSUME_SQL if consume.contract_id is None
-                            else CONSUME_BOUND_SQL
-                        ) + (CONSUME_TARGET_SQL if consume.action is not None else ""),
+                        consume_sql(consume),
                         {
                             "iid": event.instance_id,
                             "id": consume.call_approval_id,

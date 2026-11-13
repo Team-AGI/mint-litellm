@@ -91,14 +91,36 @@ def test_ensure_partitions_is_idempotent_and_creates_missing_months(admin, worke
     assert "events_204004" in partitions(admin)
 
 
-def test_a_month_that_the_default_partition_already_holds_cannot_be_created(admin, worker_conn):
+def test_rows_already_in_the_default_partition_are_moved_into_the_new_month(admin, worker_conn):
+    for key, day in (("d:1", 3), ("d:2", 4)):
+        admin.execute(
+            "INSERT INTO mint.events (event_id, instance_id, inserted_at, kind, source_key,"
+            " payload) VALUES (gen_random_uuid(), %s, %s, 'org_created', %s, '{}')",
+            (INSTANCE, datetime(2041, 2, day, tzinfo=UTC), key))
     admin.execute(
         "INSERT INTO mint.events (event_id, instance_id, inserted_at, kind, source_key, payload)"
-        " VALUES (gen_random_uuid(), %s, %s, 'org_created', 'd:1', '{}')",
-        (INSTANCE, datetime(2041, 2, 3, tzinfo=UTC)))
-    with pytest.raises(ControlError, match="204102"):
-        event_partitions.ensure_partitions(worker_conn, date(2041, 1, 10))
-    assert "events_204103" in partitions(admin)  # 나머지 달은 만들었다
+        " VALUES (gen_random_uuid(), %s, %s, 'org_created', 'd:3', '{}')",
+        (INSTANCE, datetime(2042, 7, 1, tzinfo=UTC)))
+    seal_all(worker_conn)
+    sealed = fetchall(admin, "SELECT source_key, seal_seq, row_hash FROM mint.events ORDER BY 1")
+    assert event_partitions.ensure_partitions(worker_conn, date(2041, 1, 10)) != []
+    assert "events_204102" in partitions(admin) and "events_default" in partitions(admin)
+    where = {r["source_key"]: r["tableoid"] for r in fetchall(
+        admin, "SELECT source_key, tableoid::regclass::text AS tableoid FROM mint.events")}
+    assert where == {"d:1": "mint.events_204102", "d:2": "mint.events_204102",
+                     "d:3": "mint.events_default"}
+    assert fetchall(admin, "SELECT source_key, seal_seq, row_hash FROM mint.events ORDER BY 1") == sealed
+    assert seal.verify(admin, INSTANCE)["ok"]
+    # 옮긴 뒤에도 가드는 그대로다
+    with pytest.raises(psycopg.errors.CheckViolation):
+        admin.execute("TRUNCATE mint.events_default")
+    with pytest.raises(psycopg.errors.CheckViolation):
+        admin.execute("DELETE FROM mint.events WHERE source_key = 'd:1'")
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        admin.execute(
+            "INSERT INTO mint.events (event_id, instance_id, kind, source_key, payload)"
+            " VALUES (gen_random_uuid(), %s, 'org_created', 'd:1', '{}')", (INSTANCE,))
+    assert event_partitions.ensure_partitions(worker_conn, date(2041, 1, 10)) == []
 
 
 def test_the_partition_guards_still_hold(admin):

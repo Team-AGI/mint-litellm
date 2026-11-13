@@ -370,6 +370,10 @@ def _operator_bootstrap(run: Run) -> None:
     )
 
 
+def _window_minutes(value: str | None) -> int | None:
+    return None if value is None else int(value.removesuffix("m"))
+
+
 def _second(run: Run) -> Operator | None:
     value = getattr(run.args, "second_approver", None)
     if not value:
@@ -847,7 +851,8 @@ HANDLERS: dict[str, Handler] = {
     ),
     "call-approval request": _call_request,
     "call-approval approve": lambda r: call_approval_service.approve(
-        r.context(), r.args.call_approval_id, _second(r)
+        r.context(), r.args.call_approval_id, _second(r),
+        window_minutes=_window_minutes(r.args.for_),
     ),
     "call-approval reject": _done(call_approval_service.reject, "call_approval_id"),
     "call-approval cancel": _done(call_approval_service.cancel, "call_approval_id"),
@@ -1050,7 +1055,11 @@ ARGUMENTS: dict[str, list[Any]] = {
         _a("--expires-in-minutes", type=int, default=30),
         _a("--requested-by", help="기본: 운영자의 사용자 식별자"),
     ],
-    "call-approval approve": [_a("call_approval_id"), _SECOND],
+    "call-approval approve": [
+        _a("call_approval_id"), _SECOND,
+        _a("--for", dest="for_", choices=["10m", "30m"],
+           help="같은 호출을 이 시간 동안 되풀이해 승인한다(기본: 1회)"),
+    ],
     "call-approval reject": [_a("call_approval_id")],
     "call-approval cancel": [_a("call_approval_id")],
     "consent add": [

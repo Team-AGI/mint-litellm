@@ -1,0 +1,1 @@
+- 로컬 실행(stdio) 서버의 호출별 승인과 본인 확인은 받은 때의 실행 계약 해시에 묶인다(마이그레이션 `019_exec_contract_approval_binding`). 서버의 실행 계약이 바뀌면(재등록) 묶인 열린 승인이 같은 트랜잭션에서 만료되고, 소비는 서버 행의 지금 계약과 같을 때만 된다. `MINT_ENDPOINT_ROUTES=true`이면 단말 훅용 `POST /mint/v1/decide`·`/mint/v1/result` 경로가 붙고, 결과 보고가 5분 안에 없는 허용된 로컬 서버 호출은 `call_outcome_unknown`(사유 `no_report`)으로 남는다. 원격 서버 경로는 그대로다.

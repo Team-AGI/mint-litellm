@@ -2,16 +2,19 @@
 {% block title %}호출별 승인 · MINT{% endblock %}
 {% block body %}
 <h1>호출별 승인 요청</h1>
+{% if focus %}<p><a class="button" href="/call-approvals">전체 보기</a></p>{% endif %}
 {% if rows %}
-<table><thead><tr><th>서버</th><th>도구</th><th>주체</th><th>요청자</th><th>만료</th><th>상태</th><th></th></tr></thead><tbody>
-{% for c in rows %}<tr>
+<table><thead><tr><th>서버</th><th>도구</th><th>주체</th><th>요청자</th><th>만료</th><th>사용 기간</th><th>상태</th><th></th></tr></thead><tbody>
+{% for c in rows %}<tr{% if focus %} class="selected"{% endif %}>
 <td><a href="/servers/{{ c.server_id | urlencode }}">{{ c.server_id }}</a></td><td>{{ c.tool }}</td>
 <td>{{ L.pick(L.PRINCIPAL, c.principal_type) }} {{ c.principal_id }}</td><td>{{ c.requested_by }}</td>
-<td class="nowrap">{{ c.expires_at | when }}</td><td>{{ m.badge(L.CALL_APPROVAL, c.status) }}</td>
+<td class="nowrap">{{ (c.valid_until or c.expires_at) | when }}</td>
+<td class="nowrap">{% if c.window_minutes %}{{ c.window_minutes }}분{% if c.status == 'approved' %} · 남은 {{ c.remaining_seconds | span }}{% endif %} · {{ c.uses }}회 사용{% else %}1회{% endif %}</td><td>{{ m.badge(L.CALL_APPROVAL, c.status) }}</td>
 <td>{% if actor.role != 'viewer' and c.status in ('pending', 'approved') %}
 <form method="post" class="actions">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ c.state_version }}">
   {% if c.status == 'pending' %}
+  <select name="window_minutes" aria-label="사용 기간"><option value="0">1회</option><option value="10">10분</option><option value="30">30분</option></select>
   <button type="submit" class="primary" formaction="/call-approvals/{{ c.id }}/approve">승인</button>
   <button type="submit" formaction="/call-approvals/{{ c.id }}/reject">거부</button>
   {% endif %}

@@ -7,34 +7,22 @@ psycopg = pytest.importorskip("psycopg")
 from mint_litellm.control.db import migrate  # noqa: E402
 from mint_litellm.control.errors import ControlError  # noqa: E402
 
+ALL = [name for name, _ in migrate._migration_files()]
+
+
+def test_migration_numbers_are_unique_and_contiguous():
+    numbers = [int(name.split("_", 1)[0]) for name in ALL]
+    assert len(numbers) == len(set(numbers))
+    retired = {5}  # 번호만 비어 있는 옛 자리
+    assert numbers == [n for n in range(1, numbers[-1] + 1) if n not in retired]
+    assert ALL[0] == "001_initial"
+
 
 def test_applies_once_and_is_a_no_op_the_second_time(fresh_db):
     with psycopg.connect(fresh_db) as conn:
         assert migrate.apply_migrations(conn) == []
         names = [r[0] for r in conn.execute("SELECT name FROM mint.schema_migrations")]
-        assert names == [
-            "001_initial", "002_stage2", "003_negative_export", "004_staff_confirmation",
-            "006_alert_delivery_count", "007_contract_observations", "008_restore_requests",
-            "009_contract_reapproval_plans", "010_staff_owner",
-            "011_reapproval_plan_cancelled", "012_staff_records", "013_stage2_hardening",
-            "014_operator_negative", "015_deployment_proposer",
-            "016_intake_address_reject", "017_approval_contract_binding",
-            "018_exec_contract_fields", "019_exec_contract_approval_binding",
-            "020_endpoint_installs",
-            "021_policy_evidence",
-            "022_approval_target_binding",
-            "023_plugin_condition_defaults",
-            "024_stage3_hardening",
-            "025_approval_recertification",
-            "026_plugin_oauth_scopes_read",
-            "027_decision_time_index",
-            "028_endpoint_inventory",
-            "029_supply_chain",
-            "030_endpoint_key_expiry",
-            "031_automation",
-            "032_policy_shadow",
-            "034_events_partition",
-        ]
+        assert names == ALL
 
 
 def test_first_run_on_an_empty_database_applies_everything(fresh_db):
@@ -47,28 +35,7 @@ def test_first_run_on_an_empty_database_applies_everything(fresh_db):
         conn.execute(f'CREATE DATABASE "{name}"')
     try:
         with psycopg.connect(make_conninfo(**dict(params, dbname=name))) as conn:
-            assert migrate.apply_migrations(conn) == [
-                "001_initial", "002_stage2", "003_negative_export", "004_staff_confirmation",
-                "006_alert_delivery_count", "007_contract_observations", "008_restore_requests",
-                "009_contract_reapproval_plans", "010_staff_owner",
-                "011_reapproval_plan_cancelled", "012_staff_records", "013_stage2_hardening",
-                "014_operator_negative", "015_deployment_proposer",
-            "016_intake_address_reject", "017_approval_contract_binding",
-                "018_exec_contract_fields", "019_exec_contract_approval_binding",
-                "020_endpoint_installs",
-                "021_policy_evidence",
-                "022_approval_target_binding",
-                "023_plugin_condition_defaults",
-                "024_stage3_hardening",
-                "025_approval_recertification",
-                "026_plugin_oauth_scopes_read",
-                "027_decision_time_index",
-                "028_endpoint_inventory",
-                "029_supply_chain",
-                "030_endpoint_key_expiry",
-                "031_automation",
-                "032_policy_shadow", "034_events_partition",
-            ]
+            assert migrate.apply_migrations(conn) == ALL
             assert conn.execute("SELECT count(*) FROM mint.orgs").fetchone()[0] == 0
     finally:
         with psycopg.connect(make_conninfo(**admin), autocommit=True) as conn:
@@ -114,28 +81,7 @@ def test_a_database_with_only_the_first_migration_is_upgraded(fresh_db):
             )
             before = conn.execute("SELECT epoch FROM mint.state_epoch").fetchone()[0]
             conn.commit()
-            assert migrate.apply_migrations(conn) == [
-                "002_stage2", "003_negative_export", "004_staff_confirmation",
-                "006_alert_delivery_count", "007_contract_observations", "008_restore_requests",
-                "009_contract_reapproval_plans", "010_staff_owner",
-                "011_reapproval_plan_cancelled", "012_staff_records", "013_stage2_hardening",
-                "014_operator_negative", "015_deployment_proposer",
-            "016_intake_address_reject", "017_approval_contract_binding",
-                "018_exec_contract_fields", "019_exec_contract_approval_binding",
-                "020_endpoint_installs",
-                "021_policy_evidence",
-                "022_approval_target_binding",
-                "023_plugin_condition_defaults",
-                "024_stage3_hardening",
-                "025_approval_recertification",
-                "026_plugin_oauth_scopes_read",
-                "027_decision_time_index",
-                "028_endpoint_inventory",
-                "029_supply_chain",
-                "030_endpoint_key_expiry",
-                "031_automation",
-                "032_policy_shadow", "034_events_partition",
-            ]
+            assert migrate.apply_migrations(conn) == ALL[1:]
             assert conn.execute("SELECT count(*) FROM mint.intakes").fetchone()[0] == 0
             row = conn.execute(
                 "SELECT contract_status, issuer, last_observed_at, deployment_drift,"
@@ -204,16 +150,8 @@ def test_open_approvals_without_a_contract_are_closed_on_managed_servers_only(fr
                         conn.execute(
                             "UPDATE mint.call_approvals SET status = 'approved',"
                             " approved_by = 'a' WHERE id = %s", (call_id,))
-            assert migrate.apply_migrations(conn) == [
-                "017_approval_contract_binding", "018_exec_contract_fields",
-                "019_exec_contract_approval_binding", "020_endpoint_installs",
-                "021_policy_evidence",
-                "022_approval_target_binding", "023_plugin_condition_defaults",
-                "024_stage3_hardening", "025_approval_recertification",
-                "026_plugin_oauth_scopes_read",
-                "027_decision_time_index", "028_endpoint_inventory",
-                "029_supply_chain", "030_endpoint_key_expiry",
-                "031_automation", "032_policy_shadow", "034_events_partition"]
+            first = ALL.index("017_approval_contract_binding")
+            assert migrate.apply_migrations(conn) == ALL[first:]
             rows = conn.execute(
                 "SELECT server_id, status, count(*) FROM mint.call_approvals"
                 " GROUP BY server_id, status ORDER BY 1, 2"
