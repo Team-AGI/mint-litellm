@@ -53,6 +53,9 @@ KINDS: dict[str, JobKind] = {
     "call_spike_scan": JobKind(),
     "result_unenforced_scan": JobKind(),
     "package_vuln_scan": JobKind(),
+    # 사건 분할을 미리 만들고 닫힌 달을 내보낸다 / 보관 기간이 지난 달을 지운다.
+    "event_partition_maintain": JobKind(external_write=True),
+    "event_retention": JobKind(external_write=True),
     "approval_dormant_scan": JobKind(),
     # 해제 경로: 되돌림 차단 상태에서도 실행한다(외부 쓰기 목록에 넣지 않는다).
     "restore_publish": JobKind(),
@@ -239,6 +242,18 @@ def _package_vuln_scan(job: JobContext) -> None:
     vuln.run(job)
 
 
+def _event_partition_maintain(job: JobContext) -> None:
+    from mint_litellm.control import event_partitions
+
+    event_partitions.maintain(job)
+
+
+def _event_retention(job: JobContext) -> None:
+    from mint_litellm.control import event_partitions
+
+    event_partitions.retain(job)
+
+
 def _contract_observe(job: JobContext) -> None:
     from mint_litellm.control.contract_observe import handle
 
@@ -305,6 +320,8 @@ HANDLERS: dict[str, Callable[[JobContext], None]] = {
     "call_spike_scan": _call_spike_scan,
     "result_unenforced_scan": _result_unenforced_scan,
     "package_vuln_scan": _package_vuln_scan,
+    "event_partition_maintain": _event_partition_maintain,
+    "event_retention": _event_retention,
     "approval_dormant_scan": _approval_dormant_scan,
 }
 
@@ -322,6 +339,8 @@ SCHEDULES: dict[str, Callable[[Any], int]] = {
     "call_spike_scan": lambda s: 60,
     "result_unenforced_scan": lambda s: 60,
     "package_vuln_scan": lambda s: s.vuln_scan_seconds,
+    "event_partition_maintain": lambda s: 3600,  # 1시간(고정)
+    "event_retention": lambda s: 3600,  # 1시간(고정). 보관 일수가 없으면 아무것도 하지 않는다.
     "approval_dormant_scan": lambda s: 3600,  # 1시간(고정)
 }
 

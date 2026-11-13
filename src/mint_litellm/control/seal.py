@@ -130,6 +130,18 @@ def _signature_problem(
     return None
 
 
+def _dropped_ranges(conn: psycopg.Connection, instance_id: str) -> list[tuple[int, int]]:
+    rows = fetchall(
+        conn, "SELECT seal_ranges -> %s AS r FROM mint.event_exports WHERE dropped_at IS NOT NULL",
+        (instance_id,),
+    )
+    return [(r["r"][0], r["r"][1]) for r in rows if r["r"]]
+
+
+def _in_ranges(seq: int, ranges: list[tuple[int, int]]) -> bool:
+    return any(lo <= seq <= hi for lo, hi in ranges)
+
+
 def verify(
     conn: psycopg.Connection,
     instance_id: str,
@@ -155,6 +167,7 @@ def verify(
         (instance_id,),
     )
     prev, expected, rows_checked, signing = ZERO, 1, 0, False
+    gone = _dropped_ranges(conn, instance_id)
     for batch in batches:
         lo, hi = batch["from_seal_seq"], batch["to_seal_seq"]
 
@@ -177,17 +190,24 @@ def verify(
             " WHERE instance_id = %s AND seal_seq BETWEEN %s AND %s ORDER BY seal_seq",
             (instance_id, lo, hi),
         )
-        if len(rows) != hi - lo + 1:
+        have = {row["seal_seq"] for row in rows}
+        # 보관 기간이 지나 분할째 지운 달의 순번은 빠져 있어도 된다(내보내기 기록이 구간을 가진다).
+        missing = [n for n in range(lo, hi + 1) if n not in have and not _in_ranges(n, gone)]
+        if missing:
             report(f"배치 {lo}~{hi}: 봉인된 행이 {len(rows)}건이고 {hi - lo + 1}건이어야 합니다.")
         chain = bytes(batch["prev_tail_hash"])
+        last = lo - 1
         for row in rows:
+            if row["seal_seq"] != last + 1:
+                chain = bytes(row["prev_hash"])  # 지운 구간 뒤에서 행 자신의 prev_hash로 이어 본다
+            last = row["seal_seq"]
             digest = row_hash(row, chain)
             if bytes(row["prev_hash"]) != chain or bytes(row["row_hash"]) != digest:
                 seq = row["seal_seq"]
                 report(f"seal_seq {seq}: 행 해시가 다시 계산한 값과 다릅니다.", seq, seq)
             chain = bytes(row["row_hash"])  # 오류를 그 행에 가둔다
             rows_checked += 1
-        if chain != bytes(batch["tail_hash"]):
+        if last == hi and chain != bytes(batch["tail_hash"]):
             report(f"배치 {lo}~{hi}: tail_hash가 마지막 행 해시와 다릅니다.")
         prev, expected = bytes(batch["tail_hash"]), hi + 1
     stray = fetchone(

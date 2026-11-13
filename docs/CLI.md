@@ -22,6 +22,8 @@
 | `mint-litellm init` | 토큰 불필요 | LiteLLM 설정 조각(권장 설정 포함)을 만들고 기본 조직을 준비한다. `--no-spend-logs`를 주면 `disable_spend_logs: true`를 포함한다. `--fix-config <파일>`은 운영자 LiteLLM 설정의 MINT 가드레일 `mode`에 빠진 모드와 빠진 필수 설정(`disable_env_credential_login: true`, 서버별 기본 `rpm`·`max_concurrent_requests`)을 한 줄 수정으로 더한다(바꾸기 전 `<파일>.bak-<시각>` 사본을 남기고, 다른 항목과 주석은 그대로이며 이미 있으면 아무것도 하지 않는다). 안전하게 고칠 수 없는 모양이면 고칠 줄을 알리고 오류로 끝난다. `./mint.sh up`·`upgrade`가 `config/litellm.config.yaml`에 이 옵션을 쓴다. | - | - |
 | `mint-litellm check` | 모든 역할 | 필수 설정 위반이 있으면 종료 코드 0이 아닌 값으로 끝나고, 권장 설정은 경고하며, 관측 항목 4가지를 출력한다. | `/v1/mcp/server`, `/key/list`, `/team/list`, `/guardrails/list` | - |
 | `mint-litellm doctor` | 토큰 불필요 | 지금 비어 있거나 기다리는 일(운영자·제어 평면 키·정책 판본 없음, 승인 대기, 결정 대기 신청, 열린 경보, 실패한 작업, 보류된 동기화)과 다음에 실행할 명령을 보인다. 읽기 전용이며 데이터베이스만 읽는다. | - | - |
+| `mint-litellm upgrade policy` | `admin` | 저장소의 정책 카탈로그 해시가 적용 중인 판본과 다르면 `catalog-<해시 앞 12자>` 판본으로 활성화한다. `--check`는 바뀌었는지만 알린다. `./mint.sh upgrade`가 부른다. | - | `policy_activated` |
+| `mint-litellm upgrade report` | 모든 역할 | 업그레이드 뒤 사람이 정해야 하는 일(범위가 비어 막힌 OAuth 서버, `allow_token_forward`가 없는 전달 서버 승인, 재확인이 필요한 승인, 증빙이 없는 버전 미고정 패키지, 보고가 없거나 이전 판본인 단말 설치 묶음)을 데이터베이스에서 계산해 해결할 화면·명령과 함께 보인다. 읽기 전용이다. | - | - |
 | `mint-litellm status` | 모든 역할 | 모드, 정책 판본, 경보, 관측 항목과 같은 「할 일」 목록을 표시한다. | `/v1/mcp/server`, `/key/list`, `/team/list` | - |
 | `mint-litellm operator add` | `admin` | 운영자를 등록하고 토큰을 발급한다. `--save-token <파일>`을 주면 토큰을 화면에 보이지 않고 0600 파일로만 받는다(파일이 이미 있으면 운영자를 만들기 전에 거부한다). `admin`·`approver`는 LiteLLM 사용자 식별자 (`--user-id`) 결속이 필수이다. | `/user/info` | `operator_added` |
 | `mint-litellm operator bootstrap` | 토큰 불필요 | `operators` 표가 비어 있을 때만 토큰 없이 첫 `admin` 운영자를 만들고 토큰을 발급한다. `--name`과 `--user-id`가 필요하며, 사용자가 LiteLLM의 사람 사용자로 존재하는지 확인한다. 행위자는 `bootstrap`으로 기록하고, 운영자가 이미 있으면 거부한다. | `/user/info` | `operator_added` |
@@ -118,6 +120,7 @@
 
 - 주기가 된 일정(`schedules`)을 한 주기에 한 번 작업으로 등록하고, 임대가 만료된 `running` 작업을 `pending`으로 되돌리고(시도 한 번으로 센다), 대기 작업을 하나씩 임대해 실행한다. 실행 중에는 임대(`MINT_WORKER_LEASE_SECONDS`, 기본 60초)를 1/3마다 연장하고, 연장에 실패하면 그 작업의 외부 호출을 멈춘다.
 - 실패한 작업은 `min(2^시도 횟수 × 5초, 10분)` 뒤에 다시 시도하고, 시도 8번째 실패에서 `failed`가 되며 경보 `job_failed`(같은 종류·대상은 한 건으로 묶고 횟수만 올린다)를 남긴다. 오류 메시지는 저장하지 않고 오류 코드만 남긴다.
+- 이 판본에서 처리기가 있는 작업은 `submission_poll`(`MINT_SUBMISSION_POLL_SECONDS`마다 LiteLLM 제출을 신청으로 만든다), `intake_run`(수용검증), `session_verify`(콘솔 세션 재확인), `package_vuln_scan`(`MINT_VULN_SCAN_SECONDS`마다 패키지 취약점 조회와 치명 취약점 48시간 기한 판정, 아래 「패키지·취약점 통제」), `evidence_expiry_scan`(1시간마다 증거 만료 7일 전 경보와 재검사 등록), `approval_expiry_scan`(1분마다 만료된 호출별 승인·본인 확인을 `expired`로 표시), `endpoint_result_scan`(1분마다 결과 보고 없이 5분이 지난 허용된 로컬 서버 호출에 `call_outcome_unknown`(사유 `no_report`)을 남긴다), `seal`(1분마다 미봉인 사건을 해시 연쇄로 봉인), `export_negative_state`(부정 상태 전이가 커밋될 때 등록), `export_checkpoint`(10분마다, 기동 직후 한 번), `event_partition_maintain`(1시간마다 사건 월 분할을 석 달 앞까지 만들고 닫힌 달을 내보냄), `event_retention`(1시간마다, `MINT_EVENT_RETENTION_DAYS`가 있을 때만 확인된 오래된 월 분할을 지움)이다. 나머지 종류는 해당 기능이 들어올 때 붙으며, 그 전에는 등록할 수 없다.
 - 작업 실행기가 처리하는 작업은 `submission_poll`(`MINT_SUBMISSION_POLL_SECONDS`마다 LiteLLM 제출을 신청으로 만든다), `intake_run`(수용검증), `session_verify`(콘솔 세션 재확인), `package_vuln_scan`(`MINT_VULN_SCAN_SECONDS`마다 패키지 취약점 조회와 치명 취약점 48시간 기한 판정, 아래 「패키지·취약점 통제」), `evidence_expiry_scan`(1시간마다 증거 만료 7일 전 경보와 재검사 등록), `approval_expiry_scan`(1분마다 만료된 호출별 승인·본인 확인을 `expired`로 표시), `endpoint_result_scan`(1분마다 결과 보고 없이 5분이 지난 허용된 로컬 서버 호출에 `call_outcome_unknown`(사유 `no_report`)을 남긴다), `seal`(1분마다 미봉인 사건을 해시 연쇄로 봉인), `export_negative_state`(부정 상태 전이가 커밋될 때 등록), `export_checkpoint`(10분마다, 기동 직후 한 번)이다. 그 밖에 `contract_observe`, `sync_server`·`sync_target`·`sync_reconcile`, `relation_finalize`·`server_finalize`·`activation_finalize`, `alert_deliver`, `call_spike_scan`, `restore_publish`가 있다. 처리기가 없는 종류는 등록할 수 없다.
 - 60초마다 내보내기 파일과 DB를 대조해 되돌림을 판정한다. 처음 어긋나면 봉인·내보내기를 보류하고, 두 번 연속 어긋나거나 파일이 없거나 검증되지 않으면 외부 쓰기를 모두 멈춘다(`restore_blocked`로 대기, 시도 횟수 불변). 외부 쓰기 직전마다 같은 판정과 임대 유효성을 다시 확인한다.
 - SIGTERM·SIGINT를 받으면 실행 중인 작업에 취소를 알린다. 작업이 그대로 끝나면 완료로 기록하고, 취소를 받아 멈추면 시도 횟수를 올리지 않고 임대를 놓은 뒤 종료한다.
@@ -207,6 +210,7 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 | `MINT_VULN_FEED_URL` | 알려진 취약점 조회 주소(OSV 형식 API). 사내 미러를 쓰려면 http(s) 주소를 준다 | `https://api.osv.dev` |
 | `MINT_VULN_SCAN_SECONDS` | 취약점 조회·조치 기한 판정 주기(초, 60 이상) | `900` |
 | `MINT_VULN_FEED_TIMEOUT_SECONDS` | 조회 요청 한 번의 제한 시간(초) | `15` |
+| `MINT_EVENT_RETENTION_DAYS` | 사건 원장 보관 일수(31 이상). 설정하면 달 전체가 이보다 오래되고 내보내기 파일을 다시 읽어 확인한 월 분할을 지운다. 없으면 아무것도 지우지 않는다. MINT는 기본값을 정하지 않는다 | 없음(끔) |
 | `MINT_WEBHOOK_FORMATS` | 웹훅 주소마다 하나씩, 같은 순서로 적는 전송 형식(`json`·`slack`·`teams`). 수가 맞지 않거나 모르는 값이면 기동을 거부한다. | 모두 `json` |
 | `MINT_LINK_TTL_SECONDS` | 알림 속 콘솔 바로가기 링크의 유효 시간(초, 최소 60). | `86400` |
 | `MINT_DORMANT_DAYS` | 이 일수 동안 호출에 한 번도 쓰이지 않은 활성 승인을 「미사용」으로 본다. | `30` |

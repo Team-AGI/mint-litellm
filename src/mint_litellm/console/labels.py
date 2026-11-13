@@ -389,6 +389,8 @@ EVENT_KIND = {
     "policy_shadow_set": "정책 시험 적용 시작",
     "policy_shadow_cleared": "정책 시험 적용 취소",
     "endpoint_remediated": "단말 항목 자동 제거",
+    "event_partition_exported": "원장 월 구간 내보냄",
+    "event_partition_dropped": "원장 월 구간 삭제",
 }
 
 CONFIRMATION_EVENT = {

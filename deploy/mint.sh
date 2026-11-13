@@ -277,24 +277,123 @@ cmd_backup() {
     for file in mint.sql litellm.sql mint.tar.gz litellm.config.yaml; do
         [ -s "$dir/$file" ] || { rm -rf "$dir"; fail "백업의 $file이 비어 있어 폴더를 지웠습니다."; }
     done
+    BACKUP_DIR="$dir"
     echo "백업: $dir (mint.sql, litellm.sql, mint.tar.gz, litellm.config.yaml; 비밀값은 포함하지 않습니다)"
 }
 
-cmd_upgrade() {
-    require_env
-    "${COMPOSE[@]}" build litellm
-    "${COMPOSE[@]}" up -d --wait postgres
+# 업그레이드 단계. "설명|함수" 순서가 곧 실행 순서이며 --dry-run은 이 표만 보인다.
+# 이미지 빌드·데이터베이스 확인·백업까지는 이전 판본이 그대로 돈다. 서비스를 멈춘 뒤에는 마이그레이션
+# (제어 평면)이 플러그인보다 먼저 끝나야 새 열을 판정이 읽는다.
+UPGRADE_STEPS=(
+    "새 이미지를 빌드합니다|upgrade_build"
+    "데이터베이스를 띄워 확인합니다|upgrade_postgres"
+    "백업을 만듭니다|upgrade_backup"
+    "litellm·worker·console을 멈춥니다|upgrade_stop"
+    "마이그레이션을 적용하고 LiteLLM 설정의 빠진 기본값을 채웁니다(제어 평면 먼저)|upgrade_migrate"
+    "정책 카탈로그가 바뀌었으면 새 판본으로 활성화합니다|upgrade_policy"
+    "LiteLLM(플러그인)을 새 이미지로 다시 띄웁니다|upgrade_litellm"
+    "키를 확인하고 작업 실행기와 콘솔을 띄웁니다|upgrade_rest"
+    "점검합니다(check, doctor)|upgrade_verify"
+    "사람이 정할 일을 계산해 보입니다|upgrade_report"
+)
+UPGRADE_STEP=""
+UPGRADE_STOPPED=""
+BACKUP_DIR=""
+
+upgrade_build() { "${COMPOSE[@]}" build litellm; }
+upgrade_postgres() { "${COMPOSE[@]}" up -d --wait postgres; }
+upgrade_backup() { cmd_backup; }
+upgrade_stop() {
     # 이전 판본이 루트로 쓰는 중에 소유자를 바꾸면 그 사이에 만든 파일이 루트로 남는다.
+    UPGRADE_STOPPED=1
     "${COMPOSE[@]}" --profile worker --profile console stop litellm worker console
+}
+upgrade_migrate() {
     fix_volume_owners
-    admin_cli init --out /app/config/litellm.mint.yaml \
-        --fix-config /app/config/litellm.config.yaml >/dev/null
-    "${COMPOSE[@]}" up -d litellm
+    admin_cli init --out /app/config/litellm.mint.yaml --fix-config /app/config/litellm.config.yaml >/dev/null
+}
+has_operator_token() {
+    load_operator_token
+    [ -n "${MINT_OPERATOR_TOKEN:-}" ] || [ -n "$(env_value MINT_OPERATOR_TOKEN)" ]
+}
+upgrade_policy() {
+    ensure_bundle
+    "${COMPOSE[@]}" up -d opa
+    if has_operator_token; then
+        cli upgrade policy
+    else
+        echo "운영자 토큰이 없어 정책 판본 확인을 건너뜁니다. ./mint.sh bootstrap으로 첫 관리자를 만드십시오."
+    fi
+}
+upgrade_litellm() { "${COMPOSE[@]}" up -d litellm; }
+upgrade_rest() {
     ensure_kit_issuer_key
     ensure_control_key
     "${COMPOSE[@]}" --profile worker up -d worker
     "${COMPOSE[@]}" --profile console up -d console
-    echo "업그레이드했습니다."
+}
+# 방금 띄운 서비스가 응답하기까지 몇 번 다시 시도한다.
+upgrade_verify() {
+    if ! has_operator_token; then
+        cli doctor
+        return 0
+    fi
+    local try
+    for try in 1 2 3 4 5 6; do
+        if cli check; then
+            cli doctor
+            return 0
+        fi
+        [ "$try" -lt 6 ] && sleep "${MINT_UPGRADE_WAIT:-5}"
+    done
+    return 1
+}
+upgrade_report() {
+    if has_operator_token; then
+        cli upgrade report || echo "남은 결정을 계산하지 못했습니다. ./mint.sh cli upgrade report로 다시 실행하십시오." >&2
+    else
+        echo "운영자 토큰이 없어 남은 결정을 계산하지 않습니다."
+    fi
+}
+
+upgrade_exit() {
+    local code=$?
+    [ "$code" -ne 0 ] && [ -n "$UPGRADE_STEP" ] || return 0
+    echo "업그레이드를 중단했습니다: $UPGRADE_STEP 단계가 실패했습니다." >&2
+    if [ -z "$UPGRADE_STOPPED" ]; then
+        echo "아직 서비스를 멈추지 않아 이전 판본이 그대로 실행 중입니다. 원인을 고친 뒤 ./mint.sh upgrade를 다시 실행하십시오." >&2
+    else
+        echo "서비스가 멈춘 상태일 수 있습니다. 원인을 고친 뒤 ./mint.sh upgrade를 다시 실행하십시오." >&2
+        [ -z "$BACKUP_DIR" ] || echo "이 업그레이드 전의 백업: $BACKUP_DIR" >&2
+    fi
+}
+
+cmd_upgrade() {
+    local dry=0 entry number=0 total=${#UPGRADE_STEPS[@]}
+    case "${1:-}" in
+        "") ;;
+        --dry-run) dry=1 ;;
+        *) fail "사용법: ./mint.sh upgrade [--dry-run]" ;;
+    esac
+    if [ "$dry" -eq 1 ]; then
+        [ -f .env ] || fail ".env가 없습니다. .env.example을 복사해 값을 채우십시오."
+        echo "업그레이드 계획(아무것도 바꾸지 않았습니다):"
+        for entry in "${UPGRADE_STEPS[@]}"; do
+            number=$((number + 1))
+            echo "  $number. ${entry%%|*}"
+        done
+        return 0
+    fi
+    require_env
+    trap upgrade_exit EXIT
+    for entry in "${UPGRADE_STEPS[@]}"; do
+        number=$((number + 1))
+        UPGRADE_STEP="[$number/$total] ${entry%%|*}"
+        echo "$UPGRADE_STEP"
+        "${entry##*|}"
+    done
+    UPGRADE_STEP=""
+    echo "업그레이드했습니다.${BACKUP_DIR:+ 백업: $BACKUP_DIR}"
 }
 
 case "${1:-}" in
@@ -302,7 +401,7 @@ case "${1:-}" in
     status) cmd_status ;;
     backup) cmd_backup ;;
     bootstrap) shift; cmd_bootstrap "$@" ;;
-    upgrade) cmd_upgrade ;;
+    upgrade) shift; cmd_upgrade "$@" ;;
     cli) shift; require_env; cli "$@" ;;
-    *) fail "사용법: ./mint.sh up | status | bootstrap <이름> <사용자> | backup | upgrade | cli <명령...>" ;;
+    *) fail "사용법: ./mint.sh up | status | bootstrap <이름> <사용자> | backup | upgrade [--dry-run] | cli <명령...>" ;;
 esac

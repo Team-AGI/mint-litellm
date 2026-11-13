@@ -56,9 +56,10 @@ def scan(conn: psycopg.Connection, instance_id: str) -> int:
         conn.execute(
             "INSERT INTO mint.events (event_id, instance_id, inserted_at, kind, source_key,"
             " invocation_id, attempt_id, actor, payload)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
-            " ON CONFLICT (instance_id, source_key) DO NOTHING",
+            " SELECT %s::uuid, %s, %s::timestamptz, %s, %s, %s::uuid, %s::integer, %s, %s::jsonb"
+            " WHERE mint.claim_event_key(%s, %s, %s::uuid)",
             (event.event_id, instance_id, event.inserted_at, kind.value, event.source_key,
-             invocation_id, attempt_id, event.actor, Jsonb(payload)),
+             invocation_id, attempt_id, event.actor, Jsonb(payload),
+             instance_id, event.source_key, event.event_id),
         )
     return len(rows)

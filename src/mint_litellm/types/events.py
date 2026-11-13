@@ -97,6 +97,8 @@ class EventKind(StrEnum):
     APPROVAL_RECERT_CONFIRMED = "approval_recert_confirmed"
     POLICY_SHADOW_SET = "policy_shadow_set"
     POLICY_SHADOW_CLEARED = "policy_shadow_cleared"
+    EVENT_PARTITION_EXPORTED = "event_partition_exported"
+    EVENT_PARTITION_DROPPED = "event_partition_dropped"
     ENDPOINT_REMEDIATED = "endpoint_remediated"
 
 
@@ -185,6 +187,8 @@ CONTROL_ENTITY: dict[EventKind, str] = {
     EventKind.APPROVAL_RECERT_CONFIRMED: "approval",
     EventKind.POLICY_SHADOW_SET: "policy_shadow",
     EventKind.POLICY_SHADOW_CLEARED: "policy_shadow",
+    EventKind.EVENT_PARTITION_EXPORTED: "event_partition",
+    EventKind.EVENT_PARTITION_DROPPED: "event_partition",
     EventKind.ENDPOINT_REMEDIATED: "endpoint",
 }
 
