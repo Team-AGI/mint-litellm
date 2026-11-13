@@ -23,6 +23,7 @@ from uuid import UUID
 from mint_litellm.compat.litellm_1_106 import HookData, ServerResolutionError
 from mint_litellm.plugin.buffer import ConfirmationConsume, ConsumeRequest, EvidenceRecorder
 from mint_litellm.plugin.config import PluginConfig
+from mint_litellm.plugin.list_seen import ListSeen, list_key
 from mint_litellm.plugin.obligations import (
     AlertObligation,
     RequireCallApproval,
@@ -121,6 +122,8 @@ class PipelineDeps:
     unverified_cause: Callable[[], str | None] = lambda: None
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
     secret_markers: Callable[..., Awaitable[tuple[str, ...] | None]] | None = None
+    # 도구 목록의 「보임·통과」 반복을 거르는 기억. 없으면 걸러 내지 않는다.
+    list_seen: ListSeen | None = None
 
 
 @dataclass(frozen=True)
@@ -1458,6 +1461,17 @@ async def _evaluate(run: _Run, deps: PipelineDeps) -> Outcome:
             _context_document(run, document, True, None),
             run.timing,
         )
+    list_key_value = _list_dedup_key(run, conclusion, deps)
+    if list_key_value is not None and deps.list_seen and deps.list_seen.seen(list_key_value):
+        document = _decision_snapshot(run, conclusion, None)
+        return Outcome(
+            True,
+            document,
+            None,
+            Evidence.DB,
+            _context_document(run, document, True, None),
+            run.timing,
+        )
     event = decision_event(_decision_snapshot(run, conclusion, consume))
     run.event_started = True
     run.last_attempt = req.attempt_id
@@ -1469,6 +1483,8 @@ async def _evaluate(run: _Run, deps: PipelineDeps) -> Outcome:
     attempt: int | None = None
     if stored.stored:
         run.event_written = True
+        if list_key_value is not None and deps.list_seen:
+            deps.list_seen.add(list_key_value)
     else:
         if stored.consumption_lost:
             reason = Reason(stored.consumption_reason)
@@ -1513,6 +1529,22 @@ async def _evaluate(run: _Run, deps: PipelineDeps) -> Outcome:
         context=_context_document(run, snapshot_doc, allowed, consume),
         timing=run.timing,
     )
+
+
+def _list_dedup_key(run: _Run, conclusion: Conclusion, deps: PipelineDeps) -> tuple | None:
+    """도구 목록에서 결과 없이 통과한 판정의 중복 판단 키. 숨김·발견·정지는 키가 없다."""
+    if (
+        deps.list_seen is None
+        or run.req.operation is not OperationType.RUNTIME_DISCOVERY
+        or conclusion.enforced_action is not Action.ALLOW
+        or conclusion.evaluated_decision is not Action.ALLOW
+        or conclusion.findings
+        or conclusion.stop is not None
+    ):
+        return None
+    snap = run.snapshot
+    version = snap.policy_version if snap else None
+    return list_key(_decision_snapshot(run, conclusion, None), version.id if version else None)
 
 
 def _result_policy(run: _Run) -> dict[str, Any]:
