@@ -235,8 +235,12 @@ def with_sandbox(
     ``bwrap``·``appcontainer``는 기록된 모든 프로세스가 격리 안, ``none``은 하나라도 격리 없이.
     기록이 없는 서버는 Linux에서는 비워 두고(이전 실행기가 띄운 것) Windows에서는
     ``unsupported``이다(관리자 계정 보고기는 사용자 프로필의 기록을 읽지 않는다: ``read_records``).
+    호스트 허용 목록 서버는 실행기가 센 거절 수 ``egress_refused``도 더하고, Windows에서 그 목록을
+    거르지 못한 채 도는 서버는 ``egress_unfiltered``를 더한다.
     """
     seen: dict[str, str] = {}
+    refused: dict[str, int] = {}
+    unfiltered: set[str] = set()
     folder = home / STATE_REL / LAUNCHED
     for path in sorted(folder.glob("*.json")) if read_records and folder.is_dir() else []:
         try:
@@ -248,10 +252,18 @@ def with_sandbox(
         if status in ("bwrap", "appcontainer", "none") and start:
             if proc_start(pid, windows) == start:
                 seen[server] = "none" if "none" in (status, seen.get(server)) else status
+                if isinstance(record.get("egress_refused"), int) and record["egress_refused"] >= 0:
+                    refused[server] = refused.get(server, 0) + record["egress_refused"]
+                if record.get("egress_unfiltered") is True:
+                    unfiltered.add(server)
     for item in processes:
         status = seen.get(item["server"]) or ("unsupported" if windows else None)
         if status:
             item["sandbox"] = status
+        if item["server"] in refused:  # 호스트 허용 목록 서버가 거절당한 접속 수
+            item["egress_refused"] = refused[item["server"]]
+        if item["server"] in unfiltered:  # Windows: 호스트 허용 목록을 거르지 못함
+            item["egress_unfiltered"] = True
     return processes
 
 

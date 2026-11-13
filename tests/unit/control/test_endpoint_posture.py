@@ -91,6 +91,7 @@ def test_the_catalog_names_the_policies_these_alerts_report():
     assert by_id["endpoint_stale_process"]["reference_policies"] == ["POL-D-04"]
     assert by_id["endpoint_stale_autostart"]["reference_policies"] == ["POL-D-04"]
     assert by_id["endpoint_unsandboxed"]["reference_policies"] == ["POL-O-13", "POL-I-08"]
+    assert by_id["endpoint_egress_refused"]["reference_policies"] == ["POL-O-12", "POL-O-13"]
     assert "POL-D-04" in by_id["endpoint_silent"]["reference_policies"]
     assert by_id["endpoint_key_expiring"]["reference_policies"] == ["POL-E-06"]
 
@@ -293,3 +294,27 @@ def test_a_managed_install_running_a_server_without_isolation_raises_an_alert():
     # 사용자 수준 설치는 격리를 요구하지 않는다(관리되지 않는 설치 경보가 따로 있다).
     user = endpoint_posture.findings([{**row("user"), "processes": processes}], statuses)
     assert not any(k.startswith("endpoint_unsandboxed") for k in user)
+
+
+def test_refused_egress_raises_an_alert_only_when_the_count_is_positive():
+    processes = [
+        {"server": "a", "count": 1, "sandbox": "bwrap", "egress_refused": 2},
+        {"server": "b", "count": 1, "sandbox": "bwrap", "egress_refused": 0},
+        {"server": "c", "count": 1, "sandbox": "bwrap"},
+    ]
+    statuses = {n: "approved" for n in "abc"}
+    wanted = endpoint_posture.findings([{**row("managed"), "processes": processes}], statuses)
+    assert list(wanted) == ["endpoint_egress_refused:mint-kit-a:a"]
+    kind, severity, subject = wanted["endpoint_egress_refused:mint-kit-a:a"]
+    assert (kind, severity, subject["count"]) == ("endpoint_egress_refused", "medium", 2)
+
+
+def test_unfiltered_egress_raises_an_alert_for_the_flagged_server_only():
+    processes = [
+        {"server": "a", "count": 1, "sandbox": "appcontainer", "egress_unfiltered": True},
+        {"server": "b", "count": 1, "sandbox": "appcontainer"},
+    ]
+    statuses = {n: "approved" for n in "ab"}
+    wanted = endpoint_posture.findings([{**row("managed"), "processes": processes}], statuses)
+    assert list(wanted) == ["endpoint_egress_unfiltered:mint-kit-a:a"]
+    assert wanted["endpoint_egress_unfiltered:mint-kit-a:a"][1] == "medium"

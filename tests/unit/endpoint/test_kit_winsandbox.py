@@ -77,6 +77,10 @@ def test_network_capabilities_follow_the_declaration():
     assert agent.win_capabilities({"network": "none"}) == []
     assert agent.win_capabilities({"network": "any"}) == ["S-1-15-3-1", "S-1-15-3-3"]
     assert agent.win_capabilities({}) == ["S-1-15-3-1", "S-1-15-3-3"]  # 선언 없는 이전 계약
+    # 호스트 목록: 거를 수 없으므로 인터넷만 열고 사설망·수신 기능은 주지 않는다.
+    assert agent.win_capabilities({"network": "hosts", "allowed_hosts": ["a.example"]}) == [
+        "S-1-15-3-1"
+    ]
 
 
 def test_icacls_commands_grant_inheritably_on_folders_and_remove_by_sid():
@@ -122,6 +126,30 @@ def test_a_launch_refuses_when_managed_and_falls_back_when_not(tmp_path, monkeyp
     )  # fmt: skip
     (record,) = (tmp_path / "st" / "launched").iterdir()
     assert json.loads(record.read_text())["sandbox"] == "none" and started == ["exec"]
+
+
+def test_hosts_on_windows_runs_unfiltered_and_says_so(tmp_path, monkeypatch, capsys):
+    exe = tmp_path / "srv.exe"
+    exe.write_bytes(b"x")
+    doc = {
+        "executable": str(exe), "executable_sha256": agent.sha256_file(str(exe)), "argv": [],
+        "network": "hosts", "allowed_hosts": ["a.example"],
+    }  # fmt: skip
+    contracts = tmp_path / "c.json"
+    contracts.write_text(json.dumps({"servers": {"s": doc}}))
+
+    class Box:
+        def run(self):
+            return 0
+
+    monkeypatch.setattr(agent, "plan_sandbox", lambda *a, **k: (None, "appcontainer"))
+    monkeypatch.setattr(agent.AppContainerRun, "prepare", lambda *a: Box())
+    with pytest.raises(SystemExit):
+        agent.run_server("s", str(contracts), {}, state_dir=str(tmp_path / "st"),
+                         sandbox=agent.Sandbox(True))  # fmt: skip
+    assert "mint-egress unfiltered" in capsys.readouterr().err
+    (record,) = (tmp_path / "st" / "launched").iterdir()
+    assert json.loads(record.read_text())["egress_unfiltered"] is True
 
 
 # --- 실제 격리(Windows에서만) ---------------------------------------------------------------

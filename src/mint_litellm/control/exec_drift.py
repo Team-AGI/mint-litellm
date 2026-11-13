@@ -3,6 +3,7 @@
 계약이 직접 담는 값은 실행 파일·인자·작업 디렉터리·환경 변수·비밀 참조·선언한 파일 접근뿐이다.
 경로로 보이는 인자·환경 값은 파일, 주소(``://``)로 보이는 인자·환경 값은 네트워크,
 나머지는 실행으로 본다.
+허용 호스트 목록(``network: hosts``)은 새 항목이 확대이다.
 선언한 파일 접근은 새 경로나 읽기에서 읽기·쓰기로의 변경이 확대이다. 계약에 선언되지 않은 실제
 파일·네트워크 접근은 알 수 없다.
 """
@@ -42,7 +43,11 @@ def items(doc: dict[str, Any]) -> dict[str, set[str]]:
         if entry["mode"] == "rw":
             axes["file"].add(f"선언 {entry['path']} ({MODE_LABEL['rw']})")
     # 선언이 없으면 제한 없음과 같다. 차단에서 제한 없음이 되면 확대이다.
-    if doc.get("network") != "none":
+    # 호스트 목록은 항목마다 하나이므로 목록이 늘어나면 확대, 목록에서 제한 없음이 되면 확대이다.
+    if doc.get("network") == "hosts":
+        for host in doc.get("allowed_hosts") or ():
+            axes["network"].add(f"허용 호스트 {host}")
+    elif doc.get("network") != "none":
         axes["network"].add("네트워크 제한 없음")
     for arg in doc.get("argv") or ():
         _place(axes, arg, "인자 ")
