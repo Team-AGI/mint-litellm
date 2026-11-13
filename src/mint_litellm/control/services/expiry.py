@@ -8,7 +8,8 @@ from datetime import timedelta
 
 import psycopg
 
-from mint_litellm.control import alerts
+from mint_litellm.control import alerts, ledger
+from mint_litellm.types.events import EventKind
 
 
 def expire_due(conn: psycopg.Connection, instance_id: str) -> dict[str, int]:
@@ -29,9 +30,18 @@ def expire_due(conn: psycopg.Connection, instance_id: str) -> dict[str, int]:
 
 # 만료 전 경보를 내는 기간. 호출별 승인과 본인 확인(대기·확정 상태)에만 건다.
 WARN_WITHIN = timedelta(days=7)
+# (알림 출처, 표, 상태, 만료 시각 열, 추가 조건). 승인(approvals)은 이미 같은 범위·도구로 더 늦게
+# 끝나는 활성 승인이 있으면(갱신됨) 만료 알림 대상이 아니다.
+RENEWED = (
+    " AND NOT EXISTS (SELECT 1 FROM mint.approvals n WHERE n.instance_id = t.instance_id"
+    "  AND n.relation_id = t.relation_id AND n.scope_type = t.scope_type"
+    "  AND n.scope_id = t.scope_id AND n.tools = t.tools AND n.status = 'active'"
+    "  AND n.valid_until > t.valid_until)"
+)
 _SOURCES = (
-    ("call_approval", "call_approvals", ("pending", "approved")),
-    ("self_confirmation", "self_confirmations", ("pending", "confirmed")),
+    ("call_approval", "call_approvals", ("pending", "approved"), "expires_at", ""),
+    ("self_confirmation", "self_confirmations", ("pending", "confirmed"), "expires_at", ""),
+    ("approval", "approvals", ("active",), "valid_until", RENEWED),
 )
 
 
@@ -43,11 +53,11 @@ def warn_expiring(conn: psycopg.Connection, instance_id: str) -> int:
     """
     opened = 0
     with conn.transaction():
-        for source, table, statuses in _SOURCES:
+        for source, table, statuses, column, extra in _SOURCES:
             rows = conn.execute(
-                f"SELECT t.id, t.expires_at FROM mint.{table} t"
-                " WHERE t.instance_id = %s AND t.status = ANY(%s)"
-                " AND t.expires_at > now() AND t.expires_at <= now() + %s"
+                f"SELECT t.id, t.{column} FROM mint.{table} t"
+                f" WHERE t.instance_id = %s AND t.status = ANY(%s)"
+                f" AND t.{column} > now() AND t.{column} <= now() + %s{extra}"
                 " AND NOT EXISTS (SELECT 1 FROM mint.alerts a WHERE a.instance_id = t.instance_id"
                 "  AND a.dedup_key = 'approval_expiring:' || %s || ':' || t.id::text)",
                 (instance_id, list(statuses), WARN_WITHIN, source),
@@ -65,13 +75,14 @@ def warn_expiring(conn: psycopg.Connection, instance_id: str) -> int:
                         "expires_at": expires_at.isoformat(),
                     },
                 )
-        for source, table, statuses in _SOURCES:
+        for source, table, statuses, column, extra in _SOURCES:
             closed = conn.execute(
                 "UPDATE mint.alerts a SET status = 'resolved', resolved_at = now()"
                 " WHERE a.instance_id = %s AND a.kind = 'approval_expiring'"
                 " AND a.status <> 'resolved' AND a.subject->>'source' = %s"
                 f" AND NOT EXISTS (SELECT 1 FROM mint.{table} t WHERE t.instance_id = a.instance_id"
-                "  AND t.id::text = a.subject->>'id' AND t.status = ANY(%s))"
+                f"  AND t.id::text = a.subject->>'id' AND t.status = ANY(%s)"
+                f"  AND t.{column} > now(){extra})"
                 " RETURNING a.id",
                 (instance_id, source, list(statuses)),
             ).fetchall()
@@ -80,3 +91,43 @@ def warn_expiring(conn: psycopg.Connection, instance_id: str) -> int:
                     conn, instance_id, str(alert_id), "approval_expiring", alerts.AUTO_ACTOR
                 )
     return opened
+
+
+# 판정 프로세스가 막힌 호출에서 자동으로 연 호출별 승인 요청의 요청자 표시
+AUTO_REQUESTER = "mint-auto"
+
+
+def announce_requests(conn: psycopg.Connection, instance_id: str) -> int:
+    """자동으로 열린 대기 요청마다 요청 사건과 경보 ``call_approval_requested``를 하나 남긴다.
+
+    판정 프로세스는 경보나 원장을 쓸 수 없으므로 작업 실행기가 알린다. 새로 알린 수를 돌려준다.
+    """
+    announced = 0
+    with conn.transaction():
+        rows = conn.execute(
+            "SELECT t.id, t.org_id, t.principal_type, t.principal_id, t.server_id, t.tool,"
+            " t.policy_version_id, t.requested_by, t.state_version, t.target, t.action"
+            " FROM mint.call_approvals t WHERE t.instance_id = %s AND t.requested_by = %s"
+            " AND t.status = 'pending' AND t.expires_at > now()"
+            " AND NOT EXISTS (SELECT 1 FROM mint.alerts a WHERE a.instance_id = t.instance_id"
+            "  AND a.dedup_key = 'call_approval_requested:' || t.id::text)",
+            (instance_id, AUTO_REQUESTER),
+        ).fetchall()
+        for (call_id, org_id, ptype, pid, server_id, tool, policy_id, requested_by, version,
+             target, action) in rows:
+            ledger.record(
+                conn, instance_id, EventKind.CALL_APPROVAL_REQUESTED, entity_id=str(call_id),
+                state_version=version, actor=alerts.AUTO_ACTOR,
+                payload={"call_approval_id": str(call_id), "org_id": org_id,
+                         "principal_type": ptype, "principal_id": pid, "server_id": server_id,
+                         "tool": tool, "policy_version_id": policy_id,
+                         "requested_by": requested_by,
+                         **({"target": target, "action": action} if action is not None else {})},
+            )
+            announced += alerts.raise_alert(
+                conn, instance_id, kind="call_approval_requested", severity="medium",
+                dedup_key=f"call_approval_requested:{call_id}",
+                subject={"id": str(call_id), "server_id": server_id, "tool": tool,
+                         "principal_id": pid},
+            )
+    return announced

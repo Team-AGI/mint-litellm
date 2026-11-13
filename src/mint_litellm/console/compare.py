@@ -5,6 +5,8 @@ import hashlib
 import json
 from typing import Any
 
+from mint_litellm.control import change_summary
+
 DEPLOYMENT = "(배포)"
 # 줄 비교 상한: 한쪽이라도 이 줄 수(정규화 JSON)나 바이트 수를 넘으면 줄 비교를 하지 않는다.
 COMPARE_LIMIT_LINES = 2000
@@ -44,6 +46,8 @@ def changes(info: dict[str, Any]) -> list[dict[str, Any]]:
             "scope": key[0], "name": key[1], "change": kind,
             "approved": a["canonical_text"] if a else None,
             "observed": o["canonical_text"] if o else None,
+            "summary": (o or {}).get("change_summary") or change_summary.tool_summary(
+                a["canonical_text"] if a else None, o["canonical_text"] if o else None),
         })
     deployment = next((d for d in info["deployments"] if d["status"] == "approved"), None)
     seen = next((o for o in info["observations"] if o["kind"] == "deployment"), None)
@@ -53,6 +57,7 @@ def changes(info: dict[str, Any]) -> list[dict[str, Any]]:
         rows.append({
             "scope": "", "name": DEPLOYMENT, "change": "changed",
             "approved": deployment["canonical_text"], "observed": seen["canonical_text"],
+            "summary": seen.get("change_summary") or "",
         })
     return rows
 

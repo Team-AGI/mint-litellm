@@ -36,6 +36,8 @@ class MintError(BaseModel):
     dispatch_state: DispatchState
     retry_safe: bool
     reference: str
+    # 막힌 호출의 호출별 승인 요청을 열었음(참조로 승인자가 찾는다)
+    approval_requested: bool = False
 
     @model_validator(mode="after")
     def _retry_only_before_dispatch(self) -> Self:
@@ -47,13 +49,16 @@ class MintError(BaseModel):
 
     def detail(self) -> str:
         """``HTTPException.detail``에 넣을 JSON 문자열. 키 순서가 고정되어 있다."""
+        body = {
+            "code": self.code,
+            "dispatch_state": self.dispatch_state.value,
+            "retry_safe": self.retry_safe,
+            "reference": self.reference,
+        }
+        if self.approval_requested:
+            body["approval_requested"] = True
         return json.dumps(
-            {
-                "code": self.code,
-                "dispatch_state": self.dispatch_state.value,
-                "retry_safe": self.retry_safe,
-                "reference": self.reference,
-            },
+            body,
             ensure_ascii=False,
             separators=(",", ":"),
         )

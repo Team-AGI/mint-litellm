@@ -148,6 +148,7 @@ def _approval_expiry_scan(job: JobContext) -> None:
 
     expiry.expire_due(job.conn, job.instance_id)
     expiry.warn_expiring(job.conn, job.instance_id)
+    expiry.announce_requests(job.conn, job.instance_id)
     settings = job.settings
     recert.scan(
         job.conn,

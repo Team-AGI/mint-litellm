@@ -6,7 +6,7 @@ import uuid
 from collections.abc import Collection, Iterable
 from typing import Any
 
-from mint_litellm.control import alerts
+from mint_litellm.control import alerts, change_summary
 from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import ControlError, conflict
@@ -86,6 +86,7 @@ def _observe(
     value: Any,
     *,
     is_drift: bool = True,
+    summary: str | None = None,
 ) -> tuple[dict, bool]:
     row = fetchone(
         ctx.conn,
@@ -104,13 +105,14 @@ def _observe(
         ctx.conn,
         "INSERT INTO mint.contract_observations"
         " (instance_id,server_id,kind,scope,name,entity_id,observed_sha256,"
-        " canonical_text,change_seq)"
-        " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+        " canonical_text,change_seq,change_summary)"
+        " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
         " ON CONFLICT (instance_id,server_id,kind,scope,name) DO UPDATE SET"
         " entity_id=EXCLUDED.entity_id, observed_sha256=EXCLUDED.observed_sha256,"
-        " canonical_text=EXCLUDED.canonical_text,change_seq=EXCLUDED.change_seq,observed_at=now()"
+        " canonical_text=EXCLUDED.canonical_text,change_seq=EXCLUDED.change_seq,observed_at=now(),"
+        " change_summary=EXCLUDED.change_summary"
         " RETURNING *",
-        (ctx.instance_id, server_id, kind, scope, name, entity_id, digest, text, seq),
+        (ctx.instance_id, server_id, kind, scope, name, entity_id, digest, text, seq, summary),
     )
     return row, changed
 
@@ -161,7 +163,12 @@ def record_tools(
                 drift_kind(json.loads(contract["canonical_text"]), value) if contract else "added"
             )
             observation, changed = _observe(
-                ctx, server_id, "tool", scope, name, entity, value, is_drift=drift != "none"
+                ctx, server_id, "tool", scope, name, entity, value, is_drift=drift != "none",
+                summary=(
+                    change_summary.tool_summary(contract["canonical_text"] if contract else None,
+                                                value)
+                    if drift != "none" else None
+                ),
             )
             if contract:
                 # 입력 변경 차단은 재승인 전까지 유지한다.
@@ -282,7 +289,8 @@ def _deployment_drift(
     server_id = server["server_id"]
     entity = entity or contract["id"]  # 사건·경보 키의 개체(관측 이름마다 순번이 따로 올라간다)
     observation, changed = _observe(ctx, server_id, "deployment", "server", name,
-                                    contract["id"], value)
+                                    contract["id"], value,
+                                    summary=change_summary.deployment_summary(fields))
     merged = sorted(set(server["deployment_drift_fields"] or ()) | set(fields))
     if not server["deployment_drift"] or merged != server["deployment_drift_fields"]:
         ctx.conn.execute(

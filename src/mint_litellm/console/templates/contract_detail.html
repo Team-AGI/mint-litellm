@@ -8,9 +8,9 @@
 </dl>
 <h2>항목별 변경</h2>
 {% if rows %}
-<table><thead><tr><th>항목</th><th>변경</th><th></th></tr></thead><tbody>
+<table><thead><tr><th>항목</th><th>변경</th><th>변경 요약</th><th></th></tr></thead><tbody>
 {% for r in rows %}<tr{% if chosen and chosen.name == r.name and chosen.scope == r.scope %} class="selected"{% endif %}>
-<td>{{ r.name }}</td><td>{{ m.badge(L.CHANGE, r.change) }}</td>
+<td>{{ r.name }}</td><td>{{ m.badge(L.CHANGE, r.change) }}</td><td>{{ r.summary | blank }}</td>
 <td><a class="button" href="/contracts/{{ server_id | urlencode }}?scope={{ r.scope | urlencode }}&amp;name={{ r.name | urlencode }}">비교 보기</a></td>
 </tr>{% endfor %}
 </tbody></table>

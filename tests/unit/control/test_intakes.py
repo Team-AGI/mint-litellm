@@ -364,6 +364,9 @@ def test_submission_poll_creates_received_intakes_only_for_pending_submissions(w
     ]
     assert rows[0]["owner_user_id"] == "staff-1" and rows[0]["org_id"] == "acme"
     assert len(world.events("intake_received")) == 2
+    # 제출에서 알 수 있는 입력은 채워지고 승인자에게 경보가 간다. 목적 등은 사람이 정한다.
+    assert rows[0]["provider"] == "up.test" and rows[0]["purpose"] is None
+    assert len(fetchall(world.conn, "SELECT 1 FROM mint.alerts WHERE kind = 'intake_pending'")) == 2
     assert world.server("sub-1")["status"] == "pending"
     contract = fetchone(
         world.conn, "SELECT * FROM mint.deployment_contracts WHERE server_id = 'sub-1'"

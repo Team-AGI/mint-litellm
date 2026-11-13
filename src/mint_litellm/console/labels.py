@@ -297,6 +297,8 @@ ALERT_KIND = {
     "control_key_mismatch": "제어 키 불일치",
     "enforcement_unverified": "집행 확인 불가",
     "server_identity_conflict": "서버 신원 충돌",
+    "intake_pending": "도입 신청 대기",
+    "call_approval_requested": "호출 승인 요청",
 }
 ALERT_STATUS = {
     "open": Status("열림", "error"),
@@ -405,6 +407,7 @@ NOTICES = {
     "approved": "승인했습니다.",
     "revoked": "승인을 철회했습니다.",
     "recertified": "승인을 재확인했습니다.",
+    "renewed": "만료가 가까운 승인을 갱신했습니다.",
     "revoked_denied": "승인을 철회하고 거부를 등록했습니다.",
     "denied": "거부를 등록했습니다.",
     "lifted": "해제했습니다.",
