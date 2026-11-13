@@ -225,6 +225,8 @@ def test_result_policy_reaches_the_call_context(tmp_path):
         "response_scan": "mask",
         "scan": True,
         "enforce": True,
+        "unmanaged": False,
+        "scan_enforce": False,
     }
 
 
@@ -249,9 +251,10 @@ def test_managed_servers_get_default_result_limits_and_explicit_conditions_win(t
     assert got["max_result_bytes"] is None and got["max_result_items"] is None
 
 
-def test_result_scan_is_off_for_servers_without_a_contract_and_when_the_approval_says_so(tmp_path):
+def test_result_scan_covers_unmanaged_servers_and_the_approval_can_turn_it_off(tmp_path):
     plain = decide(harness(tmp_path, snapshot(), evaluate=evaluator()))
-    assert plain.context["result_policy"]["scan"] is False
+    assert plain.context["result_policy"]["scan"] is True
+    assert plain.context["result_policy"]["unmanaged"] is True
     off = snapshot(
         server=MANAGED_SERVER,
         tool_contracts=CONTRACTS,
