@@ -32,7 +32,7 @@ log = logging.getLogger("mint_litellm.endpoint")
 
 MAX_BODY_BYTES = 64 * 1024
 # 경로마다 정상 본문이 이보다 작다(결과 보고는 참조와 결과 종류, 설치 보고는 서버 이름 목록).
-BODY_LIMITS = {DECIDE_PATH: MAX_BODY_BYTES, RESULT_PATH: 4 * 1024, REPORT_PATH: 16 * 1024}
+BODY_LIMITS = {DECIDE_PATH: MAX_BODY_BYTES, RESULT_PATH: 4 * 1024, REPORT_PATH: 32 * 1024}
 NOT_READY_CODE = "MINT-ENDPOINT-NOT-READY"
 _REFERENCE = re.compile(r"^([0-9a-f-]{36}):([1-9][0-9]{0,8})$")
 
@@ -79,6 +79,17 @@ class AutostartItem(BaseModel):
     server: str | None = Field(default=None, min_length=1, max_length=128)
 
 
+class RemovedItem(BaseModel):
+    """관리형 묶음이 폐기 서버 때문에 지웠다고 보고하는 항목(경로는 받지 않는다)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["config", "process", "autostart"]
+    server: str = Field(min_length=1, max_length=128)
+    # 설정 항목이면 도구 이름(claude·codex), 자동 시작 항목이면 항목 이름
+    target: str | None = Field(default=None, max_length=256)
+
+
 class ReportBody(BaseModel):
     """설치 묶음이 설치·제거를 마치고 보내는 상태 보고. 파일 경로나 키는 받지 않는다."""
 
@@ -94,6 +105,7 @@ class ReportBody(BaseModel):
     # 이전 묶음은 보내지 않는다(None = 보고 없음). 단말의 주장이며 MINT가 관측한 값이 아니다.
     processes: list[ProcessItem] | None = Field(default=None, max_length=64)
     autostart: list[AutostartItem] | None = Field(default=None, max_length=64)
+    removed: list[RemovedItem] | None = Field(default=None, max_length=256)
 
     @model_validator(mode="after")
     def _mode_matches_action(self) -> ReportBody:
@@ -280,6 +292,7 @@ def make_router(
                 mcp_servers=body.mcp_servers,
                 processes=_dump(body.processes),
                 autostart=_dump(body.autostart),
+                removed=_dump(body.removed),
             )
         except Exception as exc:
             raise HTTPException(status_code=503, detail="install store is not ready") from exc
@@ -287,7 +300,18 @@ def make_router(
             raise HTTPException(status_code=404, detail="no such kit key")
         if outcome == "expired":
             raise HTTPException(status_code=403, detail="kit key expired; ask an admin to reissue")
-        return {"recorded": True, "renewed": outcome == "renewed"}
+        try:
+            retired = await runtime.database.retired_servers(
+                runtime.config.instance_id,
+                [*body.mcp_servers, *(i.server for i in body.processes or ()),
+                 *(i.server for i in body.autostart or () if i.server)],
+            )
+        except Exception:
+            retired = None  # 목록을 못 만들면 싣지 않는다(단말은 마지막 목록을 그대로 쓴다)
+        answer: dict[str, Any] = {"recorded": True, "renewed": outcome == "renewed"}
+        if retired is not None:
+            answer["retired"] = retired
+        return answer
 
     return router
 

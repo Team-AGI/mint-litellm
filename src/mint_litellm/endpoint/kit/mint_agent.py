@@ -11,7 +11,11 @@
         전용 소켓을 가진 작은 프로세스가 결정 서버와의 연결을 유지하고 훅이 이를 거쳐 보낸다.
         중계에 닿지 못하면 훅이 직접 보내며(느릴 뿐 판정은 같다), 요청이 한동안 없으면 끝난다.
   run   MCP 서버 실행기. 승인된 실행 계약과 디스크의 실행 파일·스크립트 해시가 모두 같을 때만
-        서버를 시작하고, 아니면 시작하지 않고 종료 코드 126으로 끝난다.
+        서버를 시작하고, 아니면 시작하지 않고 종료 코드 126으로 끝난다. 마지막 설치 보고 응답이
+        폐기·미승인으로 알린 서버(사용자 캐시나 설치 폴더의 ``retired.json``)도
+        시작하지 않는다. 캐시는
+        오래되어도 그대로 쓰며(목록에 든 서버만 막는다), 시작한 프로세스는 보고기가 끌 수 있게
+        PID와 시작 시각을 사용자 캐시에 기록한다.
 
 Claude Code와 Codex가 같은 훅 입력(도구 이름 ``mcp__서버__도구``, 호출 식별자)을 준다. Codex는
 서버 이름을 따로 주지 않아 승인 목록의 서버 이름과 도구 이름의 접두로 서버를 찾는다. Windows에서
@@ -54,6 +58,10 @@ SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 # 승인된 계약이 값을 정하지 않은 한, 시작 직전에 물려받지 않는 환경 변수.
 ENV_DENIED = re.compile(r"^(LD_|DYLD_|NODE_OPTIONS$|NODE_PATH$|PYTHON|BASH_ENV$|ENV$)")
 REFUSED = 126
+STATE_DIR = "~/.cache/mint"
+KIT_DIR = os.path.dirname(os.path.abspath(__file__))  # Windows SYSTEM 보고기는 목록을 여기 둔다
+RETIRED_FILE = "retired.json"
+LAUNCHED = "launched"
 # 연결 중계는 요청이 이 시간(초) 없으면 끝난다. 소켓 경로는 운영체제 상한 안이어야 한다.
 BROKER_SOCKET = "conn.sock"
 BROKER_IDLE = 300.0
@@ -121,6 +129,55 @@ def load_contract(path: str, server: str) -> dict[str, Any]:
     if not isinstance(entry, dict) or not isinstance(entry.get("executable"), str):
         raise Refuse(f"server {server} is not an approved local server")
     return entry
+
+
+def load_retired(state_dir: str) -> set[str]:
+    """마지막 보고 응답의 폐기 서버 이름(사용자 캐시와 이 파일이 있는 설치 폴더의 목록을 합친다).
+    목록이 없거나 읽을 수 없으면 그 몫은 비어 있다(알 수 없다)."""
+    names: set[str] = set()
+    for folder in (os.path.expanduser(state_dir), KIT_DIR):
+        try:
+            with open(os.path.join(folder, RETIRED_FILE), encoding="utf-8") as handle:
+                listed = json.load(handle).get("servers")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(listed, list):
+            names |= {name for name in listed if isinstance(name, str)}
+    return names
+
+
+def proc_start(pid: int) -> str | None:
+    """프로세스의 시작 시각 표지(보고기가 재사용된 PID를 가려내는 데 쓴다). 모르면 None."""
+    if os.name == "nt":
+        try:
+            done = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 f"(Get-Process -Id {int(pid)}).StartTime.ToFileTimeUtc()"],
+                capture_output=True, text=True, timeout=10,
+            )  # fmt: skip
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return done.stdout.strip() or None if done.returncode == 0 else None
+    try:
+        with open(f"/proc/{int(pid)}/stat", encoding="utf-8", errors="replace") as handle:
+            stat = handle.read()
+    except OSError:
+        return None
+    return stat.rsplit(")", 1)[-1].split()[19] if ")" in stat else None
+
+
+def record_launch(state_dir: str, server: str) -> None:
+    """시작할 서버 프로세스(exec 뒤에도 같은 PID)를 기록한다. 기록하지 못해도 시작은 막지 않는다."""
+    try:
+        folder = os.path.join(os.path.expanduser(state_dir), LAUNCHED)
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        pid = os.getpid()
+        name = re.sub(r"[^A-Za-z0-9_.-]", "_", server)[:100]
+        record = {"server": server, "pid": pid, "start": proc_start(pid)}
+        with open(os.path.join(folder, f"{name}-{pid}.json"), "w", encoding="utf-8") as handle:
+            json.dump(record, handle)
+    except OSError:
+        pass
 
 
 def server_prefix(server: str) -> str:
@@ -476,8 +533,14 @@ def run_server(
     contracts: str,
     environ: Mapping[str, str],
     execve: Callable[..., Any] | None = None,
+    state_dir: str | None = None,
 ) -> None:
-    """승인된 서버만 시작한다. 검증을 통과하지 못하면 ``Refuse``이고 서버는 시작되지 않는다."""
+    """승인된 서버만 시작한다. 검증을 통과하지 못하면 ``Refuse``이고 서버는 시작되지 않는다.
+
+    ``state_dir``가 있으면 폐기 서버 목록을 확인하고 시작한 프로세스를 기록한다.
+    """
+    if state_dir is not None and server in load_retired(state_dir):
+        raise Refuse(f"server {server} was retired by MINT")
     approved = load_contract(contracts, server)
     executable = approved["executable"]
     try:
@@ -489,6 +552,8 @@ def run_server(
     env = launch_env(approved, environ)
     if approved.get("cwd"):
         os.chdir(approved["cwd"])
+    if state_dir is not None:
+        record_launch(state_dir, server)
     # 한계: 실행 파일은 검증한 기술자로 실행해 바꿔치기를 막지만, 셸 스크립트처럼 기술자로
     # 실행할 수 없으면 경로 실행으로 물러나 검증과 실행 사이에 틈이 남는다. 읽는 스크립트도
     # 경로로 열린다. 관리형 설치의 쓰기 금지 경로가 틈을 줄이며, 완전히 닫으려면 검증한 사본으로
@@ -553,7 +618,10 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "run":
         kick_report(os.path.dirname(os.path.abspath(__file__)))
         try:
-            run_server(args.server or "", args.contracts, os.environ)
+            run_server(
+                args.server or "", args.contracts, os.environ,
+                state_dir=args.state_dir or STATE_DIR,
+            )  # fmt: skip
         except Refuse as exc:
             _give_up(REFUSED, f"MINT refused to start the server: {exc}")
         except BaseException as exc:  # 어떤 예외도 시작으로 새지 않는다.
