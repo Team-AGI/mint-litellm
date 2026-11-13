@@ -311,3 +311,240 @@ def test_a_package_runner_keeps_its_cache_and_leaves_the_rest_of_home_alone(tmp_
     assert (home / ".npm" / "marker").read_text() == "cached\n"
     assert not (home / "other").exists()  # 홈의 나머지는 비어 있는 임시 폴더다.
     assert not (home / ".npm" / "secret-visible").exists()
+
+
+# --- 호스트 허용 목록(network: hosts) -------------------------------------------------------
+
+def quad(*parts):
+    return ".".join(str(p) for p in parts)  # 소스에 주소 글자를 직접 두지 않는다
+
+
+LO = quad(127, 0, 0, 1)
+HOSTS = ["api.example.com", "*.cdn.example.com:443", f"{LO}:8080", "[::1]:9"]
+
+
+def test_host_matching_is_exact_or_a_proper_subdomain_and_port_aware():
+    ok, no = agent.host_matches, lambda *a: not agent.host_matches(*a)
+    assert ok(HOSTS, "api.example.com", 1) and ok(HOSTS, "API.example.com.", 443)
+    assert no(HOSTS, "example.com", 443) and no(HOSTS, "x.api.example.com", 443)
+    assert ok(HOSTS, "a.cdn.example.com", 443) and ok(HOSTS, "a.b.cdn.example.com", 443)
+    assert no(HOSTS, "a.cdn.example.com", 80) and no(HOSTS, "cdn.example.com", 443)
+    assert no(HOSTS, "evilcdn.example.com", 443)  # 접미는 점 경계에서만
+    assert ok(HOSTS, LO, 8080) and no(HOSTS, LO, 8081)
+    assert ok(HOSTS, "[::1]", 9) and ok(HOSTS, "::1", 9)
+    assert no(["*.0.0.1"], LO, 1)  # 와일드카드는 주소 글자에 맞지 않는다.
+
+
+PUBLIC = quad(93, 184, 216, 34)
+
+
+def fake(table):
+    def resolve(host, port):
+        if host not in table:
+            raise OSError("no such name")
+        return table[host]
+
+    return resolve
+
+
+def test_the_verdict_resolves_only_declared_names_and_refuses_private_answers():
+    seen = []
+
+    def resolve(host, port):
+        seen.append(host)
+        return {
+            "api.example.com": [quad(10, 0, 0, 5), PUBLIC],
+            "bad.cdn.example.com": [quad(10, 1, 1, 1)],
+            "meta.cdn.example.com": [quad(169, 254, 169, 254)],
+            "lo.cdn.example.com": ["::ffff:" + LO],
+        }[host]
+
+    verdict = lambda h, p: agent.egress_verdict(HOSTS, h, p, resolve)  # noqa: E731
+    assert verdict("api.example.com", 443) == (PUBLIC, "ok")  # 사설 답은 건너뛴다.
+    assert verdict("bad.cdn.example.com", 443)[0] is None
+    assert verdict("meta.cdn.example.com", 443)[0] is None
+    assert verdict("lo.cdn.example.com", 443)[0] is None
+    assert verdict("other.example.org", 443) == (None, "host not declared")
+    assert "other.example.org" not in seen  # 선언하지 않은 이름은 DNS로 새지 않는다.
+    # 선언한 호스트 자체가 사설·루프백 주소 글자이면 그 주소만 허용한다.
+    assert verdict(LO, 8080) == (LO, "ok")
+    assert verdict("::1", 9) == ("::1", "ok")
+    assert verdict(quad(127, 0, 0, 2), 8080)[0] is None
+    assert agent.egress_verdict(HOSTS, "api.example.com", 1, fake({}))[1] == "name did not resolve"
+
+
+def test_a_hosts_contract_runs_without_a_network_and_with_the_forwarder():
+    doc = {**CONTRACT, "network": "hosts", "allowed_hosts": ["api.example.com"]}
+    argv = [doc["executable"], *doc["argv"]]
+    args = agent.bwrap_args(doc, argv, HOME, "bwrap", "/tmp/e", "/usr/bin/python3")
+    assert "--unshare-all" in args and "--share-net" not in args
+    assert "/etc/ssl" in args  # 인증서는 필요하다
+    assert ("/tmp/e", agent.EGRESS_MOUNT) in pairs(args, "--ro-bind")
+    tail = args[args.index("--") + 1 :]
+    assert tail[:3] == ["/usr/bin/python3", "-I", "-c"] and tail[3] == agent.EGRESS_FORWARDER
+    assert tail[4:] == [f"{agent.EGRESS_MOUNT}/proxy.sock", str(agent.EGRESS_PORT), agent.LOOPBACK,
+                        "/opt/srv/bin/node", "/opt/srv/app/index.js"]  # fmt: skip
+    with pytest.raises(agent.Refuse):  # 중계가 없으면 열어 두지 않고 시작하지 않는다.
+        agent.bwrap_args(doc, [doc["executable"]], HOME, "bwrap")
+
+
+def test_none_any_and_undeclared_networks_do_not_get_a_forwarder():
+    for doc in ({**CONTRACT, "network": "none"}, {**CONTRACT, "network": "any"}, CONTRACT):
+        args = build(doc)
+        assert agent.EGRESS_FORWARDER not in args and agent.EGRESS_MOUNT not in args
+    assert [agent.network_mode(d) for d in ({"network": "none"}, {"network": "hosts"}, {})] == [
+        "none", "hosts", "open"]  # fmt: skip
+
+
+def test_the_proxy_environment_overrides_inherited_bypass_lists():
+    env = agent.proxy_env()
+    url = f"http://{LO}:{agent.EGRESS_PORT}"
+    assert {env[k] for k in ("HTTP_PROXY", "https_proxy", "ALL_PROXY")} == {url}
+    assert env["NO_PROXY"] == "" == env["no_proxy"]
+
+
+def test_refusal_counts_reach_the_process_report(tmp_path, monkeypatch):
+    monkeypatch.setattr(kit, "proc_start", lambda pid, windows: "t1")
+    launched(tmp_path, "s", 1, "t1", "bwrap")
+    launched(tmp_path, "other", 2, "t1", "bwrap")
+    path = tmp_path / kit.STATE_REL / kit.LAUNCHED / "s-1.json"
+    agent.update_launch(str(path), egress_refused=3)
+    items = [{"server": "s", "count": 1}, {"server": "other", "count": 1}]
+    got = {i["server"]: i.get("egress_refused") for i in kit.with_sandbox(items, tmp_path, False)}
+    assert got == {"s": 3, "other": None}
+
+
+# --- 중계 판정(운영체제의 이름 해석 없이, 유닉스 소켓이 있는 곳에서) -----------------------------
+
+import asyncio  # noqa: E402
+import threading  # noqa: E402
+
+posix = pytest.mark.skipif(os.name != "posix", reason="needs unix sockets")
+
+
+class Echo:
+    """로컬 시험 HTTP 서버(루프백). 받은 요청 경로를 본문으로 돌려준다."""
+
+    def __init__(self):
+        import http.server
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = b"hello " + self.path.encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        self.server = http.server.ThreadingHTTPServer((LO, 0), Handler)
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def ask(sock_path, request: bytes, full: bool = True) -> bytes:
+    async def go():
+        reader, writer = await asyncio.open_unix_connection(sock_path)
+        writer.write(request)
+        data = await reader.read() if full else await reader.read(64)
+        writer.close()
+        return data
+
+    return asyncio.run(go())
+
+
+@posix
+def test_the_proxy_forwards_declared_hosts_and_counts_what_it_refuses(tmp_path):
+    echo, other = Echo(), Echo()
+    refusals, lines = [], []
+    sock = str(tmp_path / "p.sock")
+    proxy = agent.EgressProxy([f"{LO}:{echo.port}", "named.example.com"], sock,
+                              resolve=fake({"named.example.com": [LO]}),
+                              log=lines.append, on_refuse=refusals.append)  # fmt: skip
+    proxy.start()
+    try:
+        url = f"http://{LO}:{echo.port}/x?y=1"
+        ok = ask(sock, f"GET {url} HTTP/1.1\r\nHost: h\r\n\r\n".encode())
+        assert ok.startswith(b"HTTP/1.0 200") and ok.endswith(b"hello /x?y=1")
+        undeclared = ask(sock, f"GET http://{LO}:{other.port}/ HTTP/1.1\r\n\r\n".encode())
+        assert undeclared.startswith(b"HTTP/1.1 403")
+        # 선언한 이름이 루프백으로 풀리면(주소 글자로 선언하지 않았으므로) 거절한다.
+        named = ask(sock, b"CONNECT named.example.com:80 HTTP/1.1\r\n\r\n")
+        assert named.startswith(b"HTTP/1.1 403")
+        connect = ask(sock, f"CONNECT {LO}:{echo.port} HTTP/1.1\r\n\r\n".encode(), False)
+        assert connect.startswith(b"HTTP/1.1 200 Connection Established")
+        assert ask(sock, b"GET https://x/ HTTP/1.1\r\n\r\n").startswith(b"HTTP/1.1 400")
+    finally:
+        proxy.stop()
+        echo.close(), other.close()
+    assert refusals == [1, 2] and (proxy.allowed, proxy.refused) == (2, 2)
+    assert any(f"allow {LO}" in x for x in lines) and any("refuse" in x for x in lines)
+
+
+HOSTS_SERVER = r"""
+import http.client, json, socket, sys, urllib.error, urllib.request
+allowed, other, lo, proxy_port = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+out = {}
+def get(port):
+    try:
+        return urllib.request.urlopen(f"http://{lo}:{port}/ok", timeout=10).read().decode()
+    except urllib.error.HTTPError as exc:
+        return f"http {exc.code}"
+    except Exception as exc:
+        return "error " + type(exc).__name__
+out["allowed"], out["other"] = get(allowed), get(other)
+def tunnel():
+    conn = http.client.HTTPConnection(lo, proxy_port, timeout=10)
+    conn.set_tunnel(lo, int(allowed))
+    conn.request("GET", "/tunnel")
+    return conn.getresponse().read().decode()
+def direct(port):
+    s = socket.socket()
+    s.settimeout(3)
+    s.connect((lo, int(port)))
+    return "connected"
+for name, call in (("tunnel", tunnel), ("direct", lambda: direct(allowed))):
+    try:
+        out[name] = call()
+    except Exception as exc:
+        out[name] = "denied " + type(exc).__name__
+print(json.dumps(out))
+"""
+
+
+@real
+def test_a_hosts_server_reaches_only_declared_hosts_through_the_proxy(tmp_path):
+    echo, other = Echo(), Echo()
+    script = tmp_path / "server.py"
+    script.write_text(HOSTS_SERVER)
+    doc = {
+        "executable": SYSTEM_PYTHON, "argv": [str(script), str(echo.port), str(other.port),
+                                              agent.LOOPBACK, str(agent.EGRESS_PORT)],
+        "executable_sha256": agent.sha256_file(SYSTEM_PYTHON), "script_sha256": None,
+        "cwd": None, "env": {}, "network": "hosts", "allowed_hosts": [f"{LO}:{echo.port}"],
+    }  # fmt: skip
+    listing = tmp_path / "contracts.json"
+    listing.write_text(json.dumps({"servers": {"s": doc}}))
+    try:
+        done = subprocess.run(
+            [sys.executable, agent.__file__, "run", "--contracts", str(listing), "--server", "s",
+             "--state-dir", str(tmp_path / "state")],
+            capture_output=True, text=True, timeout=90,
+        )  # fmt: skip
+    finally:
+        echo.close(), other.close()
+    assert done.returncode == 0, done.stderr
+    seen = json.loads(done.stdout)
+    assert seen["allowed"] == "hello /ok" and seen["tunnel"] == "hello /tunnel"
+    assert seen["other"] == "http 403"  # 선언하지 않은 호스트(포트)는 거절된다.
+    assert seen["direct"].startswith("denied")  # 프록시를 거치지 않으면 어디에도 닿지 못한다.
+    assert "mint-egress refuse" in done.stderr
+    (record,) = [json.loads(p.read_text()) for p in (tmp_path / "state/launched").iterdir()]
+    assert record["sandbox"] == "bwrap" and record["egress_refused"] == 1
+    assert not list(__import__("pathlib").Path("/tmp").glob("mint-egress-*"))  # 중계 폴더는 지운다.

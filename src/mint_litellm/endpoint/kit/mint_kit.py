@@ -231,9 +231,11 @@ def with_sandbox(processes: list[dict], home: Path, windows: bool) -> list[dict]
     """프로세스 항목에 서버별 격리 상태를 더한다(실행기가 남긴 기록 중 아직 살아 있는 것만).
 
     ``bwrap``은 기록된 모든 프로세스가 격리 안, ``none``은 하나라도 격리 없이, Windows는
-    ``unsupported``. 기록이 없는 서버는 비워 둔다(이전 실행기가 띄운 것).
+    ``unsupported``. 기록이 없는 서버는 비워 둔다(이전 실행기가 띄운 것). 호스트 허용 목록 서버는
+    실행기가 센 거절 수 ``egress_refused``도 더한다.
     """
     seen: dict[str, str] = {}
+    refused: dict[str, int] = {}
     folder = home / STATE_REL / LAUNCHED
     for path in sorted(folder.glob("*.json")) if not windows and folder.is_dir() else []:
         try:
@@ -244,10 +246,14 @@ def with_sandbox(processes: list[dict], home: Path, windows: bool) -> list[dict]
             continue
         if status in ("bwrap", "none") and start and proc_start(pid, False) == start:
             seen[server] = "none" if "none" in (status, seen.get(server)) else "bwrap"
+            if isinstance(record.get("egress_refused"), int) and record["egress_refused"] >= 0:
+                refused[server] = refused.get(server, 0) + record["egress_refused"]
     for item in processes:
         status = "unsupported" if windows else seen.get(item["server"])
         if status:
             item["sandbox"] = status
+        if item["server"] in refused:  # 호스트 허용 목록 서버가 거절당한 접속 수
+            item["egress_refused"] = refused[item["server"]]
     return processes
 
 

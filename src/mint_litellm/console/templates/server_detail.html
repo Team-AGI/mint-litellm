@@ -18,7 +18,7 @@
 </tbody></table>
 {% else %}<p class="muted">선언된 경로가 없습니다.</p>{% endif %}
 <h2>네트워크</h2>
-<p>{{ '차단(단말 격리가 네트워크를 막습니다)' if s.network == 'none' else '네트워크 미제한' }}</p>
+<p>{% if s.network == 'none' %}차단(단말 격리가 네트워크를 막습니다){% elif s.network == 'hosts' %}허용 호스트만: {{ s.allowed_hosts | join(', ') }}{% else %}네트워크 미제한{% endif %}</p>
 {% endif %}
 {% if s.exec_drift %}
 <h2>실행 계약 변경</h2>

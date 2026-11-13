@@ -106,3 +106,17 @@ def test_registration_hints_tell_what_the_network_declaration_means():
     assert len(plain) == 1 and "네트워크 미제한" in plain[0]
     runner = network_hints(contract(executable="/usr/bin/npx", network="any"))
     assert runner == ["이 계약은 네트워크를 쓸 것으로 보입니다."]
+
+
+def test_host_allowlist_is_hashed_sorted_and_validated():
+    base = {"executable": "/usr/bin/x", "executable_sha256": "0" * 64}
+    a = ExecContract(**base, network="hosts", allowed_hosts=("b.io:443", "*.a.com"))
+    b = ExecContract(**base, network="hosts", allowed_hosts=("*.a.com", "b.io:443"))
+    assert a.allowed_hosts == ("*.a.com", "b.io:443") and a.sha256() == b.sha256()
+    assert a.sha256() != ExecContract(**base, network="any").sha256()
+    assert "allowed_hosts" not in ExecContract(**base).document()  # 이전 계약의 해시는 그대로
+    for bad in (("A.com",), ("a.com:0",), ("a.com:70000",), ("a..com",), ("a.com", "a.com"), ()):
+        with pytest.raises(ValueError):
+            ExecContract(**base, network="hosts", allowed_hosts=bad)
+    with pytest.raises(ValueError):  # 목록은 hosts 선언과 함께만
+        ExecContract(**base, network="any", allowed_hosts=("a.com",))

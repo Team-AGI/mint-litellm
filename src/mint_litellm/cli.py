@@ -615,7 +615,12 @@ def _server_register_local(run: Run) -> None:
         document = json.loads(Path(run.args.contract).read_bytes())
         declared = [{"path": p, "mode": "ro"} for p in run.args.read or ()]
         declared += [{"path": p, "mode": "rw"} for p in run.args.read_write or ()]
-        if run.args.network:
+        if run.args.allow_host:
+            if run.args.network not in (None, "hosts"):
+                raise ValueError("--allow-host는 --network hosts와만 함께 쓴다")
+            document["network"] = "hosts"
+            document["allowed_hosts"] = [*document.get("allowed_hosts", ()), *run.args.allow_host]
+        elif run.args.network:
             document["network"] = run.args.network
         if declared:  # 플래그로 준 선언은 파일의 선언에 더한다(같은 경로는 거부된다)
             document["file_access"] = [*document.get("file_access", ()), *declared]
@@ -1016,8 +1021,10 @@ ARGUMENTS: dict[str, list[Any]] = {
         _a("--read", action="append", metavar="PATH", help="서버가 읽을 경로 선언(반복 가능)"),
         _a("--read-write", action="append", metavar="PATH",
            help="서버가 읽고 쓸 경로 선언(반복 가능)"),
-        _a("--network", choices=["none", "any"],
+        _a("--network", choices=["none", "any", "hosts"],
            help="네트워크 선언. none이면 단말 격리가 네트워크를 막는다(생략하면 제한 없음)"),
+        _a("--allow-host", action="append", metavar="HOST[:PORT]",
+           help="서버가 나갈 호스트(정확한 이름 또는 *.도메인, 반복 가능). 주면 network는 hosts"),
     ],
     "server suspend": [_SERVER_ID],
     "server resume": [_SERVER_ID],
