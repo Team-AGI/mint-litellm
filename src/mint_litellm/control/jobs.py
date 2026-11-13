@@ -53,6 +53,7 @@ KINDS: dict[str, JobKind] = {
     "call_spike_scan": JobKind(),
     "package_vuln_scan": JobKind(),
     "approval_dormant_scan": JobKind(),
+    "org_suggest_scan": JobKind(),
     # 해제 경로: 되돌림 차단 상태에서도 실행한다(외부 쓰기 목록에 넣지 않는다).
     "restore_publish": JobKind(),
 }
@@ -226,6 +227,12 @@ def _approval_dormant_scan(job: JobContext) -> None:
     dormant.run(job)
 
 
+def _org_suggest_scan(job: JobContext) -> None:
+    from mint_litellm.control import org_suggest
+
+    org_suggest.run(job)
+
+
 def _package_vuln_scan(job: JobContext) -> None:
     from mint_litellm.control import vuln
 
@@ -298,6 +305,7 @@ HANDLERS: dict[str, Callable[[JobContext], None]] = {
     "call_spike_scan": _call_spike_scan,
     "package_vuln_scan": _package_vuln_scan,
     "approval_dormant_scan": _approval_dormant_scan,
+    "org_suggest_scan": _org_suggest_scan,
 }
 
 # 일정(주기 작업): 종류 -> 설정에서 주기(초)를 얻는 함수. 처리기가 있는 종류만 일정을 만든다.
@@ -314,6 +322,7 @@ SCHEDULES: dict[str, Callable[[Any], int]] = {
     "call_spike_scan": lambda s: 60,
     "package_vuln_scan": lambda s: s.vuln_scan_seconds,
     "approval_dormant_scan": lambda s: 3600,  # 1시간(고정)
+    "org_suggest_scan": lambda s: s.org_suggest_seconds,
 }
 
 

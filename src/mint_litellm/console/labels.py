@@ -208,6 +208,11 @@ APPROVAL_CLASS = {"standard": "일반", "exception": "예외"}
 PRINCIPAL = {"user": "사용자", "team_key": "팀 키", "service_account": "서비스 계정"}
 KIT_PLATFORM = {"linux": "Linux", "windows": "Windows"}
 KIT_HARNESS = {"claude": "Claude Code", "codex": "Codex", "all": "Claude Code + Codex"}
+ORG_RULE = {
+    "team_metadata": "팀 메타데이터",
+    "team_alias": "팀 별칭",
+    "email_domain": "이메일 도메인",
+}
 ALLOWLIST_KIND = {
     "provider": "제공자",
     "auth_server": "인증 서버",
@@ -433,6 +438,9 @@ NOTICES = {
     "call_cancelled": "승인 요청을 취소했습니다.",
     "org_added": "조직을 생성했습니다.",
     "org_closed": "조직을 닫았습니다.",
+    "org_suggestion_applied": "조직 연결 제안을 적용했습니다.",
+    "org_suggestion_ignored": "조직 연결 제안을 무시했습니다.",
+    "org_suggestions_applied": "규칙의 열린 제안을 적용했습니다.",
     "allowlist_added": "허용 목록에 추가했습니다.",
     "mode_set": "모드를 변경했습니다.",
     "policy_applied": "정책 판본을 적용했습니다.",

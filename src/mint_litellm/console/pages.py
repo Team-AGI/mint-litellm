@@ -13,7 +13,7 @@ from fastapi.responses import RedirectResponse, Response
 from mint_litellm.console import alert_view, api, compare
 from mint_litellm.console.core import STATUS, Actor, page_actor, require_csrf
 from mint_litellm.console.templating import render
-from mint_litellm.control import dormant, endpoint_kits, jobs, links
+from mint_litellm.control import dormant, endpoint_kits, jobs, links, org_suggest
 from mint_litellm.control import status as control_status
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import alerts as alert_service
@@ -691,6 +691,7 @@ def admin_page(request: Request, actor: Actor, error=None, status=200):
         "operators": [] if actor.role == "viewer" else reads.operators(actor.conn, actor.instance),
         "orgs": reads.orgs(actor.conn, actor.instance),
         "bindings": reads.bindings(actor.conn, actor.instance),
+        "suggestions": org_service.list_suggestions(actor.ctx),
         "allowlists": reads.allowlists(actor.conn, actor.instance),
         "error": error,
     }
@@ -744,6 +745,35 @@ def add_org(
 ):
     return act(actor, lambda: org_service.add(actor.ctx, org_id, name), "org_added", "/admin",
                lambda **kw: admin_page(request, actor, **kw))
+
+
+@router.post("/org-suggestions/rule")
+def apply_org_suggestion_rule(
+    request: Request, rule: str = Form(...), actor: Actor = Depends(page_actor)
+):
+    def action():
+        if rule not in org_suggest.RULES:
+            raise ValueError(rule)
+        org_service.apply_rule(actor.ctx, rule)
+
+    return act(actor, action, "org_suggestions_applied", "/admin",
+               lambda **kw: admin_page(request, actor, **kw))
+
+
+@router.post("/org-suggestions/{suggestion_id}/apply")
+def apply_org_suggestion(
+    suggestion_id: str, request: Request, actor: Actor = Depends(page_actor)
+):
+    return act(actor, lambda: org_service.apply_suggestion(actor.ctx, suggestion_id),
+               "org_suggestion_applied", "/admin", lambda **kw: admin_page(request, actor, **kw))
+
+
+@router.post("/org-suggestions/{suggestion_id}/ignore")
+def ignore_org_suggestion(
+    suggestion_id: str, request: Request, actor: Actor = Depends(page_actor)
+):
+    return act(actor, lambda: org_service.ignore_suggestion(actor.ctx, suggestion_id),
+               "org_suggestion_ignored", "/admin", lambda **kw: admin_page(request, actor, **kw))
 
 
 @router.post("/orgs/{org_id}/close")

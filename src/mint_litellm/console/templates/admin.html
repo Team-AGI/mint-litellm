@@ -40,6 +40,18 @@
 {% for b in bindings %}<tr><td>{{ b.org_id }}</td><td>{{ L.pick(L.SCOPE, b.subject_type) }}</td><td>{{ b.subject_id }}</td><td>{{ b.created_by | who }}</td></tr>{% endfor %}
 </tbody></table>
 {% endif %}
+{% if suggestions %}
+<h3>조직 연결 제안</h3>
+{% for rule in L.ORG_RULE %}{% set group = suggestions | selectattr('rule', 'equalto', rule) | list %}{% if group %}
+<h4>{{ L.ORG_RULE[rule] }} ({{ group | length }}건)</h4>
+<table><thead><tr><th>구분</th><th>대상</th><th>조직</th><th>일치 값</th><th class="num">최근 7일 호출</th><th></th></tr></thead><tbody>
+{% for s in group %}<tr><td>{{ L.pick(L.SCOPE, s.subject_type) }}</td><td>{{ s.subject_id }}</td><td>{{ s.org_id }}</td><td>{{ s.matched }}</td><td class="num">{{ s.calls }}</td>
+<td>{% if actor.role == 'admin' %}<form method="post" action="/org-suggestions/{{ s.id }}/apply" class="filters">{{ m.csrf(actor) }}<button type="submit" class="primary">적용</button></form>
+<form method="post" action="/org-suggestions/{{ s.id }}/ignore" class="filters">{{ m.csrf(actor) }}<button type="submit">무시</button></form>{% endif %}</td></tr>{% endfor %}
+</tbody></table>
+{% if actor.role == 'admin' %}<form method="post" action="/org-suggestions/rule" class="filters">{{ m.csrf(actor) }}<input type="hidden" name="rule" value="{{ rule }}"><button type="submit">{{ L.ORG_RULE[rule] }} 제안 {{ group | length }}건 모두 적용</button></form>{% endif %}
+{% endif %}{% endfor %}
+{% endif %}
 {% if actor.role == 'admin' %}
 <form method="post" action="/orgs" class="filters">
   {{ m.csrf(actor) }}

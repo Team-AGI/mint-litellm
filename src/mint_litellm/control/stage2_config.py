@@ -175,6 +175,9 @@ class Stage2Settings:
     vuln_feed_url: str = "https://api.osv.dev"
     vuln_scan_seconds: int = 900
     vuln_feed_timeout_seconds: int = 15
+    # 조직 연결 제안: 팀 메타데이터에서 조직을 읽는 키와 점검 주기(초). 기본값은 MINT가 채운다.
+    org_meta_key: str = "mint_org"
+    org_suggest_seconds: int = 3600
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "Stage2Settings":
@@ -213,6 +216,8 @@ class Stage2Settings:
             spike_min_calls=_seconds(env, "MINT_SPIKE_MIN_CALLS", 50),
             vuln_feed_url=_feed_url(env.get("MINT_VULN_FEED_URL")),
             vuln_scan_seconds=_seconds(env, "MINT_VULN_SCAN_SECONDS", 900, 60),
+            org_meta_key=(env.get("MINT_ORG_META_KEY") or "").strip() or "mint_org",
+            org_suggest_seconds=_seconds(env, "MINT_ORG_SUGGEST_SECONDS", 3600, 60),
             vuln_feed_timeout_seconds=_seconds(env, "MINT_VULN_FEED_TIMEOUT_SECONDS", 15),
             console_url=(env.get("MINT_CONSOLE_URL") or "").strip() or None,
         )
