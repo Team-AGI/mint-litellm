@@ -14,7 +14,9 @@
   ],
   "checks": [
     {"id":"endpoint_stale_server","description":"설치 보고에 폐기된 서버 항목이 남음","output":"alert","reference_policies":["POL-D-02"]},
-    {"id":"endpoint_unmanaged","description":"관리되지 않는 단말 설치(관리형에서만 게이트웨이 밖 MCP를 막음)","output":"alert","reference_policies":["POL-E-06"]}
+    {"id":"endpoint_unmanaged","description":"관리되지 않는 단말 설치(관리형에서만 게이트웨이 밖 MCP를 막음)","output":"alert","reference_policies":["POL-E-06"]},
+    {"id":"endpoint_stale_process","description":"폐기·미승인 서버의 프로세스가 단말에 남음","output":"alert","reference_policies":["POL-D-04"]},
+    {"id":"endpoint_stale_autostart","description":"폐기·미승인 서버의 자동 시작 항목이 단말에 남음","output":"alert","reference_policies":["POL-D-04"]}
   ],
   "policies": [
     {"id":"POL-I-01","class":"unconditional","pr":null,"enforced_by":["src/mint_litellm/control/intake_checks.py:154","src/mint_litellm/plugin/pipeline.py:282"]},
@@ -91,11 +93,11 @@
     {"id":"POL-D-07","class":"semi_auto_evidence","pr":64,"enforced_by":["src/mint_litellm/control/services/evidence.py:46","src/mint_litellm/control/services/relations.py:33","src/mint_litellm/control/relations.py:91"],"limit":"증빙 전에는 종료 완료로 닫지 않는다. 증빙 내용의 진위는 사람이 확인한다."},
     {"id":"POL-O-03","class":"semi_auto_evidence","pr":64,"enforced_by":["src/mint_litellm/control/services/evidence.py:47","src/mint_litellm/control/services/evidence.py:230"],"limit":"차단 없이 증빙 없음·기한 임박 경보만 낸다. 증빙 내용의 진위는 사람이 확인한다."},
     {"id":"POL-O-04","class":"semi_auto_evidence","pr":64,"enforced_by":["src/mint_litellm/control/services/evidence.py:49","src/mint_litellm/control/services/evidence.py:230"],"limit":"차단 없이 증빙 없음·기한 임박 경보만 낸다. 증빙 내용의 진위는 사람이 확인한다."},
-    {"id":"POL-O-05","class":"semi_auto_evidence","pr":64,"enforced_by":["src/mint_litellm/control/services/evidence.py:50","src/mint_litellm/control/services/evidence.py:230"],"limit":"차단 없이 증빙 없음·기한 임박 경보만 낸다. 증빙 내용의 진위는 사람이 확인한다."}
+    {"id":"POL-O-05","class":"semi_auto_evidence","pr":64,"enforced_by":["src/mint_litellm/control/services/evidence.py:50","src/mint_litellm/control/services/evidence.py:230"],"limit":"차단 없이 증빙 없음·기한 임박 경보만 낸다. 증빙 내용의 진위는 사람이 확인한다."},
+    {"id":"POL-D-04","class":"partial","pr":null,"enforced_by":["src/mint_litellm/control/endpoint_posture.py:52","src/mint_litellm/control/endpoint_posture.py:59","src/mint_litellm/endpoint/kit/mint_kit.py:169","src/mint_litellm/endpoint/kit/mint_kit.py:178"],"limit":"설치 묶음이 설치·제거 때 보고한 프로세스·자동 시작 목록만 폐기·미승인 서버와 대조해 경보한다. 보고는 단말의 주장이고 보고 시점의 스냅숏이며, 묶음 실행기 밖에서 뜬 프로세스와 서버를 알 수 없는 자동 시작 항목은 비교하지 못한다. 프로세스를 끄거나 항목을 지우지는 않는다."},
+    {"id":"POL-I-08","class":"partial","pr":null,"enforced_by":["src/mint_litellm/types/exec_contract.py:62","src/mint_litellm/control/exec_drift.py:38"],"limit":"서버가 접근할 경로와 읽기 또는 읽기·쓰기 권한은 실행 계약에 선언되어 계약 해시에 묶이고, 경로 추가나 읽기에서 쓰기로의 확대는 재승인 전까지 호출이 막히며 경보가 열린다. 선언은 운영자가 적으며 서버의 실제 파일 접근을 막거나 관측하지는 않는다."}
   ],
   "not_counted": [
-    {"id":"POL-D-03","reason":"종료 시 토큰 무효화 read-back은 설정 점검으로 증명할 수 없어 이번 범위에서 뺐다."},
-    {"id":"POL-I-08","reason":"실행 계약에 마운트·권한 필드가 없다."},
-    {"id":"POL-D-04","reason":"프로세스·자동 시작 점검이 없다."}
+    {"id":"POL-D-03","reason":"종료 시 토큰 무효화 read-back은 설정 점검으로 증명할 수 없어 이번 범위에서 뺐다."}
   ]
 }

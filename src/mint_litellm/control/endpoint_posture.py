@@ -7,6 +7,10 @@
 - 사용자 수준 설치(관리형이 아님)면 ``endpoint_unmanaged``. 게이트웨이 밖 MCP를 막는 것은 관리형
   설치뿐이라, 사용자 수준 설치는 이 통제가 적용되지 않는다는 표시이다.
 
+- 보고한 실행 중 프로세스나 자동 시작 항목이 가리키는 서버가 승인 상태가 아니거나(폐기·반려·승인
+  대기) 레지스트리에 없으면 ``endpoint_stale_process``·``endpoint_stale_autostart``. 제거 보고도
+  본다(제거한 뒤에 남은 것을 찾는 점검이다). 서버를 알 수 없는 자동 시작 항목은 비교하지 못한다.
+
 조건이 사라지면(재설치·제거·키 해제·서버 되살림) 같은 스캔이 경보를 닫는다.
 """
 
@@ -20,7 +24,13 @@ from mint_litellm.control.db.connection import fetchall
 from mint_litellm.types.events import AlertKind
 
 TERMINATED = ("terminating", "terminated")
-KINDS = (AlertKind.ENDPOINT_STALE_SERVER.value, AlertKind.ENDPOINT_UNMANAGED.value)
+KINDS = (
+    AlertKind.ENDPOINT_STALE_SERVER.value,
+    AlertKind.ENDPOINT_UNMANAGED.value,
+    AlertKind.ENDPOINT_STALE_PROCESS.value,
+    AlertKind.ENDPOINT_STALE_AUTOSTART.value,
+)
+LIVE = ("approved", "suspended")  # 이 밖의 상태(없는 서버 포함)가 단말에서 돌면 잔존으로 본다
 
 
 def findings(
@@ -39,6 +49,23 @@ def findings(
                 wanted[f"{kind}:{row['key_alias']}:{name}"] = (
                     kind, "high", {**who, "server_id": name}
                 )
+        for item in row.get("processes") or ():
+            name = item["server"]
+            if statuses.get(name) not in LIVE:
+                kind = AlertKind.ENDPOINT_STALE_PROCESS.value
+                wanted[f"{kind}:{row['key_alias']}:{name}"] = (
+                    kind, "high", {**who, "server_id": name, "count": item["count"]}
+                )
+        for item in row.get("autostart") or ():
+            name = item.get("server")
+            if name is not None and statuses.get(name) not in LIVE:
+                kind = AlertKind.ENDPOINT_STALE_AUTOSTART.value
+                key = f"{kind}:{row['key_alias']}:{item['kind']}:{item['name']}"
+                wanted[key] = (
+                    kind, "high",
+                    {**who, "server_id": name, "autostart_kind": item["kind"],
+                     "autostart_name": item["name"]},
+                )  # fmt: skip
     return wanted
 
 
@@ -46,8 +73,9 @@ def scan(conn: psycopg.Connection, instance_id: str) -> int:
     """경보를 맞춘다. 새로 연 경보 수를 돌려준다. 이미 열린 경보는 건드리지 않는다."""
     installs = fetchall(
         conn,
-        "SELECT user_id, key_alias, install_mode, mcp_servers FROM mint.endpoint_installs"
-        " WHERE instance_id = %s AND revoked_at IS NULL AND install_mode IN ('managed', 'user')",
+        "SELECT user_id, key_alias, install_mode, mcp_servers, processes, autostart"
+        " FROM mint.endpoint_installs WHERE instance_id = %s AND revoked_at IS NULL"
+        " AND install_mode IN ('managed', 'user', 'removed')",
         (instance_id,),
     )
     statuses = {

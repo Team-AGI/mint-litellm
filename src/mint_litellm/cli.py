@@ -535,9 +535,14 @@ def _server_register(run: Run) -> None:
 
 def _server_register_local(run: Run) -> None:
     try:
-        contract = ExecContract.model_validate_json(Path(run.args.contract).read_bytes())
-    except (OSError, ValueError) as exc:
-        raise ControlError(f"실행 계약 파일을 읽을 수 없습니다: {exc}") from exc
+        document = json.loads(Path(run.args.contract).read_bytes())
+        declared = [{"path": p, "mode": "ro"} for p in run.args.read or ()]
+        declared += [{"path": p, "mode": "rw"} for p in run.args.read_write or ()]
+        if declared:  # 플래그로 준 선언은 파일의 선언에 더한다(같은 경로는 거부된다)
+            document["file_access"] = [*document.get("file_access", ()), *declared]
+        contract = ExecContract.model_validate(document)
+    except (OSError, ValueError, AttributeError) as exc:
+        raise ControlError(f"실행 계약을 읽을 수 없습니다: {exc}") from exc
     server_service.register_local(run.context(), run.args.server_id, contract)
 
 
@@ -916,6 +921,9 @@ ARGUMENTS: dict[str, list[Any]] = {
     "server register-local": [
         _SERVER_ID,
         _a("--contract", required=True, help="실행 계약 JSON 파일 경로"),
+        _a("--read", action="append", metavar="PATH", help="서버가 읽을 경로 선언(반복 가능)"),
+        _a("--read-write", action="append", metavar="PATH",
+           help="서버가 읽고 쓸 경로 선언(반복 가능)"),
     ],
     "server suspend": [_SERVER_ID],
     "server resume": [_SERVER_ID],

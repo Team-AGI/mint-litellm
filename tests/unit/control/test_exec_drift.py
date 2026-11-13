@@ -72,3 +72,29 @@ def test_summary_marks_narrowing_and_no_change():
     assert exec_drift.summary(exec_drift.classify(BASE, dict(BASE))) == "권한 변화 없음"
     narrowed = {**BASE, "argv": ("/opt/srv/index.js",)}
     assert exec_drift.summary(exec_drift.classify(BASE, narrowed)) == "실행 축소"
+
+
+def _declared(*entries):
+    return ExecContract(
+        executable="/usr/bin/node", executable_sha256="ab" * 32,
+        file_access=[{"path": p, "mode": m} for p, m in entries],
+    ).document()
+
+
+def test_a_new_declared_path_widens_file_access_only():
+    old = _declared(("/data", "ro"))
+    new = _declared(("/data", "ro"), ("/home/u/.ssh", "ro"))
+    assert verdicts(new, old) == {"file": "widened", "exec": "unchanged", "network": "unchanged"}
+    assert "/home/u/.ssh" in exec_drift.summary(exec_drift.classify(old, new))
+
+
+def test_a_declared_path_going_from_read_to_read_write_widens_and_back_narrows():
+    ro, rw = _declared(("/data", "ro")), _declared(("/data", "rw"))
+    assert verdicts(rw, ro)["file"] == "widened"
+    assert verdicts(ro, rw)["file"] == "narrowed"
+    assert verdicts(ro, ro)["file"] == "unchanged"
+
+
+def test_dropping_a_declared_path_narrows_and_declaring_none_to_some_widens():
+    assert verdicts(_declared(), _declared(("/data", "ro")))["file"] == "narrowed"
+    assert verdicts(_declared(("/data", "ro")), _declared())["file"] == "widened"

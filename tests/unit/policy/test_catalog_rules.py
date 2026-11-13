@@ -36,8 +36,8 @@ def test_endpoint_policies_are_counted_only_where_a_rule_or_a_check_backs_them()
     counted = {p for entry in entries for p in entry["reference_policies"]}
     # 로컬 서버 실행 계약(호출 통제 부분), 폐기 항목 잔존(보고 기반), 관리형 설치(관리형에서만)
     assert {"POL-R-18", "POL-R-20", "POL-D-02", "POL-E-06"} <= counted
-    # 실행 계약에 마운트·권한 필드가 없고 프로세스 점검이 없어 아직 세지 않는다.
-    assert not {"POL-I-08", "POL-D-04"} & counted
+    # 프로세스·자동 시작 점검(보고 기반)이 D-04를 받친다. I-08은 경보 없이 계약 해시에 묶인다.
+    assert "POL-D-04" in counted
     assert all(check["output"] == "alert" for check in catalog["checks"])
 
 
@@ -90,7 +90,7 @@ def test_policies_that_are_not_counted_stay_out_of_the_count():
     counted = {p["id"] for p in _policies()}
     not_counted = {p["id"]: p["reason"] for p in _catalog()["not_counted"]}
     assert not counted & set(not_counted)
-    assert {"POL-D-03", "POL-I-08", "POL-D-04"} == set(not_counted)
+    assert {"POL-D-03"} == set(not_counted)
     assert all(not_counted.values())
 
 

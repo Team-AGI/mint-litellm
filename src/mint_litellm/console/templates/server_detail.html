@@ -10,6 +10,14 @@
   {% if s.identity_kind == 'stdio' %}<dt>실행 계약 지문</dt><dd><code>{{ s.exec_contract_sha256 }}</code></dd>
   {% else %}<dt>주소 지문</dt><dd><code>{{ s.url_sha256 }}</code></dd>{% endif %}
 </dl>
+{% if s.identity_kind == 'stdio' %}
+<h2>파일 접근</h2>
+{% if s.file_access %}
+<table><thead><tr><th>경로</th><th>권한</th></tr></thead><tbody>
+{% for f in s.file_access %}<tr><td><code>{{ f.path }}</code></td><td>{{ '읽기·쓰기' if f.mode == 'rw' else '읽기' }}</td></tr>{% endfor %}
+</tbody></table>
+{% else %}<p class="muted">선언된 경로가 없습니다.</p>{% endif %}
+{% endif %}
 {% if s.exec_drift %}
 <h2>실행 계약 변경</h2>
 <table><thead><tr><th>구분</th><th>판정</th><th>더해진 항목</th><th>빠진 항목</th></tr></thead><tbody>

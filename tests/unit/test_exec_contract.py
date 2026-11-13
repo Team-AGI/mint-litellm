@@ -59,3 +59,30 @@ def test_the_resolved_server_carries_the_hash_and_no_url_hash():
         identity_kind="stdio", exec_contract_sha256=contract().sha256(),
         exec_contract_version=1, transport="stdio", auth_type="none",
     )
+
+
+def test_declared_file_access_changes_the_hash_but_an_empty_one_does_not():
+    base = contract()
+    assert "file_access" not in base.document()
+    assert contract(file_access=[]).sha256() == base.sha256()
+    read = contract(file_access=[{"path": "/data", "mode": "ro"}])
+    write = contract(file_access=[{"path": "/data", "mode": "rw"}])
+    assert len({base.sha256(), read.sha256(), write.sha256()}) == 3
+    assert read.document()["file_access"] == [{"path": "/data", "mode": "ro"}]
+
+
+def test_file_access_is_ordered_by_path_and_the_mode_defaults_to_read():
+    a = contract(file_access=[{"path": "/b"}, {"path": "/a", "mode": "rw"}])
+    b = contract(file_access=[{"path": "/a", "mode": "rw"}, {"path": "/b", "mode": "ro"}])
+    assert a.sha256() == b.sha256()
+    assert [f.path for f in a.file_access] == ["/a", "/b"]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [[{"path": "data"}], [{"path": "/a/../b"}], [{"path": "/a", "mode": "x"}],
+     [{"path": "/a"}, {"path": "/a", "mode": "rw"}], [{"path": "/a", "extra": 1}]],
+)
+def test_file_access_must_be_absolute_normalized_unique_and_closed(bad):
+    with pytest.raises(ValidationError):
+        contract(file_access=bad)
