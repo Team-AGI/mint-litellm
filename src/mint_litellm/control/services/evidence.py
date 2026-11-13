@@ -14,7 +14,7 @@ from mint_litellm.control import alerts
 from mint_litellm.control.context import Context
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import ControlError, conflict, forbidden, not_found
-from mint_litellm.control.services.base import transact
+from mint_litellm.control.services.base import enqueue_job, transact
 from mint_litellm.types.events import EventKind
 from mint_litellm.types.ids import new_uuid7
 
@@ -232,6 +232,8 @@ def attach(
         )
         # 묶음 경보는 닫고, 남은 누락은 다음 확인 작업이 최신 목록으로 다시 연다
         alerts.resolve(ctx.conn, ctx.instance_id, group_key(kind.subject, subject_id, server_id))
+        if kind.key == "access_revocation":  # 폐기 마무리가 이 증빙을 기다린다
+            enqueue_job(ctx, "server_finalize", subject_id)
         ctx.emit(
             EventKind.EVIDENCE_ATTACHED, row_id, 1,
             {"kind": kind.key, "policy": kind.policy, "subject_kind": kind.subject,

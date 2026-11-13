@@ -28,6 +28,7 @@ from mint_litellm.control.litellm_write import (
     LiteLLMSync,
     LiteLLMUnreachable,
 )
+from mint_litellm.control.services import evidence
 from mint_litellm.control.services.base import enqueue_job
 from mint_litellm.control.sync_state import (
     ACTOR,
@@ -380,6 +381,12 @@ class CredentialsRemain(ControlError):
     code = "server_credentials_remain"
 
 
+class EvidenceMissing(ControlError):
+    """서버 계정·문서 공유 권한 회수 확인(access_revocation)이 아직 없다. 붙이면 다시 시도한다."""
+
+    code = "server_evidence_missing"
+
+
 @_reachable
 def server_finalize(ctx: JobContext) -> None:
     """폐기 중인 서버의 사용자별 자격(OAuth2 토큰·API 키)을 지우고, 다시 읽어 없음을 확인한다.
@@ -388,6 +395,8 @@ def server_finalize(ctx: JobContext) -> None:
     비었을 때만 서버를 ``terminated``로 닫고 지운 개수를 사건에 남긴다. 남아 있으면 서버는
     ``terminating``에 머물고 경보 ``server_credentials_remain``을 연 채 재시도한다. 목록 경로가 없는
     LiteLLM이면 확인할 수 없으므로 경보 ``server_credentials_unverifiable``을 열고 닫지 않는다.
+    자격 확인 다음에 서버 계정·문서 공유 권한 회수 확인(``access_revocation``) 증빙을 본다. 없으면
+    경보 ``evidence_missing``을 연 채 ``terminating``에 머물고, 증빙을 붙이면 다시 등록된다.
     """
     server_id, conn, inst = ctx.job["target_ref"], ctx.conn, ctx.instance_id
     server = fetchone(
@@ -417,9 +426,13 @@ def server_finalize(ctx: JobContext) -> None:
         raise_alert(conn, inst, kind="server_credentials_remain", severity="high", dedup_key=key,
                     subject={"server_id": server_id, "remaining": len(left), "deleted": deleted})
         raise CredentialsRemain(f"서버 {server_id}의 사용자 자격 {len(left)}건이 남아 있습니다.")
+    resolve_alert(conn, inst, key)
+    resolve_alert(conn, inst, f"server_credentials_unverifiable:{server_id}")
+    if "access_revocation" not in evidence.current(conn, inst, "server", server_id):
+        evidence.scan_alerts(conn, inst)
+        raise EvidenceMissing(f"서버 {server_id}의 계정·공유 권한 회수 확인 증빙이 없습니다.")
     with conn.transaction():
-        resolve_alert(conn, inst, key)
-        resolve_alert(conn, inst, f"server_credentials_unverifiable:{server_id}")
+        resolve_alert(conn, inst, evidence.group_key("server", server_id, server_id))
         row = fetchone(
             conn,
             "UPDATE mint.servers SET status = 'terminated' WHERE instance_id = %s"

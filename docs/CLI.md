@@ -30,7 +30,7 @@
 | `mint-litellm server register` | `admin` | LiteLLM에 등록된 서버를 승인 대기 상태로 등록한다. | `/v1/mcp/server/{server_id}` | `server_registered` |
 | `mint-litellm server register-local` | `admin` | 로컬 실행(stdio) 서버를 LiteLLM 없이 실행 계약(`--contract` JSON 파일)으로 승인 대기 상태로 등록한다. 서버가 접근할 경로는 계약 파일의 `file_access`나 `--read`·`--read-write`(반복 가능)로 선언한다. | - | `server_registered` |
 | `mint-litellm server suspend` | `admin` | 서버를 중지한다. 중지된 서버의 호출은 차단된다. | - | `server_suspended` |
-| `mint-litellm server terminate` | `admin` | 승인 또는 중지된 서버를 폐기 중으로 바꾼다(호출은 즉시 차단). 작업 실행기가 LiteLLM 관리 API로 그 서버에 저장된 사용자별 OAuth2·API 키 자격을 지우고, 목록을 다시 읽어 하나도 남지 않은 것을 확인한 뒤 폐기됨으로 닫고 `server_terminated`에 지운 개수를 남긴다. 남아 있으면 폐기 중에 머물며 재시도하고 경보 `server_credentials_remain`을 연다. 서버 자체 비밀·사용자별 환경 변수·동적 등록 클라이언트는 LiteLLM이 목록·삭제 경로를 주지 않아 읽어 확인하지 못한다. | - | `server_terminating`, `server_terminated` |
+| `mint-litellm server terminate` | `admin` | 승인 또는 중지된 서버를 폐기 중으로 바꾼다(호출은 즉시 차단). 작업 실행기가 LiteLLM 관리 API로 그 서버에 저장된 사용자별 OAuth2·API 키 자격을 지우고, 목록을 다시 읽어 하나도 남지 않은 것을 확인하고, 서버 계정·문서 공유 권한 회수 확인 증빙(`access_revocation`)이 있으면 폐기됨으로 닫고(없으면 폐기 중에 머물고 경보 `evidence_missing`을 연다) `server_terminated`에 지운 개수를 남긴다. 남아 있으면 폐기 중에 머물며 재시도하고 경보 `server_credentials_remain`을 연다. 서버 자체 비밀·사용자별 환경 변수·동적 등록 클라이언트는 LiteLLM이 목록·삭제 경로를 주지 않아 읽어 확인하지 못한다. | - | `server_terminating`, `server_terminated` |
 | `mint-litellm server resume` | `admin` | 중지한 서버를 다시 승인 상태로 되돌린다. | - | `server_resumed` |
 | `mint-litellm relation add` | `admin` | 조직·팀·목적·서버를 묶는 이용 관계를 만든다. | - | `relation_created` |
 | `mint-litellm relation terminate` | `admin` | 이용 관계를 종료 중으로 바꾸고 그 관계의 활성 승인을 철회한다. 그 관계에 속한 승인과 매칭되는 호출은 `RELATION_TERMINATED`로 차단되고, LiteLLM 권한 회수를 읽어 확인한 결과가 사건으로 남는다. | - | `relation_terminating`, `approval_revoked` |
@@ -146,7 +146,7 @@
 | `unpinned_acceptance` 버전 미고정 패키지 사용 승인 | 서버 | 버전이 고정되지 않은 패키지를 실행하는 로컬 서버의 승인 | 30일 |
 | `vuln_exception` 취약점 조치 예외 | 서버 | 치명 취약점 조치 기한이 지난 서버의 호출 차단을 푸는 예외 | 30일 |
 | `command_input_review` 명령·질의 입력 전달 방식 점검 결과 (문서 해시값 필수) | 신청 | 로컬 실행 서버이거나 도구 이름에 실행·질의 말이 든 서버의 신청 승인 | 180일 |
-| `access_revocation` 서버 계정·문서 공유 권한 회수 확인 | 서버 | 종료 중·종료됨 서버(없으면 경보만 열고 종료를 막지는 않는다) | 없음 |
+| `access_revocation` 서버 계정·문서 공유 권한 회수 확인 | 서버 | 서버 폐기 마무리(없으면 서버가 폐기 중에 머물고 경보를 연다. 붙이면 마무리가 다시 실행된다) | 없음 |
 | `deletion_proof` 자료 삭제·반환 증빙 | 이용 관계 | 관계 종료 완료 | 없음 |
 | `access_recheck` 변경된 자료의 접근 권한 재확인 (해당 없음 가능) | 서버 | 주기 확인 | 90일 |
 | `source_review` 변경된 자료의 출처 확인 (해당 없음 가능) | 서버 | 주기 확인 | 90일 |

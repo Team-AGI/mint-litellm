@@ -1018,6 +1018,14 @@ def terminating_server(admin, fake, credentials) -> None:
     admin.execute("UPDATE mint.servers SET status = 'terminating'")
 
 
+def revocation_evidence(admin) -> None:
+    admin.execute(
+        "INSERT INTO mint.policy_evidence (id, instance_id, kind, subject_kind, subject_id,"
+        " result, summary, attached_by) SELECT gen_random_uuid(), instance_id, 'access_revocation',"
+        " 'server', server_id, 'confirmed', '계정·공유 권한 회수', 'boss' FROM mint.servers"
+    )
+
+
 def server_status(admin) -> str:
     return fetchone(admin, "SELECT status FROM mint.servers")["status"]
 
@@ -1031,6 +1039,7 @@ def test_terminating_a_server_deletes_its_user_credentials_reads_back_and_closes
     admin, fake, worker
 ):
     terminating_server(admin, fake, CREDS)
+    revocation_evidence(admin)
     enqueue(admin, "server_finalize", "srv-1")
     drain(worker)
     assert fake.credentials["srv-1"] == []
@@ -1044,6 +1053,7 @@ def test_terminating_a_server_deletes_its_user_credentials_reads_back_and_closes
 
 def test_credentials_that_remain_keep_the_server_terminating_retry_and_alert(admin, fake, worker):
     terminating_server(admin, fake, CREDS)
+    revocation_evidence(admin)
     fake.sticky_credentials = True
     enqueue(admin, "server_finalize", "srv-1")
     drain(worker)
@@ -1079,6 +1089,29 @@ def test_the_reconcile_pass_requests_the_credential_check_for_terminating_server
     admin, fake, worker
 ):
     terminating_server(admin, fake, CREDS)
+    revocation_evidence(admin)
     reconcile(admin)
     drain(worker)
     assert server_status(admin) == "terminated"
+
+
+def test_without_access_revocation_evidence_the_server_stays_terminating_with_an_alert(
+    admin, fake, worker
+):
+    terminating_server(admin, fake, CREDS)
+    enqueue(admin, "server_finalize", "srv-1")
+    drain(worker)
+    assert fake.credentials["srv-1"] == []  # 자격 삭제는 먼저 끝난다
+    assert server_status(admin) == "terminating"
+    assert events(admin, "server_terminated") == []
+    (alert,) = alerts(admin, "evidence_missing")
+    assert alert["status"] == "open"
+    job = fetchone(admin, "SELECT status, attempts FROM mint.jobs WHERE kind = 'server_finalize'")
+    assert job["status"] == "pending" and job["attempts"] == 1
+    revocation_evidence(admin)
+    admin.execute("UPDATE mint.jobs SET run_after = now() - interval '1 second'"
+                  " WHERE status = 'pending'")
+    drain(worker)
+    assert server_status(admin) == "terminated"
+    assert [a["status"] for a in alerts(admin, "evidence_missing")] == ["resolved"]
+
