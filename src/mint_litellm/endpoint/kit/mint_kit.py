@@ -12,6 +12,13 @@
 한 번 부른다(1시간 안에 보냈으면 건너뛴다). 키가 만료되기 전 14일 안의 보고는 MINT가 키의 만료
 시각을 늘려 준다.
 
+보고 응답에는 MINT가 폐기·반려·미승인으로 보는 서버 이름 목록(``retired``)이 실린다. 관리형 설치의
+보고기는 관리자 권한(Linux는 시스템 타이머, Windows는 SYSTEM 예약 작업)으로 돌며, 이 묶음이 쓴 설정
+항목과 묶음 실행기가 띄운 프로세스(실행기가 기록한 PID, 시작 시각까지 맞을 때만)와 묶음이 등록한
+자동 시작 항목 중 목록에 든 서버의 것만 지우고, 지운 것을 곧바로 다시 보고한다. 사용자가 만든
+항목과 묶음이 띄우지 않은 프로세스는 건드리지 않는다. 사용자 수준 설치는 지우지 않고 경보만 남는다.
+목록은 실행기가 읽도록 사용자 캐시에 남긴다.
+
 대상 도구는 묶음의 ``harnesses``(claude, codex)가 정한다. Codex는 관리형이면 관리자 요구 파일
 (``requirements.toml``: 승인 서버 외 차단, 호출 전·후 훅)을, 사용자 수준이면 ``config.toml``의 표식
 구간을 쓴다. 서버 표는 승인 서버가 없어도 항상 둔다(표가 없으면 Codex는 서버를 제한하지 않는다).
@@ -32,6 +39,7 @@ import random
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -59,6 +67,10 @@ REPORT_INTERVAL_HOURS = 6
 REPORT_JITTER = 1800
 REPORT_MIN_GAP = 3600
 LAST_REPORT = "last_report"
+RETIRED_FILE = "retired.json"  # 마지막 보고 응답의 폐기 서버 목록(실행기가 읽는다)
+LAUNCHED = "launched"  # 실행기가 띄운 서버 프로세스의 기록
+SYSTEMD_DIR = "/etc/systemd/system"
+MAX_PENDING = 256
 UNIT = "mint-report"
 TASK_NAME = "MINT Endpoint Report"
 
@@ -87,7 +99,8 @@ def write_atomic(path: Path, data: bytes, mode: int, owner: tuple[int, int] | No
             os.unlink(name)
 
 
-def post(url: str, key: str, payload: dict, ca_file: str | None) -> bool:
+def post(url: str, key: str, payload: dict, ca_file: str | None) -> dict | None:
+    """보고를 보내고 응답 본문(JSON 객체)을 돌려준다. 닿지 못했거나 거절되면 None."""
     import ssl
 
     request = urllib.request.Request(
@@ -99,13 +112,19 @@ def post(url: str, key: str, payload: dict, ca_file: str | None) -> bool:
     context = ssl.create_default_context(cafile=ca_file) if url.startswith("https:") else None
     try:
         with urllib.request.urlopen(request, timeout=REPORT_TIMEOUT, context=context) as reply:
-            return reply.status == 200
+            if reply.status != 200:
+                return None
+            try:
+                answer = json.loads(reply.read(65536))
+            except ValueError:
+                answer = None
+            return answer if isinstance(answer, dict) else {"recorded": True}
     except urllib.error.HTTPError as error:
         if error.code == 403:
             sys.stderr.write("MINT 키가 만료되었습니다. 설치 묶음 재발급을 요청하세요." + NL)
-        return False
+        return None
     except OSError:
-        return False
+        return None
 
 
 def jitter_delay(limit: int, rand=random.random) -> int:
@@ -285,6 +304,92 @@ def with_block(text: str, body: str) -> str:
     return f"{rest}{gap}{BEGIN}{NL}{body.lstrip(NL)}{END}{NL}"
 
 
+def drop_tables(text: str, names: set[str]) -> tuple[str, list[str]]:
+    """``[mcp_servers."이름"]`` 표를 지운다(표는 다음 표 머리나 구간 표식에서 끝난다)."""
+    headers = {f"[mcp_servers.{toml(name)}]": name for name in names}
+    kept, skipping, gone = [], False, []
+    for line in text.splitlines(keepends=True):
+        bare = line.strip()
+        if bare.startswith("[") or bare in (BEGIN, END):
+            name = headers.get(bare)
+            skipping = name is not None
+            if name is not None:
+                gone.append(name)
+                continue
+        if not skipping:
+            kept.append(line)
+    return "".join(kept), gone
+
+
+def drop_block_tables(text: str, names: set[str]) -> tuple[str, list[str]]:
+    """표식 구간 안의 서버 표만 지운다. 구간 밖(사용자가 쓴 것)은 한 글자도 바꾸지 않는다."""
+    found = re.search(rf"{re.escape(BEGIN)}.*?{re.escape(END)}", text, flags=re.S)
+    if found is None:
+        return text, []
+    block, gone = drop_tables(found.group(0), names)
+    return text[: found.start()] + block + text[found.end() :], gone
+
+
+def is_ours_entry(entry: object, name: str) -> bool:
+    """관리형 MCP 목록의 항목 중 이 묶음의 실행기가 ``name`` 서버를 시작하는 것."""
+    raw = entry.get("args", []) if isinstance(entry, dict) else []
+    args = [str(a).replace("\\", "/") for a in raw]
+    return (
+        any(a.endswith("/" + AGENT) for a in args)
+        and "--server" in args
+        and args[args.index("--server") + 1 : args.index("--server") + 2] == [name]
+    )
+
+
+def proc_start(pid: int, windows: bool) -> str | None:
+    """프로세스의 시작 시각 표지(재사용된 PID를 가려내는 데 쓴다). 없는 프로세스나 모르면 None."""
+    if windows:
+        out = capture(
+            ["powershell", "-NoProfile", "-Command",
+             f"(Get-Process -Id {int(pid)}).StartTime.ToFileTimeUtc()"]
+        )  # fmt: skip
+        return out.strip() or None
+    try:
+        stat = Path(f"/proc/{int(pid)}/stat").read_text()
+    except OSError:
+        return None
+    return stat.rsplit(")", 1)[-1].split()[19] if ")" in stat else None
+
+
+def home_owner(home: Path) -> tuple[int, int] | None:
+    """관리자(root)로 돌 때 사용자 홈 아래에 만든 파일을 사용자에게 돌려줄 소유자. 아니면 None."""
+    try:
+        if os.geteuid() != 0:
+            return None
+        info = home.stat()
+        return info.st_uid, info.st_gid
+    except (AttributeError, OSError):
+        return None
+
+
+def hand_over(path: Path, home: Path, owner: tuple[int, int] | None) -> None:
+    """``path``와 홈 아래의 상위 폴더를 사용자 소유로 한다(실패해도 보고는 계속한다)."""
+    if owner is None:
+        return
+    for item in (path, *path.parents):
+        if item == home or home not in item.parents:
+            break
+        try:
+            os.chown(item, *owner)
+        except OSError:
+            pass
+
+
+def save_retired(home: Path, names: list[str], now: float, owner: tuple[int, int] | None) -> None:
+    """응답의 폐기 서버 목록을 실행기가 읽을 캐시에 쓴다. 쓰지 못해도 보고는 계속한다."""
+    path = home / STATE_REL / RETIRED_FILE
+    try:
+        write_atomic(path, json.dumps({"servers": names, "at": now}).encode(), 0o600, owner)
+    except OSError:
+        return
+    hand_over(path, home, owner)
+
+
 def system_python(path: str) -> bool:
     """Windows에서 일반 사용자가 쓸 수 없는 위치(Program Files·Windows)의 Python인가."""
     real = os.path.normcase(os.path.realpath(path))
@@ -352,7 +457,8 @@ class Kit:
         else:
             managed_programs, self.claude_dir, self.codex_dir = PROGRAMS, MANAGED_DIR, CODEX_DIR
             user_programs = str(self.home / ".local/lib/mint-endpoint")
-        self.system_paths = (managed_programs, self.claude_dir, self.codex_dir)
+        self.system_paths = (managed_programs, self.claude_dir, self.codex_dir, SYSTEMD_DIR)
+        self.answer: dict = {}  # 마지막 보고의 응답
         self.logical_programs = managed_programs if self.managed else user_programs
         self.programs = self.physical(self.logical_programs)
         self.managed_dir = self.physical(self.claude_dir)
@@ -519,13 +625,22 @@ class Kit:
             json.dumps(config, indent=1).encode(), 0o644,
         )  # fmt: skip
         command = [python, "-I", "-B", tool, "report", "--kit", self.logical_programs]
+        if self.managed:
+            # 관리자 권한으로 돌므로 사용자의 키와 캐시가 있는 홈을 알려 준다.
+            command += ["--home", str(self.home).replace("\\", "/"), "--user", self.account.name]
         if self.windows:
             self.schedule_task(state, command)
         else:
             self.schedule_timer(state, command)
 
     def schedule_timer(self, state: dict, command: list[str]) -> None:
-        """사용자 systemd 타이머. 시작 지연의 무작위화는 systemd가 한다. 다음 로그인부터 돈다."""
+        """systemd 타이머. 시작 지연의 무작위화는 systemd가 한다.
+
+        관리형은 시스템 타이머(관리자 권한이라 폐기 서버의 관리형 설정 항목을 지울 수 있다),
+        사용자 수준은 사용자 타이머(다음 로그인부터)이다.
+        """
+        if self.managed:
+            return self.schedule_system_timer(state, command)
         folder = self.home / ".config/systemd/user"
         units = {
             f"{UNIT}.service": (
@@ -558,6 +673,33 @@ class Kit:
         elif self.root is None and not self.dry_run:
             capture(["systemctl", "--user", "enable", "--now", f"{UNIT}.timer"])
 
+    def schedule_system_timer(self, state: dict, command: list[str]) -> None:
+        folder = self.physical(SYSTEMD_DIR)
+        units = {
+            f"{UNIT}.service": (
+                "[Unit]\nDescription=MINT endpoint report\n\n[Service]\nType=oneshot\n"
+                f"ExecStart={shlex.join(command)}\n"
+            ),
+            f"{UNIT}.timer": (
+                "[Unit]\nDescription=MINT endpoint report\n\n[Timer]\nOnBootSec=5min\n"
+                f"OnUnitActiveSec={REPORT_INTERVAL_HOURS}h\n"
+                f"RandomizedDelaySec={REPORT_JITTER}\n\n[Install]\nWantedBy=timers.target\n"
+            ),
+        }
+        for name, text in units.items():
+            self.write_tracked(state, folder / name, f"{SYSTEMD_DIR}/{name}", text.encode(), 0o644)
+        wants = folder / "timers.target.wants" / f"{UNIT}.timer"
+        wants.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if not wants.is_symlink():
+                os.symlink(f"../{UNIT}.timer", wants)
+        except OSError:
+            return
+        state["links"] = [str(wants)]
+        state["timer"] = "system"
+        if self.root is None and not self.dry_run:
+            capture(["systemctl", "enable", "--now", f"{UNIT}.timer"])
+
     def schedule_task(self, state: dict, command: list[str]) -> None:
         """Windows 예약 작업(설치한 계정으로 돈다). 시작 지연은 명령이 스스로 기다린다."""
         if self.root is not None or self.dry_run:
@@ -566,6 +708,7 @@ class Kit:
         made = capture([
             "schtasks", "/Create", "/TN", TASK_NAME, "/SC", "HOURLY",
             "/MO", str(REPORT_INTERVAL_HOURS), "/TR", line, "/F",
+            *(["/RU", "SYSTEM"] if self.managed else []),
         ])  # fmt: skip
         if made:
             state["task"] = TASK_NAME
@@ -671,6 +814,8 @@ class Kit:
         if not state:
             return {"mode": "none"}
         left = []
+        if state.get("timer") == "system" and self.root is None:
+            capture(["systemctl", "disable", "--now", f"{UNIT}.timer"])
         for logical, digest in state.get("files", {}).items():
             path = self.physical(logical)
             if not path.exists():
@@ -686,7 +831,7 @@ class Kit:
             Path(link).unlink(missing_ok=True)
         if state.get("task") and self.root is None:
             capture(["schtasks", "/Delete", "/TN", state["task"], "/F"])
-        elif state.get("links") and self.root is None and not self.owner:
+        elif state.get("links") and self.root is None and not self.owner and not state.get("timer"):
             capture(["systemctl", "--user", "disable", "--now", f"{UNIT}.timer"])
         if state.get("mode") == "user":
             self.uninstall_user(state)
@@ -695,7 +840,10 @@ class Kit:
         shutil.rmtree(self.programs, ignore_errors=True)
         shutil.rmtree(self.home / STATE_REL, ignore_errors=True)
         extra = [self.codex_managed_dir.parent] if self.windows else []
-        folders = (self.managed_dir, self.codex_managed_dir, *extra, self.home / ".config/mint")
+        wants = self.physical(SYSTEMD_DIR) / "timers.target.wants"
+        folders = (
+            self.managed_dir, self.codex_managed_dir, *extra, wants, self.home / ".config/mint"
+        )  # fmt: skip
         for folder in folders:
             try:
                 folder.rmdir()
@@ -763,8 +911,14 @@ class Kit:
             return {}
         return {"processes": processes, "autostart": autostart}
 
+    def pending_removed(self, state: dict) -> list[dict]:
+        """아직 보고하지 못한 제거 항목. 상태 파일을 쓸 수 있는(관리자 권한) 보고기만 보낸다."""
+        items = state.get("pending_removed") or []
+        return items if items and self.managed and os.access(self.programs, os.W_OK) else []
+
     def report(self, state: dict, action: str) -> bool:
         installed = action == "installed"
+        pending = self.pending_removed(state) if installed else []
         payload = {
             "kit_version": self.config["kit_version"],
             "action": action,
@@ -773,22 +927,191 @@ class Kit:
             "mcp_servers": state.get("mcp_servers", []) if installed else [],
             **self.inventory(),
         }
+        if pending:
+            payload["removed"] = pending
         url = self.config["decide_url"].rstrip("/") + REPORT_PATH
         ca_pem = self.config.get("ca_pem")
         if not ca_pem:
-            return post(url, self.config["key"], payload, None)
-        # 제거 뒤에는 설치한 인증서가 없으므로 묶음에 든 인증서를 임시 파일로 쓴다.
-        with tempfile.NamedTemporaryFile("w", suffix=".pem", delete=False) as handle:
-            handle.write(ca_pem)
+            answer = post(url, self.config["key"], payload, None)
+        else:
+            # 제거 뒤에는 설치한 인증서가 없으므로 묶음에 든 인증서를 임시 파일로 쓴다.
+            with tempfile.NamedTemporaryFile("w", suffix=".pem", delete=False) as handle:
+                handle.write(ca_pem)
+            try:
+                answer = post(url, self.config["key"], payload, handle.name)
+            finally:
+                os.unlink(handle.name)
+        self.answer = answer if isinstance(answer, dict) else {}
+        if answer and pending:
+            state.pop("pending_removed", None)
+            self.save_state(state)
+        return bool(answer)
+
+    def save_state(self, state: dict) -> bool:
         try:
-            return post(url, self.config["key"], payload, handle.name)
-        finally:
-            os.unlink(handle.name)
+            write_atomic(self.state_file, json.dumps(state, indent=1).encode(), 0o644)
+        except OSError:
+            return False
+        return True
+
+    # -- 폐기 서버 정리(관리형) -----------------------------------------------------------------
+
+    def retrack(self, state: dict, logical: str, before: str, after: bytes) -> None:
+        """우리가 쓴 그대로였던 파일만 새 내용을 우리 것으로 다시 기록한다(바뀐 파일은 남긴다)."""
+        if state["files"].get(logical) == before:
+            state["files"][logical] = sha256_bytes(after)
+
+    def edit_file(self, state: dict, path: Path, logical: str, edit) -> tuple[list[str], bool]:
+        """파일 내용을 ``edit(글) -> (새 글, 지운 이름들)``로 고친다. (지운 이름, 쓰기 성공)."""
+        if not path.exists():
+            return [], True
+        try:
+            raw = path.read_bytes()
+            new, gone = edit(raw.decode("utf-8-sig"))
+            if not gone:
+                return [], True
+            write_atomic(path, new.encode(), path.stat().st_mode & 0o777)
+        except (OSError, ValueError):
+            return [], False
+        self.retrack(state, logical, sha256_bytes(raw), new.encode())
+        return gone, True
+
+    def drop_configs(self, state: dict, names: set[str]) -> tuple[list[dict], set[str]]:
+        """관리형 설정에서 이 묶음이 쓴 ``names`` 서버 항목을 지운다. (지운 항목, 못 지운 이름)."""
+        removed: list[dict] = []
+        failed: set[str] = set()
+
+        def note(target: str, gone: list[str], ok: bool) -> None:
+            removed.extend({"kind": "config", "server": n, "target": target} for n in gone)
+            if not ok:
+                failed.update(names)
+
+        if "claude" in self.harnesses:
+
+            def edit_json(text: str) -> tuple[str, list[str]]:
+                data = json.loads(text)
+                listed = data.get("mcpServers", {})
+                gone = [n for n in sorted(names) if is_ours_entry(listed.get(n), n)]
+                for name in gone:
+                    del listed[name]
+                return json.dumps(data, indent=2), gone
+
+            logical = f"{self.claude_dir}/managed-mcp.json"
+            path = self.managed_dir / "managed-mcp.json"
+            note("claude", *self.edit_file(state, path, logical, edit_json))
+        if "codex" in self.harnesses:
+            found: set[str] = set()
+            for name in ("requirements.toml", "managed_config.toml"):
+                gone, ok = self.edit_file(
+                    state, self.codex_managed_dir / name, f"{self.codex_dir}/{name}",
+                    lambda text: drop_tables(text, names),
+                )  # fmt: skip
+                found.update(gone)
+                note("codex", [], ok)
+            if self.windows:  # Windows는 관리형 서버 정의가 사용자 설정 파일의 표식 구간에 있다
+                gone, ok = self.edit_codex_block(state, self.codex_config(), names)
+                found.update(gone)
+                note("codex", [], ok)
+            note("codex", sorted(found), True)
+        return removed, failed
+
+    def edit_codex_block(self, state: dict, path: Path, names: set[str]) -> tuple[list[str], bool]:
+        if not path.exists():
+            return [], True
+        try:
+            current = path.read_bytes().decode("utf-8-sig")
+            new, gone = drop_block_tables(current, names)
+            if not gone:
+                return [], True
+            write_atomic(path, new.encode(), path.stat().st_mode & 0o777)
+        except OSError:
+            return [], False
+        if sha256_bytes(current.encode()) == state.get("codex_config_sha"):
+            state["codex_config_sha"] = sha256_bytes(new.encode())
+        return gone, True
+
+    def stop_launched(self, retired: set[str]) -> list[dict]:
+        """실행기가 띄운 프로세스 중 폐기 서버의 것을 끈다(기록한 PID와 시작 시각이 맞을 때만)."""
+        folder = self.home / STATE_REL / LAUNCHED
+        removed = []
+        for path in sorted(folder.glob("*.json")) if folder.is_dir() else []:
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+                server, pid, start = str(record["server"]), int(record["pid"]), record.get("start")
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            if server not in retired:
+                continue
+            if not start or proc_start(pid, self.windows) != start:
+                path.unlink(missing_ok=True)  # 이미 끝났거나 PID가 다른 프로세스에 재사용되었다.
+                continue
+            if self.kill(pid):
+                path.unlink(missing_ok=True)
+                removed.append({"kind": "process", "server": server, "target": None})
+        return removed
+
+    def kill(self, pid: int) -> bool:
+        if self.windows:
+            return bool(capture(["taskkill", "/PID", str(pid), "/T", "/F"]))
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            return False
+        return True
+
+    def drop_autostart(self, state: dict, retired: set[str]) -> list[dict]:
+        """묶음이 서버마다 등록한 자동 시작 항목(상태 파일의 ``autostart``)을 지운다."""
+        removed, kept = [], []
+        for item in state.get("autostart", []):
+            if item.get("server") not in retired:
+                kept.append(item)
+                continue
+            if "task" in item:
+                done = self.root is not None or bool(
+                    capture(["schtasks", "/Delete", "/TN", item["task"], "/F"])
+                )
+                target = item["task"]
+            else:
+                logical = item.get("file", "")
+                path = self.physical(logical)
+                done = not path.exists() or sha256_file(path) == state["files"].get(logical)
+                if done:
+                    path.unlink(missing_ok=True)
+                    state["files"].pop(logical, None)
+                target = path.name
+            if done:
+                removed.append({"kind": "autostart", "server": item["server"], "target": target})
+            else:
+                kept.append(item)  # 바뀐 파일은 건드리지 않는다.
+        state["autostart"] = kept
+        return removed
+
+    def remediate(self, state: dict, retired: list[str]) -> list[dict]:
+        """폐기 서버의 설정 항목·프로세스·자동 시작 항목을 지우고 지운 것을 상태에 남긴다.
+
+        관리형만 한다. 이 묶음이 쓴 항목과 띄운 프로세스만 대상이며 지운 항목만 돌려준다.
+        """
+        if not self.managed or not retired:
+            return []
+        gone_names = set(retired)
+        mine = set(state.get("mcp_servers", [])) & gone_names
+        removed, failed = self.drop_configs(state, mine) if mine else ([], set())
+        removed += self.stop_launched(gone_names)
+        removed += self.drop_autostart(state, gone_names)
+        state["mcp_servers"] = sorted(set(state.get("mcp_servers", [])) - (mine - failed))
+        if removed:
+            pending = [*state.get("pending_removed", []), *removed]
+            state["pending_removed"] = pending[-MAX_PENDING:]
+        if removed or mine:
+            self.save_state(state)
+        return removed
 
 
 def report_installed(
     folder: Path,
     *,
+    home: Path | None = None,
+    user: str | None = None,
     if_due: bool = False,
     jitter: int = 0,
     now=time.time,
@@ -796,7 +1119,8 @@ def report_installed(
     rand=random.random,
 ) -> int:
     """설치된 묶음의 주기 보고. 설치되어 있지 않거나(키·상태 없음) 할 일이 없으면 조용히 0."""
-    home = Path(os.path.expanduser("~"))
+    home = home or Path(os.path.expanduser("~"))
+    owner = home_owner(home)
     stamp = home / STATE_REL / LAST_REPORT
     try:
         last = float(stamp.read_text())
@@ -816,13 +1140,20 @@ def report_installed(
     sleep(jitter_delay(jitter, rand))
     stamp.parent.mkdir(parents=True, exist_ok=True)
     stamp.write_text(str(now()))  # 곧바로 기록해 동시에 뜬 실행기들이 한 번만 보내게 한다.
-    account = Account(getpass.getuser(), home, 0, 0)
+    hand_over(stamp, home, owner)
+    account = Account(user or getpass.getuser(), home, 0, 0)
     kit = Kit(folder, None, state["mode"] == "managed", account, False)
     kit.config["key"] = key
-    if kit.report(state, "installed"):
-        return 0
-    stamp.unlink(missing_ok=True)  # 닿지 못했으면 다음 기회에 다시 보낸다.
-    return 1
+    if not kit.report(state, "installed"):
+        stamp.unlink(missing_ok=True)  # 닿지 못했으면 다음 기회에 다시 보낸다.
+        return 1
+    retired = kit.answer.get("retired")
+    if isinstance(retired, list):
+        names = [n for n in retired if isinstance(n, str)][:MAX_PENDING]
+        save_retired(home, names, now(), owner)
+        if kit.remediate(state, names):
+            kit.report(state, "installed")  # 지운 것을 곧바로 알린다.
+    return 0
 
 
 def ours(item: object) -> bool:
@@ -884,7 +1215,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--kit", default=str(KIT))
     args = parser.parse_args(argv)
     if args.action == "report":
-        return report_installed(Path(args.kit), if_due=args.if_due, jitter=args.jitter)
+        return report_installed(
+            Path(args.kit), if_due=args.if_due, jitter=args.jitter,
+            home=Path(args.home) if args.home else None, user=args.user,
+        )
     windows = sys.platform == "win32"
     if windows:
         name = args.user or os.environ.get("USERNAME", "")
