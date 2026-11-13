@@ -77,12 +77,12 @@ def test_the_five_class_count_is_pinned():
     auto = _count("unconditional") + _count("conditional") + _count("partial")
     # 2단계 완료 기준 42(확인 26·조건부 10·부분 6)에서 엔드포인트 4, 재사용 설정 점검 13,
     # 3단계로 미룬 집행 4, 입력 쪽 비밀 차단(E-05), 통합 시험으로 LiteLLM 동작을 확인해 닫은
-    # 재사용 2(R-17·E-24)를 더한 값이다.
-    assert (_count("unconditional"), _count("conditional"), _count("partial")) == (36, 14, 14)
-    assert auto == 64
+    # 재사용 2(R-17·E-24), 토큰 대상·전달 2(R-05·R-06)를 더한 값이다.
+    assert (_count("unconditional"), _count("conditional"), _count("partial")) == (36, 15, 15)
+    assert auto == 66
     # 목표(90개 중 72개 이상) 산정은 반자동 수동 증거를 함께 센다.
     assert _count("semi_auto_evidence") == 10
-    assert auto + _count("semi_auto_evidence") == 74
+    assert auto + _count("semi_auto_evidence") == 76
 
 
 def test_policies_that_are_not_counted_stay_out_of_the_count():
@@ -104,7 +104,8 @@ def test_the_reuse_policies_counted_are_the_ones_the_self_check_maps():
     from mint_litellm.types.settings import REUSE_POLICIES
 
     reuse = {p["id"] for p in _policies() if p["pr"] == 65}
-    assert reuse == set(REUSE_POLICIES)
+    # 번호가 없는 재사용 정책도 점검 표에 들 수 있다. 표에 있는 정책은 모두 집계에 든다.
+    assert reuse <= set(REUSE_POLICIES) <= {p["id"] for p in _policies()}
 
 
 def test_the_semi_automated_evidence_policies_are_the_evidence_kinds():

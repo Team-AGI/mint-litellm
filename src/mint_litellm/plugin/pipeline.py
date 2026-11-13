@@ -74,6 +74,7 @@ from mint_litellm.types.identity import (
 )
 from mint_litellm.types.ids import new_uuid7
 from mint_litellm.types.reason_codes import ContractDriftKind, Reason
+from mint_litellm.types.reuse_policy import ALLOW_TOKEN_FORWARD, FORWARDING_AUTH
 from mint_litellm.types.settings import Mode, ObservationSettings, effective_mode
 from mint_litellm.types.target import (
     READ,
@@ -313,6 +314,18 @@ def denial_and_approval(
     if any(_approval_expired(a, now) for a in in_org):
         return ApprovalSelection([StageResult.stop(Reason.APPROVAL_EXPIRED)], None)
     return ApprovalSelection([StageResult.finding(Reason.APPROVAL_ABSENT)], None)
+
+
+def token_forward_result(
+    resolved: ResolvedServer, selected: ApprovalRow | None
+) -> StageResult | None:
+    """호출자 토큰을 업스트림에 그대로 전달하는 서버(POL-R-06)는 선택된 승인이 조건
+    ``allow_token_forward``를 true로 적었을 때만 호출을 보낸다. 아니면 닫는다."""
+    if resolved.auth_type not in FORWARDING_AUTH:
+        return None
+    if selected is not None and selected.conditions.get(ALLOW_TOKEN_FORWARD) is True:
+        return None
+    return StageResult.stop(Reason.TOKEN_FORWARD_FORBIDDEN, detail=resolved.auth_type)
 
 
 def control_listing_negative(
@@ -1182,6 +1195,11 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
     run.selected = selection.selected
     if stages.stopped:
         return
+    if req.operation is OperationType.TOOL_CALL:
+        forward = token_forward_result(resolved, run.selected)
+        if forward is not None:
+            stages.add(Stage.DENIAL_APPROVAL, forward)
+            return
 
     if req.operation is OperationType.RUNTIME_DISCOVERY and (
         snapshot.server is None or snapshot.server.contract_status != "managed"

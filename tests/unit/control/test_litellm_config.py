@@ -234,3 +234,23 @@ def test_servers_without_limits_get_the_defaults_and_written_values_are_kept(tmp
     (copy,) = tmp_path.glob("s.yaml.bak-*")
     assert copy.read_text(encoding="utf-8") == text
     assert litellm_config.ensure_required_flags(path) == []
+
+
+
+def test_oauth_servers_that_hold_the_upstream_token_get_the_resource_default(tmp_path):
+    path = tmp_path / "o.yaml"
+    limits = "    rpm: 5\n    max_concurrent_requests: 1\n"
+    path.write_text(
+        "general_settings:\n  disable_env_credential_login: true\n"
+        "mcp_servers:\n"
+        f"  held:\n    url: http://u.test/a\n    auth_type: oauth2\n{limits}"
+        "  optout:\n    url: http://u.test/b\n    auth_type: oauth2\n    upstream_resource: ''\n"
+        f"{limits}"
+        f"  forwarded:\n    url: http://u.test/c\n    auth_type: oauth_delegate\n{limits}",
+        encoding="utf-8", newline="",
+    )
+    assert litellm_config.ensure_required_flags(path) == ["mcp_servers.held.upstream_resource"]
+    servers = yaml.safe_load(path.read_text(encoding="utf-8"))["mcp_servers"]
+    assert servers["held"]["upstream_resource"] == "auto"
+    assert servers["optout"]["upstream_resource"] == ""
+    assert "upstream_resource" not in servers["forwarded"]

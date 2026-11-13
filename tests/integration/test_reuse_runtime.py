@@ -11,6 +11,7 @@ import json
 import re
 import threading
 import time
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
@@ -27,6 +28,7 @@ def sid(n: int) -> str:
 RPM, CONC1, CONC8, TIMEOUT_SHORT, TIMEOUT_LONG, TLS_MATCH, TLS_MISMATCH = (
     sid(n) for n in range(1, 8)
 )
+FORWARD = "e200000000000000000000000000000f"
 TRUSTED = "https://app.trusted.test/cb"
 
 
@@ -304,3 +306,72 @@ def test_issuer_limit_a_response_without_iss_passes_unless_the_idp_announces_iss
     assert finish(authorize("rt_oauth", TRUSTED)).status_code == 302
     missing = finish(authorize("rt_oauth_iss", TRUSTED))
     assert missing.status_code == 400 and "invalid_issuer" in missing.text
+
+
+# --- POL-R-05: 토큰의 대상(aud) -----------------------------------------------------------------
+
+
+def authorize_resource(server: str) -> list[str]:
+    wait_authorize_ready(server)
+    reply = authorize(server, TRUSTED)
+    assert reply.status_code in (302, 307), reply.text
+    return parse_qs(urlparse(reply.headers["location"]).query).get("resource", [])
+
+
+def test_upstream_resource_puts_the_target_on_the_authorization_request(reuse):
+    # 설정하지 않으면 resource를 보내지 않고, auto는 서버 주소를, 명시 값은 그대로 보낸다.
+    assert authorize_resource("rt_oauth") == []
+    assert authorize_resource("rt_oauth_resource") == ["http://counting-proxy:8080/a/mcp"]
+    assert authorize_resource("rt_oauth_resource_other") == ["http://counting-proxy:8080/other/mcp"]
+
+
+def test_audience_limit_litellm_forwards_a_token_issued_for_another_audience(reuse, proxy_log):
+    # LiteLLM은 받은 토큰의 aud를 읽지 않는다. 다른 대상용 토큰도 그대로 업스트림에 닿으며, 대상
+    # 확인은 업스트림과 인가 서버의 몫이다. 판본이 바뀌어 달라지면 이 시험이 알린다.
+    token = "it-aud-other-service"
+    mark = support.marker()
+    reply = httpx.post(
+        f"{BASE}/mcp-rest/tools/call",
+        headers={"x-litellm-api-key": support.MASTER_KEY, "Authorization": f"Bearer {token}"},
+        json={"server_id": FORWARD, "name": "rt_forward-echo",
+              "arguments": {"text": "x", "marker": mark}},
+        timeout=60,
+    )
+    assert reply.status_code == 200, reply.text
+    support.wait_until(lambda: proxy_log.tools_calls(mark, "a"), what="forwarded call")
+
+
+# --- POL-R-06: 연결 토큰의 전달 -------------------------------------------------------------------
+
+
+def test_forwarding_server_hands_the_callers_token_to_the_upstream(reuse, proxy_log):
+    # 클라이언트 전달 서버(true_passthrough)는 호출자의 Authorization을 그대로 업스트림에 보낸다.
+    # 이 설정을 막는 일은 LiteLLM에 없고 MINT가 승인 조건으로 맡는다(플러그인 단위 시험).
+    token = "it-forwarded-caller-token"
+    mark = support.marker()
+    reply = httpx.post(
+        f"{BASE}/mcp-rest/tools/call",
+        headers={"x-litellm-api-key": support.MASTER_KEY, "Authorization": f"Bearer {token}"},
+        json={"server_id": FORWARD, "name": "rt_forward-echo",
+              "arguments": {"text": "x", "marker": mark}},
+        timeout=60,
+    )
+    assert reply.status_code == 200, reply.text
+    rows = support.wait_until(lambda: proxy_log.tools_calls(mark, "a"), what="forwarded call")
+    assert [r["fwd_auth"] for r in rows] == [token]
+
+
+def test_non_forwarding_server_does_not_hand_the_callers_token_on(reuse, proxy_log):
+    # 대조: 서버 고유 자격을 쓰는 서버는 같은 요청의 호출자 토큰을 업스트림에 보내지 않는다.
+    mark = support.marker()
+    reply = httpx.post(
+        f"{BASE}/mcp-rest/tools/call",
+        headers={"x-litellm-api-key": support.MASTER_KEY,
+                 "Authorization": "Bearer it-forwarded-caller-token"},
+        json={"server_id": CONC8, "name": "rt_conc8-echo",
+              "arguments": {"text": "x", "marker": mark}},
+        timeout=60,
+    )
+    assert reply.status_code == 200, reply.text
+    rows = support.wait_until(lambda: proxy_log.tools_calls(mark, "b"), what="call")
+    assert [r["fwd_auth"] for r in rows] == [""]

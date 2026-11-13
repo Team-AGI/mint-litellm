@@ -24,14 +24,18 @@ from mint_litellm.types.reuse_policy import (
     KEY_CONCURRENCY,
     KEY_CREDENTIAL,
     KEY_ENV_LOGIN,
+    KEY_FORWARD,
     KEY_ISSUER,
     KEY_REDIRECT,
+    KEY_RESOURCE,
     KEY_RPM,
     KEY_SSL,
     KEY_TIMEOUT,
     KEY_URL_HOSTS,
     ServerFacts,
     credential_digest,
+    forwarding_violation,
+    forwards_client_token,
     reuse_violations,
     ssl_verify_on,
 )
@@ -45,7 +49,7 @@ from mint_litellm.types.target import effective_profile, parse_profile_map, sele
 
 _REUSE_KEYS = (
     KEY_ENV_LOGIN, KEY_URL_HOSTS, KEY_SSL, KEY_REDIRECT, KEY_ISSUER, KEY_BINDING, KEY_TIMEOUT,
-    KEY_CREDENTIAL, KEY_RPM, KEY_CONCURRENCY,
+    KEY_CREDENTIAL, KEY_RPM, KEY_CONCURRENCY, KEY_RESOURCE, KEY_FORWARD,
 )
 _ROWS = {row.key: row for row in SETTINGS_TABLE}
 _OPTOUT_KEYS = ("opted_out_global_guardrails", "disable_global_guardrails")
@@ -295,8 +299,12 @@ def _server_facts(name: str, cfg: Mapping[str, Any]) -> ServerFacts:
     auth = str(cfg.get("auth_type", "")).lower()
     m2m = cfg.get("oauth2_flow") == "client_credentials"
     timeout = cfg.get("timeout")
+    delegate = _truthy(cfg.get("delegate_auth_to_upstream", False))
     return ServerFacts(
         name=name,
+        gateway_oauth=auth == "oauth2" and not delegate,
+        upstream_resource=cfg.get("upstream_resource"),
+        forwards_token=forwards_client_token(auth, delegate, cfg.get("extra_headers")),
         discovery_oauth=auth in DISCOVERY_AUTH,
         per_user_oauth=auth == "oauth2" and not m2m and not _truthy(
             cfg.get("delegate_auth_to_upstream", False)),
@@ -317,14 +325,17 @@ def _check_reuse_rows(judge, general, lsettings, servers_cfg, env) -> None:
     except ValueError:
         default_timeout = None
     ssl_value = env.get("SSL_VERIFY", lsettings.get("ssl_verify", True))
+    facts = [_server_facts(n, s or {}) for n, s in servers_cfg.items()]
     violations = reuse_violations(
         general=general,
         allowed_hosts=lsettings.get("user_url_allowed_hosts") or [],
         ssl_verify=ssl_verify_on(ssl_value),
         env=env,
-        servers=[_server_facts(n, s or {}) for n, s in servers_cfg.items()],
+        servers=facts,
         default_timeout=default_timeout,
     )
+    forwarding = forwarding_violation(facts)
+    violations = [*violations, *([forwarding] if forwarding else [])]
     for key in _REUSE_KEYS:
         messages = [v.message for v in violations if v.key == key]
         judge(key, not messages, " ".join(messages))
