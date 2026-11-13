@@ -12,7 +12,7 @@
     구형 HTTP+SSE(/mcp/sse + /mcp/sse/messages) e
 
 2026-07-28 헤더로 들어오는 요청은 기본 설정에서 도구 호출 앞에서 거절된다. 광고 판본에 2026-07-28을
-넣은 구성은 거절 여부를 단정하지 않고 판정 사건 없이 업스트림에 닿는 호출이 없음만 확인한다.
+넣은 구성은 자체 점검이 집행 확인 불가로 기록하며, 업스트림에 닿는 호출이 없음을 확인한다.
 """
 
 import json
@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 
 import httpx
+import psycopg
 import pytest
 import support
 from mcp import ClientSession
@@ -175,10 +176,7 @@ def test_each_path_blocks_without_approval_and_allows_with_it(world, evidence, p
     text = invoke(ingress, subject.key, server, allowed)
     assert f"{INSTANCE}:hello" in text, text
     (event,) = decisions_of(world, subject, since, 1)
-    assert (event["payload"]["evaluated_decision"], event["payload"]["enforced_action"]) == (
-        "allow",
-        "allow",
-    )
+    assert decision(event)[:2] == ("allow", "allow")
     evidence.assert_calls(allowed, 1, server)
 
 
@@ -294,10 +292,8 @@ def test_legacy_sse_ingress_also_refuses_2026_07_28(world):
     assert body["error"]["message"].startswith("Unsupported MCP-Protocol-Version 2026-07-28")
 
 
-def test_advertising_2026_07_28_never_lets_a_call_reach_upstream_without_a_decision(
-    world, evidence
-):
-    """광고 판본에 2026-07-28을 넣은 구성: 승인 없는 호출의 효과는 0, 효과는 허용 사건 수와 같다."""
+def test_advertising_2026_07_28_fails_self_check_and_no_call_reaches_upstream(world, evidence):
+    """광고 판본에 2026-07-28을 넣은 구성은 자체 점검이 실패해 호출이 업스트림에 닿지 않는다."""
     base = BASE_CONFIG.read_text(encoding="utf-8")
     name = "modern-advertised.generated.yaml"
     versions = json.dumps([*LEGACY_VERSIONS.split(", "), "2026-07-28"])
@@ -315,14 +311,27 @@ def test_advertising_2026_07_28_never_lets_a_call_reach_upstream_without_a_decis
     try:
         subject = world.subject(("e",))
         relation = world.prepare(subject, "e")
-        with litellm_config(f"./config/{name}") as started:
+        with psycopg.connect(support.mint_database_url()) as conn:
+            opened = conn.execute("select clock_timestamp()").fetchone()[0]
+        with litellm_config(f"./config/{name}", verified=False) as started:
             assert started.returncode == 0, started.stderr
-            since = world.now()
-            outcomes = []
+
+            def unverified() -> bool:
+                with psycopg.connect(support.mint_database_url()) as conn:
+                    row = conn.execute(
+                        "select count(*) from mint.events where kind = 'enforcement_unverified' "
+                        "and inserted_at >= %s",
+                        (opened,),
+                    ).fetchone()
+                return row[0] >= 1
+
+            support.wait_until(unverified, 150, 2, what="enforcement_unverified")
+            marks = []
             for approved in (False, True):
                 if approved:
                     world.approve(subject, relation, tools="echo")
                 mark = support.marker()
+                marks.append(mark)
                 headers = {
                     "Authorization": f"Bearer {subject.key}",
                     "Accept": "application/json, text/event-stream",
@@ -337,19 +346,8 @@ def test_advertising_2026_07_28_never_lets_a_call_reach_upstream_without_a_decis
                     "_meta": MODERN_META,
                 }
                 body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params}
-                reply = httpx.post(
-                    f"{LITELLM}/mcp", headers=headers, content=json.dumps(body), timeout=60
-                )
-                outcomes.append((approved, mark, reply.status_code, reply.text))
+                httpx.post(f"{LITELLM}/mcp", headers=headers, content=json.dumps(body), timeout=60)
             time.sleep(2)
-            allows = [
-                e
-                for e in world.decisions_since(subject, since)
-                if decision(e)[:2] == ("allow", "allow")
-            ]
-            reached = sum(evidence.calls(mark, "e")[1] for _, mark, _, _ in outcomes)
-            print([(a, status, text[:200]) for a, _, status, text in outcomes])
-            assert evidence.calls(outcomes[0][1], "e") == (0, 0), outcomes[0]
-            assert reached == len(allows), (reached, len(allows), outcomes)
+            assert all(evidence.calls(m, "e") == (0, 0) for m in marks), marks
     finally:
         path.unlink(missing_ok=True)
