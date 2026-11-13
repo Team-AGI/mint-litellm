@@ -28,6 +28,7 @@ import psycopg
 
 from mint_litellm.control import alerts
 from mint_litellm.control.db.connection import fetchall
+from mint_litellm.endpoint.remediation import LIVE
 from mint_litellm.types.events import AlertKind
 
 TERMINATED = ("terminating", "terminated")
@@ -41,7 +42,6 @@ KINDS = (
 )
 SILENT_AFTER = timedelta(hours=24)
 KEY_WARN = timedelta(days=7)
-LIVE = ("approved", "suspended")  # 이 밖의 상태(없는 서버 포함)가 단말에서 돌면 잔존으로 본다
 
 
 def findings(

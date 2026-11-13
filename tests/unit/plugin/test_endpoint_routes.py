@@ -61,6 +61,9 @@ class FakeDatabase:
     async def has_negative_state(self, query):
         return False
 
+    async def retired_servers(self, instance_id, reported):
+        return []
+
 
 def build(tmp_path, snap=None, **kwargs):
     h = harness(tmp_path, snap or snapshot(server=local_row()), **kwargs)
