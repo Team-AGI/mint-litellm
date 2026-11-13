@@ -263,3 +263,15 @@ def test_silence_and_expiry_alerts_open_and_close_with_the_reports(conn):
         " reported_at = now() - interval '300 hours'"
     )
     assert endpoint_posture.scan(conn, INSTANCE) == 0
+
+
+def test_the_alerts_for_a_retired_server_close_once_the_kit_reports_what_it_removed():
+    statuses = {"gone": "terminated"}
+    before = [{
+        **row("managed", ["gone"]),
+        "processes": [{"server": "gone", "count": 1}],
+        "autostart": [{"kind": "cron", "name": "@reboot", "server": "gone"}],
+    }]
+    assert len(endpoint_posture.findings(before, statuses)) == 3
+    after = [{**row("managed"), "processes": [], "autostart": []}]
+    assert endpoint_posture.findings(after, statuses) == {}

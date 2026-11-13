@@ -16,10 +16,11 @@ import socket
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
+from mint_litellm.endpoint.remediation import remediation_events, retired_names
 from mint_litellm.plugin.buffer import ConsumeRequest, ConsumptionLost
 from mint_litellm.types.events import Event
 from mint_litellm.types.identity import OrgStatus, SubjectType
@@ -1009,6 +1010,7 @@ class PluginDatabase:
         mcp_servers: Sequence[str],
         processes: Sequence[dict[str, Any]] | None = None,
         autostart: Sequence[dict[str, Any]] | None = None,
+        removed: Sequence[dict[str, Any]] | None = None,
     ) -> str:
         """설치 묶음에 발급한 키의 설치 상태 보고를 남기고 결과를 돌려준다.
 
@@ -1022,7 +1024,8 @@ class PluginDatabase:
             async with conn.transaction():
                 cursor = await conn.execute(
                     "SELECT expires_at IS NOT NULL AND expires_at <= clock_timestamp(),"
-                    " expires_at IS NOT NULL AND expires_at <= clock_timestamp() + %s"
+                    " expires_at IS NOT NULL AND expires_at <= clock_timestamp() + %s,"
+                    " user_id, key_alias"
                     " FROM mint.endpoint_installs WHERE instance_id = %s AND key_token = %s"
                     " AND revoked_at IS NULL FOR UPDATE",
                     (RENEW_WINDOW, instance_id, key_token),
@@ -1043,9 +1046,25 @@ class PluginDatabase:
                      None if autostart is None else Jsonb(list(autostart)), row[1], instance_id,
                      key_token),
                 )
-                return "renewed" if row[1] else "recorded"
+                return ("renewed" if row[1] else "recorded", row[2], row[3])
 
-        return str(await self._run(write))
+        outcome = await self._run(write)
+        if isinstance(outcome, str):
+            return outcome
+        status, user_id, key_alias = outcome
+        # 지웠다는 보고는 항목마다 사건으로 남긴다(단말의 주장이다). 같은 보고는 한 번만 남는다.
+        for event in remediation_events(
+            instance_id, user_id=user_id, key_alias=key_alias, removed=removed or (),
+            at=datetime.now(UTC),
+        ):
+            await self.insert_event(event)
+        return str(status)
+
+    async def retired_servers(self, instance_id: str, reported: Sequence[str]) -> list[str]:
+        """설치 보고 응답에 실을 폐기·미승인 로컬 서버 이름."""
+        rows = await self.registered_servers(instance_id)
+        statuses = {r.server_id: r.status for r in rows if r.identity_kind == "stdio"}
+        return retired_names(statuses, reported)
 
     async def read_epoch(self, instance_id: str) -> int | None:
         async def read(conn: Any) -> Any:
