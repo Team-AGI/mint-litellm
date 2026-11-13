@@ -280,6 +280,12 @@ def test_a_burst_of_calls_raises_a_call_spike_alert_and_recovery_closes_it(
     )
     with psycopg.connect(url, autocommit=True) as conn:
         conn.execute("UPDATE mint.schedules SET next_run_at = now() WHERE kind='call_spike_scan'")
+        # 재시도 중인 다른 작업(예: 제출 조회)이 제한 시간을 다 쓰지 않도록 뒤로 미룬다.
+        conn.execute(
+            "UPDATE mint.jobs SET run_after = now() + interval '1 hour'"
+            " WHERE instance_id=%s AND status='pending' AND kind <> 'call_spike_scan'",
+            (INSTANCE,),
+        )
     _run_worker(
         _worker_url(database), quiet, control_client,
         lambda: "call_spike" not in _alert_kinds(url),
