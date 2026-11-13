@@ -174,6 +174,7 @@ class Stage2Settings:
     # 알려진 취약점 조회(OSV 형식 API): 주소, 조회 주기, 요청 제한 시간(초). 기본값은 MINT가 채운다.
     vuln_feed_url: str = "https://api.osv.dev"
     vuln_scan_seconds: int = 900
+    instance_mismatch_grace_seconds: int = 900
     vuln_feed_timeout_seconds: int = 15
 
     @classmethod
@@ -213,6 +214,8 @@ class Stage2Settings:
             spike_min_calls=_seconds(env, "MINT_SPIKE_MIN_CALLS", 50),
             vuln_feed_url=_feed_url(env.get("MINT_VULN_FEED_URL")),
             vuln_scan_seconds=_seconds(env, "MINT_VULN_SCAN_SECONDS", 900, 60),
+            instance_mismatch_grace_seconds=_seconds(
+                env, "MINT_INSTANCE_MISMATCH_GRACE_SECONDS", 900, 0),
             vuln_feed_timeout_seconds=_seconds(env, "MINT_VULN_FEED_TIMEOUT_SECONDS", 15),
             console_url=(env.get("MINT_CONSOLE_URL") or "").strip() or None,
         )

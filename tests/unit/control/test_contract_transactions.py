@@ -797,3 +797,45 @@ def test_an_admin_exception_releases_the_block_but_keeps_the_alert(contract_db):
     assert compare_instances(ctx) == 1
     assert not blocked(conn)
     assert len(instance_alerts(conn)) == 1
+
+
+def mismatch_marks(conn):
+    return fetchone(
+        conn, "SELECT instance_mismatch_since AS since, instance_mismatch_at AS at"
+        " FROM mint.servers WHERE instance_id='i' AND server_id='s'"
+    )
+
+
+def test_within_the_grace_window_only_the_alert_opens(contract_db):
+    conn, ctx, _ = contract_db
+    seed_peer(conn, "https://other.test/api", NEW)
+    assert compare_instances(ctx, 900) == 1
+    assert len(instance_alerts(conn)) == 1
+    first = mismatch_marks(conn)
+    assert first["since"] is not None and first["at"] is None
+    # 다시 관측해도 처음 본 시각은 그대로다
+    assert compare_instances(ctx, 900) == 1
+    assert mismatch_marks(conn) == first
+
+
+def test_after_the_grace_window_the_server_is_blocked(contract_db):
+    conn, ctx, _ = contract_db
+    seed_peer(conn, "https://other.test/api", NEW)
+    assert compare_instances(ctx, 900) == 1
+    since = mismatch_marks(conn)["since"]
+    conn.execute(
+        "UPDATE mint.servers SET instance_mismatch_since = now() - interval '901 seconds'"
+        " WHERE instance_id='i'")
+    assert compare_instances(ctx, 900) == 1
+    marks = mismatch_marks(conn)
+    assert marks["at"] is not None and marks["since"] < since
+
+
+def test_a_resolved_difference_clears_both_marks(contract_db):
+    conn, ctx, _ = contract_db
+    seed_peer(conn, "https://other.test/api", NEW)
+    assert compare_instances(ctx, 0) == 1
+    assert mismatch_marks(conn)["at"] is not None
+    conn.execute("UPDATE mint.servers SET status='suspended' WHERE instance_id='j'")
+    assert compare_instances(ctx, 0) == 0
+    assert mismatch_marks(conn) == {"since": None, "at": None}

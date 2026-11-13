@@ -207,6 +207,7 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 | `MINT_RECERT_GRACE_DAYS` | 재확인 요청 뒤 보류까지의 유예(일, 1~365) | `14` |
 | `MINT_VULN_FEED_URL` | 알려진 취약점 조회 주소(OSV 형식 API). 사내 미러를 쓰려면 http(s) 주소를 준다 | `https://api.osv.dev` |
 | `MINT_VULN_SCAN_SECONDS` | 취약점 조회·조치 기한 판정 주기(초, 60 이상) | `900` |
+| `MINT_INSTANCE_MISMATCH_GRACE_SECONDS` | 다른 인스턴스와 계약·설정이 다른 상태가 이 시간(초)을 넘게 이어지면 그 서버 호출을 막는다. 경보는 바로 열린다. 0이면 바로 막는다. | `900` |
 | `MINT_VULN_FEED_TIMEOUT_SECONDS` | 조회 요청 한 번의 제한 시간(초) | `15` |
 | `MINT_WEBHOOK_FORMATS` | 웹훅 주소마다 하나씩, 같은 순서로 적는 전송 형식(`json`·`slack`·`teams`). 수가 맞지 않거나 모르는 값이면 기동을 거부한다. | 모두 `json` |
 | `MINT_LINK_TTL_SECONDS` | 알림 속 콘솔 바로가기 링크의 유효 시간(초, 최소 60). | `86400` |
