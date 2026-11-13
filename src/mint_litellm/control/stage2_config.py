@@ -56,6 +56,14 @@ def _days(env: Mapping[str, str], name: str, default: int, minimum: int = 1) -> 
     return value
 
 
+def _retention_days(env: Mapping[str, str]) -> int | None:
+    """``MINT_EVENT_RETENTION_DAYS``. 설정하지 않으면 None(지우지 않음), 설정하면 31일 이상."""
+    raw = env.get("MINT_EVENT_RETENTION_DAYS")
+    if raw is None or not raw.strip():
+        return None
+    return _seconds(env, "MINT_EVENT_RETENTION_DAYS", 0, 31)
+
+
 def _ports(raw: str | None) -> tuple[int, ...]:
     if raw is None or not raw.strip():
         return (443, 8443)
@@ -176,6 +184,8 @@ class Stage2Settings:
     vuln_scan_seconds: int = 900
     instance_mismatch_grace_seconds: int = 900
     vuln_feed_timeout_seconds: int = 15
+    # 사건 원장 보관 일수. 없으면(기본) 분할을 지우지 않는다. MINT는 기본값을 정하지 않는다.
+    event_retention_days: int | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "Stage2Settings":
@@ -217,6 +227,7 @@ class Stage2Settings:
             instance_mismatch_grace_seconds=_seconds(
                 env, "MINT_INSTANCE_MISMATCH_GRACE_SECONDS", 900, 0),
             vuln_feed_timeout_seconds=_seconds(env, "MINT_VULN_FEED_TIMEOUT_SECONDS", 15),
+            event_retention_days=_retention_days(env),
             console_url=(env.get("MINT_CONSOLE_URL") or "").strip() or None,
         )
         if settings.session_idle_seconds > settings.session_absolute_seconds:

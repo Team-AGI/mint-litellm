@@ -25,8 +25,13 @@ def run(tmp_path: Path, env_text: str, *args: str, docker_tail: str = ""):
     bin_dir.mkdir(exist_ok=True)
     fake = bin_dir / "docker"
     fake.write_text(
-        '#!/bin/sh\necho "$@" >> "$FAKE_DOCKER_LOG"\n' + docker_tail, encoding="utf-8"
+        '#!/bin/sh\necho "$@" >> "$FAKE_DOCKER_LOG"\n'
+        'case "$*" in *pg_dump*|*"--entrypoint cat"*) echo dump;; esac\n' + docker_tail,
+        encoding="utf-8",
     )
+    if args[:1] == ("upgrade",):  # 백업이 설정 파일을 복사한다
+        (deploy / "config").mkdir(exist_ok=True)
+        (deploy / "config" / "litellm.config.yaml").write_text("{}\n", encoding="utf-8")
     fake.chmod(0o755)
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
@@ -35,6 +40,7 @@ def run(tmp_path: Path, env_text: str, *args: str, docker_tail: str = ""):
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
         "HOME": str(home),
         "FAKE_DOCKER_LOG": str(tmp_path / "docker.log"),
+        "MINT_UPGRADE_WAIT": "0",
     }
     result = subprocess.run(
         [BASH, "mint.sh", *args],
@@ -323,3 +329,77 @@ def test_up_tells_the_next_step_for_a_first_install(tmp_path):
     result, _, _ = up_with_issuer(tmp_path, docker_tail="")
     assert result.returncode == 0, result.stderr
     assert "./mint.sh bootstrap <이름>" in result.stdout
+
+
+def positions(log: str, *needles: str) -> list[int]:
+    """각 문구가 처음 나온 줄 번호. 문구가 없으면 시험이 실패한다."""
+    lines = log.splitlines()
+    return [next(i for i, ln in enumerate(lines) if needle in ln) for needle in needles]
+
+
+def upgrade_with_token(tmp_path, docker_tail=""):
+    (tmp_path / "deploy").mkdir(exist_ok=True)
+    secrets = tmp_path / "secrets"
+    secrets.mkdir(exist_ok=True)
+    (secrets / "operator.token").write_text("tok\n", encoding="utf-8")
+    env = f"POSTGRES_PASSWORD=x\nMINT_SECRETS_DIR={secrets}\n"
+    return run(tmp_path, env, "upgrade", docker_tail=docker_tail)[0]
+
+
+def test_upgrade_runs_every_mechanical_step_in_order(tmp_path):
+    result = upgrade_with_token(tmp_path)
+    assert result.returncode == 0, result.stderr
+    log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+    order = positions(
+        log, " build litellm", "pg_dump", "stop litellm worker console", "init --out",
+        "upgrade policy", "up -d litellm", "up -d console", " check", " doctor", "upgrade report",
+    )
+    assert order == sorted(order)
+    assert list((tmp_path / "deploy" / "backups").glob("*/mint.sql"))
+    assert "백업:" in result.stdout and "] 사람이 정할 일을 계산해" in result.stdout
+
+
+def test_upgrade_dry_run_prints_the_plan_and_touches_nothing(tmp_path):
+    (tmp_path / "deploy").mkdir()
+    result, env_file, _ = run(tmp_path, "POSTGRES_PASSWORD=x\n", "upgrade", "--dry-run")
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert "아무것도 바꾸지 않았습니다" in lines[0]
+    assert [ln.split(".")[0].strip() for ln in lines[1:]] == [str(n) for n in range(1, 11)]
+    assert not (tmp_path / "docker.log").exists()
+    assert env_file.read_text(encoding="utf-8") == "POSTGRES_PASSWORD=x\n"
+    assert not (tmp_path / "deploy" / "backups").exists()
+
+
+def test_upgrade_with_an_unknown_option_is_refused(tmp_path):
+    (tmp_path / "deploy").mkdir()
+    result, _, _ = run(tmp_path, "POSTGRES_PASSWORD=x\n", "upgrade", "--now")
+    assert result.returncode != 0 and "사용법" in result.stderr
+    assert not (tmp_path / "docker.log").exists()
+
+
+def test_a_failed_build_leaves_the_previous_version_running(tmp_path):
+    (tmp_path / "deploy").mkdir()
+    result, _, _ = run(tmp_path, "POSTGRES_PASSWORD=x\n", "upgrade",
+                       docker_tail='case "$*" in *" build "*) exit 1;; esac\n')
+    assert result.returncode != 0
+    assert "[1/10]" in result.stderr and "이전 판본이 그대로 실행 중" in result.stderr
+    log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+    assert " stop " not in log and "init --out" not in log
+
+
+def test_a_failed_check_stops_with_the_step_and_the_backup_location(tmp_path):
+    result = upgrade_with_token(tmp_path, 'case "$*" in *" check"*) exit 1;; esac\n')
+    assert result.returncode != 0
+    assert "[9/10] 점검합니다" in result.stderr and "백업:" in result.stderr
+    assert "업그레이드했습니다" not in result.stdout
+    assert "upgrade report" not in (tmp_path / "docker.log").read_text(encoding="utf-8")
+
+
+def test_a_failed_migration_stops_before_the_policy_and_litellm_steps(tmp_path):
+    (tmp_path / "deploy").mkdir()
+    result, _, _ = run(tmp_path, "POSTGRES_PASSWORD=x\n", "upgrade",
+                       docker_tail='case "$*" in *"init --out"*) exit 1;; esac\n')
+    assert result.returncode != 0 and "[5/10]" in result.stderr
+    log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+    assert "up -d opa" not in log and "up -d litellm" not in log

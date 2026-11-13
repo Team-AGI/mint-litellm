@@ -28,12 +28,13 @@ def stored(monkeypatch):
 
 def test_a_managed_install_report_is_stored_for_the_calling_key(tmp_path, stored):
     client, _ = build(tmp_path)
-    assert post(client, REPORT, report()).json() == {"recorded": True, "renewed": False}
+    assert post(client, REPORT, report()).json() == {
+        "recorded": True, "renewed": False, "retired": []}
     (_, key_token, fields), = stored
     assert key_token == KEY
     assert fields == {"mode": "managed", "kit_version": "k" * 64,
                       "claude_version": "2.1.0 (Claude Code)", "mcp_servers": ["srv-1"],
-                      "processes": None, "autostart": None}
+                      "processes": None, "autostart": None, "removed": None}
 
 
 def test_the_process_and_autostart_inventory_is_stored_as_plain_rows(tmp_path, stored):
@@ -97,8 +98,8 @@ def test_the_report_route_needs_a_key_and_a_ready_store(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(("outcome", "status", "body"), [
-    ("recorded", 200, {"recorded": True, "renewed": False}),
-    ("renewed", 200, {"recorded": True, "renewed": True}),
+    ("recorded", 200, {"recorded": True, "renewed": False, "retired": []}),
+    ("renewed", 200, {"recorded": True, "renewed": True, "retired": []}),
 ])
 def test_a_report_near_expiry_says_the_key_was_extended(
     tmp_path, monkeypatch, outcome, status, body
@@ -120,3 +121,54 @@ def test_an_expired_key_is_refused_with_a_clear_error(tmp_path, monkeypatch):
     client, _ = build(tmp_path)
     reply = post(client, REPORT, report())
     assert reply.status_code == 403 and "expired" in reply.text
+
+
+def test_the_answer_lists_the_servers_the_control_plane_treats_as_retired(
+    tmp_path, stored, monkeypatch
+):
+    seen = []
+
+    async def retired_servers(self, instance_id, reported):
+        seen.append(reported)
+        return ["old-srv"]
+
+    monkeypatch.setattr(FakeDatabase, "retired_servers", retired_servers, raising=False)
+    client, _ = build(tmp_path)
+    body = report(
+        processes=[{"server": "proc-srv", "count": 1}],
+        autostart=[{"kind": "cron", "name": "@reboot", "server": "auto-srv"}],
+    )
+    assert post(client, REPORT, body).json()["retired"] == ["old-srv"]
+    assert seen == [["srv-1", "proc-srv", "auto-srv"]]
+
+
+def test_a_report_still_succeeds_when_the_retired_list_cannot_be_built(
+    tmp_path, stored, monkeypatch
+):
+    async def broken(self, *args):
+        raise OSError("down")
+
+    monkeypatch.setattr(FakeDatabase, "retired_servers", broken, raising=False)
+    client, _ = build(tmp_path)
+    assert post(client, REPORT, report()).json() == {"recorded": True, "renewed": False}
+
+
+def test_removed_items_are_passed_on_as_plain_rows(tmp_path, stored):
+    client, _ = build(tmp_path)
+    removed = [{"kind": "config", "server": "old-srv", "target": "claude"},
+               {"kind": "process", "server": "old-srv"}]
+    assert post(client, REPORT, report(removed=removed)).status_code == 200
+    assert stored[0][2]["removed"] == [
+        {"kind": "config", "server": "old-srv", "target": "claude"},
+        {"kind": "process", "server": "old-srv", "target": None},
+    ]
+
+
+@pytest.mark.parametrize("removed", [
+    [{"kind": "file", "server": "a"}],
+    [{"kind": "config", "server": "a", "path": "/etc/x"}],
+    [{"kind": "config", "server": "a"}] * 257,
+])
+def test_a_removed_list_that_does_not_fit_is_refused(tmp_path, stored, removed):
+    client, _ = build(tmp_path)
+    assert post(client, REPORT, report(removed=removed)).status_code == 422
