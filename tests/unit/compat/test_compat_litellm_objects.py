@@ -102,6 +102,70 @@ class TestRealAuthObjects:
         )
 
 
+class TestJwtAuthObjects:
+    """LiteLLM JWT 경로가 만드는 객체. handle_jwt.py의 user_api_key_auth_from_result는
+    api_key=None으로 만들고 user_id·team_id·org_id·end_user_id·jwt_claims를 채운다."""
+
+    def jwt_auth(self, **kw):
+        args = {
+            "api_key": None,
+            "user_id": "entra-oid-1",
+            "team_id": "t1",
+            "org_id": "o1",
+            "end_user_id": "visitor",
+            "jwt_claims": {"sub": "entra-oid-1"},
+        }
+        args.update(kw)
+        return UserAPIKeyAuth(**args)
+
+    def test_a_jwt_user_without_a_virtual_key_is_that_user(self):
+        auth = self.jwt_auth()
+        assert auth.token is None
+        principal = compat.principal_from_auth(auth, instance_id="i")
+        assert principal.principal_type is PrincipalType.USER
+        assert principal.principal_id == "entra-oid-1" and principal.user_id == "entra-oid-1"
+        assert principal.key_id is None and principal.team_id == "t1"
+        assert principal.claimed_end_user_id == "visitor"
+
+    def test_a_jwt_without_a_user_id_is_anonymous_even_with_a_team(self):
+        auth = self.jwt_auth(user_id=None)
+        assert compat.principal_from_auth(auth, instance_id="i").principal_type is (
+            PrincipalType.ANONYMOUS
+        )
+
+    def test_a_keyless_user_without_a_server_side_marker_is_anonymous(self):
+        auth = UserAPIKeyAuth(api_key=None, user_id="u1", team_id="t1")
+        assert compat.principal_from_auth(auth, instance_id="i").principal_type is (
+            PrincipalType.ANONYMOUS
+        )
+
+    def test_a_managed_agent_context_counts_as_a_verified_keyless_subject(self):
+        from litellm.types.proxy.agent_identity import ManagedAgentContext
+
+        auth = UserAPIKeyAuth(api_key=None, user_id="agent-user")
+        auth.managed_agent_context = ManagedAgentContext(
+            agent_id="a1", mode="delegated", user_id="agent-user"
+        )
+        principal = compat.principal_from_auth(auth, instance_id="i")
+        assert principal.principal_type is PrincipalType.USER
+        assert principal.principal_id == "agent-user"
+
+    def test_a_gateway_admitted_user_counts_as_a_verified_keyless_subject(self):
+        auth = UserAPIKeyAuth(api_key=None, user_id="u9")
+        auth.mcp_admitted_user_subject = True
+        assert compat.principal_from_auth(auth, instance_id="i").principal_id == "u9"
+
+    def test_the_marker_cannot_be_set_from_constructor_input(self):
+        auth = UserAPIKeyAuth(api_key=None, user_id="u9", mcp_admitted_user_subject=True)
+        assert compat.principal_from_auth(auth, instance_id="i").principal_type is (
+            PrincipalType.ANONYMOUS
+        )
+
+    def test_a_virtual_key_still_wins(self):
+        auth = self.jwt_auth(api_key=RAW_KEY)
+        assert compat.principal_from_auth(auth, instance_id="i").key_id == auth.token
+
+
 def manager_with(*servers, tools=None):
     manager = MCPServerManager()
     for server in servers:
