@@ -3,16 +3,18 @@
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import RedirectResponse, Response
 
-from mint_litellm.console import api, compare
+from mint_litellm.console import alert_view, api, compare
 from mint_litellm.console.core import STATUS, Actor, page_actor, require_csrf
 from mint_litellm.console.templating import render
 from mint_litellm.control import endpoint_kits, jobs
 from mint_litellm.control import status as control_status
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
+from mint_litellm.control.services import alerts as alert_service
 from mint_litellm.control.services import allowlists as allowlist_service
 from mint_litellm.control.services import approvals as approval_service
 from mint_litellm.control.services import call_approvals as call_approval_service
@@ -448,6 +450,64 @@ def ledger(
         "error": error,
     }
     return render(request, "ledger.html", ctx, actor=actor, status=400 if error else 200)
+
+
+# --- 경보 -----------------------------------------------------------------------------------
+
+
+@router.get("/alerts")
+def alerts_list(
+    request: Request,
+    status: str = "",
+    severity: str = "",
+    kind: str = "",
+    server_id: str = "",
+    page: int = 1,
+    actor: Actor = Depends(page_actor),
+):
+    rows = reads.alerts(
+        actor.conn, actor.instance, status=status, severity=severity, kind=kind,
+        server_id=server_id, page=page,
+    )
+    zone = actor.config.time_zone
+    for row in rows:
+        row["summary"] = alert_view.summary(row["kind"], row["subject"])
+        row["link"] = alert_view.link(row["kind"], row["subject"])
+    ctx = {
+        "rows": rows, "page": page, "zone": zone,
+        "filters": reads.alert_filters(actor.conn, actor.instance),
+        "q": {"status": status, "severity": severity, "kind": kind, "server_id": server_id},
+    }
+    return render(request, "alerts.html", ctx, actor=actor)
+
+
+def alert_page(request: Request, actor: Actor, alert_id: str, error=None, status=200):
+    try:
+        row = reads.alert(actor.conn, actor.instance, str(UUID(alert_id)))
+    except ValueError:
+        row = None
+    if row is None:
+        raise AdminError(AdminCode.NOT_FOUND, "경보를 찾을 수 없습니다.")
+    ctx = {
+        "a": row, "error": error,
+        "summary": alert_view.summary(row["kind"], row["subject"]),
+        "fields": alert_view.subject_rows(row["subject"], actor.config.time_zone),
+        "link": alert_view.link(row["kind"], row["subject"]),
+    }
+    return render(request, "alert_detail.html", ctx, actor=actor, status=status)
+
+
+@router.get("/alerts/{alert_id}")
+def alert_detail(alert_id: str, request: Request, actor: Actor = Depends(page_actor)):
+    return alert_page(request, actor, alert_id)
+
+
+@router.post("/alerts/{alert_id}/acknowledge")
+def alert_acknowledge(alert_id: str, request: Request, actor: Actor = Depends(page_actor)):
+    return act(
+        actor, lambda: alert_service.acknowledge(actor.ctx, alert_id), "alert_acknowledged",
+        f"/alerts/{alert_id}", lambda **kw: alert_page(request, actor, alert_id, **kw),
+    )
 
 
 # --- 정책·관측 설정 ---------------------------------------------------------------------------

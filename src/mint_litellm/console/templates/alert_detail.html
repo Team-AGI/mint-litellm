@@ -1,0 +1,28 @@
+{% extends "base.html" %}{% import "macros.html" as m %}
+{% block title %}경보 · MINT{% endblock %}
+{% block body %}
+<h1>{{ L.pick(L.ALERT_KIND, a.kind) }} {{ m.badge(L.ALERT_STATUS, a.status) }}</h1>
+<dl class="detail">
+  <dt>요약</dt><dd>{{ summary }}</dd>
+  <dt>심각도</dt><dd>{{ m.badge(L.ALERT_SEVERITY, a.severity) }}</dd>
+  <dt>서버</dt><dd>{{ a.server_id | blank }}</dd>
+  <dt>처음 발생</dt><dd>{{ a.first_at | when }}</dd>
+  <dt>마지막 발생</dt><dd>{{ a.last_at | when }}</dd>
+  <dt>발생 횟수</dt><dd>{{ a.count }}</dd>
+  {% if a.acknowledged_by %}<dt>확인한 사람</dt><dd>{{ a.acknowledged_by | who }}</dd>{% endif %}
+  {% if a.resolved_at %}<dt>해결 시각</dt><dd>{{ a.resolved_at | when }}</dd>{% endif %}
+</dl>
+{% if fields %}
+<h2>내용</h2>
+<table><thead><tr><th>항목</th><th>값</th></tr></thead><tbody>
+{% for name, lines in fields %}<tr><td class="nowrap">{{ name }}</td><td>{% for line in lines %}<div>{{ line }}</div>{% endfor %}</td></tr>{% endfor %}
+</tbody></table>
+{% endif %}
+<div class="actions">
+  {% if link %}<a class="button" href="{{ link[0] }}">{{ link[1] }}</a>{% endif %}
+  {% if a.status == 'open' and actor.role == 'admin' %}
+  <form method="post" action="/alerts/{{ a.id }}/acknowledge">{{ m.csrf(actor) }}<button type="submit" class="primary">확인함</button></form>
+  {% endif %}
+  <a class="button" href="/alerts">목록</a>
+</div>
+{% endblock %}

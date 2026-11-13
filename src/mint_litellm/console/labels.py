@@ -263,6 +263,31 @@ ALERT_KIND = {
     "package_vulnerable": "패키지 취약점",
     "package_vuln_due": "취약점 조치 기한",
     "vuln_feed_unreachable": "취약점 조회 실패",
+    "oauth_flow_unreadable": "인증 흐름 읽기 실패",
+    "instance_mismatch": "인스턴스 간 불일치",
+    "export_failed": "내보내기 실패",
+    "sync_divergence": "LiteLLM 설정 불일치",
+    "sync_foreign_change": "LiteLLM 설정 외부 변경",
+    "evidence_missing": "증빙 누락",
+    "evidence_expiring": "증빙 만료 임박",
+    "job_failed": "작업 실패",
+    "restore_request_rejected": "복원 요청 거부",
+    "restore_blocked": "복원 대기로 호출 차단",
+    "approval_expiring": "승인 만료 임박",
+    "approval_recert_due": "승인 재확인 필요",
+    "approval_recert_held": "승인 보류",
+    "litellm_unreachable": "LiteLLM 연결 실패",
+    "termination_unconfirmed": "폐기 확인 불가",
+    "server_credentials_remain": "서버 자격 잔존",
+    "server_credentials_unverifiable": "서버 자격 확인 불가",
+    "control_key_mismatch": "제어 키 불일치",
+    "enforcement_unverified": "집행 확인 불가",
+    "server_identity_conflict": "서버 신원 충돌",
+}
+ALERT_STATUS = {
+    "open": Status("열림", "error"),
+    "acknowledged": Status("확인함", "wait"),
+    "resolved": Status("해결", "ok"),
 }
 EVENT_KIND = {
     "decision_evaluated": "호출 판정",
@@ -390,6 +415,7 @@ NOTICES = {
     "consent_given": "동의를 등록했습니다.",
     "consent_withdrawn": "동의를 철회했습니다.",
     "kit_revoked": "단말 연결을 해제했습니다.",
+    "alert_acknowledged": "경보를 확인 처리했습니다.",
 }
 
 

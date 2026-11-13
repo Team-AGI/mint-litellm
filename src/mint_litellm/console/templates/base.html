@@ -20,7 +20,7 @@
   </span>
 </header>
 <nav class="sidebar" aria-label="메뉴"><div class="menu">
-{% for href, text in MENU %}<a href="{{ href }}" class="{{ 'active' if (path == href or (href != '/' and path.startswith(href))) else '' }}">{{ text }}</a>
+{% for href, text in MENU %}<a href="{{ href }}" class="{{ 'active' if (path == href or (href != '/' and path.startswith(href))) else '' }}">{{ text }}{% if href == '/alerts' and alert_badge %} <span class="badge error">{{ alert_badge }}</span>{% endif %}</a>
 {% endfor %}
 </div></nav>
 <main><div class="page">

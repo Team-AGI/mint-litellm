@@ -355,6 +355,75 @@ def ledger_filters(conn: psycopg.Connection, instance: str) -> dict[str, list[st
     return {"kinds": [r["kind"] for r in kinds], "actors": [r["actor"] for r in actors]}
 
 
+# --- 경보 ----------------------------------------------------------------------------------
+
+ALERT_COLUMNS = (
+    "id, kind, severity, status, subject, first_at, last_at, count, acknowledged_by, resolved_at,"
+    " subject->>'server_id' AS server_id"
+)
+
+
+def alerts(
+    conn: psycopg.Connection,
+    instance: str,
+    *,
+    status: str | None = None,
+    severity: str | None = None,
+    kind: str | None = None,
+    server_id: str | None = None,
+    page: int = 1,
+) -> list[dict]:
+    """해결되지 않은 경보를 먼저, 심각한 순서로, 그다음 최근 순서로 낸다."""
+    where, params = ["instance_id = %s"], [instance]
+    for column, value in (("status", status), ("severity", severity), ("kind", kind),
+                          ("subject->>'server_id'", server_id)):
+        if value:
+            where.append(f"{column} = %s")
+            params.append(value)
+    size, offset = _page(page)
+    return fetchall(
+        conn,
+        f"SELECT {ALERT_COLUMNS} FROM mint.alerts WHERE {' AND '.join(where)}"
+        " ORDER BY (status = 'resolved'),"
+        " array_position(ARRAY['critical', 'high', 'medium', 'low'], severity),"
+        " last_at DESC, id LIMIT %s OFFSET %s",
+        (*params, size, offset),
+    )
+
+
+def alert(conn: psycopg.Connection, instance: str, alert_id: str) -> dict | None:
+    return fetchone(
+        conn,
+        f"SELECT {ALERT_COLUMNS} FROM mint.alerts WHERE instance_id = %s AND id = %s",
+        (instance, alert_id),
+    )
+
+
+def alert_filters(conn: psycopg.Connection, instance: str) -> dict[str, list[str]]:
+    kinds = fetchall(
+        conn, "SELECT DISTINCT kind FROM mint.alerts WHERE instance_id = %s ORDER BY kind",
+        (instance,),
+    )
+    servers = fetchall(
+        conn,
+        "SELECT DISTINCT subject->>'server_id' AS server_id FROM mint.alerts"
+        " WHERE instance_id = %s AND subject->>'server_id' IS NOT NULL ORDER BY 1",
+        (instance,),
+    )
+    return {"kinds": [r["kind"] for r in kinds], "servers": [r["server_id"] for r in servers]}
+
+
+def urgent_alert_count(conn: psycopg.Connection, instance: str) -> int:
+    """아직 확인하지 않은 높음·심각 경보의 수(메뉴 표지)."""
+    row = fetchone(
+        conn,
+        "SELECT count(*) AS n FROM mint.alerts WHERE instance_id = %s AND status = 'open'"
+        " AND severity IN ('high', 'critical')",
+        (instance,),
+    )
+    return row["n"] if row else 0
+
+
 # --- 개요 -----------------------------------------------------------------------------------
 
 
