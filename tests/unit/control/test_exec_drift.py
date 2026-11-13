@@ -108,3 +108,28 @@ def test_network_none_to_any_widens_the_network_axis_and_back_narrows_it():
     # 선언이 없는 이전 계약은 any와 같다.
     assert exec_drift.classify(BASE, opened)["network"]["verdict"] == "unchanged"
     assert exec_drift.classify(BASE, closed)["network"]["verdict"] == "narrowed"
+
+
+def hosted(*hosts: str) -> dict:
+    return ExecContract(
+        executable="/usr/bin/node", executable_sha256="ab" * 32, network="hosts",
+        allowed_hosts=hosts,
+    ).document()  # fmt: skip
+
+
+def test_a_longer_host_list_widens_network_and_a_shorter_one_narrows_it():
+    old = hosted("api.example.com")
+    assert verdicts(hosted("api.example.com", "*.cdn.example.com"), old)["network"] == "widened"
+    assert verdicts(hosted("api.example.com"), hosted("api.example.com", "b.example.com"))[
+        "network"
+    ] == "narrowed"
+    assert verdicts(old, old)["network"] == "unchanged"
+
+
+def test_moving_between_none_hosts_and_unrestricted_follows_the_width():
+    closed = {**hosted("a.example.com"), "network": "none"}
+    closed.pop("allowed_hosts")
+    open_ = {k: v for k, v in closed.items() if k != "network"}
+    assert verdicts(hosted("a.example.com"), closed)["network"] == "widened"
+    assert verdicts(open_, hosted("a.example.com"))["network"] == "widened"
+    assert verdicts(closed, hosted("a.example.com"))["network"] == "narrowed"

@@ -11,7 +11,14 @@ import posixpath
 import re
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from mint_litellm.types.canonical import canonical_text
 from mint_litellm.types.decision import ResolvedServer
@@ -43,13 +50,19 @@ class FileAccess(BaseModel):
         return _check_path(value)
 
 
+# 허용 호스트: 정확한 이름·IPv4 리터럴·``[IPv6]`` 또는 ``*.도메인`` 접미, 뒤에 선택적 ``:포트``.
+# 포트가 없으면 모든 포트이다. 소문자만 받고 정규화하지 않는다.
+_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+_HOST_ENTRY = re.compile(
+    rf"^(?:(?:\*\.)?{_LABEL}(?:\.{_LABEL})*|\[[0-9a-f:.]+\])(?::([0-9]{{1,5}}))?$"
+)
 _ADDRESS = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
 _RUNNERS = {"npx", "bunx", "uvx", "pipx", "npm", "pnpm", "yarn", "bun", "uv"}
 
 
 def network_hints(contract: "ExecContract") -> list[str]:
     """등록할 때 보이는 안내. 집행은 네트워크 선언이 하고, 주소·패키지 실행기는 단서일 뿐이다."""
-    if contract.network == "none":
+    if contract.network in ("none", "hosts"):
         return []
     exe = posixpath.basename(contract.executable.replace("\\", "/")).lower()
     exe = re.sub(r"\.(exe|cmd|bat)$", "", exe)
@@ -81,7 +94,9 @@ class ExecContract(BaseModel):
     file_access: tuple[FileAccess, ...] = Field(default=(), max_length=64)
     # 네트워크 선언: ``none``이면 단말 격리가 네트워크를 막고, ``any``이거나 선언이 없으면 제한이
     # 없다. 선언이 없으면 계약 문서에 나타나지 않아 이전 해시가 그대로다.
-    network: Literal["none", "any"] | None = None
+    network: Literal["none", "any", "hosts"] | None = None
+    # ``network``가 ``hosts``일 때 서버가 나갈 수 있는 ``호스트[:포트]`` 목록(정렬·중복 없음).
+    allowed_hosts: tuple[str, ...] = Field(default=(), max_length=64)
 
     @field_validator("executable", "cwd")
     @classmethod
@@ -96,6 +111,23 @@ class ExecContract(BaseModel):
             raise ValueError("file_access paths must be unique")
         return tuple(sorted(value, key=lambda item: item.path))
 
+    @field_validator("allowed_hosts")
+    @classmethod
+    def _host_entries(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for item in value:
+            match = _HOST_ENTRY.match(item) if len(item) <= 255 else None
+            if not match or (match.group(1) and not 0 < int(match.group(1)) < 65536):
+                raise ValueError(f"allowed_hosts entry is not acceptable: {item!r}")
+        if len(set(value)) != len(value):
+            raise ValueError("allowed_hosts entries must be unique")
+        return tuple(sorted(value))
+
+    @model_validator(mode="after")
+    def _hosts_match_network(self) -> "ExecContract":
+        if (self.network == "hosts") != bool(self.allowed_hosts):
+            raise ValueError("allowed_hosts is required with network hosts and only then")
+        return self
+
     @model_serializer(mode="wrap")
     def _omit_empty_file_access(self, handler):
         data = handler(self)
@@ -103,6 +135,8 @@ class ExecContract(BaseModel):
             data.pop("file_access", None)
         if data.get("network") is None:
             data.pop("network", None)
+        if not data.get("allowed_hosts"):
+            data.pop("allowed_hosts", None)
         return data
 
     @field_validator("argv")

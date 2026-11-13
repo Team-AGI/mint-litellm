@@ -20,6 +20,9 @@
 - 관리형 설치가 격리 없이(``sandbox`` 값 ``none``) 실행 중인 서버를 보고하면
   ``endpoint_unsandboxed``. Windows(``unsupported``)와 사용자 수준 설치는 격리를 요구하지 않는다.
 
+- 보고한 서버가 허용 호스트 밖 접속을 거절당한 적이 있으면(``egress_refused``가 0보다 큼)
+  ``endpoint_egress_refused``. 실행 중인 프로세스가 끝나면 기록이 사라져 닫힌다.
+
 조건이 사라지면(재설치·제거·키 해제·서버 되살림) 같은 스캔이 경보를 닫는다.
 """
 
@@ -41,6 +44,7 @@ KINDS = (
     AlertKind.ENDPOINT_STALE_PROCESS.value,
     AlertKind.ENDPOINT_STALE_AUTOSTART.value,
     AlertKind.ENDPOINT_UNSANDBOXED.value,
+    AlertKind.ENDPOINT_EGRESS_REFUSED.value,
     AlertKind.ENDPOINT_SILENT.value,
     AlertKind.ENDPOINT_KEY_EXPIRING.value,
 )
@@ -97,6 +101,13 @@ def findings(
                     wanted[f"{kind}:{row['key_alias']}:{item['server']}"] = (
                         kind, "high", {**who, "server_id": item["server"]}
                     )
+        for item in row.get("processes") or ():
+            if item.get("egress_refused"):
+                kind = AlertKind.ENDPOINT_EGRESS_REFUSED.value
+                wanted[f"{kind}:{row['key_alias']}:{item['server']}"] = (
+                    kind, "medium",
+                    {**who, "server_id": item["server"], "count": item["egress_refused"]},
+                )  # fmt: skip
         for item in row.get("autostart") or ():
             name = item.get("server")
             if name is not None and statuses.get(name) not in LIVE:

@@ -69,6 +69,8 @@ class ProcessItem(BaseModel):
     count: int = Field(ge=1, le=100000)
     # 서버 프로세스의 격리 상태(단말의 주장). 이전 묶음은 보내지 않는다.
     sandbox: Literal["bwrap", "none", "unsupported"] | None = None
+    # 허용 호스트 밖이라 중계가 거절한 접속 수(``network: hosts`` 서버만). 이전 묶음은 안 보낸다.
+    egress_refused: int | None = Field(default=None, ge=0, le=10**9)
 
 
 class AutostartItem(BaseModel):

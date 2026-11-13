@@ -30,8 +30,10 @@ Claude Code와 Codex가 같은 훅 입력(도구 이름 ``mcp__서버__도구``,
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
 import http.client
+import ipaddress
 import json
 import os
 import posixpath
@@ -42,6 +44,7 @@ import socketserver
 import ssl
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -169,8 +172,13 @@ def proc_start(pid: int) -> str | None:
     return stat.rsplit(")", 1)[-1].split()[19] if ")" in stat else None
 
 
-def record_launch(state_dir: str, server: str, sandbox: str | None = None) -> None:
-    """시작할 서버 프로세스(exec 뒤에도 같은 PID)를 기록한다. 기록하지 못해도 시작은 막지 않는다."""
+def record_launch(
+    state_dir: str, server: str, sandbox: str | None = None, extra: Mapping[str, Any] | None = None
+) -> str | None:
+    """시작할 서버 프로세스(exec 뒤에도 같은 PID)를 기록한다. 기록하지 못해도 시작은 막지 않는다.
+
+    기록 파일 경로를 돌려준다(``extra``는 기록에 더하는 값, 쓰지 못하면 None).
+    """
     try:
         folder = os.path.join(os.path.expanduser(state_dir), LAUNCHED)
         os.makedirs(folder, mode=0o700, exist_ok=True)
@@ -179,9 +187,27 @@ def record_launch(state_dir: str, server: str, sandbox: str | None = None) -> No
         record = {"server": server, "pid": pid, "start": proc_start(pid)}
         if sandbox:
             record["sandbox"] = sandbox
-        with open(os.path.join(folder, f"{name}-{pid}.json"), "w", encoding="utf-8") as handle:
+        record.update(extra or {})
+        path = os.path.join(folder, f"{name}-{pid}.json")
+        with open(path, "w", encoding="utf-8") as handle:
             json.dump(record, handle)
+        return path
     except OSError:
+        return None
+
+
+def update_launch(path: str | None, **fields: Any) -> None:
+    """실행 기록의 값을 바꿔 쓴다(원자적으로). 실패해도 서버에는 영향이 없다."""
+    if not path:
+        return
+    try:
+        with open(path, encoding="utf-8") as handle:
+            record = json.load(handle)
+        record.update(fields)
+        with open(f"{path}.tmp", "w", encoding="utf-8") as handle:
+            json.dump(record, handle)
+        os.replace(f"{path}.tmp", path)
+    except (OSError, ValueError):
         pass
 
 
@@ -529,8 +555,9 @@ def verify_launch(approved: Mapping[str, Any], fd: int) -> None:
 
 
 # --- 서버 격리(Linux bubblewrap) ------------------------------------------------------------
-# 승인된 실행 계약에서 격리 명령을 만든다. 네트워크는 전부 허용 아니면 전부 차단이다(호스트별
-# 거름은 하지 않는다). Windows는 격리하지 않고 ``unsupported``로 보고한다.
+# 승인된 실행 계약에서 격리 명령을 만든다. 네트워크는 전부 허용(any)·전부 차단(none)·선언한
+# 호스트만(hosts) 중 하나이다. hosts는 격리 안에 네트워크를 두지 않고 실행기가 띄운 거름 중계로만
+# 나가게 한다. Windows는 격리하지 않고 ``unsupported``로 보고한다.
 SANDBOX_SYSTEM = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32")
 SANDBOX_ETC = (
     "/etc/ld.so.cache", "/etc/ld.so.conf", "/etc/ld.so.conf.d", "/etc/alternatives",
@@ -578,6 +605,286 @@ def sandbox_policy(folder: str = KIT_DIR) -> Sandbox:
 def declares_network(contract: Mapping[str, Any]) -> bool:
     """계약이 ``network: none``을 선언하지 않았으면 네트워크를 연다(선언이 없는 이전 계약 포함)."""
     return contract.get("network") != "none"
+
+
+def network_mode(contract: Mapping[str, Any]) -> str:
+    """``none``(차단), ``hosts``(선언한 호스트만, 중계 경유), ``open``(제한 없음·선언 없음)."""
+    declared = contract.get("network")
+    return declared if declared in ("none", "hosts") else "open"
+
+
+# --- 호스트 허용 목록 중계(network: hosts) ----------------------------------------------------
+# 격리 안에는 네트워크가 없다(빈 이름공간). 실행기가 유닉스 소켓에 HTTP 프록시를 열고, 그 소켓을
+# 격리 안에 붙인 뒤 격리 안의 작은 전달기가 루프백의 포트로 이어 준다. 프록시 환경 변수를
+# 무시하는 클라이언트는 어디에도 닿지 못한다(닫힌 채로 실패한다).
+EGRESS_PORT = 3128
+LOOPBACK = ".".join(("127", "0", "0", "1"))
+EGRESS_MOUNT = "/run/mint-egress"
+EGRESS_SOCKET = "proxy.sock"
+EGRESS_HEAD_MAX = 64 * 1024
+EGRESS_FORWARDER = r"""
+import os, socket, sys, threading
+path, port = sys.argv[1], int(sys.argv[2])
+srv = socket.socket()
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind((sys.argv[3], port))
+srv.listen(128)
+if os.fork():
+    srv.close()
+    os.execv(sys.argv[4], sys.argv[4:])
+null = os.open(os.devnull, os.O_RDWR)
+for fd in (0, 1, 2):
+    os.dup2(null, fd)
+def pump(a, b):
+    try:
+        while True:
+            data = a.recv(65536)
+            if not data:
+                break
+            b.sendall(data)
+    except OSError:
+        pass
+    try:
+        b.shutdown(socket.SHUT_WR)
+    except OSError:
+        pass
+def serve(c):
+    u = socket.socket(socket.AF_UNIX)
+    try:
+        u.connect(path)
+    except OSError:
+        c.close()
+        return
+    back = threading.Thread(target=pump, args=(u, c), daemon=True)
+    back.start()
+    pump(c, u)
+    back.join()
+    c.close()
+    u.close()
+while True:
+    conn, _ = srv.accept()
+    threading.Thread(target=serve, args=(conn,), daemon=True).start()
+"""
+
+
+def _literal(host: str) -> Any:
+    """주소 글자면 ``ip_address``, 이름이면 None. 대괄호와 IPv4 매핑 표기를 풀어 비교한다."""
+    try:
+        ip = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return None
+    return ip.ipv4_mapped or ip if ip.version == 6 else ip
+
+
+def _norm_host(host: str) -> str:
+    ip = _literal(host)
+    return str(ip) if ip else host.strip("[]").lower().rstrip(".")
+
+
+def split_entry(entry: str) -> tuple[str, int | None]:
+    """``호스트[:포트]`` 항목을 (정규화한 호스트, 포트 또는 None)으로 나눈다."""
+    if entry.startswith("["):
+        host, _, rest = entry.partition("]")
+        host, port = host + "]", rest[1:]
+    else:
+        host, _, port = entry.partition(":")
+    host = host.lower() if host.startswith("*.") else _norm_host(host)
+    return host, int(port) if port else None
+
+
+def host_matches(entries: Sequence[str], host: str, port: int) -> bool:
+    """선언한 항목 중 하나가 (이름, 포트)와 맞는가. ``*.도메인``은 하위 이름만 맞는다."""
+    name = _norm_host(host)
+    literal = _literal(name) is not None
+    for entry in entries:
+        want, want_port = split_entry(entry)
+        if want_port is not None and want_port != port:
+            continue
+        if want.startswith("*."):
+            if not literal and name.endswith(want[1:]):
+                return True
+        elif want == name:
+            return True
+    return False
+
+
+def default_resolve(host: str, port: int) -> list[str]:
+    return [item[4][0] for item in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)]
+
+
+def egress_verdict(
+    entries: Sequence[str],
+    host: str,
+    port: int,
+    resolve: Callable[[str, int], list[str]] = default_resolve,
+) -> tuple[str | None, str]:
+    """(접속할 주소 또는 None, 사유). 선언하지 않은 이름은 이름 해석도 하지 않는다.
+
+    선언한 호스트가 사설·루프백·링크 로컬 주소로만 풀리면 거절한다. 선언한 호스트 자체가 그런
+    주소 글자이면 그 주소만 허용한다.
+    """
+    if not host_matches(entries, host, port):
+        return None, "host not declared"
+    name = _norm_host(host)
+    literal = _literal(name)
+    try:
+        found = [str(literal)] if literal else resolve(name, port)
+    except OSError:
+        return None, "name did not resolve"
+    for text in found:
+        ip = _literal(text.split("%")[0])
+        if ip is not None and (ip.is_global or ip == literal):
+            return str(ip), "ok"
+    return None, "address is not public" if found else "name did not resolve"
+
+
+def proxy_env() -> dict[str, str]:
+    """서버가 프록시를 쓰게 하는 환경 변수(계약·상속값을 덮는다; 우회 목록은 비운다)."""
+    url = f"http://{LOOPBACK}:{EGRESS_PORT}"
+    env = {"NO_PROXY": "", "no_proxy": ""}
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+        env[key] = env[key.lower()] = url
+    return env
+
+
+def sandbox_python() -> str:
+    """격리 안에서 전달기를 돌릴 파이썬(시스템 폴더에 있는 것). 없으면 시작하지 않는다."""
+    for path in ("/usr/bin/python3", sys.executable):
+        if path and os.path.exists(path) and any(_under(path, base) for base in SANDBOX_SYSTEM):
+            return path
+    raise Refuse("격리 안에서 쓸 시스템 파이썬을 찾지 못해 호스트 허용 서버를 시작하지 않았습니다.")
+
+
+_DENIED = b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+_BAD = b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+_BAD_GATEWAY = b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+_TIMEOUT = asyncio.TimeoutError  # noqa: UP041 (3.9·3.10에서는 내장 TimeoutError와 다르다)
+_HOP = (b"proxy-connection", b"proxy-authorization", b"connection")
+
+
+class EgressProxy:
+    """선언한 호스트로만 CONNECT·``http://`` 요청을 잇는 프록시(유닉스 소켓, 표준 라이브러리만).
+
+    이름 해석은 프록시가 하고 확인한 주소로만 접속한다. 판정마다 한 줄 기록하고 거절을 센다.
+    """
+
+    def __init__(
+        self,
+        entries: Sequence[str],
+        path: str,
+        resolve: Callable[[str, int], list[str]] = default_resolve,
+        log: Callable[[str], None] | None = None,
+        on_refuse: Callable[[int], None] | None = None,
+    ) -> None:
+        self.entries, self.path, self.resolve = list(entries), path, resolve
+        self.log = log or (lambda line: sys.stderr.write(line + "\n"))
+        self.on_refuse = on_refuse
+        self.allowed = self.refused = 0
+        self.loop: asyncio.AbstractEventLoop | None = None
+
+    def start(self) -> None:
+        ready: threading.Event = threading.Event()
+        failed: list[Exception] = []
+
+        def run() -> None:
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
+            try:
+                self.loop.run_until_complete(
+                    asyncio.start_unix_server(self.handle, self.path, limit=EGRESS_HEAD_MAX)
+                )
+                os.chmod(self.path, 0o600)
+            except Exception as exc:  # 열지 못하면 서버를 시작하지 않는다
+                failed.append(exc)
+                ready.set()
+                return
+            ready.set()
+            self.loop.run_forever()
+
+        threading.Thread(target=run, daemon=True).start()
+        if not ready.wait(10) or failed:
+            raise Refuse("호스트 허용 목록 중계를 열지 못해 서버를 시작하지 않았습니다.")
+
+    def stop(self) -> None:
+        if self.loop is not None:
+            self.loop.call_soon_threadsafe(self.loop.stop)
+
+    def _decide(self, host: str, port: int, ok: bool, reason: str) -> None:
+        self.log(f"mint-egress {'allow' if ok else 'refuse'} {host}:{port} ({reason})")
+        if ok:
+            self.allowed += 1
+        else:
+            self.refused += 1
+            if self.on_refuse:
+                self.on_refuse(self.refused)
+
+    @staticmethod
+    def parse(head: bytes) -> tuple[str, int, str | None, list[bytes]]:
+        """(호스트, 포트, 서버에 보낼 첫 줄 또는 None(CONNECT), 나머지 머리글 줄)."""
+        first, _, rest = head.partition(b"\r\n")
+        method, target, version = first.decode("latin-1").split(" ")
+        lines = [x for x in rest.split(b"\r\n") if x]
+        if method.upper() == "CONNECT":
+            host, _, port = target.rpartition(":")
+            return host.strip("[]"), int(port), None, lines
+        url = urllib.parse.urlsplit(target)
+        if url.scheme != "http" or not url.hostname:
+            raise ValueError("only http:// absolute URLs")
+        path = (url.path or "/") + (f"?{url.query}" if url.query else "")
+        return url.hostname, url.port or 80, f"{method} {path} {version}", lines
+
+    @staticmethod
+    async def _pipe(source: asyncio.StreamReader, sink: asyncio.StreamWriter) -> None:
+        try:
+            while True:
+                data = await source.read(65536)
+                if not data:
+                    break
+                sink.write(data)
+                await sink.drain()
+            if sink.can_write_eof():
+                sink.write_eof()
+        except OSError:
+            pass
+
+    async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        upstream = None
+        try:
+            try:
+                head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 30)
+                host, port, first, lines = self.parse(head[:-4])
+            except (ValueError, OSError, asyncio.IncompleteReadError, asyncio.LimitOverrunError,
+                    _TIMEOUT):  # fmt: skip
+                writer.write(_BAD)
+                return
+            loop = asyncio.get_running_loop()
+            addr, reason = await loop.run_in_executor(
+                None, egress_verdict, self.entries, host, port, self.resolve
+            )
+            self._decide(host, port, addr is not None, reason)
+            if addr is None:
+                writer.write(_DENIED)
+                return
+            try:
+                upstream = await asyncio.wait_for(asyncio.open_connection(addr, port), 15)
+            except (_TIMEOUT, OSError):
+                writer.write(_BAD_GATEWAY)
+                return
+            up_reader, up_writer = upstream
+            if first is None:
+                writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            else:
+                keep = [x for x in lines if x.split(b":")[0].strip().lower() not in _HOP]
+                out = [first.encode("latin-1"), *keep, b"Connection: close"]
+                up_writer.write(b"\r\n".join(out) + b"\r\n\r\n")
+            await writer.drain()
+            await asyncio.gather(self._pipe(reader, up_writer), self._pipe(up_reader, writer))
+        except OSError:
+            pass
+        finally:
+            writer.close()
+            if upstream is not None:
+                upstream[1].close()
 
 
 def runner_caches(contract: Mapping[str, Any], home: str) -> list[str]:
@@ -645,12 +952,24 @@ def sandbox_mounts(approved: Mapping[str, Any], home: str) -> list[tuple[str, st
 
 
 def bwrap_args(
-    approved: Mapping[str, Any], argv: Sequence[str], home: str, bwrap: str = "bwrap"
+    approved: Mapping[str, Any],
+    argv: Sequence[str],
+    home: str,
+    bwrap: str = "bwrap",
+    egress_dir: str | None = None,
+    python: str | None = None,
 ) -> list[str]:
-    """계약에서 만든 bubblewrap 명령. 시스템 폴더·계약 경로만 붙고, 선언하지 않은 경로는 없다."""
+    """계약에서 만든 bubblewrap 명령. 시스템 폴더·계약 경로만 붙고, 선언하지 않은 경로는 없다.
+
+    ``network: hosts``이면 네트워크를 공유하지 않고 중계 소켓이 든 ``egress_dir``을 붙여 격리 안의
+    전달기로 서버를 감싼다(``egress_dir``이 없으면 만들 수 없으므로 ``Refuse``).
+    """
+    net = network_mode(approved)
     network = declares_network(approved)
+    if net == "hosts" and not egress_dir:
+        raise Refuse("호스트 허용 목록 중계가 없어 서버를 시작하지 않았습니다.")
     args = [bwrap, "--unshare-all", "--die-with-parent", "--new-session"]
-    if network:
+    if net == "open":
         args.append("--share-net")
     args += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"]
     for path in (*SANDBOX_SYSTEM, *SANDBOX_ETC, *(SANDBOX_ETC_NET if network else ())):
@@ -659,7 +978,14 @@ def bwrap_args(
         args += ["--tmpfs", home]  # 홈은 비어 있는 임시 폴더. 선언한 경로만 그 위에 붙는다.
     for path, mode in sandbox_mounts(approved, home):
         args += ["--bind-try" if mode == "rw" else "--ro-bind-try", path, path]
-    args += ["--chdir", approved.get("cwd") or "/", "--", approved["executable"], *argv[1:]]
+    command = [approved["executable"], *argv[1:]]
+    if net == "hosts" and egress_dir:
+        args += ["--ro-bind", egress_dir, EGRESS_MOUNT]
+        command = [
+            python or sandbox_python(), "-I", "-c", EGRESS_FORWARDER,
+            f"{EGRESS_MOUNT}/{EGRESS_SOCKET}", str(EGRESS_PORT), LOOPBACK, *command,
+        ]  # fmt: skip
+    args += ["--chdir", approved.get("cwd") or "/", "--", *command]
     return args
 
 
@@ -681,6 +1007,7 @@ def plan_sandbox(
     which: Callable[[str], str | None] = shutil.which,
     ready: Callable[[str], bool] = bwrap_ready,
     windows: bool | None = None,
+    egress_dir: str | None = None,
 ) -> tuple[list[str] | None, str]:
     """(격리 명령 또는 None, 상태). 상태는 ``bwrap``·``none``(격리 못 함)·``unsupported``(Windows).
 
@@ -690,7 +1017,7 @@ def plan_sandbox(
         return None, "unsupported"
     bwrap = which("bwrap")
     if bwrap and ready(bwrap):
-        return bwrap_args(approved, argv, home, bwrap), "bwrap"
+        return bwrap_args(approved, argv, home, bwrap, egress_dir), "bwrap"
     if policy.managed and not policy.allow_unsandboxed:
         raise Refuse(
             "격리 도구(bubblewrap)를 쓸 수 없어 서버를 시작하지 않았습니다. 관리자에게 알려 "
@@ -732,15 +1059,32 @@ def run_server(
     if approved.get("cwd"):
         os.chdir(approved["cwd"])
     wrapped, status = None, None
-    if sandbox is not None:
-        wrapped, status = plan_sandbox(
-            approved, argv, sandbox, home=env.get("HOME") or os.path.expanduser("~")
-        )
-    if state_dir is not None:
-        record_launch(state_dir, server, status)
-    if wrapped is not None:
-        os.close(fd)
-        spawn_and_exit(wrapped[0], wrapped, env)
+    hosts = network_mode(approved) == "hosts" and os.name != "nt" and sandbox is not None
+    egress_dir = tempfile.mkdtemp(prefix="mint-egress-") if hosts else None
+    proxy = None
+    try:
+        if sandbox is not None:
+            wrapped, status = plan_sandbox(
+                approved, argv, sandbox, home=env.get("HOME") or os.path.expanduser("~"),
+                egress_dir=egress_dir,
+            )  # fmt: skip
+        extra = {"egress_refused": 0} if wrapped is not None and hosts else None
+        record = record_launch(state_dir, server, status, extra) if state_dir is not None else None
+        if wrapped is not None:
+            if hosts and egress_dir:
+                proxy = EgressProxy(
+                    approved.get("allowed_hosts") or [], os.path.join(egress_dir, EGRESS_SOCKET),
+                    on_refuse=lambda n: update_launch(record, egress_refused=n),
+                )  # fmt: skip
+                proxy.start()
+                env = {**env, **proxy_env()}
+            os.close(fd)
+            spawn_and_exit(wrapped[0], wrapped, env)
+    finally:
+        if proxy is not None:
+            proxy.stop()
+        if egress_dir:
+            shutil.rmtree(egress_dir, ignore_errors=True)
     # 한계: 실행 파일은 검증한 기술자로 실행해 바꿔치기를 막지만, 셸 스크립트처럼 기술자로
     # 실행할 수 없으면 경로 실행으로 물러나 검증과 실행 사이에 틈이 남는다. 읽는 스크립트도
     # 경로로 열린다. 관리형 설치의 쓰기 금지 경로가 틈을 줄이며, 완전히 닫으려면 검증한 사본으로

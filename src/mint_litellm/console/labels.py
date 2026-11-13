@@ -296,6 +296,7 @@ ALERT_KIND = {
     "endpoint_stale_process": "폐기 서버 프로세스 잔존",
     "endpoint_stale_autostart": "폐기 서버 자동 시작 잔존",
     "endpoint_unsandboxed": "격리 없이 실행 중인 서버",
+    "endpoint_egress_refused": "허용 호스트 밖 접속 거절",
     "endpoint_silent": "단말 보고 끊김",
     "endpoint_key_expiring": "단말 키 만료 임박",
     "package_unpinned": "버전 미고정 패키지",
