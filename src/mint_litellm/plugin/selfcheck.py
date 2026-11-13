@@ -254,13 +254,12 @@ def check_items(
     # LiteLLM의 OpenAI WebSocket 패스스루는 사전 훅을 거치지 않으므로 실시간 허용을 명시해야 한다.
     if _ws_passthrough_on(view.general_settings) and not allow_realtime:
         problems.append("enable_openai_websocket_passthrough needs MINT_ALLOW_REALTIME=true")
-    # 스킬 훅(항상 로드)의 Docker 샌드박스와 코드 인터프리터 가로채기는 MCP 훅을 지나지 않는다.
-    # 실행할 수 있는 구성이면 운영자가 허용을 명시해야 하고, 아니어도 요청은 사전 단계에서 막는다.
+    # 코드 인터프리터 가로채기는 운영자가 켜는 콜백이라 허용을 명시해야 한다. 스킬 훅의 샌드박스
+    # 패키지는 공식 이미지에 늘 들어 있으므로 기동을 막지 않고, 그 요청은 사전 단계에서 막는다.
     interception = any(type(cb).__name__ == "CodeInterpreterInterceptionLogger" for cb in callbacks)
-    if (interception or view.sandbox_installed) and not allow_code_execution:
+    if interception and not allow_code_execution:
         problems.append(
-            "LiteLLM can run model-generated code "
-            f"({'code_interpreter_interception' if interception else 'llm-sandbox installed'}); "
+            "LiteLLM can run model-generated code (code_interpreter_interception); "
             "set MINT_ALLOW_CODE_EXECUTION=true or remove it"
         )
     # 구독 중계(subscriptions/listen)는 훅을 거치지 않고 끄는 설정도 없어 새 규격을 막는다.

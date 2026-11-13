@@ -1023,16 +1023,13 @@ class CodeInterpreterInterceptionLogger(FakeLogger):
     """LiteLLM의 코드 인터프리터 가로채기 로거 이름만 흉내 낸 대역."""
 
 
-@pytest.mark.parametrize(
-    "layout",
-    [
-        {"sandbox_installed": True},
-        {"callbacks": [LOGGER, GUARDRAIL, CodeInterpreterInterceptionLogger()]},
-    ],
-    ids=["llm_sandbox", "interception"],
-)
-def test_a_setup_that_can_run_model_code_needs_the_explicit_allowance(layout):
-    on = view(**layout)
+def test_the_sandbox_package_of_the_official_image_does_not_stop_the_start():
+    # 공식 LiteLLM 이미지에는 llm-sandbox가 들어 있다. 그 요청은 사전 단계에서 막힌다.
+    assert failed(run_checks(view(sandbox_installed=True))) == set()
+
+
+def test_a_setup_that_can_run_model_code_needs_the_explicit_allowance():
+    on = view(callbacks=[LOGGER, GUARDRAIL, CodeInterpreterInterceptionLogger()])
     assert SelfCheckItem.REQUIRED_SETTINGS in failed(run_checks(on))
     allowed = check_items(
         on, logger=LOGGER, guardrail=GUARDRAIL, controlled=[registered()], allow_code_execution=True
