@@ -7,7 +7,9 @@
 - C: 호출 판정만 있다. 결과 단계 가드레일이 없어 결과는 로거 훅으로 관측만 한다.
 - D: 호출 판정 지점이 없다. 지원하지 않는다.
 
-지금 구현은 A만 기동을 허용한다. B·C·D는 빠진 능력 이름을 밝히고 기동을 거부한다(닫힌 실패).
+기본은 A만 기동을 허용한다. B·C·D는 빠진 능력 이름을 밝히고 기동을 거부한다(닫힌 실패).
+운영자가 ``MINT_ALLOW_DEGRADED_LITELLM=true``로 명시하면 B·C도 기동하되, 잃는 보장을 모두
+밝힌다(D는 늘 거부).
 """
 
 from __future__ import annotations
@@ -127,3 +129,62 @@ def allow_untested(env: Mapping[str, str] | None = None) -> bool:
     """검증되지 않은 판본을 운영자가 명시해 허용했는가. 기본은 거부한다."""
     raw = (os.environ if env is None else env).get("MINT_ALLOW_UNTESTED_LITELLM", "")
     return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def allow_degraded(env: Mapping[str, str] | None = None) -> bool:
+    """등급 B·C의 저하 운용을 운영자가 명시해 허용했는가. 기본은 거부한다."""
+    raw = (os.environ if env is None else env).get("MINT_ALLOW_DEGRADED_LITELLM", "")
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+@dataclass(frozen=True)
+class Loss:
+    """저하 운용에서 잃는 보장 하나와 그 보장에 기대는 카탈로그 정책."""
+
+    key: str
+    text: str
+    policies: tuple[str, ...] = ()
+
+
+_LIST_LOSSES = (
+    Loss("list_hiding", "MINT does not hide tools from tools/list; hiding relies on the LiteLLM "
+         "permission sync", ("POL-O-02",)),
+    Loss("list_events", "tools/list discovery events are not recorded"),
+    Loss("list_dedup", "tools/list de-duplication is off (no list events)"),
+)
+_RESULT_LOSS = Loss(
+    "result_unenforced",
+    "result checks run observe-only: nothing can block or mask a result "
+    "(findings are recorded as result_unenforced and raise an alert)",
+    ("POL-E-04", "POL-E-05", "POL-E-16"),
+)
+# 정책 식별자는 카탈로그의 enforced_by(discovery.py, result.py·logger.py)가 기대는 능력에서 왔다.
+LOSSES: dict[str, tuple[Loss, ...]] = {
+    "A": (),
+    "B": _LIST_LOSSES,
+    "C": (*_LIST_LOSSES, _RESULT_LOSS),
+}
+
+
+def list_enforced(grade: str) -> bool:
+    """도구 목록 훅 기능(숨김·목록 사건·중복 제거)을 쓰는가."""
+    return grade == "A"
+
+
+def result_enforced(grade: str) -> bool:
+    """결과 단계에서 막거나 가릴 수 있는가. C는 관측만 한다."""
+    return grade != "C"
+
+
+def affected_policies(grade: str) -> tuple[str, ...]:
+    """이 등급에서 집행이 약해지는 카탈로그 정책 식별자."""
+    return tuple(sorted({p for loss in LOSSES.get(grade, ()) for p in loss.policies}))
+
+
+def degraded_findings(found: Assessment) -> list[str]:
+    """저하 운용이 잃는 보장 문장(등급 A·D는 비어 있다)."""
+    return [loss.text for loss in LOSSES.get(found.grade, ())] if found.grade in ("B", "C") else []
+
+
+def current_grade() -> str:
+    return assess(()).grade

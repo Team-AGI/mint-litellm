@@ -173,6 +173,7 @@ async def observe_response(
         output_findings=tuple(ctx.get("output_findings") or ()),
         output_blocked=bool(ctx.get("output_blocked")),
         output_masked=bool(ctx.get("output_masked")),
+        result_unenforced=bool(ctx.get("result_unenforced")),
         sensitive_findings=dict(ctx.get("sensitive_findings") or {}),
         outcome=response_outcome(
             is_error=is_error, output_blocked=bool(ctx.get("output_blocked"))

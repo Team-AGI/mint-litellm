@@ -51,6 +51,7 @@ KINDS: dict[str, JobKind] = {
     "evidence_expiry_scan": JobKind(),
     "session_verify": JobKind(),
     "call_spike_scan": JobKind(),
+    "result_unenforced_scan": JobKind(),
     "package_vuln_scan": JobKind(),
     "approval_dormant_scan": JobKind(),
     # 해제 경로: 되돌림 차단 상태에서도 실행한다(외부 쓰기 목록에 넣지 않는다).
@@ -220,6 +221,12 @@ def _call_spike_scan(job: JobContext) -> None:
     call_spike.run(job)
 
 
+def _result_unenforced_scan(job: JobContext) -> None:
+    from mint_litellm.control import result_unenforced
+
+    result_unenforced.run(job)
+
+
 def _approval_dormant_scan(job: JobContext) -> None:
     from mint_litellm.control import dormant
 
@@ -296,6 +303,7 @@ HANDLERS: dict[str, Callable[[JobContext], None]] = {
     "alert_deliver": _alert_deliver,
     "session_verify": _session_verify,
     "call_spike_scan": _call_spike_scan,
+    "result_unenforced_scan": _result_unenforced_scan,
     "package_vuln_scan": _package_vuln_scan,
     "approval_dormant_scan": _approval_dormant_scan,
 }
@@ -312,6 +320,7 @@ SCHEDULES: dict[str, Callable[[Any], int]] = {
     "session_verify": lambda s: s.session_verify_seconds,
     "evidence_expiry_scan": lambda s: 3600,  # 1시간(고정)
     "call_spike_scan": lambda s: 60,
+    "result_unenforced_scan": lambda s: 60,
     "package_vuln_scan": lambda s: s.vuln_scan_seconds,
     "approval_dormant_scan": lambda s: 3600,  # 1시간(고정)
 }

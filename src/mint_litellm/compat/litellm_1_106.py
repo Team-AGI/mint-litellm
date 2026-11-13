@@ -289,6 +289,9 @@ def register_contract_tools(
     """
     mgr = manager if manager is not None else global_manager()
     utils = importlib.import_module(_UTILS_MODULE)
+    if not (hasattr(utils, "iter_known_tool_name_spellings")
+            and hasattr(mgr, "server_owning_tool_name_prefix")):
+        return 0  # 이름 철자 도우미가 없는 판본(저하 운용): 목록을 숨기지 않으므로 올릴 것이 없다
     registry = importlib.import_module(
         "litellm.proxy._experimental.mcp_server.tool_registry"
     ).global_mcp_tool_registry
@@ -574,7 +577,11 @@ def mcp_default_timeout() -> float:
 
 def spend_logs_store_prompts() -> bool:
     mod = importlib.import_module("litellm.proxy.spend_tracking.spend_tracking_utils")
-    return bool(mod.should_store_prompts_and_responses_in_spend_logs())
+    helper = getattr(mod, "should_store_prompts_and_responses_in_spend_logs", None)
+    if helper is not None:
+        return bool(helper())
+    # 이 도우미가 없는 판본은 같은 값을 설정이 직접 정한다(없으면 저장하지 않는다).
+    return general_settings().get("store_prompts_in_spend_logs") is True
 
 
 def installed_litellm_version() -> str | None:
@@ -589,12 +596,9 @@ _REQUIRED_SYMBOLS: tuple[tuple[str, str], ...] = (
     (_MANAGER_MODULE, "global_mcp_server_manager"),
     (_MANAGER_MODULE, "global_mcp_server_manager._resolve_mcp_server_for_tool_call"),
     (_MANAGER_MODULE, "global_mcp_server_manager.get_registry"),
-    (_MANAGER_MODULE, "global_mcp_server_manager.catalog"),
     (_MANAGER_MODULE, "global_mcp_server_manager.reload_servers_from_database"),
     (_MANAGER_MODULE, "global_mcp_server_manager.tool_name_to_mcp_server_name_mapping"),
-    (_MANAGER_MODULE, "global_mcp_server_manager.server_owning_tool_name_prefix"),
     (_UTILS_MODULE, "get_server_prefix"),
-    (_UTILS_MODULE, "iter_known_tool_name_spellings"),
     (
         "litellm.proxy._experimental.mcp_server.tool_registry",
         "global_mcp_tool_registry.get_tool",
@@ -603,10 +607,6 @@ _REQUIRED_SYMBOLS: tuple[tuple[str, str], ...] = (
     ("litellm.constants", "LITELLM_PROXY_MASTER_KEY_ALIAS"),
     ("litellm.secret_managers.main", "str_to_bool"),
     ("litellm.proxy.proxy_server", "general_settings"),
-    (
-        "litellm.proxy.spend_tracking.spend_tracking_utils",
-        "should_store_prompts_and_responses_in_spend_logs",
-    ),
     ("litellm.integrations.custom_logger", "CustomLogger.async_pre_call_hook"),
     ("litellm.integrations.custom_logger", "CustomLogger.async_log_success_event"),
     ("litellm.integrations.custom_logger", "CustomLogger.async_log_failure_event"),
@@ -638,7 +638,8 @@ def missing_symbols(
 
     등급 A이고 시험한 판본이면 비어 있다. 시험하지 않은 판본은 모든 능력이 감지되어도
     ``MINT_ALLOW_UNTESTED_LITELLM=true``로 운영자가 명시해야 허용한다. 등급 B·C·D는
-    빠진 능력을 밝히고 거부한다(저하 운용은 아직 없다).
+    빠진 능력을 밝히고 거부한다. ``MINT_ALLOW_DEGRADED_LITELLM=true``이면 B·C는 기동하고 잃는
+    보장을 ``degraded_findings``가 밝힌다(D는 늘 거부).
     """
     missing = [
         f"{module}:{path}"
@@ -650,10 +651,13 @@ def missing_symbols(
     )
     if found.version is None:
         return [*missing, "litellm: not installed"]
-    if found.grade != "A":
+    if found.grade in ("B", "C") and capabilities.allow_degraded(env):
+        pass
+    elif found.grade != "A":
         missing.append(
             f"litellm {found.version} grade {found.grade}: missing capability "
-            f"{', '.join(found.missing) or '-'} (only grade A can start)"
+            f"{', '.join(found.missing) or '-'} (only grade A can start; "
+            "MINT_ALLOW_DEGRADED_LITELLM=true allows B and C)"
         )
     elif not found.tested and not capabilities.allow_untested(env):
         supported = ", ".join(SUPPORTED_LITELLM_VERSIONS)

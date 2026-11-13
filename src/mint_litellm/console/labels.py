@@ -279,6 +279,7 @@ TIME_ZONE = {
 ALERT_KIND = {
     "contract_drift": "계약 변경",
     "call_spike": "호출량 급증",
+    "result_unenforced": "결과를 막지 못함",
     "approval_dormant": "미사용 승인",
     "endpoint_stale_server": "폐기 서버 항목 잔존",
     "endpoint_unmanaged": "관리되지 않는 설치",

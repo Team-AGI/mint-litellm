@@ -400,6 +400,8 @@ class ResponseObservation(BaseModel):
     output_blocked: bool = False
     output_masked: bool = False
     sensitive_findings: dict[str, int] = Field(default_factory=dict)
+    # 결과 단계 가드레일이 없는 LiteLLM(저하 운용): 걸려도 막지도 가리지도 못한 결과.
+    result_unenforced: bool = False
     # 새 행부터 남는 결과 분류(success·tool_error·output_blocked).
     outcome: Outcome | None = None
 
@@ -427,3 +429,4 @@ class AlertKind(StrEnum):
     ENDPOINT_SILENT = "endpoint_silent"
     ENDPOINT_KEY_EXPIRING = "endpoint_key_expiring"
     CALL_SPIKE = "call_spike"
+    RESULT_UNENFORCED = "result_unenforced"

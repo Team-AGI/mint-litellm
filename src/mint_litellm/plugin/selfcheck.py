@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from mint_litellm.compat import capabilities
 from mint_litellm.compat import litellm_1_106 as compat
 from mint_litellm.compat.litellm_1_106 import RegistryEntry
 from mint_litellm.plugin.buffer import EvidenceRecorder, LocalBuffer, SystemEventKeys
@@ -86,6 +87,9 @@ class LiteLLMView:
     env: Mapping[str, str] = field(default_factory=dict, repr=False)
     # llm-sandbox가 설치되어 스킬 훅이 Docker 샌드박스에서 코드를 실행할 수 있다.
     sandbox_installed: bool = False
+    # 저하 운용(등급 B·C)이 잃는 보장. 비어 있으면 모든 보장이 성립한다.
+    degraded: Sequence[str] = ()
+    result_guardrail: bool = True
 
 
 def collect_view(env: Mapping[str, str] | None = None) -> LiteLLMView:
@@ -99,6 +103,9 @@ def collect_view(env: Mapping[str, str] | None = None) -> LiteLLMView:
     found = compat.litellm_assessment()
     if not found.tested:
         log.warning("%s: 시험하지 않은 판본이다. 보장은 감지된 능력에만 근거한다.", found.summary)
+    degraded = capabilities.degraded_findings(found)
+    for finding in degraded:
+        log.warning("%s: degraded operation: %s", found.summary, finding)
     return LiteLLMView(
         callbacks=compat.litellm_callbacks(),
         general_settings=compat.general_settings(),
@@ -112,6 +119,8 @@ def collect_view(env: Mapping[str, str] | None = None) -> LiteLLMView:
         default_timeout=compat.mcp_default_timeout(),
         env=dict(env),
         sandbox_installed=importlib.util.find_spec("llm_sandbox") is not None,
+        degraded=tuple(degraded),
+        result_guardrail=capabilities.result_enforced(found.grade),
     )
 
 
@@ -120,6 +129,13 @@ def _hook_names(event_hook: Any) -> set[str]:
         return set()
     items = event_hook if isinstance(event_hook, (list, tuple, set)) else [event_hook]
     return {str(getattr(i, "value", i)) for i in items}
+
+
+def _required_modes(view: LiteLLMView) -> tuple[str, ...]:
+    """결과 단계 가드레일이 없는 LiteLLM(등급 C)에는 그 모드가 없다."""
+    if view.result_guardrail:
+        return REQUIRED_MODES
+    return tuple(m for m in REQUIRED_MODES if m != "post_mcp_call")
 
 
 def guardrail_definition_check(callbacks: Sequence[Any], guardrail: Any) -> tuple[bool, str]:
@@ -189,7 +205,7 @@ def check_items(
         SelfCheckItem.GUARDRAIL_MODES,
         guardrail is not None
         and id(guardrail) in positions
-        and all(m in modes for m in REQUIRED_MODES)
+        and all(m in modes for m in _required_modes(view))
         and getattr(guardrail, "default_on", False) is True,
         "guardrail is missing, lacks a mode, or is not default_on",
     )
@@ -400,18 +416,34 @@ class PluginRuntime:
     guardrail: Any = None
     last_results: list[CheckResult] = field(default_factory=list)
     last_mismatches: list[tuple[str, str]] = field(default_factory=list)
+    last_degraded: list[str] = field(default_factory=list)
     keys: SystemEventKeys = field(default_factory=SystemEventKeys, repr=False)
     _reported: dict[str, dict[str, str]] = field(default_factory=dict, repr=False)
     _observed_hashes: dict[str, dict[str, str]] = field(default_factory=dict, repr=False)
     _list_seen: ListSeen | None = field(default=None, repr=False)
+    _grade: str | None = field(default=None, repr=False)
     _task: asyncio.Task[None] | None = field(default=None, repr=False)
     _observe_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _restore_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _shadow_task: asyncio.Task[None] | None = field(default=None, repr=False)
 
     @property
+    def grade(self) -> str:
+        if self._grade is None:
+            self._grade = compat.litellm_assessment().grade
+        return self._grade
+
+    @property
+    def list_enforced(self) -> bool:
+        return capabilities.list_enforced(self.grade)
+
+    @property
+    def result_enforced(self) -> bool:
+        return capabilities.result_enforced(self.grade)
+
+    @property
     def deps(self) -> PipelineDeps:
-        if self._list_seen is None and self.config.list_dedup_seconds > 0:
+        if self._list_seen is None and self.list_enforced and self.config.list_dedup_seconds > 0:
             self._list_seen = ListSeen(self.config.list_dedup_seconds)
         return PipelineDeps(
             list_seen=self._list_seen,
@@ -488,6 +520,7 @@ class PluginRuntime:
                         {"item": int(r.item), "name": r.item.name, "ok": r.ok}
                         for r in self.last_results
                     ],
+                    **({"degraded": list(self.last_degraded)} if self.last_degraded else {}),
                 },
             )
         )
@@ -512,6 +545,7 @@ class PluginRuntime:
             allow_code_execution=self.config.allow_code_execution,
         )
         self.last_results = results
+        self.last_degraded = list(view.degraded)
         self.last_mismatches = contract_mismatches(view, controlled or [])
         by_id = {entry.server_id: entry for entry in view.registry}
         for server in controlled or ():
@@ -558,7 +592,7 @@ class PluginRuntime:
         기동 점검과 주기 관측이 돌 때마다 하고, 그 사이에 승인된 서버는 호출 진입의 재시도가 맡는다
         (``install_contract_retry``). 실패하면 이전 등록을 유지하고 다음 주기에 다시 한다.
         """
-        if view.missing_symbols:
+        if view.missing_symbols or self.grade != "A":
             return
         try:
             compat.register_contract_tools(await self._load_contract_tools())
