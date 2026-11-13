@@ -360,6 +360,7 @@ def endpoint_kit(
         contracts, decide_url=config.endpoint_url or config.litellm_url, key=key,
         ca_pem=config.endpoint_ca_pem, platform=platform,
         harnesses=("claude", "codex") if harness == "all" else (harness,),
+        allow_unsandboxed=config.endpoint_allow_unsandboxed,
     )
     media, name = (
         ("application/zip", "mint-kit.zip") if platform == "windows"
