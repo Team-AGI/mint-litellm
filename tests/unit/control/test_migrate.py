@@ -150,7 +150,8 @@ def test_open_approvals_without_a_contract_are_closed_on_managed_servers_only(fr
                         conn.execute(
                             "UPDATE mint.call_approvals SET status = 'approved',"
                             " approved_by = 'a' WHERE id = %s", (call_id,))
-            assert migrate.apply_migrations(conn) == ALL[ALL.index("017_approval_contract_binding"):]
+            first = ALL.index("017_approval_contract_binding")
+            assert migrate.apply_migrations(conn) == ALL[first:]
             rows = conn.execute(
                 "SELECT server_id, status, count(*) FROM mint.call_approvals"
                 " GROUP BY server_id, status ORDER BY 1, 2"

@@ -30,7 +30,8 @@ def release(
     head, sep, rest = text.partition(marker)
     if not sep:
         raise SystemExit("CHANGELOG.md에 Unreleased 절이 없습니다.")
-    changelog.write_text(f"{head}{marker}\n## [{version}]\n\n{body}{rest}", encoding="utf-8", newline="\n")
+    new = f"{head}{marker}\n## [{version}]\n\n{body}{rest}"
+    changelog.write_text(new, encoding="utf-8", newline="\n")
     for p in fragment_files(directory):
         p.unlink()
 
