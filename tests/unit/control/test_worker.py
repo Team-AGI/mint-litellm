@@ -146,8 +146,26 @@ def test_the_worker_login_creates_the_schedules_it_has_handlers_for(make_worker,
 # --- 수렴 작업 등록 규칙 ----------------------------------------------------------
 
 
+def test_every_registry_entry_refers_to_a_known_kind_and_the_release_path_is_unscheduled():
+    """종류 총수를 세지 않고 표 사이의 짜임만 본다(DB 불필요)."""
+    kinds = set(jobs.KINDS)
+    assert set(jobs.HANDLERS) <= kinds, "종류 없이 처리기만 있는 항목"
+    assert set(jobs.SCHEDULES) <= kinds, "종류 없이 일정만 있는 항목"
+    assert jobs.PERIODIC_RETRY_KINDS <= set(jobs.SCHEDULES)
+    assert {k for k, v in jobs.KINDS.items() if v.external_write} <= kinds
+    # 되돌림 해제 경로는 처리기는 있으나 일정이 없고 되돌림 상태에서도 돈다(외부 쓰기가 아니다).
+    assert "restore_publish" in jobs.HANDLERS
+    assert "restore_publish" not in jobs.SCHEDULES
+    assert not jobs.KINDS["restore_publish"].external_write
+    # 일정이 있는 종류는 주기를 정수 초로 낸다.
+    class _S:
+        def __getattr__(self, name):
+            return 60
+
+    assert all(isinstance(f(_S()), int) and f(_S()) > 0 for f in jobs.SCHEDULES.values())
+
+
 def test_job_kinds_follow_the_registration_rules(url, all_handlers):
-    assert len(jobs.KINDS) == 28  # 27종 + 해제 경로의 restore_publish
     assert {k for k, v in jobs.KINDS.items() if v.convergent} == {
         "contract_observe", "sync_server", "sync_target", "activation_finalize",
         "relation_finalize", "server_finalize"}
