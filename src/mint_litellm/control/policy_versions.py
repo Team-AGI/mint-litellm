@@ -2,7 +2,8 @@
 
 import asyncio
 import subprocess
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import httpx
@@ -101,6 +102,81 @@ def activate(
     ) as error:
         message = f"정책 활성화에 실패했습니다: {error}"
         raise ActivationError(message, restore_outcome(error)) from None
+
+
+def prepare_shadow(
+    conn: psycopg.Connection,
+    database_url: str,
+    instance_id: str,
+    version_id: str,
+    source: PolicySource,
+) -> str:
+    """시험 판본의 번들을 준비해 등록하고 시험용 정책 엔진에 게시한다. 번들 해시를 돌려준다.
+
+    ``source``의 번들 경로와 엔진 주소는 시험용 값이다. 활성 판본은 시험 판본이 될 수 없고, 판본은
+    등록만 되며 활성화되지 않는다.
+    """
+    active = fetchone(
+        conn,
+        "SELECT id FROM mint.policy_versions WHERE instance_id = %s AND status = 'active'",
+        (instance_id,),
+    )
+    if active and active["id"] == version_id:
+        raise ControlError(f"판본 {version_id}은(는) 이미 적용 중입니다.")
+    row = fetchone(
+        conn,
+        "SELECT status FROM mint.policy_versions WHERE instance_id = %s AND id = %s",
+        (instance_id, version_id),
+    )
+    if row and row["status"] != "validated":
+        raise ControlError(
+            f"판본 {version_id}은(는) {row['status']} 상태입니다. "
+            "새 판본 이름으로 다시 실행하십시오."
+        )
+    try:
+        bundle = policy_bundle.prepare_bundle(source.root, version_id, opa=source.opa)
+    except FileNotFoundError as error:
+        raise ControlError(f"정책 번들을 준비할 수 없습니다: {error}") from None
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or error.stdout or b"").decode("utf-8", "replace").strip()
+        raise ControlError(f"정책 시험이 실패했습니다: {detail}") from None
+    except (ValueError, OSError, KeyError) as error:
+        raise ControlError(f"정책 번들이 올바르지 않습니다: {error}") from None
+
+    async def run() -> None:
+        async with await psycopg.AsyncConnection.connect(database_url) as aconn:
+            if row is None:
+                await policy_bundle.register_bundle(
+                    aconn, instance_id=instance_id, bundle=bundle
+                )
+        policy_bundle.publish_bundle(source.bundle_path, bundle.archive)
+        deadline = time.monotonic() + source.timeout_seconds
+        async with httpx.AsyncClient(follow_redirects=False, trust_env=False) as client:
+            while True:
+                try:
+                    loaded = await policy_bundle.loaded_bundle_sha256(source.opa_url, client)
+                    if loaded == bundle.bundle_sha256:
+                        return
+                except (httpx.HTTPError, policy_bundle.BundleContentMismatch):
+                    pass
+                if time.monotonic() >= deadline:
+                    raise TimeoutError
+                await asyncio.sleep(0.2)
+
+    try:
+        asyncio.run(run(), loop_factory=asyncio.SelectorEventLoop)
+    except TimeoutError:
+        raise ControlError(
+            "시험용 정책 엔진이 시간 안에 번들을 적재하지 않았습니다. 시험용 정책 엔진이 "
+            "실행 중인지 확인하고 같은 명령으로 다시 시도하십시오."
+        ) from None
+    except (ValueError, OSError, psycopg.Error) as error:
+        raise ControlError(f"정책 시험 적용을 시작하지 못했습니다: {error}") from None
+    return bundle.bundle_sha256
+
+
+def shadow_source(source: PolicySource, bundle_path: Path, opa_url: str) -> PolicySource:
+    return replace(source, bundle_path=bundle_path, opa_url=opa_url)
 
 
 class ActivationError(ControlError):

@@ -55,6 +55,9 @@
 | `mint-litellm settings control-key` | `admin` | 환경 변수 `MINT_LITELLM_KEY`의 제어 평면 키를 도구 목록 면제 키로 저장한다(`--clear`는 해제). `init`도 키가 있으면 저장되지 않은 경우 같은 일을 한다. | - | `settings_changed` |
 | `mint-litellm settings observable` | `admin` | 관측 모드로 전환할 수 있는 사유 계열과 정책을 정한다. | - | `settings_changed` |
 | `mint-litellm policy activate` | `admin` | 정책 번들을 검증하고 정책 엔진에 적재한 뒤 활성 판본으로 전환한다. | - | `policy_activated` |
+| `mint-litellm policy shadow` | `admin` | 정책 판본을 시험용 정책 엔진에 올려 활성 판본과 나란히 평가한다. 호출의 판정은 달라지지 않고 판정이 달라지는 호출만 센다. | - | `policy_shadow_set` |
+| `mint-litellm policy shadow-cancel` | `admin` | 시험 중인 정책 판본을 내린다. | - | `policy_shadow_cleared` |
+| `mint-litellm policy status` | 모든 역할 | 적용 중인 판본과 시험 중인 판본, 판정이 달라지는 호출 수를 조회한다. | - | - |
 | `mint-litellm ledger list` | 모든 역할 | 원장 사건을 종류·기간·호출 식별자로 조회한다. | - | - |
 | `mint-litellm sync status` | 모든 역할 | LiteLLM에 반영한 키·팀·서버 권한의 확인 상태, 외부 삭제 횟수, 보류 여부를 조회한다. | - | - |
 | `mint-litellm sync resume` | `admin` | 반복 외부 삭제로 보류된 항목을 풀고 다시 부여한다. | - | `sync_applied` |
@@ -75,6 +78,10 @@
 목록에 나온 식별자(경보·신청·호출별 승인·동기화 항목·승인·거부·동의·허용 목록)는 끝 8자리(또는 충분히 긴 앞부분)만 써도 이 배치 안에서 한 건으로 정해지면 찾아 준다(`alert ack 3f9c1a2b`). 둘 이상이면 더 길게 입력하라고 알리고, 없으면 그대로 없다고 알린다. 토큰 없이 인증이 필요한 명령을 실행하면 운영자가 한 명도 없을 때는 첫 관리자를 만드는 명령(`operator bootstrap ... --save-token`)을, 있을 때는 토큰을 받는 방법을 안내한다.
 
 ## 정책 활성화 실패와 복원
+
+### 정책 시험 적용
+
+새 판본을 바로 적용하기 전에 `policy shadow <판본>`으로 시험용 정책 엔진(`opa-shadow`, `docker compose --profile shadow up -d opa-shadow`)에 올린다. LiteLLM 컨테이너의 `MINT_SHADOW_OPA_URL`을 시험용 정책 엔진 주소(`http://opa-shadow:8181`)로 정하면 호출마다 활성 판본이 판정을 마친 뒤 같은 입력을 시험 판본에도 보낸다. 시험 결과는 호출의 판정에 쓰이지 않고, 오류는 평가 오류 수로만 센다. 판정 결과나 사유가 달라진 호출은 (서버, 도구, 현재 결과, 시험 결과, 사유)별로 세고 호출 식별자를 다섯 개까지만 남긴다. `policy status`와 콘솔 정책 화면의 「정책 시험 적용」에서 허용에서 차단, 차단에서 허용으로 바뀌는 호출 수를 본다. 마음에 들면 `policy activate <판본>`(콘솔의 「적용」)으로 평소 활성화 경로를 거쳐 적용하고, 아니면 `policy shadow-cancel`(콘솔의 「취소」)로 내린다.
 
 `policy activate`가 시간 초과나 취소로 끝나면 이전 활성 번들을 복원하려고 시도하며, 결과를 `restore_outcome` 필드에 담는다(`--json`). 성공하면 값은 `null`이다. 복원도 확인하지 못했다면 그 사실이 필드에 남으므로 운영자가 현재 적재된 번들을 `status`로 다시 확인해야 한다.
 
@@ -208,6 +215,8 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 | `MINT_PLUGIN_DB_PASSWORD`, `MINT_CONTROL_DB_PASSWORD` | `init`이 판정 프로세스용·제어 평면용 로그인 역할(`mint_plugin_app`, `mint_control_app`)을 만들 때 쓰는 비밀번호 | 없음(역할을 만들지 않음) |
 | `MINT_WORKER_DB_PASSWORD`, `MINT_STAFF_DB_PASSWORD` | `init`이 작업 실행기용(`mint_worker_app`: 제어·작업·봉인 그룹)·콘솔 직원 화면 연결 풀용(`mint_staff_app`: 직원 그룹) 로그인 역할을 만들 때 쓰는 비밀번호 | 없음(역할을 만들지 않음) |
 | `MINT_EXPORT_DIR`, `MINT_EXPORT_HMAC_KEY`, `MINT_WORKER_LEASE_SECONDS` 등 | `worker`가 읽는 2단계 설정(`MINT_EXPORT_HMAC_KEY`는 디코딩하면 32바이트 이상인 base64url). | `MINT_EXPORT_DIR`·`MINT_EXPORT_HMAC_KEY`는 필수, 임대 길이 60초 |
+| `MINT_SHADOW_OPA_URL`, `MINT_OPA_SHADOW_BUNDLE_PATH` | `policy shadow`의 시험용 정책 엔진 주소와 그 엔진이 감시하는 번들 파일. 각 옵션(`--opa-url`, `--bundle-path`)으로 대신할 수 있다. LiteLLM 컨테이너에도 `MINT_SHADOW_OPA_URL`을 주어야 시험 판본을 평가한다. | 없음, `/bundles/shadow.tar.gz` |
+| `MINT_SHADOW_SAMPLE_PERCENT`, `MINT_SHADOW_MAX_PER_SECOND` | LiteLLM 컨테이너가 시험 판본을 평가하는 호출의 비율(1~100)과 워커당 초당 평가 수 상한. 어느 쪽에 걸려도 호출은 그대로 처리되고 건너뛴 수로만 센다. | `100`, `50` |
 | `MINT_OPA_URL`, `MINT_POLICY_ROOT`, `MINT_OPA_BUNDLE_PATH` | `policy activate`의 정책 엔진 주소, `policy/`를 담은 루트, 정책 엔진이 감시하는 번들 파일. 각 옵션(`--opa-url`, `--policy-root`, `--bundle-path`)으로 대신할 수 있다. | `/opt/mint`, `/bundles/mint.tar.gz` |
 
 ## 설정 조각
@@ -264,7 +273,7 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 | --- | --- |
 | `init` | `migrations`(이번에 적용한 마이그레이션), `login_roles`(설정한 로그인 역할), `snippet_path`(설정 조각 파일) 또는 `snippet`(`--out -`일 때 본문) |
 | `check` | `incomplete`(확인하지 못한 필수 행), `findings`(각 항목 `item`, `level`=`OK`·`INFO`·`WARN`·`FAIL`·`SKIP`, `message`), `observations`(관측 4항목) |
-| `status` | `instance_id`, `mode`(`stored`, `ceiling`, `effective`), `default_org_id`, `policy_version`, `policy_bundle`(`state`: `match`·`mismatch`·`unverified`·`none`, `detail`), `servers`(상태별 개수), `enforcement`(워커별 최근 집행 점검 전환: `worker_id`, `passed`, `failed`, `last_transition_at`, `run_id`), `alerts`, `observations` |
+| `status` | `instance_id`, `mode`(`stored`, `ceiling`, `effective`), `default_org_id`, `policy_version`, `policy_shadow`(시험 판본이 있을 때만: `version`, `evaluated`, `allow_to_deny`, `deny_to_allow`, `other`, `errors`, `skipped`), `policy_bundle`(`state`: `match`·`mismatch`·`unverified`·`none`, `detail`), `servers`(상태별 개수), `enforcement`(워커별 최근 집행 점검 전환: `worker_id`, `passed`, `failed`, `last_transition_at`, `run_id`), `alerts`, `observations` |
 | `sync status` | `grants`(각 항목 `id`, `target_type`, `target_id`, `item`, `server_id`, `tools`, `preexisting`, `observed`, `missing_count`, `held`, `held_at`, `last_applied_at`, `state_version`) |
 | `ledger list` | `events`(각 항목 `event_id`, `inserted_at`, `kind`, `source_key`, `invocation_id`, `attempt_id`, `actor`, `subject`, `payload`, `final`) |
 

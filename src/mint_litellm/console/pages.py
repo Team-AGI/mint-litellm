@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import RedirectResponse, Response
@@ -22,6 +23,7 @@ from mint_litellm.control.services import evidence as evidence_service
 from mint_litellm.control.services import intakes as intake_service
 from mint_litellm.control.services import operators as operator_service
 from mint_litellm.control.services import orgs as org_service
+from mint_litellm.control.services import policy as policy_service
 from mint_litellm.control.services import reads
 from mint_litellm.control.services import recert as recert_service
 from mint_litellm.control.services import servers as server_service
@@ -408,6 +410,7 @@ def ledger(
     actor_name: str = Query("", alias="actor"),
     server_id: str = "",
     result: str = "",
+    invocation: str = "",
     page: int = 1,
     actor: Actor = Depends(page_actor),
 ):
@@ -427,15 +430,21 @@ def ledger(
         begin = finish = None
         since = until = ""
         error = "날짜는 연-월-일 형식으로 입력하십시오."
+    try:
+        invocation_id = str(UUID(invocation)) if invocation else None
+    except ValueError:
+        invocation_id, invocation = None, ""
+        error = "호출 식별자 형식이 올바르지 않습니다."
     first = datetime.now(zone) - timedelta(days=reads.LEDGER_DEFAULT_DAYS)
     start = begin or first.replace(hour=0, minute=0, second=0, microsecond=0)
     rows = reads.ledger(
         actor.conn, actor.instance, since=start, until=finish, kind=kind or None,
         actor=actor_name or None, server_id=server_id or None, result=result or None, page=page,
+        invocation_id=invocation_id,
     )
     query = {
         "since": since, "until": until, "kind": kind, "actor": actor_name, "server_id": server_id,
-        "result": result,
+        "result": result, "invocation": invocation,
     }
     ctx = {
         "rows": rows,
@@ -454,8 +463,11 @@ def ledger(
 
 
 def policy_page(request: Request, actor: Actor, error=None, status=200):
+    shadow = reads.policy_shadow(actor.conn, actor.instance)
     ctx = {
         "versions": reads.policy_versions(actor.conn, actor.instance),
+        "shadow": shadow,
+        "shadow_day": shadow and f"{shadow['set_at'].astimezone(actor.config.zone):%Y-%m-%d}",
         "s": reads.settings(actor.conn, actor.instance),
         "ceiling": actor.config.control.mode_ceiling.value,
         "error": error,
@@ -466,6 +478,29 @@ def policy_page(request: Request, actor: Actor, error=None, status=200):
 @router.get("/policy")
 def policy(request: Request, actor: Actor = Depends(page_actor)):
     return policy_page(request, actor)
+
+
+@router.post("/policy/shadow/apply")
+def apply_shadow(
+    request: Request, version: str = Form(...), actor: Actor = Depends(page_actor)
+):
+    def action():
+        source = actor.config.policy_source
+        if source is None:
+            raise ControlError("이 콘솔에서는 정책 판본을 적용할 수 없습니다.")
+        policy_service.activate(actor.ctx, actor.config.database_url, version, source)
+
+    return act(
+        actor, action, "policy_applied", "/policy", lambda **kw: policy_page(request, actor, **kw)
+    )
+
+
+@router.post("/policy/shadow/cancel")
+def cancel_shadow(request: Request, actor: Actor = Depends(page_actor)):
+    return act(
+        actor, lambda: policy_service.shadow_cancel(actor.ctx), "shadow_cancelled", "/policy",
+        lambda **kw: policy_page(request, actor, **kw),
+    )
 
 
 @router.post("/policy/mode")

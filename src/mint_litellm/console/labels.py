@@ -83,6 +83,18 @@ POLICY_VERSION = {
     "active": Status("적용 중", "ok"),
     "superseded": Status("교체됨", "off"),
 }
+# 정책 판정 결과(시험 적용의 현재 결과와 시험 결과)와 판정이 달라지는 방향
+POLICY_RESULT = {
+    "Allow": "허용",
+    "Alert": "경고",
+    "RequireApproval": "승인 필요",
+    "Block": "차단",
+}
+SHADOW_FLIP = {
+    "allow_to_deny": "허용에서 차단",
+    "deny_to_allow": "차단에서 허용",
+    "other": "그 밖의 변경",
+}
 JOB = {
     "pending": Status("대기", "wait"),
     "running": Status("실행 중", "wait"),
@@ -331,6 +343,8 @@ EVENT_KIND = {
     "approval_recert_requested": "승인 재확인 요청",
     "approval_held": "승인 보류",
     "approval_recert_confirmed": "승인 재확인",
+    "policy_shadow_set": "정책 시험 적용 시작",
+    "policy_shadow_cleared": "정책 시험 적용 취소",
 }
 
 CONFIRMATION_EVENT = {
@@ -376,6 +390,8 @@ NOTICES = {
     "org_closed": "조직을 닫았습니다.",
     "allowlist_added": "허용 목록에 추가했습니다.",
     "mode_set": "모드를 변경했습니다.",
+    "policy_applied": "정책 판본을 적용했습니다.",
+    "shadow_cancelled": "정책 시험 적용을 취소했습니다.",
     "operator_role": "운영자의 역할을 변경했습니다.",
     "requester_assigned": "신청자를 지정했습니다.",
     "evidence_attached": "증빙을 첨부했습니다.",

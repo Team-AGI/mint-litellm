@@ -36,7 +36,7 @@ from mint_litellm.control import (
 )
 from mint_litellm.control.config import ControlConfig
 from mint_litellm.control.context import Context, Operator
-from mint_litellm.control.db.connection import connect, fetchall
+from mint_litellm.control.db.connection import connect, fetchall, fetchone
 from mint_litellm.control.db.migrate import apply_migrations
 from mint_litellm.control.db.roles import LOGIN_PASSWORD_VARIABLES, LOGIN_ROLES, ensure_login_roles
 from mint_litellm.control.errors import AuthError, ControlError
@@ -53,6 +53,7 @@ from mint_litellm.control.services import intakes as intake_service
 from mint_litellm.control.services import operators as operator_service
 from mint_litellm.control.services import orgs as org_service
 from mint_litellm.control.services import policy as policy_service
+from mint_litellm.control.services import reads
 from mint_litellm.control.services import relations as relation_service
 from mint_litellm.control.services import servers as server_service
 from mint_litellm.control.services import settings as settings_service
@@ -491,17 +492,59 @@ def _sync_status(run: Run) -> None:
         )
 
 
-def _policy_activate(run: Run) -> None:
-    a, ctx = run.args, run.context()
+def _policy_source(run: Run, url_env: str = "MINT_OPA_URL") -> policy_versions.PolicySource:
+    a = run.args
     source = policy_versions.PolicySource(
         root=Path(a.policy_root),
         opa=a.opa,
         bundle_path=Path(a.bundle_path),
-        opa_url=a.opa_url or run.environ.get("MINT_OPA_URL", ""),
+        opa_url=a.opa_url or run.environ.get(url_env, ""),
         timeout_seconds=a.timeout,
     )
     if not source.opa_url:
-        raise ControlError("--opa-url 또는 MINT_OPA_URL이 필요합니다.")
+        raise ControlError(f"--opa-url 또는 {url_env}이(가) 필요합니다.")
+    return source
+
+
+def _policy_shadow(run: Run) -> None:
+    source = _policy_source(run, "MINT_SHADOW_OPA_URL")
+    policy_service.shadow_set(run.context(), run.cfg.require_database(), run.args.version, source)
+    run.data["id"] = run.args.version
+
+
+def _policy_shadow_cancel(run: Run) -> None:
+    run.data["id"] = policy_service.shadow_cancel(run.context())
+
+
+def _policy_status(run: Run) -> None:
+    ctx = run.context()
+    active = fetchone(
+        run.conn,
+        "SELECT id, activated_at FROM mint.policy_versions"
+        " WHERE instance_id = %s AND status = 'active'",
+        (ctx.instance_id,),
+    )
+    shadow = reads.policy_shadow(run.conn, ctx.instance_id)
+    run.data["active"] = None if active is None else active["id"]
+    run.data["shadow"] = None
+    run.say(f"적용 중인 판본: {run.data['active'] or '없음'}")
+    if shadow is None:
+        run.say("시험 중인 판본: 없음")
+        return
+    run.data["shadow"] = json.loads(json.dumps(shadow, default=str))
+    run.say(status.shadow_line(
+        {"version": shadow["version_id"], **shadow["stats"], **shadow["totals"]}
+    ))
+    for row in shadow["flips"]:
+        run.say(
+            f"{row['server_id']}	{row['tool']}	{row['active_result']} -> "
+            f"{row['shadow_result']}	{row['calls']}건"
+        )
+
+
+def _policy_activate(run: Run) -> None:
+    a, ctx = run.args, run.context()
+    source = _policy_source(run)
     try:
         row = policy_service.activate(ctx, run.cfg.require_database(), a.version, source)
     except policy_versions.ActivationError as error:
@@ -827,6 +870,9 @@ HANDLERS: dict[str, Handler] = {
         r.context(), r.args.reasons, r.args.policy_ids
     ),
     "policy activate": _policy_activate,
+    "policy shadow": _policy_shadow,
+    "policy shadow-cancel": _policy_shadow_cancel,
+    "policy status": _policy_status,
     "ledger list": _ledger_list,
     "sync status": _sync_status,
     "sync resume": lambda r: sync_service.resume(r.context(), r.args.grant_id),
@@ -1049,6 +1095,17 @@ ARGUMENTS: dict[str, list[Any]] = {
            default=os.environ.get("MINT_OPA_BUNDLE_PATH", "/bundles/mint.tar.gz"),
            help="정책 엔진이 감시하는 번들 파일(공유 볼륨)"),
         _a("--opa-url", help="정책 엔진 주소(기본: MINT_OPA_URL)"),
+        _a("--timeout", type=float, default=30.0, help="엔진 적재 확인 제한 시간(초)"),
+    ],
+    "policy shadow": [
+        _a("version", help="시험할 정책 판본 식별자(적용 중인 판본과 달라야 한다)"),
+        _a("--policy-root", default=os.environ.get("MINT_POLICY_ROOT", "/opt/mint"),
+           help="policy/ 디렉터리를 담은 루트(기본: MINT_POLICY_ROOT 또는 /opt/mint)"),
+        _a("--opa", default="opa", help="정책 시험에 쓸 opa 실행 파일"),
+        _a("--bundle-path",
+           default=os.environ.get("MINT_OPA_SHADOW_BUNDLE_PATH", "/bundles/shadow.tar.gz"),
+           help="시험용 정책 엔진이 감시하는 번들 파일(공유 볼륨)"),
+        _a("--opa-url", help="시험용 정책 엔진 주소(기본: MINT_SHADOW_OPA_URL)"),
         _a("--timeout", type=float, default=30.0, help="엔진 적재 확인 제한 시간(초)"),
     ],
     "sync status": [_a("--held", action="store_true", help="보류된 항목만 보인다")],

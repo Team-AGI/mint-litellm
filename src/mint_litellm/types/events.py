@@ -93,6 +93,8 @@ class EventKind(StrEnum):
     APPROVAL_RECERT_REQUESTED = "approval_recert_requested"
     APPROVAL_HELD = "approval_held"
     APPROVAL_RECERT_CONFIRMED = "approval_recert_confirmed"
+    POLICY_SHADOW_SET = "policy_shadow_set"
+    POLICY_SHADOW_CLEARED = "policy_shadow_cleared"
 
 
 CALL_KINDS: frozenset[EventKind] = frozenset(
@@ -178,6 +180,8 @@ CONTROL_ENTITY: dict[EventKind, str] = {
     EventKind.APPROVAL_RECERT_REQUESTED: "approval",
     EventKind.APPROVAL_HELD: "approval",
     EventKind.APPROVAL_RECERT_CONFIRMED: "approval",
+    EventKind.POLICY_SHADOW_SET: "policy_shadow",
+    EventKind.POLICY_SHADOW_CLEARED: "policy_shadow",
 }
 
 _ENTITY_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")

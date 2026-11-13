@@ -140,3 +140,18 @@ def test_configuring_the_log_level_sets_one_stderr_handler_once():
         logger.setLevel(before[0])
         logger.handlers[:] = before[1]
         logger.propagate = before[2]
+
+
+def test_shadow_evaluation_is_off_unless_an_address_is_given():
+    off = PluginConfig.from_env({**BASE, "MINT_SHADOW_OPA_URL": " "})
+    assert off.shadow_opa_url is None
+    assert (off.shadow_sample_percent, off.shadow_max_per_second) == (100, 50)
+    env = {**BASE, "MINT_SHADOW_OPA_URL": "http://opa-shadow:8181",
+           "MINT_SHADOW_SAMPLE_PERCENT": "10", "MINT_SHADOW_MAX_PER_SECOND": "5"}
+    got = PluginConfig.from_env(env)
+    assert (got.shadow_opa_url, got.shadow_sample_percent, got.shadow_max_per_second) == (
+        "http://opa-shadow:8181", 10, 5)
+    for name, bad in (("MINT_SHADOW_SAMPLE_PERCENT", "0"), ("MINT_SHADOW_SAMPLE_PERCENT", "101"),
+                      ("MINT_SHADOW_MAX_PER_SECOND", "0")):
+        with pytest.raises(RuntimeError):
+            PluginConfig.from_env({**BASE, name: bad})
