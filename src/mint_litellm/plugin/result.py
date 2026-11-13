@@ -29,6 +29,7 @@ from mint_litellm.types.events import (
     ResponseObservation,
     call_source_key,
 )
+from mint_litellm.types.outcome import Outcome, response_outcome
 
 log = logging.getLogger("mint_litellm.result")
 
@@ -173,6 +174,9 @@ async def observe_response(
         output_blocked=bool(ctx.get("output_blocked")),
         output_masked=bool(ctx.get("output_masked")),
         sensitive_findings=dict(ctx.get("sensitive_findings") or {}),
+        outcome=response_outcome(
+            is_error=is_error, output_blocked=bool(ctx.get("output_blocked"))
+        ),
     )
     event = _event(ctx, EventKind.CALL_RESPONSE_RECEIVED, observation.model_dump(mode="json"), deps)
     await deps.recorder.record(event)
@@ -198,6 +202,7 @@ async def observe_unknown_outcome(
         "cause": cause,
         "exception_type": exception_type,
         "http_status": http_status,
+        "outcome": Outcome.UNKNOWN.value,
     }
     consumed = ctx.get("consumed_call_approval")
     if isinstance(consumed, Mapping):

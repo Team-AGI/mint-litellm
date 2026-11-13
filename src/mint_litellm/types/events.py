@@ -14,6 +14,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validato
 from mint_litellm.types.decision import DecisionSnapshot, OperationType, RevocationCheck
 from mint_litellm.types.frozen import json_value, no_floats
 from mint_litellm.types.ids import new_uuid7
+from mint_litellm.types.outcome import Outcome
 
 
 class Evidence(StrEnum):
@@ -319,6 +320,8 @@ class ResponseObservation(BaseModel):
     output_blocked: bool = False
     output_masked: bool = False
     sensitive_findings: dict[str, int] = Field(default_factory=dict)
+    # 새 행부터 남는 결과 분류(success·tool_error·output_blocked).
+    outcome: Outcome | None = None
 
     @model_validator(mode="after")
     def _check(self) -> Self:

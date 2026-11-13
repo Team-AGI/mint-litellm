@@ -29,9 +29,9 @@ from mint_litellm.control.services import contracts as contract_service
 from mint_litellm.control.services import denials as denial_service
 from mint_litellm.control.services import evidence as evidence_service
 from mint_litellm.control.services import intakes as intake_service
+from mint_litellm.control.services import metrics, reads
 from mint_litellm.control.services import operators as operator_service
 from mint_litellm.control.services import orgs as org_service
-from mint_litellm.control.services import reads
 from mint_litellm.control.services import relations as relation_service
 from mint_litellm.control.services import servers as server_service
 from mint_litellm.control.services import settings as settings_service
@@ -322,6 +322,14 @@ def list_policy_versions(actor: Actor = Depends(api_actor)):
     return {"items": public(reads.policy_versions(actor.conn, actor.instance))}
 
 
+@router.get("/metrics")
+def get_metrics(actor: Actor = Depends(api_actor)):
+    return Response(
+        metrics.exposition(actor.conn, actor.instance),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
+
+
 @router.get("/ledger")
 def get_ledger(
     since: datetime | None = None,
@@ -330,12 +338,13 @@ def get_ledger(
     actor_name: str | None = Query(None, alias="actor"),
     server_id: str | None = None,
     result: str | None = None,
+    ref: str | None = None,
     page: int = 1,
     actor: Actor = Depends(api_actor),
 ):
     rows = reads.ledger(
         actor.conn, actor.instance, since=since, until=until, kind=kind, actor=actor_name,
-        server_id=server_id, result=result, page=page,
+        server_id=server_id, result=result, ref=ref, page=page,
     )
     return {"items": public(rows), "page": page}
 
@@ -349,11 +358,12 @@ def export_ledger(
     actor_name: str | None = Query(None, alias="actor"),
     server_id: str | None = None,
     result: str | None = None,
+    ref: str | None = None,
     actor: Actor = Depends(api_actor),
 ):
     rows = reads.ledger(
         actor.conn, actor.instance, since=since, until=until, kind=kind, actor=actor_name,
-        server_id=server_id, result=result, limit=reads.EXPORT_LIMIT,
+        server_id=server_id, result=result, ref=ref, limit=reads.EXPORT_LIMIT,
     )
     if format == "json":
         return Response(

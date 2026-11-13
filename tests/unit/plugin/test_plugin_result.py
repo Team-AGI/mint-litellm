@@ -163,6 +163,7 @@ def test_a_call_that_never_answered_is_an_unknown_outcome(tmp_path, status, caus
         "cause": cause,
         "exception_type": "HTTPException",
         "http_status": status,
+        "outcome": "unknown",
     }
     assert event.source_key == f"call:{INVOCATION}:1:call_outcome_unknown"
 
