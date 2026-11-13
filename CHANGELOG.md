@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- 운영자 문서를 정리했다. `README.md`에 구성(플러그인·제어 평면·콘솔·단말 설치 묶음)과 빠른 시작, 문서 목록을 두고, 새 `docs/운영.md`에 승인·재확인, 호출별 승인, 도입 신청, 경보와 웹훅, 증빙, 서버 폐기, 정책 시험 적용, 지표, 단말 보고와 키 갱신을 화면과 명령별로 모았다. 서로 어긋난 서술을 고쳤다: 로컬 실행(stdio) 서버가 `server register-local`로 등록된다는 점, 단말 묶음 키가 만료된다는 점, 계약 재승인이 작업 실행기에서 확정된다는 점, 작업 종류 목록.
 - 원장 크기 줄이기. (1) 도구 목록에서 「보임」으로 통과한 판정(`discovery_evaluated`)은 같은 주체·서버·도구가 같은 상태 세대·설정 판본·활성 정책 판본이면 `MINT_LIST_DEDUP_SECONDS`(기본 86400, 0이면 끔) 안에는 다시 쓰지 않는다. 기억은 워커 메모리에 있고 최대 10만 키이며, 숨김·차단·걸림과 호출 판정·승인·응답 사건은 줄이지 않고 기억 오류나 기록 실패는 사건을 쓰는 쪽으로 처리한다. (2) 새 판정 본문은 2판(`v: 2`)이다. 빈 값·기본값, 모두 통과한 단계, 주체의 부가 정보, 활성 판본에서 찾을 수 있는 번들 해시를 빼 호출 판정 본문이 약 2.4 KB에서 0.85 KB, 도구 목록 판정이 약 2.1 KB에서 0.8 KB로 줄었다(단위 시험 기준). 기존 행은 바뀌지 않고 읽는 쪽은 두 판을 모두 받는다. 마이그레이션 없음. 테이블 분할은 이 변경에 없다.
 - LiteLLM 샌드박스 코드 실행 경로를 막는다. 스킬 훅(`container.skills`)과 코드 인터프리터 가로채기는 모델이 만든 코드를 Docker 샌드박스에서 실행하며 MCP 훅을 지나지 않으므로, `pre_call`에서 `container`, `code_interpreter`·`code_execution*` 도구, `litellm_code_execution` 도구와 그 활성 표지를 `MINT-CODE-EXECUTION-FORBIDDEN`으로 막는다. `MINT_ALLOW_CODE_EXECUTION=true`로만 허용하고, llm-sandbox가 설치되었거나 `code_interpreter_interception`이 켜진 구성은 허용 없이는 자가 점검이 실패한다.
 - 키 없는 주체(JWT, 관리형 에이전트, 게이트웨이 입장 사용자)를 올바르게 판정한다. 가상 키 `token`이 없어도 서버가 검증한 표지(`jwt_claims`·`managed_agent_context`·`mcp_admitted_user_subject`)와 `user_id`가 있으면 그 사용자로 다루고, 표지가 없거나 `user_id`가 없으면 `MINT-ANONYMOUS`로 막는다. 키 없는 사용자는 키 토큰이 필요한 본인 확인 요청을 만들 수 없다.
