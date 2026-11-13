@@ -5,7 +5,7 @@ import random
 import subprocess
 
 import pytest
-from test_kit_install import agent, folder, kit_module, make_kit, reports  # noqa: F401
+from test_kit_install import agent, kit_module, make_kit
 
 
 def test_the_start_delay_is_spread_over_the_window_and_never_negative():
@@ -27,14 +27,14 @@ def test_a_start_report_is_skipped_when_one_went_out_within_the_hour(last, now, 
     assert kit_module.report_due(last, now) is due
 
 
-def installed(folder, tmp_path, reports):  # noqa: F811
+def installed(folder, tmp_path, reports):
     kit = make_kit(folder, tmp_path, managed=False)
     state = kit.install()
     return kit, state
 
 
 def test_an_install_registers_a_six_hour_timer_that_runs_the_installed_copy(
-    folder, tmp_path, reports  # noqa: F811
+    folder, tmp_path, reports
 ):
     kit, state = installed(folder, tmp_path, reports)
     units = kit.home / ".config/systemd/user"
@@ -49,7 +49,7 @@ def test_an_install_registers_a_six_hour_timer_that_runs_the_installed_copy(
     assert str(units / "mint-report.timer") in state["files"]
 
 
-def test_uninstalling_removes_the_timer_and_the_reporter(folder, tmp_path, reports):  # noqa: F811
+def test_uninstalling_removes_the_timer_and_the_reporter(folder, tmp_path, reports):
     kit, _ = installed(folder, tmp_path, reports)
     kit.uninstall()
     assert not (kit.home / ".config/systemd/user/mint-report.timer").exists()
@@ -58,7 +58,7 @@ def test_uninstalling_removes_the_timer_and_the_reporter(folder, tmp_path, repor
 
 
 def test_a_windows_install_asks_for_a_task_with_the_jitter_on_the_command(
-    folder, tmp_path, reports, monkeypatch  # noqa: F811
+    folder, tmp_path, reports, monkeypatch
 ):
     calls = []
     monkeypatch.setattr(kit_module, "capture", lambda command: calls.append(command) or "SUCCESS")
@@ -91,7 +91,7 @@ def stage(tmp_path, monkeypatch, *, state=True, key="sk-user"):
 
 
 def test_the_periodic_report_sends_the_installed_state_with_the_user_key(
-    tmp_path, monkeypatch, reports  # noqa: F811
+    tmp_path, monkeypatch, reports
 ):
     programs, home = stage(tmp_path, monkeypatch)
     waited = []
@@ -107,7 +107,7 @@ def test_the_periodic_report_sends_the_installed_state_with_the_user_key(
 
 
 def test_a_start_report_is_skipped_inside_the_hour_but_the_timer_always_reports(
-    tmp_path, monkeypatch, reports  # noqa: F811
+    tmp_path, monkeypatch, reports
 ):
     programs, _ = stage(tmp_path, monkeypatch)
     now = [5000.0]
@@ -121,14 +121,14 @@ def test_a_start_report_is_skipped_inside_the_hour_but_the_timer_always_reports(
     assert run(if_due=True) == 0 and len(reports) == 3
 
 
-def test_a_failed_report_is_retried_at_the_next_start(tmp_path, monkeypatch, reports):  # noqa: F811
+def test_a_failed_report_is_retried_at_the_next_start(tmp_path, monkeypatch, reports):
     programs, home = stage(tmp_path, monkeypatch)
     monkeypatch.setattr(kit_module, "post", lambda *args: False)
     assert kit_module.report_installed(programs, if_due=True, sleep=lambda s: None) == 1
     assert not (home / ".cache/mint/last_report").exists()
 
 
-def test_nothing_is_reported_when_the_bundle_is_not_installed(tmp_path, monkeypatch, reports):  # noqa: F811
+def test_nothing_is_reported_when_the_bundle_is_not_installed(tmp_path, monkeypatch, reports):
     programs, _ = stage(tmp_path, monkeypatch, state=False)
     assert kit_module.report_installed(programs, sleep=lambda s: None) == 0
     assert reports == []
