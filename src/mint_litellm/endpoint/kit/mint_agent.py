@@ -10,7 +10,8 @@
   serve 연결 중계(내부용). 훅은 호출마다 새 프로세스라 연결을 이어 쓸 수 없으므로, 사용자
         전용 소켓을 가진 작은 프로세스가 결정 서버와의 연결을 유지하고 훅이 이를 거쳐 보낸다.
         중계에 닿지 못하면 훅이 직접 보내며(느릴 뿐 판정은 같다), 요청이 한동안 없으면 끝난다.
-  run   MCP 서버 실행기. 승인된 실행 계약과 디스크의 실행 파일·스크립트 해시가 모두 같을 때만
+  run   MCP 서버 실행기(Linux는 승인된 계약에서 만든 bubblewrap 격리 안에서 시작한다).
+        승인된 실행 계약과 디스크의 실행 파일·스크립트 해시가 모두 같을 때만
         서버를 시작하고, 아니면 시작하지 않고 종료 코드 126으로 끝난다. 마지막 설치 보고 응답이
         폐기·미승인으로 알린 서버(사용자 캐시나 설치 폴더의 ``retired.json``)도
         시작하지 않는다. 캐시는
@@ -33,7 +34,9 @@ import hashlib
 import http.client
 import json
 import os
+import posixpath
 import re
+import shutil
 import socket
 import socketserver
 import ssl
@@ -45,7 +48,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any
+from typing import Any, NamedTuple
 
 DECIDE_PATH = "/mint/v1/decide"
 RESULT_PATH = "/mint/v1/result"
@@ -166,7 +169,7 @@ def proc_start(pid: int) -> str | None:
     return stat.rsplit(")", 1)[-1].split()[19] if ")" in stat else None
 
 
-def record_launch(state_dir: str, server: str) -> None:
+def record_launch(state_dir: str, server: str, sandbox: str | None = None) -> None:
     """시작할 서버 프로세스(exec 뒤에도 같은 PID)를 기록한다. 기록하지 못해도 시작은 막지 않는다."""
     try:
         folder = os.path.join(os.path.expanduser(state_dir), LAUNCHED)
@@ -174,6 +177,8 @@ def record_launch(state_dir: str, server: str) -> None:
         pid = os.getpid()
         name = re.sub(r"[^A-Za-z0-9_.-]", "_", server)[:100]
         record = {"server": server, "pid": pid, "start": proc_start(pid)}
+        if sandbox:
+            record["sandbox"] = sandbox
         with open(os.path.join(folder, f"{name}-{pid}.json"), "w", encoding="utf-8") as handle:
             json.dump(record, handle)
     except OSError:
@@ -523,6 +528,177 @@ def verify_launch(approved: Mapping[str, Any], fd: int) -> None:
         raise Refuse("server script differs from the approved contract")
 
 
+# --- 서버 격리(Linux bubblewrap) ------------------------------------------------------------
+# 승인된 실행 계약에서 격리 명령을 만든다. 네트워크는 전부 허용 아니면 전부 차단이다(호스트별
+# 거름은 하지 않는다). Windows는 격리하지 않고 ``unsupported``로 보고한다.
+SANDBOX_SYSTEM = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32")
+SANDBOX_ETC = (
+    "/etc/ld.so.cache", "/etc/ld.so.conf", "/etc/ld.so.conf.d", "/etc/alternatives",
+    "/etc/localtime",
+)  # fmt: skip
+SANDBOX_ETC_NET = (
+    "/etc/resolv.conf", "/etc/hosts", "/etc/nsswitch.conf", "/etc/ssl", "/etc/ca-certificates",
+    "/etc/pki",
+)  # fmt: skip
+# 패키지 실행기는 내려받은 패키지를 캐시에 두므로 실행기별 캐시 폴더(홈 기준)만 읽기·쓰기로 붙인다.
+RUNNER_CACHES = {
+    "npx": (".npm",), "npm": (".npm",), "yarn": (".cache/yarn", ".yarn"),
+    "pnpm": (".local/share/pnpm", ".cache/pnpm", ".npm"), "bunx": (".bun", ".cache/bun"),
+    "bun": (".bun", ".cache/bun"), "uvx": (".cache/uv", ".local/share/uv"),
+    "uv": (".cache/uv", ".local/share/uv"), "pipx": (".local/share/pipx", ".cache/pipx"),
+}  # fmt: skip
+RUNNER_ARGS = {"npm": ("exec", "x"), "pnpm": ("dlx", "exec"), "yarn": ("dlx",), "bun": ("x",),
+               "pipx": ("run",), "uv": ("tool",)}  # fmt: skip
+
+
+class Sandbox(NamedTuple):
+    """격리 정책. ``managed``이면 격리할 수 없을 때 시작하지 않는다(허용하지 않는 한)."""
+
+    managed: bool
+    allow_unsandboxed: bool = False
+
+
+def sandbox_policy(folder: str = KIT_DIR) -> Sandbox:
+    """설치 폴더의 상태·설정에서 격리 정책을 읽는다. 읽지 못하면 관리형(엄격)으로 본다."""
+
+    def read(name: str) -> dict:
+        try:
+            with open(os.path.join(folder, name), encoding="utf-8") as handle:
+                data = json.load(handle)
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    return Sandbox(
+        managed=read("state.json").get("mode") != "user",
+        allow_unsandboxed=read("kit.json").get("allow_unsandboxed") is True,
+    )
+
+
+def declares_network(contract: Mapping[str, Any]) -> bool:
+    """계약이 ``network: none``을 선언하지 않았으면 네트워크를 연다(선언이 없는 이전 계약 포함)."""
+    return contract.get("network") != "none"
+
+
+def runner_caches(contract: Mapping[str, Any], home: str) -> list[str]:
+    """패키지 실행기(npx·uvx·pipx run 등)면 그 실행기의 캐시 폴더(홈의 다른 것은 붙이지 않는다)."""
+    name = re.sub(r"\.(exe|cmd|bat)$", "", posixpath.basename(str(contract["executable"])).lower())
+    first = (contract.get("argv") or [""])[:1]
+    needs = RUNNER_ARGS.get(name)
+    if name not in RUNNER_CACHES or (needs and (not first or first[0] not in needs)):
+        return []
+    return [posixpath.join(home, rel) for rel in RUNNER_CACHES[name]] if home else []
+
+
+def _under(path: str, base: str) -> bool:
+    return path == base or path.startswith(base.rstrip("/") + "/")
+
+
+def _runtime_dir(path: str, home: str) -> str:
+    """실행 파일이 쓰는 묶음 폴더(``<접두>/bin/x``의 접두). 너무 넓으면 파일 하나만."""
+    prefix = posixpath.dirname(posixpath.dirname(path))
+    broad = prefix.count("/") < 2 or _under(home, prefix) or prefix in ("/opt", "/srv", "/mnt")
+    return path if broad else prefix
+
+
+def link_chain(path: str) -> list[str]:
+    """실행 파일에서 심볼릭 링크를 따라간 경로들(처음 경로, 각 단계의 대상, 최종 실제 경로)."""
+    if os.name != "posix":
+        return [path]
+    chain = [path]
+    for _ in range(8):
+        if not os.path.islink(chain[-1]):
+            break
+        target = os.readlink(chain[-1])
+        chain.append(posixpath.normpath(posixpath.join(posixpath.dirname(chain[-1]), target)))
+    return [*chain, os.path.realpath(path)]
+
+
+def sandbox_mounts(approved: Mapping[str, Any], home: str) -> list[tuple[str, str]]:
+    """격리 안에 붙일 (경로, ro|rw). 상위 경로가 먼저 오도록 정렬한다."""
+    executable = approved["executable"]
+    found: dict[str, str] = {}
+
+    def add(path: str, mode: str) -> None:
+        if posixpath.isabs(path) and not any(_under(path, s) for s in SANDBOX_SYSTEM):
+            if found.get(path) != "rw":
+                found[path] = mode
+
+    for path in dict.fromkeys(link_chain(executable)):
+        add(_runtime_dir(path, home), "ro")
+    script = script_path(approved)
+    if script:
+        folder = posixpath.dirname(script)
+        add(script if folder.count("/") < 2 or _under(home, folder) else folder, "ro")
+    if approved.get("cwd"):
+        add(approved["cwd"], "ro")
+    for cache in runner_caches(approved, home):
+        add(cache, "rw")
+    for entry in approved.get("file_access") or ():
+        add(entry["path"], "rw" if entry.get("mode") == "rw" else "ro")
+    ordered = sorted(found.items(), key=lambda item: (item[0].count("/"), item[0]))
+    kept: list[tuple[str, str]] = []
+    for path, mode in ordered:  # 상위 경로가 같은 권한으로 이미 붙었으면 건너뛴다.
+        if not any(_under(path, base) and m == mode for base, m in kept if base != path):
+            kept.append((path, mode))
+    return kept
+
+
+def bwrap_args(
+    approved: Mapping[str, Any], argv: Sequence[str], home: str, bwrap: str = "bwrap"
+) -> list[str]:
+    """계약에서 만든 bubblewrap 명령. 시스템 폴더·계약 경로만 붙고, 선언하지 않은 경로는 없다."""
+    network = declares_network(approved)
+    args = [bwrap, "--unshare-all", "--die-with-parent", "--new-session"]
+    if network:
+        args.append("--share-net")
+    args += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"]
+    for path in (*SANDBOX_SYSTEM, *SANDBOX_ETC, *(SANDBOX_ETC_NET if network else ())):
+        args += ["--ro-bind-try", path, path]
+    if home and home != "/" and not any(_under(home, s) for s in SANDBOX_SYSTEM):
+        args += ["--tmpfs", home]  # 홈은 비어 있는 임시 폴더. 선언한 경로만 그 위에 붙는다.
+    for path, mode in sandbox_mounts(approved, home):
+        args += ["--bind-try" if mode == "rw" else "--ro-bind-try", path, path]
+    args += ["--chdir", approved.get("cwd") or "/", "--", approved["executable"], *argv[1:]]
+    return args
+
+
+def bwrap_ready(bwrap: str) -> bool:
+    """이 단말에서 bubblewrap이 실제로 격리를 만들 수 있는가(사용자 이름공간이 막혀 있으면 거짓)."""
+    probe = [bwrap, "--unshare-all", "--ro-bind", "/", "/", "--dev", "/dev", "--", "/bin/true"]
+    try:
+        return subprocess.run(probe, capture_output=True, timeout=10).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def plan_sandbox(
+    approved: Mapping[str, Any],
+    argv: Sequence[str],
+    policy: Sandbox,
+    *,
+    home: str,
+    which: Callable[[str], str | None] = shutil.which,
+    ready: Callable[[str], bool] = bwrap_ready,
+    windows: bool | None = None,
+) -> tuple[list[str] | None, str]:
+    """(격리 명령 또는 None, 상태). 상태는 ``bwrap``·``none``(격리 못 함)·``unsupported``(Windows).
+
+    관리형 설치는 격리할 수 없으면 시작을 거부한다(``allow_unsandboxed``가 아니면).
+    """
+    if os.name == "nt" if windows is None else windows:
+        return None, "unsupported"
+    bwrap = which("bwrap")
+    if bwrap and ready(bwrap):
+        return bwrap_args(approved, argv, home, bwrap), "bwrap"
+    if policy.managed and not policy.allow_unsandboxed:
+        raise Refuse(
+            "격리 도구(bubblewrap)를 쓸 수 없어 서버를 시작하지 않았습니다. 관리자에게 알려 "
+            "bubblewrap을 설치하거나 사용자 이름공간을 허용하게 하세요."
+        )
+    return None, "none"
+
+
 def spawn_and_exit(path: str, argv: list[str], env: Mapping[str, str]) -> None:
     """exec가 없는 Windows용. 자식을 띄워 표준 입출력을 그대로 잇고 같은 종료 코드로 끝난다."""
     sys.exit(subprocess.call([path, *argv[1:]], env=dict(env)))
@@ -534,10 +710,13 @@ def run_server(
     environ: Mapping[str, str],
     execve: Callable[..., Any] | None = None,
     state_dir: str | None = None,
+    sandbox: Sandbox | None = None,
 ) -> None:
     """승인된 서버만 시작한다. 검증을 통과하지 못하면 ``Refuse``이고 서버는 시작되지 않는다.
 
-    ``state_dir``가 있으면 폐기 서버 목록을 확인하고 시작한 프로세스를 기록한다.
+    ``state_dir``가 있으면 폐기 서버 목록을 확인하고 시작한 프로세스를 기록한다. ``sandbox``가
+    있으면 Linux에서는 계약에서 만든 격리 안에서 시작하고(실행기가 부모로 남는다), 관리형이면
+    격리할 수 없을 때 ``Refuse``이다. 없으면(시험용) 격리하지 않는다.
     """
     if state_dir is not None and server in load_retired(state_dir):
         raise Refuse(f"server {server} was retired by MINT")
@@ -552,8 +731,16 @@ def run_server(
     env = launch_env(approved, environ)
     if approved.get("cwd"):
         os.chdir(approved["cwd"])
+    wrapped, status = None, None
+    if sandbox is not None:
+        wrapped, status = plan_sandbox(
+            approved, argv, sandbox, home=env.get("HOME") or os.path.expanduser("~")
+        )
     if state_dir is not None:
-        record_launch(state_dir, server)
+        record_launch(state_dir, server, status)
+    if wrapped is not None:
+        os.close(fd)
+        spawn_and_exit(wrapped[0], wrapped, env)
     # 한계: 실행 파일은 검증한 기술자로 실행해 바꿔치기를 막지만, 셸 스크립트처럼 기술자로
     # 실행할 수 없으면 경로 실행으로 물러나 검증과 실행 사이에 틈이 남는다. 읽는 스크립트도
     # 경로로 열린다. 관리형 설치의 쓰기 금지 경로가 틈을 줄이며, 완전히 닫으려면 검증한 사본으로
@@ -620,8 +807,10 @@ def main(argv: list[str] | None = None) -> None:
         try:
             run_server(
                 args.server or "", args.contracts, os.environ,
-                state_dir=args.state_dir or STATE_DIR,
+                state_dir=args.state_dir or STATE_DIR, sandbox=sandbox_policy(),
             )  # fmt: skip
+        except SystemExit:
+            raise  # 격리·Windows 실행은 서버의 종료 코드로 끝난다.
         except Refuse as exc:
             _give_up(REFUSED, f"MINT refused to start the server: {exc}")
         except BaseException as exc:  # 어떤 예외도 시작으로 새지 않는다.

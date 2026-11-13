@@ -86,3 +86,23 @@ def test_file_access_is_ordered_by_path_and_the_mode_defaults_to_read():
 def test_file_access_must_be_absolute_normalized_unique_and_closed(bad):
     with pytest.raises(ValidationError):
         contract(file_access=bad)
+
+
+def test_a_network_declaration_changes_the_hash_but_a_missing_one_does_not():
+    base = contract()
+    assert "network" not in base.document()
+    none, any_ = contract(network="none"), contract(network="any")
+    assert len({base.sha256(), none.sha256(), any_.sha256()}) == 3
+    assert none.document()["network"] == "none"
+    with pytest.raises(ValidationError):
+        contract(network="some")
+
+
+def test_registration_hints_tell_what_the_network_declaration_means():
+    from mint_litellm.types.exec_contract import network_hints
+
+    assert network_hints(contract(network="none")) == []
+    plain = network_hints(contract())
+    assert len(plain) == 1 and "네트워크 미제한" in plain[0]
+    runner = network_hints(contract(executable="/usr/bin/npx", network="any"))
+    assert runner == ["이 계약은 네트워크를 쓸 것으로 보입니다."]

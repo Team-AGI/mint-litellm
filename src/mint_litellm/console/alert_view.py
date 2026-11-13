@@ -93,6 +93,7 @@ SUMMARY = {
     "endpoint_unmanaged": "단말 {key_alias}에 관리되지 않는 설치가 있습니다.",
     "endpoint_stale_process": "단말 {key_alias}에서 폐기된 서버 {server_id}가 실행 중입니다.",
     "endpoint_stale_autostart": "단말 {key_alias}에 폐기된 서버 {server_id}의 자동 시작 있음",
+    "endpoint_unsandboxed": "단말 {key_alias}에서 서버 {server_id}가 격리 없이 실행 중입니다.",
 }
 TIME_KEYS = ("valid_until", "expires_at", "deadline_at")
 

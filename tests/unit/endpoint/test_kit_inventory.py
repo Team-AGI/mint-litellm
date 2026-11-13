@@ -86,7 +86,7 @@ def test_an_inventory_that_cannot_be_read_never_blocks_the_report(tmp_path, monk
 def test_the_inventory_fits_what_the_server_accepts():
     body = {
         "kit_version": "k", "action": "removed", "mode": "none", "mcp_servers": [],
-        "processes": [{"server": "srv-1", "count": 1}],
+        "processes": [{"server": "srv-1", "count": 1, "sandbox": "bwrap"}],
         "autostart": [{"kind": "cron", "name": "@reboot", "server": "srv-1"}],
     }
     parsed = ReportBody.model_validate(body)
