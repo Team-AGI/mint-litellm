@@ -25,7 +25,9 @@ SERVER = {
     "terminated": Status("종료됨", "off"),
 }
 # 단말 설치 묶음의 설치 상태: 관리형만 정상이고, 사용자 수준은 관리되지 않는 단말이다.
-SANDBOX = {"bwrap": "격리됨", "none": "격리 없음", "unsupported": "격리 미지원"}
+SANDBOX = {
+    "bwrap": "격리됨", "appcontainer": "격리됨", "none": "격리 없음", "unsupported": "격리 미지원",
+}  # fmt: skip
 INSTALL = {
     "managed": Status("관리형", "ok"),
     "user": Status("관리되지 않음", "error"),

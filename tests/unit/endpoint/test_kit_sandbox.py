@@ -129,8 +129,23 @@ def test_an_operator_can_allow_an_unsandboxed_start_and_user_installs_fall_back(
     assert status == "bwrap" and command[0] == "/usr/bin/bwrap"
 
 
-def test_windows_is_not_sandboxed_and_says_so():
-    assert plan(agent.Sandbox(True), which=None, windows=True) == (None, "unsupported")
+def test_windows_uses_an_appcontainer_when_the_api_exists():
+    got = agent.plan_sandbox(
+        CONTRACT, [], agent.Sandbox(True), home=HOME, windows=True, win_ready=lambda: True
+    )
+    assert got == (None, "appcontainer")
+
+
+def test_windows_without_appcontainer_refuses_when_managed_and_falls_back_otherwise():
+    def plan_windows(policy):
+        return agent.plan_sandbox(
+            CONTRACT, [], policy, home=HOME, windows=True, win_ready=lambda: False
+        )
+
+    with pytest.raises(agent.Refuse, match="AppContainer"):
+        plan_windows(agent.Sandbox(True))
+    for policy in (agent.Sandbox(True, allow_unsandboxed=True), agent.Sandbox(False)):
+        assert plan_windows(policy) == (None, "none")
 
 
 def test_the_policy_comes_from_the_install_folder(tmp_path):
@@ -169,8 +184,18 @@ def test_process_items_get_the_status_of_live_launches_only(tmp_path, monkeypatc
     assert got == {"a": "bwrap", "b": "none", "c": None, "d": None}
 
 
-def test_windows_processes_are_reported_as_unsupported(tmp_path):
-    (item,) = kit.with_sandbox([{"server": "a", "count": 1}], tmp_path, True)
+def test_windows_processes_report_the_launcher_record_or_unsupported(tmp_path, monkeypatch):
+    monkeypatch.setattr(kit, "proc_start", lambda pid, windows: "t1")
+    launched(tmp_path, "a", 1, "t1", "appcontainer")
+    items = [{"server": "a", "count": 1}, {"server": "b", "count": 1}]
+    got = {i["server"]: i["sandbox"] for i in kit.with_sandbox(items, tmp_path, True)}
+    assert got == {"a": "appcontainer", "b": "unsupported"}
+
+
+def test_the_admin_reporter_does_not_read_user_profile_records(tmp_path, monkeypatch):
+    monkeypatch.setattr(kit, "proc_start", lambda pid, windows: "t1")
+    launched(tmp_path, "a", 1, "t1", "appcontainer")
+    (item,) = kit.with_sandbox([{"server": "a", "count": 1}], tmp_path, True, read_records=False)
     assert item["sandbox"] == "unsupported"
 
 
