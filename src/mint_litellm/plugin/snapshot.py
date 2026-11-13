@@ -314,6 +314,7 @@ class ServerRow:
     deployment_drift: bool = False
     pin_blocked: bool = False  # 고정 불일치·해제 미완료 표지(관측 모드로 풀 수 없다)
     vuln_blocked: bool = False  # 치명 취약점 조치 기한이 지난 서버(관측 모드로 풀 수 없다)
+    instance_mismatch: bool = False  # 다른 인스턴스와 계약·설정이 달라 막는 서버(예외 증빙 전까지)
     approved_contracts: int | None = None  # 승인 계약 수. None은 알 수 없음(1단계 스키마)
     identity_kind: str = "remote"
     exec_contract_sha256: str | None = None
@@ -502,6 +503,7 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
             deployment_drift=server.get("deployment_drift", False),
             pin_blocked="pin_reapproval" in (server.get("deployment_drift_fields") or ()),
             vuln_blocked=server.get("vuln_blocked_at") is not None,
+            instance_mismatch=server.get("instance_mismatch_at") is not None,
             approved_contracts=doc.get("approved_contracts"),
             identity_kind=server.get("identity_kind", "remote"),
             exec_contract_sha256=server.get("exec_contract_sha256"),

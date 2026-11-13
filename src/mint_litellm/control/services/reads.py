@@ -58,7 +58,7 @@ def server(conn: psycopg.Connection, instance: str, server_id: str) -> dict | No
         conn,
         "SELECT server_id, status, url_sha256, transport, auth_type, registered_by, state_version,"
         " identity_kind, exec_contract_sha256, contract_status, deployment_drift,"
-        " deployment_drift_fields, last_observed_at, vuln_blocked_at"
+        " deployment_drift_fields, last_observed_at, vuln_blocked_at, instance_mismatch_at"
         " FROM mint.servers WHERE instance_id = %s AND server_id = %s",
         (instance, server_id),
     )
