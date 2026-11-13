@@ -118,7 +118,7 @@
 
 - 주기가 된 일정(`schedules`)을 한 주기에 한 번 작업으로 등록하고, 임대가 만료된 `running` 작업을 `pending`으로 되돌리고(시도 한 번으로 센다), 대기 작업을 하나씩 임대해 실행한다. 실행 중에는 임대(`MINT_WORKER_LEASE_SECONDS`, 기본 60초)를 1/3마다 연장하고, 연장에 실패하면 그 작업의 외부 호출을 멈춘다.
 - 실패한 작업은 `min(2^시도 횟수 × 5초, 10분)` 뒤에 다시 시도하고, 시도 8번째 실패에서 `failed`가 되며 경보 `job_failed`(같은 종류·대상은 한 건으로 묶고 횟수만 올린다)를 남긴다. 오류 메시지는 저장하지 않고 오류 코드만 남긴다.
-- 이 판본에서 처리기가 있는 작업은 `submission_poll`(`MINT_SUBMISSION_POLL_SECONDS`마다 LiteLLM 제출을 신청으로 만든다), `intake_run`(수용검증), `session_verify`(콘솔 세션 재확인), `package_vuln_scan`(`MINT_VULN_SCAN_SECONDS`마다 패키지 취약점 조회와 치명 취약점 48시간 기한 판정, 아래 「패키지·취약점 통제」), `evidence_expiry_scan`(1시간마다 증거 만료 7일 전 경보와 재검사 등록), `approval_expiry_scan`(1분마다 만료된 호출별 승인·본인 확인을 `expired`로 표시), `endpoint_result_scan`(1분마다 결과 보고 없이 5분이 지난 허용된 로컬 서버 호출에 `call_outcome_unknown`(사유 `no_report`)을 남긴다), `seal`(1분마다 미봉인 사건을 해시 연쇄로 봉인), `export_negative_state`(부정 상태 전이가 커밋될 때 등록), `export_checkpoint`(10분마다, 기동 직후 한 번)이다. 나머지 종류는 해당 기능이 들어올 때 붙으며, 그 전에는 등록할 수 없다.
+- 작업 실행기가 처리하는 작업은 `submission_poll`(`MINT_SUBMISSION_POLL_SECONDS`마다 LiteLLM 제출을 신청으로 만든다), `intake_run`(수용검증), `session_verify`(콘솔 세션 재확인), `package_vuln_scan`(`MINT_VULN_SCAN_SECONDS`마다 패키지 취약점 조회와 치명 취약점 48시간 기한 판정, 아래 「패키지·취약점 통제」), `evidence_expiry_scan`(1시간마다 증거 만료 7일 전 경보와 재검사 등록), `approval_expiry_scan`(1분마다 만료된 호출별 승인·본인 확인을 `expired`로 표시), `endpoint_result_scan`(1분마다 결과 보고 없이 5분이 지난 허용된 로컬 서버 호출에 `call_outcome_unknown`(사유 `no_report`)을 남긴다), `seal`(1분마다 미봉인 사건을 해시 연쇄로 봉인), `export_negative_state`(부정 상태 전이가 커밋될 때 등록), `export_checkpoint`(10분마다, 기동 직후 한 번)이다. 그 밖에 `contract_observe`, `sync_server`·`sync_target`·`sync_reconcile`, `relation_finalize`·`server_finalize`·`activation_finalize`, `alert_deliver`, `call_spike_scan`, `restore_publish`가 있다. 처리기가 없는 종류는 등록할 수 없다.
 - 60초마다 내보내기 파일과 DB를 대조해 되돌림을 판정한다. 처음 어긋나면 봉인·내보내기를 보류하고, 두 번 연속 어긋나거나 파일이 없거나 검증되지 않으면 외부 쓰기를 모두 멈춘다(`restore_blocked`로 대기, 시도 횟수 불변). 외부 쓰기 직전마다 같은 판정과 임대 유효성을 다시 확인한다.
 - SIGTERM·SIGINT를 받으면 실행 중인 작업에 취소를 알린다. 작업이 그대로 끝나면 완료로 기록하고, 취소를 받아 멈추면 시도 횟수를 올리지 않고 임대를 놓은 뒤 종료한다.
 
@@ -189,7 +189,7 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 
 ## 서버를 LiteLLM에서 삭제하는 순서
 
-승인된 서버가 LiteLLM 레지스트리에 없으면 플러그인 자가 점검 5번이 실패해 프록시가 기동하지 않는다. 그래서 서버를 지울 때는 먼저 MINT에서 `server suspend <server_id>`로 서버를 중지하고, 그다음 LiteLLM에서 삭제한다. 삭제하기 전에 그 서버를 가리키는 팀·키의 MCP 권한(`object_permission`)도 지운다. 남아 있으면 `check`가 없는 서버를 가리키는 권한으로 실패를 알린다. 중지된 서버는 호출이 계속 차단되고, 레지스트리에 없어도 기동을 막지 않는다. 플러그인은 이 서버에 대해 `server_identity_mismatch_observed` 사건(`fields`에 `registry_missing`)을 남기고, `check`는 같은 서버를 정보 행으로 알린다. 등록을 해제하는 명령은 아직 없다. 중지한 서버는 통제 상태로 남는다.
+승인된 서버가 LiteLLM 레지스트리에 없으면 플러그인 자가 점검 5번이 실패해 프록시가 기동하지 않는다. 그래서 서버를 지울 때는 먼저 MINT에서 `server suspend <server_id>`로 서버를 중지하고, 그다음 LiteLLM에서 삭제한다. 삭제하기 전에 그 서버를 가리키는 팀·키의 MCP 권한(`object_permission`)도 지운다. 남아 있으면 `check`가 없는 서버를 가리키는 권한으로 실패를 알린다. 중지된 서버는 호출이 계속 차단되고, 레지스트리에 없어도 기동을 막지 않는다. 플러그인은 이 서버에 대해 `server_identity_mismatch_observed` 사건(`fields`에 `registry_missing`)을 남기고, `check`는 같은 서버를 정보 행으로 알린다. 중지한 서버는 통제 상태로 남는다. 서버를 완전히 폐기하려면 `server terminate`를 쓴다(서버 폐기는 `docs/운영.md`).
 
 ## 환경 변수
 
@@ -295,9 +295,9 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 
 `contract reapprove <server_id> --intake <id> --tool-contract <candidate_id>`는 후보 도구 계약의 재승인 계획을 등록하고 `plan_id`·`job_id`를 돌려준다. 도구가 여러 개면 `--tool-contract`를 반복하고, 배포 값 변경에는 `--deployment-contract <candidate_id>`를 함께 지정한다. `--state-version`은 서버의 낙관적 잠금 버전이다. 신청자와 승인자는 서로 다른 사람이어야 하며, 후보 집합의 해시에 결속된 24시간 이내 통과 증거가 있어야 한다. 재검사는 수용검증 경로로 실행한다. 재승인자는 원래 신청자와도, 운영자가 `--url`로 제시한 배포 후보의 제시자와도 달라야 한다. 예외 승인(`intake except`)된 신청의 재승인은 `--second-approver`로 다른 admin 한 명이 더 필요하고(두 사람 모두 신청자·제시자와 달라야 한다), 원래 예외 승인의 유효 기한이 지났으면 새 예외 승인을 받아야 한다.
 
-확정 접점은 `control.contract_pin.finalize_reapproval(conn, instance_id, server_id, pin_client)`이다. 외부 pin 응답 뒤 계획과 후보 id·판본·도구 집합을 다시 확인하고 승인본·사건·pin 원장·계획 완료를 한 DB 트랜잭션에서 확정한다. 불일치나 DB 실패이면 unpin을 시도하고 기존 승인본과 먼저 커밋한 차단을 유지한다. 외부 pin과 DB 사이에는 분산 원자성을 보장하지 않으며, unpin도 실패할 수 있으므로 실패 시 차단이 안전 경계이다. 이 변경에서는 `sync_server` 처리기에 연결하지 않는다. G4b 연결 전까지 계획은 대기하고 차단은 유지된다.
+재승인 계획은 작업 실행기의 `sync_server`가 확정한다. LiteLLM에 새 계약을 다시 고정(pin)한 뒤 계획과 후보 id·판본·도구 집합을 다시 확인하고, 승인본·사건·고정 원장·계획 완료를 한 트랜잭션에서 확정한다. 불일치나 DB 실패이면 고정을 되돌리려 시도하고 기존 승인본과 먼저 커밋한 차단을 유지한다. 외부 고정과 DB 사이에는 분산 원자성이 없고 되돌리기도 실패할 수 있으므로, 실패했을 때는 차단이 안전 경계이다.
 
-배포 후보를 등록한 경로는 `control.services.contracts.request_deployment`를 같은 트랜잭션에서 호출한다. 이 함수는 승인 전 서버 차단과 재승인 요청을 기록한다. 재검사 증거의 `inputs.contract_sha256`은 `SHA-256(JCS({tools: {도구명: 후보 sha256}, deployment: 배포 후보 sha256 또는 null}))`이다. 관측 작업은 수용검증 클라이언트의 `test_tools_list({server_id})`를 사용한다. 이 연결이 없거나 관측이 실패하면 관측 시각을 갱신하지 않는다.
+배포 후보를 등록하면 승인 전 서버 차단과 재승인 요청이 같은 트랜잭션에서 기록된다. 재검사 증거의 `inputs.contract_sha256`은 `SHA-256(JCS({tools: {도구명: 후보 sha256}, deployment: 배포 후보 sha256 또는 null}))`이다. 관측 작업은 수용검증 클라이언트의 업스트림 시험 목록(`test_tools_list`)을 쓰며, 이 연결이 없거나 관측이 실패하면 관측 시각을 갱신하지 않는다.
 
 ## 정책 번들 내용 대조
 
