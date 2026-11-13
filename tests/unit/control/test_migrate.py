@@ -28,6 +28,8 @@ def test_applies_once_and_is_a_no_op_the_second_time(fresh_db):
             "025_approval_recertification",
             "026_plugin_oauth_scopes_read",
             "027_decision_time_index",
+            "028_endpoint_inventory",
+            "029_supply_chain",
         ]
 
 
@@ -57,6 +59,8 @@ def test_first_run_on_an_empty_database_applies_everything(fresh_db):
                 "025_approval_recertification",
                 "026_plugin_oauth_scopes_read",
                 "027_decision_time_index",
+                "028_endpoint_inventory",
+                "029_supply_chain",
             ]
             assert conn.execute("SELECT count(*) FROM mint.orgs").fetchone()[0] == 0
     finally:
@@ -119,6 +123,8 @@ def test_a_database_with_only_the_first_migration_is_upgraded(fresh_db):
                 "025_approval_recertification",
                 "026_plugin_oauth_scopes_read",
                 "027_decision_time_index",
+                "028_endpoint_inventory",
+                "029_supply_chain",
             ]
             assert conn.execute("SELECT count(*) FROM mint.intakes").fetchone()[0] == 0
             row = conn.execute(
@@ -195,7 +201,8 @@ def test_open_approvals_without_a_contract_are_closed_on_managed_servers_only(fr
                 "022_approval_target_binding", "023_plugin_condition_defaults",
                 "024_stage3_hardening", "025_approval_recertification",
                 "026_plugin_oauth_scopes_read",
-                "027_decision_time_index"]
+                "027_decision_time_index", "028_endpoint_inventory",
+                "029_supply_chain"]
             rows = conn.execute(
                 "SELECT server_id, status, count(*) FROM mint.call_approvals"
                 " GROUP BY server_id, status ORDER BY 1, 2"

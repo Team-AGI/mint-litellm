@@ -418,6 +418,7 @@ def _approve(run: Run) -> None:
             scan_result=not a.no_result_scan,
             response_scan=a.response_scan,
             allow_input_secrets=a.allow_input_secret,
+            allow_token_forward=a.allow_token_forward,
         ),
     )
     _created(run, approval_id)
@@ -535,9 +536,14 @@ def _server_register(run: Run) -> None:
 
 def _server_register_local(run: Run) -> None:
     try:
-        contract = ExecContract.model_validate_json(Path(run.args.contract).read_bytes())
-    except (OSError, ValueError) as exc:
-        raise ControlError(f"실행 계약 파일을 읽을 수 없습니다: {exc}") from exc
+        document = json.loads(Path(run.args.contract).read_bytes())
+        declared = [{"path": p, "mode": "ro"} for p in run.args.read or ()]
+        declared += [{"path": p, "mode": "rw"} for p in run.args.read_write or ()]
+        if declared:  # 플래그로 준 선언은 파일의 선언에 더한다(같은 경로는 거부된다)
+            document["file_access"] = [*document.get("file_access", ()), *declared]
+        contract = ExecContract.model_validate(document)
+    except (OSError, ValueError, AttributeError) as exc:
+        raise ControlError(f"실행 계약을 읽을 수 없습니다: {exc}") from exc
     server_service.register_local(run.context(), run.args.server_id, contract)
 
 
@@ -916,6 +922,9 @@ ARGUMENTS: dict[str, list[Any]] = {
     "server register-local": [
         _SERVER_ID,
         _a("--contract", required=True, help="실행 계약 JSON 파일 경로"),
+        _a("--read", action="append", metavar="PATH", help="서버가 읽을 경로 선언(반복 가능)"),
+        _a("--read-write", action="append", metavar="PATH",
+           help="서버가 읽고 쓸 경로 선언(반복 가능)"),
     ],
     "server suspend": [_SERVER_ID],
     "server resume": [_SERVER_ID],
@@ -957,6 +966,9 @@ ARGUMENTS: dict[str, list[Any]] = {
         _a("--allow-input-secret", action="append",
            help="인자에서 비밀을 찾아도 이 승인의 도구에 한해 허용할 탐지 종류(반복 가능). "
            "기본은 인자에 비밀이 있으면 막는다"),
+        _a("--allow-token-forward", action="store_true",
+           help="호출자 토큰을 업스트림에 그대로 전달하는 서버(true_passthrough·oauth_delegate)의 "
+           "호출을 이 승인에서 허용한다. 기본은 막는다"),
         _a("--confirm-tool", action="append",
            help="호출 때 본인 확인을 요구할 도구(반복 가능, 승인 도구 안에 있어야 한다)"),
         _a("--confirm-purpose", help="본인 확인의 목적(--confirm-tool과 함께)"),

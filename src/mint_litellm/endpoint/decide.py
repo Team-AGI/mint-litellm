@@ -60,6 +60,25 @@ class ResultBody(BaseModel):
     size_bytes: int | None = Field(default=None, ge=0, le=2**40)
 
 
+class ProcessItem(BaseModel):
+    """단말에서 실행 중인 묶음 실행기 프로세스(서버 이름별 개수)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    server: str = Field(min_length=1, max_length=128)
+    count: int = Field(ge=1, le=100000)
+
+
+class AutostartItem(BaseModel):
+    """MCP 실행기·서버를 가리키는 자동 시작 항목. ``server``는 항목이 시작하는 서버 이름이다."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["systemd", "autostart", "cron", "run_key", "scheduled_task", "startup_folder"]
+    name: str = Field(min_length=1, max_length=256)
+    server: str | None = Field(default=None, min_length=1, max_length=128)
+
+
 class ReportBody(BaseModel):
     """설치 묶음이 설치·제거를 마치고 보내는 상태 보고. 파일 경로나 키는 받지 않는다."""
 
@@ -72,6 +91,9 @@ class ReportBody(BaseModel):
     mcp_servers: list[Annotated[str, Field(min_length=1, max_length=128)]] = Field(
         default_factory=list, max_length=64
     )
+    # 이전 묶음은 보내지 않는다(None = 보고 없음). 단말의 주장이며 MINT가 관측한 값이 아니다.
+    processes: list[ProcessItem] | None = Field(default=None, max_length=64)
+    autostart: list[AutostartItem] | None = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def _mode_matches_action(self) -> ReportBody:
@@ -256,6 +278,8 @@ def make_router(
                 kit_version=body.kit_version,
                 claude_version=body.claude_version,
                 mcp_servers=body.mcp_servers,
+                processes=_dump(body.processes),
+                autostart=_dump(body.autostart),
             )
         except Exception as exc:
             raise HTTPException(status_code=503, detail="install store is not ready") from exc
@@ -264,6 +288,10 @@ def make_router(
         return {"recorded": True}
 
     return router
+
+
+def _dump(items: list[Any] | None) -> list[dict[str, Any]] | None:
+    return None if items is None else [item.model_dump() for item in items]
 
 
 def install(app: Any, router: APIRouter) -> bool:

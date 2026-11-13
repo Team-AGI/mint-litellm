@@ -109,3 +109,12 @@ def test_the_cache_sharing_check_counts_workers_as_well_as_replicas():
 
     assert ControlConfig.from_env({}).replicas == 1
     assert ControlConfig.from_env({"MINT_REPLICAS": "2", "MINT_LITELLM_WORKERS": "3"}).replicas == 6
+
+
+def test_the_vulnerability_feed_defaults_to_public_osv_and_takes_a_mirror():
+    s = Stage2Settings.from_env(BASE)
+    assert (s.vuln_feed_url, s.vuln_scan_seconds) == ("https://api.osv.dev", 900)
+    s = Stage2Settings.from_env({**BASE, "MINT_VULN_FEED_URL": "http://mirror.internal:8080/"})
+    assert s.vuln_feed_url == "http://mirror.internal:8080"
+    with pytest.raises(ControlError, match="MINT_VULN_FEED_URL"):
+        Stage2Settings.from_env({**BASE, "MINT_VULN_FEED_URL": "ftp://x.example"})

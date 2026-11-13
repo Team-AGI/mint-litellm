@@ -103,6 +103,10 @@ def test_every_settings_row_is_reported(healthy):
         (lambda c: c["mcp_servers"]["everything"].update(
             auth_type="oauth2", issuer="https://i.test"),
          "mcp_servers.<이름>.oauth_identity_binding.mode"),
+        (lambda c: c["mcp_servers"]["everything"].update(
+            auth_type="oauth2", issuer="https://i.test",
+            oauth_identity_binding={"mode": "enforce"}),
+         "mcp_servers.<이름>.upstream_resource"),
         (lambda c: c["mcp_servers"].update(
             second={**c["mcp_servers"]["everything"], "server_id": "ctl-second",
                     "authentication_token": "os.environ/SHARED"},
@@ -541,3 +545,25 @@ def test_registered_local_servers_are_not_compared_with_the_registry(healthy):
     clash = {**local, "server_id": "ctl-everything"}
     assert Level.FAIL in levels(run(good_config(), healthy, registered_servers=[clash]))[
         "등록 서버의 계약 값"]
+
+
+def test_a_token_audience_setting_or_an_explicit_opt_out_satisfies_the_resource_row(healthy):
+    for value in ("auto", "https://u.test/mcp", ""):
+        config = good_config()
+        config["mcp_servers"]["everything"].update(
+            auth_type="oauth2", issuer="https://i.test",
+            oauth_identity_binding={"mode": "enforce"}, upstream_resource=value)
+        assert Level.OK in levels(run(config, healthy))["mcp_servers.<이름>.upstream_resource"]
+
+
+@pytest.mark.parametrize(
+    "update",
+    [{"auth_type": "true_passthrough"}, {"auth_type": "oauth_delegate"},
+     {"extra_headers": ["Authorization"]}, {"extra_headers": ["X-Api-Key"]}],
+)
+def test_a_server_that_forwards_the_callers_token_is_warned_about(healthy, update):
+    config = good_config()
+    config["mcp_servers"]["everything"].update(issuer="https://i.test", **update)
+    found = levels(run(config, healthy))["mcp_servers.<이름>.auth_type"]
+    assert Level.WARN in found and Level.FAIL not in found
+    assert Level.OK in levels(run(good_config(), healthy))["mcp_servers.<이름>.auth_type"]

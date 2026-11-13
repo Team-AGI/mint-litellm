@@ -26,6 +26,7 @@ from mint_litellm.types.reuse_policy import (
     DISCOVERY_AUTH,
     ServerFacts,
     credential_digest,
+    forwards_client_token,
     header_credential_digests,
     ssl_verify_on,
 )
@@ -370,6 +371,9 @@ class RegistryEntry:
     max_concurrent: int | None = None
     in_database: bool = False
     header_credentials: tuple[str, ...] = ()
+    gateway_oauth: bool = False
+    upstream_resource: str | None = None
+    forwards_token: bool = False
 
     def facts(self) -> ServerFacts:
         return ServerFacts(
@@ -384,6 +388,9 @@ class RegistryEntry:
             self.max_concurrent,
             self.header_credentials,
             self.in_database,
+            self.gateway_oauth,
+            self.upstream_resource,
+            self.forwards_token,
         )
 
 
@@ -419,6 +426,14 @@ def registry_entries(*, manager: Any = None) -> list[RegistryEntry]:
             max_concurrent=getattr(server, "max_concurrent_requests", None),
             in_database=server.server_id in database_ids,
             header_credentials=header_credential_digests(getattr(server, "static_headers", None)),
+            gateway_oauth=normalize_auth_type(server.auth_type) == "oauth2"
+            and getattr(server, "delegate_auth_to_upstream", False) is not True,
+            upstream_resource=getattr(server, "upstream_resource", None),
+            forwards_token=forwards_client_token(
+                normalize_auth_type(server.auth_type),
+                getattr(server, "delegate_auth_to_upstream", False),
+                getattr(server, "extra_headers", None),
+            ),
         )
         for server in mgr.get_registry().values()
     ]

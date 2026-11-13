@@ -112,3 +112,34 @@ mcp_servers:
       audiences: [it-client]
     rpm: 600
     max_concurrent_requests: 8
+  # 토큰 대상: upstream_resource를 auto(서버 주소)나 다른 값으로 두면 인가 요청이 resource를 싣는다.
+  rt_oauth_resource:
+    server_id: e200000000000000000000000000000d
+    url: http://counting-proxy:8080/a/mcp
+    transport: http
+    auth_type: oauth2
+    oauth2_flow: authorization_code
+    client_id: it-client
+    issuer: http://counting-proxy:8080/idp
+    upstream_resource: auto
+    rpm: 600
+    max_concurrent_requests: 8
+  rt_oauth_resource_other:
+    server_id: e200000000000000000000000000000e
+    url: http://counting-proxy:8080/a/mcp
+    transport: http
+    auth_type: oauth2
+    oauth2_flow: authorization_code
+    client_id: it-client
+    issuer: http://counting-proxy:8080/idp
+    upstream_resource: http://counting-proxy:8080/other/mcp
+    rpm: 600
+    max_concurrent_requests: 8
+  # 토큰 전달: 호출자의 Authorization을 그대로 업스트림에 넘기는 클라이언트 전달 서버.
+  rt_forward:
+    server_id: e200000000000000000000000000000f
+    url: http://counting-proxy:8080/a/mcp
+    transport: http
+    auth_type: true_passthrough
+    rpm: 600
+    max_concurrent_requests: 8

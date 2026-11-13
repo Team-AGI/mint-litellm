@@ -58,7 +58,7 @@ def server(conn: psycopg.Connection, instance: str, server_id: str) -> dict | No
         conn,
         "SELECT server_id, status, url_sha256, transport, auth_type, registered_by, state_version,"
         " identity_kind, exec_contract_sha256, contract_status, deployment_drift,"
-        " deployment_drift_fields, last_observed_at"
+        " deployment_drift_fields, last_observed_at, vuln_blocked_at"
         " FROM mint.servers WHERE instance_id = %s AND server_id = %s",
         (instance, server_id),
     )
@@ -70,6 +70,35 @@ def server(conn: psycopg.Connection, instance: str, server_id: str) -> dict | No
         " WHERE instance_id = %s AND kind = 'contract_drift' AND status <> 'resolved'"
         " AND subject ->> 'kind' = 'exec' AND subject ->> 'server_id' = %s"
         " ORDER BY last_at DESC LIMIT 1",
+        (instance, server_id),
+    )
+    declared = None if row["identity_kind"] != "stdio" else fetchone(
+        conn,
+        "SELECT payload -> 'exec_contract' -> 'file_access' AS access FROM mint.events"
+        " WHERE instance_id = %s AND kind = 'server_registered'"
+        " AND payload ->> 'server_id' = %s AND payload ->> 'exec_contract_sha256' = %s"
+        " ORDER BY inserted_at DESC LIMIT 1",
+        (instance, server_id, row["exec_contract_sha256"]),
+    )
+    row["file_access"] = (declared or {}).get("access") or []
+    row["packages"] = fetchall(
+        conn,
+        "SELECT p.ecosystem, p.name, p.version, p.pinned, p.registry FROM mint.servers s"
+        " JOIN mint.server_packages p ON p.instance_id = s.instance_id"
+        " AND p.server_id = s.server_id AND p.exec_contract_sha256 = s.exec_contract_sha256"
+        " WHERE s.instance_id = %s AND s.server_id = %s ORDER BY p.ecosystem, p.name",
+        (instance, server_id),
+    )
+    row["vulns"] = fetchall(
+        conn,
+        "SELECT v.ecosystem, v.name, v.version, v.vuln_id, v.severity, v.cvss, v.exploited,"
+        " v.first_seen_at, v.first_seen_at + interval '48 hours' AS deadline_at"
+        " FROM mint.servers s JOIN mint.server_packages p"
+        " ON p.instance_id = s.instance_id AND p.server_id = s.server_id"
+        " AND p.exec_contract_sha256 = s.exec_contract_sha256 JOIN mint.package_vulns v"
+        " ON v.instance_id = p.instance_id AND v.ecosystem = p.ecosystem AND v.name = p.name"
+        " AND v.version = p.version AND v.cleared_at IS NULL"
+        " WHERE s.instance_id = %s AND s.server_id = %s ORDER BY v.first_seen_at",
         (instance, server_id),
     )
     row["relations"] = relations(conn, instance, server_id)

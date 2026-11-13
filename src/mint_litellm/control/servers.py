@@ -8,7 +8,7 @@ LiteLLM 레지스트리 없이 실행 계약 해시만 MINT 표에 등록한다.
 from collections.abc import Mapping
 from typing import Any
 
-from mint_litellm.control import alerts, exec_drift
+from mint_litellm.control import alerts, exec_drift, packages
 from mint_litellm.control.context import Context
 from mint_litellm.control.db.connection import fetchone
 from mint_litellm.control.errors import ControlError, not_found
@@ -138,14 +138,40 @@ def _exec_drift(ctx: Context, server_id: str, old_sha: str, contract: ExecContra
         return {}  # 이전 계약 원문을 찾지 못하면 비교하지 못한다(해시 결속으로는 이미 차단된다)
     result = exec_drift.classify(previous["contract"], contract.document())
     widened = exec_drift.widened_axes(result)
+    changed = packages.changes(previous["contract"], contract.document())
     subject = {
         "kind": "exec", "server_id": server_id, "axes": result, "widened": widened,
-        "summary": exec_drift.summary(result),
+        "summary": exec_drift.summary(result, changed), "package_changes": changed,
     }
     alerts.raise_alert(
         ctx.conn, ctx.instance_id, kind="contract_drift", severity="high" if widened else "low",
         dedup_key=f"contract_drift:exec:{server_id}:{contract.sha256()}", subject=subject)
-    return {"exec_drift": {"axes": result, "widened": widened}}
+    return {"exec_drift": {"axes": result, "widened": widened, "package_changes": changed}}
+
+
+def _record_packages(ctx: Context, server_id: str, contract: ExecContract) -> None:
+    """계약의 패키지(제공처·이름·버전)를 적고, 버전이 고정되지 않은 것이 있으면 경보를 연다."""
+    found = packages.extract(contract.document())
+    for p in found:
+        ctx.conn.execute(
+            "INSERT INTO mint.server_packages (id, instance_id, server_id, exec_contract_sha256,"
+            " ecosystem, name, version, pinned, registry) VALUES (%s, %s, %s, %s, %s, %s, %s, %s,"
+            " %s) ON CONFLICT DO NOTHING",
+            (new_uuid7(), ctx.instance_id, server_id, contract.sha256(), p.ecosystem, p.name,
+             p.version, p.pinned, p.registry),
+        )
+    loose = packages.unpinned(found)
+    key = f"package_unpinned:{server_id}"
+    if loose:
+        alerts.resolve(ctx.conn, ctx.instance_id, key)  # 계약이 바뀌었으면 새 내용으로 다시 연다
+        alerts.raise_alert(
+            ctx.conn, ctx.instance_id, kind="package_unpinned", severity="medium", dedup_key=key,
+            subject={"server_id": server_id, "packages": [
+                {"ecosystem": p.ecosystem, "name": p.name, "version": p.version,
+                 "registry": p.registry} for p in loose]},
+        )
+    else:
+        alerts.resolve(ctx.conn, ctx.instance_id, key)
 
 
 def register_local(ctx: Context, server_id: str, contract: ExecContract) -> None:
@@ -186,6 +212,7 @@ def register_local(ctx: Context, server_id: str, contract: ExecContract) -> None
         )
         ctx.emit(EventKind.SERVER_REGISTERED, existing["id"], row["state_version"],
                  {**payload, "updated": True, **drift})
+        _record_packages(ctx, server_id, contract)
         return
     row_id = new_uuid7()
     row = fetchone(
@@ -197,6 +224,7 @@ def register_local(ctx: Context, server_id: str, contract: ExecContract) -> None
         (row_id, ctx.instance_id, server_id, digest, version, ctx.operator.name),
     )
     ctx.emit(EventKind.SERVER_REGISTERED, row_id, row["state_version"], payload)
+    _record_packages(ctx, server_id, contract)
 
 
 def _transition(ctx: Context, server_id: str, source: str, target: str, kind: EventKind) -> None:

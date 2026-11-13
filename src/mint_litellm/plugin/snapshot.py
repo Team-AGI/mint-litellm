@@ -279,6 +279,7 @@ class ServerRow:
     last_observed_at: datetime | None = None
     deployment_drift: bool = False
     pin_blocked: bool = False  # 고정 불일치·해제 미완료 표지(관측 모드로 풀 수 없다)
+    vuln_blocked: bool = False  # 치명 취약점 조치 기한이 지난 서버(관측 모드로 풀 수 없다)
     approved_contracts: int | None = None  # 승인 계약 수. None은 알 수 없음(1단계 스키마)
     identity_kind: str = "remote"
     exec_contract_sha256: str | None = None
@@ -464,6 +465,7 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
             last_observed_at=_maybe_time(server.get("last_observed_at")),
             deployment_drift=server.get("deployment_drift", False),
             pin_blocked="pin_reapproval" in (server.get("deployment_drift_fields") or ()),
+            vuln_blocked=server.get("vuln_blocked_at") is not None,
             approved_contracts=doc.get("approved_contracts"),
             identity_kind=server.get("identity_kind", "remote"),
             exec_contract_sha256=server.get("exec_contract_sha256"),
@@ -921,6 +923,8 @@ class PluginDatabase:
         kit_version: str,
         claude_version: str | None,
         mcp_servers: Sequence[str],
+        processes: Sequence[dict[str, Any]] | None = None,
+        autostart: Sequence[dict[str, Any]] | None = None,
     ) -> bool:
         """설치 묶음에 발급한 키의 설치 상태 보고를 남긴다. 해제되었거나 발급하지 않은 키면 거짓."""
         from psycopg.types.json import Jsonb
@@ -928,10 +932,12 @@ class PluginDatabase:
         async def write(conn: Any) -> Any:
             cursor = await conn.execute(
                 "UPDATE mint.endpoint_installs SET install_mode = %s, kit_version = %s,"
-                " claude_version = %s, mcp_servers = %s, reported_at = clock_timestamp()"
+                " claude_version = %s, mcp_servers = %s, processes = %s, autostart = %s,"
+                " reported_at = clock_timestamp()"
                 " WHERE instance_id = %s AND key_token = %s AND revoked_at IS NULL",
-                (mode, kit_version, claude_version, Jsonb(list(mcp_servers)), instance_id,
-                 key_token),
+                (mode, kit_version, claude_version, Jsonb(list(mcp_servers)),
+                 None if processes is None else Jsonb(list(processes)),
+                 None if autostart is None else Jsonb(list(autostart)), instance_id, key_token),
             )
             return cursor.rowcount
 

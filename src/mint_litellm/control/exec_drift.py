@@ -1,14 +1,17 @@
 """승인된 실행 계약과 새로 보고된 실행 계약의 권한 변화를 파일·실행·네트워크 축으로 가른다.
 
-계약이 직접 담는 값은 실행 파일·인자·작업 디렉터리·환경 변수·비밀 참조뿐이다. 경로로 보이는
-인자·환경 값은 파일, 주소(``://``)로 보이는 인자·환경 값은 네트워크, 나머지는 실행으로 본다.
-계약에 선언되지 않은 실제 파일·네트워크 접근은 알 수 없다.
+계약이 직접 담는 값은 실행 파일·인자·작업 디렉터리·환경 변수·비밀 참조·선언한 파일 접근뿐이다.
+경로로 보이는 인자·환경 값은 파일, 주소(``://``)로 보이는 인자·환경 값은 네트워크,
+나머지는 실행으로 본다.
+선언한 파일 접근은 새 경로나 읽기에서 읽기·쓰기로의 변경이 확대이다. 계약에 선언되지 않은 실제
+파일·네트워크 접근은 알 수 없다.
 """
 
 import re
 from typing import Any
 
 AXES = ("file", "exec", "network")
+MODE_LABEL = {"ro": "읽기", "rw": "읽기·쓰기"}
 AXIS_LABEL = {"file": "파일 접근", "exec": "실행", "network": "네트워크"}
 _URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"]+")
 _PATH = re.compile(r"^(/|[A-Za-z]:[\\])")
@@ -33,6 +36,11 @@ def items(doc: dict[str, Any]) -> dict[str, set[str]]:
         axes["exec"].add(f"스크립트 내용 {doc['script_sha256']}")
     # 작업 디렉터리를 비워 두면 비교하지 않으므로 지정이 없는 쪽이 더 넓다.
     axes["file"].add(f"작업 디렉터리 {doc.get('cwd') or '제한 없음'}")
+    for entry in doc.get("file_access") or ():
+        # 읽기·쓰기는 읽기를 포함하므로 항목을 하나 더 가진다(읽기에서 읽기·쓰기가 되면 더해진다).
+        axes["file"].add(f"선언 {entry['path']} ({MODE_LABEL['ro']})")
+        if entry["mode"] == "rw":
+            axes["file"].add(f"선언 {entry['path']} ({MODE_LABEL['rw']})")
     for arg in doc.get("argv") or ():
         _place(axes, arg, "인자 ")
     for key, value in sorted((doc.get("env") or {}).items()):
@@ -57,9 +65,9 @@ def widened_axes(result: dict[str, dict[str, Any]]) -> list[str]:
     return [a for a in AXES if result[a]["verdict"] == "widened"]
 
 
-def summary(result: dict[str, dict[str, Any]]) -> str:
-    """경보·콘솔에 쓰는 한국어 요약. 확대된 축은 더해진 항목을 나열한다."""
-    parts = []
+def summary(result: dict[str, dict[str, Any]], package_changes: list[str] | tuple = ()) -> str:
+    """경보·콘솔에 쓰는 한국어 요약. 패키지 변화를 먼저 적고 확대된 축은 더해진 항목을 나열한다."""
+    parts = [f"패키지 변경: {', '.join(package_changes)}"] if package_changes else []
     for axis in AXES:
         r = result[axis]
         if r["verdict"] == "widened":

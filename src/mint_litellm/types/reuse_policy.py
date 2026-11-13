@@ -18,6 +18,11 @@ DEFAULT_TOOL_TIMEOUT_SECONDS = 60.0
 DEFAULT_SERVER_RPM = 600
 DEFAULT_SERVER_CONCURRENCY = 8
 
+# 호출자의 토큰을 그대로 업스트림에 전달하는 인증 방식(LiteLLM의 클라이언트 전달 모드)
+FORWARDING_AUTH = frozenset({"true_passthrough", "oauth_delegate"})
+# 승인 조건: 이 서버가 호출자 토큰을 업스트림에 전달하도록 승인에서 명시적으로 허용한다.
+ALLOW_TOKEN_FORWARD = "allow_token_forward"
+
 # 인증 서버를 발견해 쓰는 인증 방식
 DISCOVERY_AUTH = frozenset({"oauth2", "true_passthrough", "oauth_delegate"})
 
@@ -27,6 +32,8 @@ KEY_URL_HOSTS = "user_url_allowed_hosts"
 KEY_REDIRECT = "OAuth 리다이렉트 출처"
 KEY_ISSUER = "mcp_servers.<이름>.issuer"
 KEY_BINDING = "mcp_servers.<이름>.oauth_identity_binding.mode"
+KEY_RESOURCE = "mcp_servers.<이름>.upstream_resource"
+KEY_FORWARD = "mcp_servers.<이름>.auth_type"
 KEY_TIMEOUT = "mcp_servers.<이름>.timeout"
 KEY_CREDENTIAL = "mcp_servers.<이름>.authentication_token"
 KEY_RPM = "mcp_servers.<이름>.rpm"
@@ -50,6 +57,11 @@ class ServerFacts:
     header_credentials: tuple[str, ...] = ()
     # LiteLLM DB에 등록된 서버. 한도는 MINT가 승인·동기화 때 채우므로 기동을 막지 않는다.
     in_database: bool = False
+    # 게이트웨이가 업스트림 토큰을 직접 받아 두는 OAuth 서버(RFC 8707 resource를 보내야 하는 서버)
+    gateway_oauth: bool = False
+    upstream_resource: str | None = None
+    # 호출자의 토큰(Authorization 등)을 업스트림에 그대로 전달하도록 설정된 서버
+    forwards_token: bool = False
 
 
 @dataclass(frozen=True)
@@ -88,6 +100,16 @@ def header_credential_digests(headers: object) -> tuple[str, ...]:
         if isinstance(value, str) and any(w in str(name).lower() for w in _CREDENTIAL_HEADER)
     )
     return tuple(d for d in found if d)
+
+
+def forwards_client_token(auth_type: str, delegate: object, extra_headers: object) -> bool:
+    """호출자 토큰이 업스트림으로 가는 구성인지: 클라이언트 전달 인증 방식, 구형 위임 설정, 또는
+    호출자 요청에서 자격 헤더(Authorization 등)를 그대로 넘기도록 적은 ``extra_headers``."""
+    if auth_type in FORWARDING_AUTH or delegate is True:
+        return True
+    names = extra_headers if isinstance(extra_headers, (list, tuple)) else ()
+    return any(isinstance(n, str) and any(w in n.lower() for w in _CREDENTIAL_HEADER)
+               for n in names)
 
 
 def _strip_scheme(value: str) -> str:
@@ -144,6 +166,13 @@ def reuse_violations(
     if unbound:
         add(KEY_BINDING, "enforce가 아닌 사용자별 OAuth 서버: " + ", ".join(unbound[:5]))
 
+    no_resource = [
+        s.name for s in servers if s.gateway_oauth and s.upstream_resource is None
+        and not s.in_database
+    ]
+    if no_resource:
+        add(KEY_RESOURCE, "upstream_resource가 없는 OAuth 서버: " + ", ".join(no_resource[:5]))
+
     entries = [e for e in str(env.get("MCP_TRUSTED_REDIRECT_ORIGINS", "")).split(",") if e.strip()]
     wide = [e.strip() for e in entries if _origin_problem(e)]
     if wide:
@@ -178,3 +207,16 @@ def reuse_violations(
     if shared:
         add(KEY_CREDENTIAL, "한 정적 자격을 함께 쓰는 서버: " + "; ".join(shared[:3]))
     return found
+
+
+def forwarding_violation(servers: Sequence[ServerFacts]) -> Violation | None:
+    """호출자 토큰을 업스트림에 전달하도록 설정된 서버. 승인 조건을 볼 수 없는 설정 점검용이며,
+    실제 호출은 플러그인이 승인 조건 ``allow_token_forward`` 없이는 막는다."""
+    names = [s.name for s in servers if s.forwards_token]
+    if not names:
+        return None
+    return Violation(
+        KEY_FORWARD,
+        "호출자 토큰을 업스트림에 전달하는 서버(승인 조건 allow_token_forward가 없으면 호출을 "
+        "막는다): " + ", ".join(names[:5]),
+    )

@@ -63,6 +63,8 @@ def reports(monkeypatch):
     monkeypatch.setattr(kit_module, "claude_version", lambda home: None)
     monkeypatch.setattr(kit_module, "codex_version", lambda home: None)
     monkeypatch.setattr(kit_module, "find_claude", lambda home: None)
+    monkeypatch.setattr(kit_module, "scan_processes", lambda windows: [])
+    monkeypatch.setattr(kit_module, "scan_autostart", lambda home, windows, user: [])
     return sent
 
 
@@ -121,6 +123,7 @@ def test_the_reports_fit_what_the_server_accepts(folder, tmp_path, reports):
     assert removed["mode"] == "none" and removed["mcp_servers"] == []
     for payload in (installed, removed):
         ReportBody.model_validate(payload)
+        assert payload["processes"] == [] and payload["autostart"] == []
     assert installed["kit_version"] == kit_version()
 
 

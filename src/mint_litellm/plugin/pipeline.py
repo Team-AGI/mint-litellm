@@ -74,6 +74,7 @@ from mint_litellm.types.identity import (
 )
 from mint_litellm.types.ids import new_uuid7
 from mint_litellm.types.reason_codes import ContractDriftKind, Reason
+from mint_litellm.types.reuse_policy import ALLOW_TOKEN_FORWARD, FORWARDING_AUTH
 from mint_litellm.types.settings import Mode, ObservationSettings, effective_mode
 from mint_litellm.types.target import (
     READ,
@@ -315,6 +316,18 @@ def denial_and_approval(
     return ApprovalSelection([StageResult.finding(Reason.APPROVAL_ABSENT)], None)
 
 
+def token_forward_result(
+    resolved: ResolvedServer, selected: ApprovalRow | None
+) -> StageResult | None:
+    """호출자 토큰을 업스트림에 그대로 전달하는 서버(POL-R-06)는 선택된 승인이 조건
+    ``allow_token_forward``를 true로 적었을 때만 호출을 보낸다. 아니면 닫는다."""
+    if resolved.auth_type not in FORWARDING_AUTH:
+        return None
+    if selected is not None and selected.conditions.get(ALLOW_TOKEN_FORWARD) is True:
+        return None
+    return StageResult.stop(Reason.TOKEN_FORWARD_FORBIDDEN, detail=resolved.auth_type)
+
+
 def control_listing_negative(
     snapshot: Snapshot, principal: Principal, resolved: ResolvedServer, tool: str
 ) -> StageResult | None:
@@ -361,6 +374,14 @@ def bound_to_current_contract(snapshot: Snapshot, tool: str, bound: str | None) 
         return bound is None
     contract = current_contract(snapshot, tool)
     return contract is not None and bound == contract.id
+
+
+def vuln_result(snapshot: Snapshot) -> StageResult | None:
+    """치명 취약점 조치 기한이 지난 서버의 호출은 계약 관리 여부와 무관하게 막는다(닫힌 쪽)."""
+    server = snapshot.server
+    if server is not None and server.vuln_blocked:
+        return StageResult.finding(Reason.CONTRACT_DRIFT, ContractDriftKind.VULN_OVERDUE.value)
+    return None
 
 
 def contract_result(
@@ -1184,6 +1205,11 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
     run.selected = selection.selected
     if stages.stopped:
         return
+    if req.operation is OperationType.TOOL_CALL:
+        forward = token_forward_result(resolved, run.selected)
+        if forward is not None:
+            stages.add(Stage.DENIAL_APPROVAL, forward)
+            return
 
     if req.operation is OperationType.RUNTIME_DISCOVERY and (
         snapshot.server is None or snapshot.server.contract_status != "managed"
@@ -1191,6 +1217,9 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         return
     run.current = Stage.CONTRACT
     stages.add(Stage.CONTRACT, contract_result(snapshot, tool, config.observe_seconds, resolved))
+    overdue = vuln_result(snapshot)
+    if overdue is not None:
+        stages.add(Stage.CONTRACT, overdue)
     if req.operation is OperationType.RUNTIME_DISCOVERY:
         return
     unknown_keys = input_keys_unknown(snapshot, tool, run.selected)
