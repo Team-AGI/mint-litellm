@@ -284,6 +284,15 @@ def settings(conn: psycopg.Connection, instance: str) -> dict | None:
 # --- 원장 -----------------------------------------------------------------------------------
 
 
+def parse_ref(text: str) -> tuple[UUID, int | None]:
+    """차단 응답의 판정 참조(``<호출 식별자>`` 또는 ``<호출 식별자>:<시도 번호>``)를 푼다."""
+    head, _, tail = text.strip().partition(":")
+    attempt = int(tail) if tail else None
+    if attempt is not None and attempt < 1:
+        raise ValueError("attempt")
+    return UUID(head), attempt
+
+
 def _ledger_where(
     instance: str,
     *,
@@ -293,10 +302,21 @@ def _ledger_where(
     actor: str | None,
     server_id: str | None,
     result: str | None,
+    ref: str | None = None,
 ) -> tuple[str, list[Any]]:
-    since = since or datetime.now(UTC) - timedelta(days=LEDGER_DEFAULT_DAYS)
-    clauses = ["instance_id = %s", "inserted_at >= %s"]
-    params: list[Any] = [instance, since]
+    clauses = ["instance_id = %s"]
+    params: list[Any] = [instance]
+    # 판정 참조로 찾을 때는 기본 조회 기간을 두지 않는다.
+    if since is not None or ref is None:
+        clauses.append("inserted_at >= %s")
+        params.append(since or datetime.now(UTC) - timedelta(days=LEDGER_DEFAULT_DAYS))
+    if ref is not None:
+        invocation, attempt = parse_ref(ref)
+        clauses.append("invocation_id = %s")
+        params.append(invocation)
+        if attempt is not None:
+            clauses.append("attempt_id = %s")
+            params.append(attempt)
     for clause, value in (
         ("inserted_at < %s", until),
         ("kind = %s", kind),
@@ -322,19 +342,20 @@ def ledger(
     actor: str | None = None,
     server_id: str | None = None,
     result: str | None = None,
+    ref: str | None = None,
     page: int = 1,
     limit: int | None = None,
 ) -> list[dict]:
     where, params = _ledger_where(
         instance, since=since, until=until, kind=kind, actor=actor, server_id=server_id,
-        result=result,
+        result=result, ref=ref,
     )
     size, offset = (limit, 0) if limit is not None else _page(page)
     return fetchall(
         conn,
         "SELECT event_id, inserted_at, kind, source_key, actor,"
         " COALESCE(payload->>'resolved_server_id', payload->>'server_id') AS server_id,"
-        " payload->>'enforced_action' AS result, payload"
+        " payload->>'enforced_action' AS result, payload->>'outcome' AS outcome, payload"
         f" FROM mint.events WHERE {where} ORDER BY inserted_at DESC, event_id DESC"
         " LIMIT %s OFFSET %s",
         (*params, size, offset),

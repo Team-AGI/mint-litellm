@@ -410,6 +410,7 @@ def ledger(
     actor_name: str = Query("", alias="actor"),
     server_id: str = "",
     result: str = "",
+    ref: str = "",
     page: int = 1,
     actor: Actor = Depends(page_actor),
 ):
@@ -431,13 +432,23 @@ def ledger(
         error = "날짜는 연-월-일 형식으로 입력하십시오."
     first = datetime.now(zone) - timedelta(days=reads.LEDGER_DEFAULT_DAYS)
     start = begin or first.replace(hour=0, minute=0, second=0, microsecond=0)
+    ref = ref.strip()
+    try:
+        if ref:
+            reads.parse_ref(ref)
+    except ValueError:
+        ref = ""
+        error = "판정 참조 형식이 올바르지 않습니다."
+    # 판정 참조로 찾을 때 기간을 바꾸지 않았다면 기간 제한 없이 찾는다.
+    unbounded = bool(ref) and (not begin or since == first.strftime("%Y-%m-%d"))
     rows = reads.ledger(
-        actor.conn, actor.instance, since=start, until=finish, kind=kind or None,
-        actor=actor_name or None, server_id=server_id or None, result=result or None, page=page,
+        actor.conn, actor.instance, since=None if unbounded else start, until=finish,
+        kind=kind or None, actor=actor_name or None, server_id=server_id or None,
+        result=result or None, ref=ref or None, page=page,
     )
     query = {
         "since": since, "until": until, "kind": kind, "actor": actor_name, "server_id": server_id,
-        "result": result,
+        "result": result, "ref": ref,
     }
     ctx = {
         "rows": rows,

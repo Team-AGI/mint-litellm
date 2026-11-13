@@ -218,6 +218,18 @@ RESULT = {
     "transform": "변환",
     "observe": "관측",
 }
+OUTCOME = {
+    "allowed": "허용",
+    "observed": "관측 통과",
+    "blocked": "정책 차단",
+    "pending_approval": "승인 대기",
+    "contract_drift": "계약 변경 차단",
+    "dependency_failure": "검사 실패 차단",
+    "success": "도구 성공",
+    "tool_error": "도구 오류",
+    "output_blocked": "결과 차단",
+    "unknown": "결과 불명",
+}
 RESULT_FILTER = {"allow": "허용", "deny": "차단", "transform": "변환", "observe": "관측"}
 OBSERVATION = {
     "spend_log_arguments_stored": "지출 기록에 인자 저장",

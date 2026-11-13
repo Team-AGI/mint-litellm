@@ -73,6 +73,8 @@ from mint_litellm.types.identity import (
     with_org,
 )
 from mint_litellm.types.ids import new_uuid7
+from mint_litellm.types.outcome import Outcome as DecisionOutcome
+from mint_litellm.types.outcome import decision_outcome
 from mint_litellm.types.reason_codes import ContractDriftKind, Reason
 from mint_litellm.types.reuse_policy import ALLOW_TOKEN_FORWARD, FORWARDING_AUTH
 from mint_litellm.types.settings import Mode, ObservationSettings, effective_mode
@@ -996,6 +998,8 @@ class _Run:
     timing: StageClock = OFF
     # 승인 조건에 상한이 없을 때 계약 관리 서버에 채우는 결과 상한(바이트, 항목 수).
     result_defaults: tuple[int | None, int | None] = (None, None)
+    # 판정을 시작한 단조 시계 값(나노초). 판정 사건에 걸린 시간을 남기는 데 쓴다.
+    started_at: int = field(default_factory=time.perf_counter_ns)
 
 
 def _decision_snapshot(
@@ -1075,10 +1079,23 @@ def _decision_snapshot(
         evaluated_decision=conclusion.evaluated_decision,
         enforced_action=conclusion.enforced_action,
         missing_reasons=reasons,
+        outcome=_outcome_of(conclusion),
+        decision_us=(time.perf_counter_ns() - run.started_at) // 1000,
         cause="control_key_call"
         if conclusion.stop is not None and conclusion.stop.detail == "control_key_call"
         else None,
         **{k: v for k, v in values.items() if v is not None},
+    )
+
+
+def _outcome_of(conclusion: Conclusion) -> DecisionOutcome:
+    """사건에 남기는 결과 분류. 차단 사유는 stop, 없으면 첫 finding이다."""
+    allowed = conclusion.enforced_action is Action.ALLOW
+    first = conclusion.stop or (conclusion.findings[0] if conclusion.findings else None)
+    return decision_outcome(
+        allowed=allowed,
+        reason_code=first.reason_code if first else None,
+        has_findings=bool(conclusion.findings),
     )
 
 

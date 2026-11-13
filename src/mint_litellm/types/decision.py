@@ -15,6 +15,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validato
 
 from mint_litellm.types.frozen import FrozenDict
 from mint_litellm.types.identity import Principal
+from mint_litellm.types.outcome import Outcome
 from mint_litellm.types.reason_codes import (
     NON_OBSERVABLE_DRIFT,
     OBSERVATION_CANDIDATES,
@@ -550,6 +551,9 @@ class DecisionSnapshot(BaseModel):
     revoked_after_snapshot: bool | None = None
     revocation_check: RevocationCheck | None = None
     missing_reasons: dict[str, str] = {}
+    # 새 행부터 남는 값. ``outcome``은 네 부분 요약, ``decision_us``는 판정에 걸린 마이크로초.
+    outcome: Outcome | None = None
+    decision_us: int | None = Field(default=None, ge=0)
     cause: str | None = Field(default=None, exclude=True)
 
     @field_validator("missing_reasons", mode="after")
