@@ -24,6 +24,7 @@ from mint_litellm.control.services import operators as operator_service
 from mint_litellm.control.services import orgs as org_service
 from mint_litellm.control.services import reads
 from mint_litellm.control.services import recert as recert_service
+from mint_litellm.control.services import renewals as renewal_service
 from mint_litellm.control.services import servers as server_service
 from mint_litellm.control.services import settings as settings_service
 from mint_litellm.types.cli_commands import OperatorRole
@@ -196,6 +197,7 @@ def approvals_page(request: Request, actor: Actor, error=None, status=200, form=
         "page": page_number(request),
         "error": error,
         "can_grant": actor.config.litellm_admin is not None,
+        "renewal": renewal_service.candidates(actor.conn, actor.instance),
     }
     return render(request, "approvals.html", ctx, actor=actor, status=status)
 
@@ -285,6 +287,18 @@ def revocations_page(request: Request, actor: Actor, error=None, status=200):
 @router.get("/revocations")
 def revocations(request: Request, actor: Actor = Depends(page_actor)):
     return revocations_page(request, actor)
+
+
+@router.post("/approvals/renew")
+def renew_expiring(request: Request, actor: Actor = Depends(page_actor)):
+    def action():
+        _, failed = api.renew_approvals(actor)
+        if failed:
+            raise ControlError(f"갱신하지 못한 승인이 {len(failed)}건 있습니다. {failed[0]}")
+
+    return act(
+        actor, action, "renewed", "/approvals", lambda **kw: approvals_page(request, actor, **kw),
+    )
 
 
 @router.post("/approvals/{approval_id}/recertify")

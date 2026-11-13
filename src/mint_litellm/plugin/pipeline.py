@@ -86,6 +86,10 @@ from mint_litellm.types.target import (
 
 log = logging.getLogger("mint_litellm.pipeline")
 
+# 막힌 호출이 자동으로 여는 호출별 승인 요청의 요청자 표시와 유효 시간(분)
+AUTO_REQUESTER = "mint-auto"
+AUTO_REQUEST_MINUTES = 24 * 60
+
 # 승인 범위는 좁은 쪽부터 본다.
 _SCOPE_ORDER = ("key", "user", "team", "org")
 
@@ -108,6 +112,8 @@ class SnapshotSource(Protocol):
     async def read_snapshot(self, query: SnapshotQuery) -> Snapshot: ...
 
     async def request_confirmation(self, params: Mapping[str, Any]) -> None: ...
+
+    async def request_call_approval(self, params: Mapping[str, Any]) -> str | None: ...
 
 
 @dataclass
@@ -996,6 +1002,8 @@ class _Run:
     timing: StageClock = OFF
     # 승인 조건에 상한이 없을 때 계약 관리 서버에 채우는 결과 상한(바이트, 항목 수).
     result_defaults: tuple[int | None, int | None] = (None, None)
+    # 막힌 호출이 연(또는 다시 쓴) 호출별 승인 요청의 식별자
+    call_approval_request: str | None = None
 
 
 def _decision_snapshot(
@@ -1348,6 +1356,46 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         except Exception as exc:
             # 확인을 만들지 못해도 이미 stop이며, 표시 값은 다른 저장소로 보내지 않는다.
             log.debug("본인 확인 요청 실패: %s", type(exc).__name__)
+    await _open_call_approval(run, deps, check, resolved, tool, hook.arguments, binding)
+
+
+async def _open_call_approval(
+    run: _Run, deps: PipelineDeps, check: ObligationCheck, resolved: ResolvedServer, tool: str,
+    arguments: Mapping[str, Any], binding: Target | None,
+) -> None:
+    """승인이 없어 막힌 호출의 호출별 승인 요청을 열거나 같은 호출의 대기 요청을 다시 쓴다.
+
+    요청은 대기 상태로만 열리고 승인은 사람이 한다. 열지 못해도 이미 stop이다.
+    """
+    config, principal, snapshot = deps.config, run.principal, run.snapshot
+    first = check.results[0] if check.results else None
+    if (
+        first is None or first.detail is not None
+        or first.reason_code not in (Reason.CALL_APPROVAL_REQUIRED, Reason.CALL_APPROVAL_STALE)
+        or principal.principal_type not in (
+            PrincipalType.USER, PrincipalType.TEAM_KEY, PrincipalType.SERVICE_ACCOUNT)
+        or not principal.principal_id or not principal.org_id
+        or config.fingerprint_key is None or snapshot is None or snapshot.policy_version is None
+    ):
+        return
+    contract = current_contract(snapshot, tool)
+    try:
+        async with asyncio.timeout(run.deadline.remaining()):
+            run.call_approval_request = await deps.snapshots.request_call_approval({
+                "id": new_uuid7(), "iid": config.instance_id, "org_id": principal.org_id,
+                "principal_type": principal.principal_type.value,
+                "principal_id": principal.principal_id, "server_id": resolved.server_id,
+                "tool": tool, "args_fp": argument_fingerprint(arguments, config.fingerprint_key),
+                "fp_key_version": config.fingerprint_key_version,
+                "policy_version_id": snapshot.policy_version.id,
+                "requested_by": AUTO_REQUESTER, "minutes": AUTO_REQUEST_MINUTES,
+                "contract_id": contract.id if contract is not None else None,
+                "exec_contract_sha256": resolved.exec_contract_sha256,
+                "target": binding.target if binding is not None else None,
+                "action": binding.action if binding is not None else None,
+            })
+    except Exception as exc:
+        log.debug("호출별 승인 요청 실패: %s", type(exc).__name__)
 
 
 def _mark_written(run: _Run) -> Callable[[], None]:
@@ -1505,6 +1553,10 @@ async def _evaluate(run: _Run, deps: PipelineDeps) -> Outcome:
             snapshot_doc.decision_ref,
             run.stages.dependency or Dependency.DB,
         )
+        if run.call_approval_request is not None and reason in (
+            Reason.CALL_APPROVAL_REQUIRED, Reason.CALL_APPROVAL_STALE
+        ):
+            error = error.model_copy(update={"approval_requested": True})
     return Outcome(
         allowed=allowed,
         snapshot=snapshot_doc,

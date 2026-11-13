@@ -898,6 +898,54 @@ class PluginDatabase:
 
         await self._run(write)
 
+    async def request_call_approval(self, params: Mapping[str, Any]) -> str | None:
+        """막힌 호출의 호출별 승인 요청을 연다. 같은 호출의 대기 요청이 있으면 그것을 돌려준다.
+
+        열린 요청의 식별자(없으면 None: 주체별 대기 상한 초과). 승인은 하지 않는다.
+        """
+        from psycopg import IsolationLevel
+
+        async def write(conn: Any) -> str | None:
+            await conn.set_isolation_level(IsolationLevel.READ_COMMITTED)
+            await conn.set_read_only(False)
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (json.dumps([params["iid"], params["principal_id"], "call_approval"]),),
+                )
+                cursor = await conn.execute("""
+                    SELECT id FROM mint.call_approvals
+                    WHERE instance_id = %(iid)s AND principal_type = %(principal_type)s
+                      AND principal_id = %(principal_id)s AND server_id = %(server_id)s
+                      AND tool = %(tool)s AND args_fp = %(args_fp)s AND status = 'pending'
+                      AND expires_at > clock_timestamp()
+                    LIMIT 1
+                """, params)
+                row = await cursor.fetchone()
+                if row is not None:
+                    return str(row[0])
+                cursor = await conn.execute("""
+                    INSERT INTO mint.call_approvals
+                        (id, instance_id, org_id, principal_type, principal_id, server_id, tool,
+                         args_fp, fp_key_version, policy_version_id, status, requested_by,
+                         expires_at, contract_id, exec_contract_sha256, target, action)
+                    SELECT %(id)s, %(iid)s::mint.ident, %(org_id)s::mint.ident,
+                           %(principal_type)s, %(principal_id)s, %(server_id)s, %(tool)s,
+                           %(args_fp)s, %(fp_key_version)s, %(policy_version_id)s::mint.ident,
+                           'pending', %(requested_by)s,
+                           clock_timestamp() + make_interval(mins => %(minutes)s),
+                           %(contract_id)s::uuid, %(exec_contract_sha256)s::text,
+                           %(target)s, %(action)s
+                    WHERE (SELECT count(*) FROM mint.call_approvals
+                           WHERE instance_id = %(iid)s AND principal_id = %(principal_id)s
+                             AND status = 'pending' AND expires_at > clock_timestamp()) < 20
+                    RETURNING id
+                """, params)
+                row = await cursor.fetchone()
+                return None if row is None else str(row[0])
+
+        return await self._run(write)
+
     async def read_decision(
         self, instance_id: str, invocation_id: UUID, attempt_id: int
     ) -> dict[str, Any] | None:

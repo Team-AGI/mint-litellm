@@ -21,7 +21,7 @@ from mint_litellm.console.core import Actor, api_actor, public, require_csrf
 from mint_litellm.control import endpoint_kits, operators
 from mint_litellm.control.approvals import build_conditions
 from mint_litellm.control.context import Operator
-from mint_litellm.control.errors import AdminCode, AdminError, AuthError, ControlError
+from mint_litellm.control.errors import AdminCode, AdminError, AuthError, ControlError, forbidden
 from mint_litellm.control.services import allowlists as allowlist_service
 from mint_litellm.control.services import approvals as approval_service
 from mint_litellm.control.services import call_approvals as call_approval_service
@@ -33,6 +33,7 @@ from mint_litellm.control.services import operators as operator_service
 from mint_litellm.control.services import orgs as org_service
 from mint_litellm.control.services import reads
 from mint_litellm.control.services import relations as relation_service
+from mint_litellm.control.services import renewals as renewal_service
 from mint_litellm.control.services import servers as server_service
 from mint_litellm.control.services import settings as settings_service
 from mint_litellm.types.cli_commands import OperatorRole
@@ -488,6 +489,39 @@ def grant_approval(body: ApprovalBody, actor: Actor = Depends(api_actor)):
         expected_version=body.state_version,
     )
     return done(actor, id=approval_id)
+
+
+def renew_approvals(actor: Actor) -> tuple[int, list[str]]:
+    """만료가 가까운데 계약·등급이 그대로인 승인을 같은 범위·도구·길이로 모두 갱신한다.
+
+    승인마다 따로 확정하고, 갱신하지 못한 승인(분리 원칙 등)은 사유를 모아 돌려준다.
+    """
+    if actor.role != "admin":
+        raise forbidden("승인 일괄 갱신은 admin만 할 수 있습니다.")
+    renewed, failed = 0, []
+    litellm = actor.litellm()
+    for row in renewal_service.candidates(actor.conn, actor.instance)["unchanged"]:
+        now = datetime.now(UTC)
+        try:
+            approval_service.approve(
+                actor.ctx, litellm, relation_id=str(row["relation_id"]),
+                scope_type=row["scope_type"], scope_id=row["scope_id"], tools=list(row["tools"]),
+                valid_from=now, valid_until=now + (row["valid_until"] - row["valid_from"]),
+                approval_class=row["class"], basis_text=f"기간 갱신(이전 승인 {row['id']})",
+                requested_by=row["requested_by"], allowlist_ids=[], second=None,
+                conditions=row["conditions"],
+            )
+            renewed += 1
+        except ControlError as error:
+            actor.conn.rollback()
+            failed.append(f"{row['server_id']}: {error}")
+    return renewed, failed
+
+
+@router.post("/approvals/renew")
+def renew_all(actor: Actor = Depends(api_actor)):
+    renewed, failed = renew_approvals(actor)
+    return done(actor, renewed=renewed, failed=failed)
 
 
 @router.post("/approvals/{approval_id}/revoke")

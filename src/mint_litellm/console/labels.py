@@ -263,6 +263,8 @@ ALERT_KIND = {
     "package_vulnerable": "패키지 취약점",
     "package_vuln_due": "취약점 조치 기한",
     "vuln_feed_unreachable": "취약점 조회 실패",
+    "intake_pending": "도입 신청 대기",
+    "call_approval_requested": "호출 승인 요청",
 }
 EVENT_KIND = {
     "decision_evaluated": "호출 판정",
@@ -366,6 +368,7 @@ NOTICES = {
     "approved": "승인했습니다.",
     "revoked": "승인을 철회했습니다.",
     "recertified": "승인을 재확인했습니다.",
+    "renewed": "만료가 가까운 승인을 갱신했습니다.",
     "revoked_denied": "승인을 철회하고 거부를 등록했습니다.",
     "denied": "거부를 등록했습니다.",
     "lifted": "해제했습니다.",

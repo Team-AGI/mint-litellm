@@ -12,6 +12,32 @@
 </tr>{% endfor %}
 </tbody></table>
 {% else %}{{ m.empty('승인을 기다리는 서버가 없습니다', '/servers', '서버 목록 보기') }}{% endif %}
+{% if renewal.unchanged or renewal.changed %}
+<h2>만료 임박 승인</h2>
+{% if renewal.unchanged %}
+<table><thead><tr><th>서버</th><th>대상</th><th>도구</th><th>만료</th></tr></thead><tbody>
+{% for a in renewal.unchanged %}<tr>
+<td><a href="/servers/{{ a.server_id | urlencode }}">{{ a.server_id }}</a></td>
+<td>{{ L.pick(L.SCOPE, a.scope_type) }} {{ a.scope_id }}</td><td>{{ a.tools | join }}</td>
+<td>{{ a.valid_until | when }}</td>
+</tr>{% endfor %}
+</tbody></table>
+{% if actor.role == 'admin' and can_grant %}
+<form method="post" action="/approvals/renew">
+  {{ m.csrf(actor) }}<button type="submit" class="primary">변경 없는 {{ renewal.unchanged | length }}건 일괄 갱신</button>
+</form>{% endif %}
+{% endif %}
+{% if renewal.changed %}
+<h3>변경이 있어 따로 승인할 항목</h3>
+<table><thead><tr><th>서버</th><th>대상</th><th>도구</th><th>만료</th><th>사유</th></tr></thead><tbody>
+{% for a in renewal.changed %}<tr>
+<td><a href="/servers/{{ a.server_id | urlencode }}">{{ a.server_id }}</a></td>
+<td>{{ L.pick(L.SCOPE, a.scope_type) }} {{ a.scope_id }}</td><td>{{ a.tools | join }}</td>
+<td>{{ a.valid_until | when }}</td><td>{{ a.reason }}</td>
+</tr>{% endfor %}
+</tbody></table>
+{% endif %}
+{% endif %}
 <h2>승인 내역</h2>
 {% if rows %}
 <table><thead><tr><th>서버</th><th>대상</th><th>도구</th><th>구분</th><th>유효 기간</th><th>승인자</th><th>상태</th><th>재확인 기한</th><th></th></tr></thead><tbody>

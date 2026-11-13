@@ -7,8 +7,9 @@ import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import urlsplit
 
-from mint_litellm.control import intake_checks
+from mint_litellm.control import alerts, intake_checks
 from mint_litellm.control.approvals import _derive_org
 from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import fetchall, fetchone
@@ -196,9 +197,11 @@ def _enqueue_run(ctx: Context, row: dict, mode: str = "") -> str:
 
 
 def _validated_inputs(
-    purpose: str, data_grade: str, allowed_resources: Any, provider: str, owner_user_id: str,
-    readiness: dict, data_return_terms: str,
+    purpose: str, data_grade: str, allowed_resources: Any, provider: str | None,
+    owner_user_id: str | None, readiness: dict, data_return_terms: str,
 ) -> dict:
+    if allowed_resources is None or provider is None or owner_user_id is None:
+        raise ControlError("허용 자원, 제공자, 책임자는 신청에 미리 채워진 값이 없으면 필요합니다.")
     if not 1 <= len(purpose.strip()) <= 256:
         raise ControlError("목적은 1자 이상 256자 이하여야 합니다.")
     if data_grade not in DATA_GRADES:
@@ -228,9 +231,9 @@ def create(
     org_id: str | None = None,
     purpose: str,
     data_grade: str,
-    allowed_resources: Any,
-    provider: str,
-    owner_user_id: str,
+    allowed_resources: Any = None,
+    provider: str | None = None,
+    owner_user_id: str | None = None,
     readiness: dict,
     data_return_terms: str,
     image_digest: str | None = None,
@@ -239,6 +242,17 @@ def create(
 ) -> str:
     """신청을 만든다. 같은 서버에 제출에서 온 ``received`` 신청이 있으면 그 신청의 입력을 채운다."""
     require_role(ctx, "intake create")
+    prior = fetchone(
+        ctx.conn,
+        "SELECT provider, owner_user_id, allowed_resources FROM mint.intakes"
+        " WHERE instance_id = %s AND server_id = %s AND status = 'received'",
+        (ctx.instance_id, server_id),
+    )
+    if prior is not None:  # 제출에서 미리 채워진 값은 다시 받지 않는다
+        provider = provider or prior["provider"]
+        owner_user_id = owner_user_id or prior["owner_user_id"]
+        if allowed_resources is None:
+            allowed_resources = prior["allowed_resources"]
     inputs = _validated_inputs(
         purpose, data_grade, allowed_resources, provider, owner_user_id, readiness,
         data_return_terms,
@@ -376,15 +390,25 @@ def receive_submission(ctx: Context, item: dict) -> str | None:
                                   allowed or None, None, None,
                                   oauth_scopes=intake_checks.oauth_scopes_of(item))
         intake_id = new_uuid7()
+        # 제출에서 알 수 있는 입력(주소의 호스트, 도구 목록)은 미리 채운다. 나머지는 사람이 정한다.
+        tools = [t for t in (item.get("allowed_tools") or []) if isinstance(t, str)]
+        provider = urlsplit(url).hostname if url else None
         row = fetchone(
             ctx.conn,
             "INSERT INTO mint.intakes (id, instance_id, org_id, server_id, source, requested_by,"
-            " owner_user_id) VALUES (%s, %s, %s, %s, 'submission', %s, %s) RETURNING state_version",
-            (intake_id, ctx.instance_id, org, server_id, submitted_by, submitted_by),
+            " owner_user_id, provider, allowed_resources) VALUES (%s, %s, %s, %s, 'submission',"
+            " %s, %s, %s, %s::jsonb) RETURNING state_version",
+            (intake_id, ctx.instance_id, org, server_id, submitted_by, submitted_by, provider,
+             json.dumps(tools) if tools else None),
         )
         ctx.emit(EventKind.INTAKE_RECEIVED, intake_id, row["state_version"],
                  {"intake_id": str(intake_id), "server_id": server_id, "source": "submission",
                   "requested_by": submitted_by})
+        alerts.raise_alert(
+            ctx.conn, ctx.instance_id, kind="intake_pending", severity="medium",
+            dedup_key=f"intake_pending:{intake_id}",
+            subject={"intake_id": str(intake_id), "server_id": server_id,
+                     "requested_by": submitted_by})
         return str(intake_id)
 
 
