@@ -109,7 +109,8 @@ def test_rows_already_in_the_default_partition_are_moved_into_the_new_month(admi
         admin, "SELECT source_key, tableoid::regclass::text AS tableoid FROM mint.events")}
     assert where == {"d:1": "mint.events_204102", "d:2": "mint.events_204102",
                      "d:3": "mint.events_default"}
-    assert fetchall(admin, "SELECT source_key, seal_seq, row_hash FROM mint.events ORDER BY 1") == sealed
+    after = fetchall(admin, "SELECT source_key, seal_seq, row_hash FROM mint.events ORDER BY 1")
+    assert after == sealed
     assert seal.verify(admin, INSTANCE)["ok"]
     # 옮긴 뒤에도 가드는 그대로다
     with pytest.raises(psycopg.errors.CheckViolation):
