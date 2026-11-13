@@ -74,13 +74,15 @@ class LiteLLMControl(LiteLLMSync):
         """같은 접속으로 쓰기 직전 경계만 바꾼 사본."""
         return self.with_hook(guard)  # type: ignore[return-value]
 
-    def _write(self, method: str, path: str, body: Any = None) -> Any:
+    def _write(
+        self, method: str, path: str, body: Any = None, params: dict[str, Any] | None = None
+    ) -> Any:
         if self.before_write is None:
             # 경계 없는 쓰기는 하지 않는다(되돌림 상태·임대 유효성 확인을 건너뛰지 않게)
             raise ControlError(
                 "쓰기 직전 경계(guard)가 없는 클라이언트로는 LiteLLM에 쓸 수 없습니다."
             )
-        return super()._write(method, path, body)
+        return super()._write(method, path, body, params)
 
     # --- 읽기·시험 ---------------------------------------------------------------
 

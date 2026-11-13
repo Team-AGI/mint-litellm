@@ -292,3 +292,33 @@ def test_a_key_that_is_already_gone_counts_as_deleted_but_other_failures_do_not(
     fake.fail_writes["/key/delete"] = 403
     with pytest.raises(LiteLLMForbidden):
         kit.delete_kit_keys(["mint-kit-ab12"])
+
+
+def test_a_user_credential_is_deleted_by_user_id_on_the_two_credential_paths_only(fake, client):
+    fake.credentials[SRV] = [{"user_id": "u1", "credential_type": "oauth2"},
+                             {"user_id": "u2", "credential_type": "byok"}]
+    assert [c["user_id"] for c in client.list_server_credentials(SRV)] == ["u1", "u2"]
+    client._send = lambda *a, **k: (_ for _ in ()).throw(AssertionError)  # 훅 앞에서 막힌다
+    for path in ("/v1/mcp/server/srv-1/user-credential",
+                 "/v1/mcp/server/srv-1/oauth-user-credential"):
+        for params in (None, {}, {"user_id": ""}, {"user_id": "u1", "x": "1"}, {"x": "u1"}):
+            with pytest.raises(WriteRefused):
+                client._write("DELETE", path, params=params)
+    with pytest.raises(WriteRefused):
+        client._write("DELETE", "/v1/mcp/server/srv-1/pin", params={"user_id": "u1"})
+    with pytest.raises(WriteRefused):
+        client._write("POST", "/v1/mcp/server/srv-1/user-credential", {"x": 1},
+                      params={"user_id": "u1"})
+
+
+def test_credential_deletes_remove_only_the_named_user_and_type(fake):
+    fake.credentials[SRV] = [{"user_id": "u1", "credential_type": "oauth2"},
+                             {"user_id": "u2", "credential_type": "byok"}]
+    LiteLLMSync(fake.url, CONTROL_KEY).delete_user_credential(SRV, "u1", "oauth2")
+    assert [c["user_id"] for c in fake.credentials[SRV]] == ["u2"]
+    assert fake.writes() == [("DELETE", "/v1/mcp/server/srv-1/oauth-user-credential", None)]
+
+
+def test_a_missing_credential_list_route_reads_as_none(fake, client):
+    fake.credentials_api = False
+    assert client.list_server_credentials(SRV) is None

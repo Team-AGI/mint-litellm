@@ -347,7 +347,7 @@ DOMAIN_MUTATORS = {
     "operators": {"add", "bootstrap"},
     "orgs": {"add", "close", "bind", "unbind"},
     "relations": {"add", "terminate"},
-    "servers": {"register", "suspend", "resume"},
+    "servers": {"register", "suspend", "resume", "terminate"},
     "settings_store": {"ensure", "set_default_org", "set_mode", "set_observable"},
     "policy_versions": {"activate"},
 }
@@ -370,7 +370,8 @@ def test_every_state_changing_command_has_a_service():
 
     stateful = {
         "init", "operator add", "operator bootstrap", "server register",
-        "server register-local", "server suspend", "server resume", "relation add",
+        "server register-local", "server suspend", "server resume", "server terminate",
+        "relation add",
         "relation terminate", "approve", "deny", "denial lift",
         "revoke", "call-approval request", "call-approval approve", "call-approval reject",
         "call-approval cancel", "consent add", "consent revoke", "allowlist add",

@@ -277,6 +277,8 @@ EVENT_KIND = {
     "server_approved": "서버 승인",
     "server_suspended": "서버 중지",
     "server_resumed": "서버 재개",
+    "server_terminating": "서버 폐기",
+    "server_terminated": "서버 폐기 완료",
     "relation_created": "이용 관계 생성",
     "relation_terminating": "이용 관계 종료",
     "relation_terminated": "이용 관계 종료 완료",

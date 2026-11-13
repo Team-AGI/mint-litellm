@@ -245,3 +245,15 @@ def suspend(ctx: Context, server_id: str) -> None:
 
 def resume(ctx: Context, server_id: str) -> None:
     _transition(ctx, server_id, "suspended", "approved", EventKind.SERVER_RESUMED)
+
+
+def terminate(ctx: Context, server_id: str) -> None:
+    """승인·중지 서버를 폐기 중으로 바꾼다. 자격 삭제와 확인은 ``server_finalize`` 작업이 한다."""
+    status = fetchone(
+        ctx.conn,
+        "SELECT status FROM mint.servers WHERE instance_id = %s AND server_id = %s",
+        (ctx.instance_id, server_id),
+    )
+    if status is None or status["status"] not in ("approved", "suspended"):
+        raise not_found(f"승인 또는 중지 상태의 서버 {server_id}이(가) 없습니다.")
+    _transition(ctx, server_id, status["status"], "terminating", EventKind.SERVER_TERMINATING)

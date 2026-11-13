@@ -370,8 +370,81 @@ def relation_finalize(ctx: JobContext) -> None:
         )
 
 
+# LiteLLM이 목록·삭제 경로를 주지 않아 지우지도 읽어 확인하지도 못하는 저장물(사건에 그대로 적는다)
+CREDENTIAL_UNCOVERED = ("server_secret", "user_env_vars", "oauth_clients")
+
+
+class CredentialsRemain(ControlError):
+    """자격 삭제 뒤 다시 읽었는데 남아 있다. 작업의 보통 재시도(백오프)로 다시 시도한다."""
+
+    code = "server_credentials_remain"
+
+
+@_reachable
+def server_finalize(ctx: JobContext) -> None:
+    """폐기 중인 서버의 사용자별 자격(OAuth2 토큰·API 키)을 지우고, 다시 읽어 없음을 확인한다.
+
+    LiteLLM의 서버별 사용자 자격 목록(비밀 없음)을 읽어 사용자·종류별로 지우고, 목록을 다시 읽어
+    비었을 때만 서버를 ``terminated``로 닫고 지운 개수를 사건에 남긴다. 남아 있으면 서버는
+    ``terminating``에 머물고 경보 ``server_credentials_remain``을 연 채 재시도한다. 목록 경로가 없는
+    LiteLLM이면 확인할 수 없으므로 경보 ``server_credentials_unverifiable``을 열고 닫지 않는다.
+    """
+    server_id, conn, inst = ctx.job["target_ref"], ctx.conn, ctx.instance_id
+    server = fetchone(
+        conn,
+        "SELECT id FROM mint.servers WHERE instance_id = %s AND server_id = %s"
+        " AND status = 'terminating'",
+        (inst, server_id),
+    )
+    if server is None:
+        return
+    client = _client(ctx)
+    found = client.list_server_credentials(server_id)
+    if found is None:
+        raise_alert(conn, inst, kind="server_credentials_unverifiable", severity="high",
+                    dedup_key=f"server_credentials_unverifiable:{server_id}",
+                    subject={"server_id": server_id})
+        raise PermanentFailure("credential_list_unavailable")
+    deleted = {"oauth2": 0, "byok": 0}
+    for item in found:
+        ctx.checkpoint()
+        kind = "oauth2" if item.get("credential_type") == "oauth2" else "byok"
+        client.delete_user_credential(server_id, str(item.get("user_id")), kind)
+        deleted[kind] += 1
+    left = client.list_server_credentials(server_id) or []
+    key = f"server_credentials_remain:{server_id}"
+    if left:
+        raise_alert(conn, inst, kind="server_credentials_remain", severity="high", dedup_key=key,
+                    subject={"server_id": server_id, "remaining": len(left), "deleted": deleted})
+        raise CredentialsRemain(f"서버 {server_id}의 사용자 자격 {len(left)}건이 남아 있습니다.")
+    with conn.transaction():
+        resolve_alert(conn, inst, key)
+        resolve_alert(conn, inst, f"server_credentials_unverifiable:{server_id}")
+        row = fetchone(
+            conn,
+            "UPDATE mint.servers SET status = 'terminated' WHERE instance_id = %s"
+            " AND server_id = %s AND status = 'terminating' RETURNING id, state_version",
+            (inst, server_id),
+        )
+        if row is None:
+            return  # 그 사이 다른 작업이 서버를 닫았다
+        ledger.record(
+            conn, inst, EventKind.SERVER_TERMINATED, entity_id=str(row["id"]),
+            state_version=row["state_version"], actor=ACTOR,
+            payload={"server_id": server_id, "status": "terminated", "deleted": deleted,
+                     "remaining": 0, "not_covered": list(CREDENTIAL_UNCOVERED)},
+        )
+
+
 def _finalize_terminating(ctx: JobContext) -> None:
-    """종료 중인 이용 관계마다 마무리 확인을 다시 요청한다."""
+    """폐기 중인 서버의 자격 확인과 종료 중인 이용 관계의 마무리 확인을 다시 요청한다."""
+    for row in fetchall(
+        ctx.conn,
+        "SELECT server_id AS ref FROM mint.servers WHERE instance_id = %s"
+        " AND status = 'terminating'",
+        (ctx.instance_id,),
+    ):
+        enqueue_job(_actor_context(ctx), "server_finalize", row["ref"])
     for row in fetchall(
         ctx.conn,
         "SELECT id::text AS ref FROM mint.usage_relations WHERE instance_id = %s"

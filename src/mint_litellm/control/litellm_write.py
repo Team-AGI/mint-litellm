@@ -5,6 +5,7 @@
 - 키·팀 갱신: ``/key/update``, ``/team/update``. 본문은 대상 식별자와
   ``object_permission{mcp_servers, mcp_tool_permissions}``뿐이다. LiteLLM은 두 값을 각각 통째로
   바꾸므로 언제나 전체 목록과 전체 맵을 보낸다. 다른 필드는 보내기 전에 거부한다.
+- 사용자 자격: 폐기하는 서버의 사용자별 API 키·OAuth2 토큰을 ``user_id`` 쿼리로 하나씩 지운다.
 - 서버: 승인·거절·고정·고정 해제 경로만 부른다. 서버 등록·수정·삭제·가져오기는 부르지 않는다.
 - 모든 쓰기 직전에 ``before_write``를 부른다(되돌림 상태·임대 확인 자리, 예외를 내면 쓰지 않는다).
 """
@@ -33,6 +34,8 @@ WRITE_ROUTES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
         ("PUT", _SERVER + r"/reject"),
         ("POST", _SERVER + r"/pin"),
         ("DELETE", _SERVER + r"/pin"),
+        ("DELETE", _SERVER + r"/user-credential"),  # 쿼리 user_id만(check_params)
+        ("DELETE", _SERVER + r"/oauth-user-credential"),
     )
 )
 
@@ -120,6 +123,17 @@ def check_write(method: str, path: str, body: Any) -> None:
         raise WriteRefused("mcp_tool_permissions는 서버 -> 도구 목록 맵이어야 합니다.")
 
 
+def check_params(path: str, params: dict[str, Any] | None) -> None:
+    """쿼리는 사용자 자격 삭제 경로의 ``user_id``(비어 있지 않은 문자열)만 허용한다."""
+    credential = path.endswith(("/user-credential", "/oauth-user-credential"))
+    if credential != (params is not None) or (
+        params is not None
+        and (set(params) != {"user_id"} or not isinstance(params["user_id"], str)
+             or not params["user_id"])
+    ):
+        raise WriteRefused("사용자 자격 삭제만 비어 있지 않은 user_id 쿼리를 가져야 합니다.")
+
+
 class LiteLLMSync(LiteLLMAdmin):
     """읽기(상속)와 허용된 쓰기."""
 
@@ -175,12 +189,15 @@ class LiteLLMSync(LiteLLMAdmin):
     def _get(self, path: str, params: dict[str, Any] | None = None) -> tuple[int, Any]:
         return self._send("GET", path, params)
 
-    def _write(self, method: str, path: str, body: Any = None) -> Any:
+    def _write(
+        self, method: str, path: str, body: Any = None, params: dict[str, Any] | None = None
+    ) -> Any:
         """허용 목록을 확인하고 훅을 부른 뒤 보낸다. 2xx가 아니면 예외, 아니면 응답 본문."""
         self._check(method, path, body)
+        check_params(path, params)
         if self.before_write is not None:
             self.before_write()
-        status, parsed = self._send(method, path, body=body)
+        status, parsed = self._send(method, path, params=params, body=body)
         if 200 <= status < 300:
             return parsed
         if status in (401, 403):
@@ -246,6 +263,12 @@ class LiteLLMSync(LiteLLMAdmin):
     def unpin(self, server_id: str) -> None:
         quoted = urllib.parse.quote(server_id, safe="")
         self._write("DELETE", f"/v1/mcp/server/{quoted}/pin")
+
+    def delete_user_credential(self, server_id: str, user_id: str, credential_type: str) -> None:
+        """한 사용자의 서버 자격을 지운다(``byok`` API 키 또는 ``oauth2`` 토큰). 없으면 성공이다."""
+        quoted = urllib.parse.quote(server_id, safe="")
+        route = "oauth-user-credential" if credential_type == "oauth2" else "user-credential"
+        self._write("DELETE", f"/v1/mcp/server/{quoted}/{route}", params={"user_id": user_id})
 
     def approve_server(self, server_id: str) -> dict | None:
         quoted = urllib.parse.quote(server_id, safe="")

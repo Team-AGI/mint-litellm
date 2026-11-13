@@ -1006,3 +1006,79 @@ def test_unwithdrawn_grants_keep_the_relation_terminating_until_the_sync_confirm
     drain(worker)
     assert [a["status"] for a in alerts(admin, "termination_unconfirmed")] == ["resolved"]
     assert len(termination_done(admin)) == 1
+
+
+# --- 서버 폐기: 사용자별 자격 삭제와 읽어 확인 -----------------------------------------------
+
+
+def terminating_server(admin, fake, credentials) -> None:
+    add_server(admin, status="approved")
+    fake.add_server("srv-1")
+    fake.credentials["srv-1"] = list(credentials)
+    admin.execute("UPDATE mint.servers SET status = 'terminating'")
+
+
+def server_status(admin) -> str:
+    return fetchone(admin, "SELECT status FROM mint.servers")["status"]
+
+
+CREDS = [{"user_id": "u1", "credential_type": "oauth2"},
+         {"user_id": "u2", "credential_type": "byok"},
+         {"user_id": "u3", "credential_type": "oauth2"}]
+
+
+def test_terminating_a_server_deletes_its_user_credentials_reads_back_and_closes(
+    admin, fake, worker
+):
+    terminating_server(admin, fake, CREDS)
+    enqueue(admin, "server_finalize", "srv-1")
+    drain(worker)
+    assert fake.credentials["srv-1"] == []
+    assert server_status(admin) == "terminated"
+    (done,) = events(admin, "server_terminated")
+    assert done["payload"]["deleted"] == {"oauth2": 2, "byok": 1}
+    assert done["payload"]["remaining"] == 0
+    assert "user_env_vars" in done["payload"]["not_covered"]
+    assert alerts(admin, "server_credentials_remain") == []
+
+
+def test_credentials_that_remain_keep_the_server_terminating_retry_and_alert(admin, fake, worker):
+    terminating_server(admin, fake, CREDS)
+    fake.sticky_credentials = True
+    enqueue(admin, "server_finalize", "srv-1")
+    drain(worker)
+    assert server_status(admin) == "terminating"
+    assert events(admin, "server_terminated") == []
+    (alert,) = alerts(admin, "server_credentials_remain")
+    assert alert["status"] == "open"
+    job = fetchone(admin, "SELECT status, attempts FROM mint.jobs WHERE kind = 'server_finalize'")
+    assert job["status"] == "pending" and job["attempts"] == 1  # 보통 백오프로 다시 시도한다
+    fake.sticky_credentials = False  # 다음 시도에서 지워진다
+    admin.execute("UPDATE mint.jobs SET run_after = now() - interval '1 second'"
+                  " WHERE status = 'pending'")
+    drain(worker)
+    assert server_status(admin) == "terminated"
+    assert [a["status"] for a in alerts(admin, "server_credentials_remain")] == ["resolved"]
+
+
+def test_a_litellm_without_the_credential_list_cannot_confirm_and_keeps_the_server_open(
+    admin, fake, worker
+):
+    terminating_server(admin, fake, CREDS)
+    fake.credentials_api = False
+    enqueue(admin, "server_finalize", "srv-1")
+    drain(worker)
+    assert server_status(admin) == "terminating"
+    assert fake.writes() == []  # 읽을 수 없으면 지우지도 않는다
+    assert [a["kind"] for a in alerts(admin, "server_credentials_unverifiable")] == [
+        "server_credentials_unverifiable"]
+    assert events(admin, "server_terminated") == []
+
+
+def test_the_reconcile_pass_requests_the_credential_check_for_terminating_servers(
+    admin, fake, worker
+):
+    terminating_server(admin, fake, CREDS)
+    reconcile(admin)
+    drain(worker)
+    assert server_status(admin) == "terminated"

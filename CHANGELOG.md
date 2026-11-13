@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- 서버 폐기 때 토큰 무효화(POL-D-03, 부분). 새 명령 `server terminate`가 서버를 폐기 중으로 바꾸고(호출 즉시 차단), 작업 `server_finalize`가 LiteLLM 관리 API로 그 서버의 사용자별 OAuth2 토큰·API 키를 지운 뒤 서버별 자격 목록(`GET /v1/mcp/server/{id}/user-credentials`)을 다시 읽어 비었을 때만 폐기됨으로 닫고 지운 개수를 사건 `server_terminated`에 남긴다. 남아 있으면 폐기 중에 머물며 보통 백오프로 재시도하고 경보 `server_credentials_remain`을, 목록 경로가 없는 LiteLLM이면 경보 `server_credentials_unverifiable`을 연다. 쓰기 허용 목록에 사용자 자격 삭제 두 경로(`user_id` 쿼리만)가 늘었다. 서버 자체 비밀·사용자별 환경 변수·동적 등록 클라이언트는 LiteLLM에 목록·삭제 경로가 없어 읽어 확인하지 못한다.
 - 결과 크기·항목 수 상한(POL-E-16)에 기본값을 둔다. 승인 조건에 `max_result_bytes`·`max_result_items`가 없으면 계약 관리 서버 호출에 1 MiB·1000항목(`MINT_DEFAULT_MAX_RESULT_BYTES`·`MINT_DEFAULT_MAX_RESULT_ITEMS`, 0이면 끔)을 채운다. 승인에 적은 값이 우선한다.
 - 결과 검사 코드가 오류를 내면 결과를 막는다(POL-E-04). LiteLLM은 후처리 훅의 예외를 삼키고 원래 결과를 내보내므로, MINT 훅은 던지지 않고 집행 모드에서 결과를 `MINT-OUTPUT-BLOCKED` 본문으로 바꾸고 응답 사건에 `MINT-RESULT-SCAN-ERROR`를 남긴다.
 - 새 전송 목적지 통제(POL-O-12)를 카탈로그에 올린다. 서버 URL(원격)·실행 계약의 주소(로컬)가 승인과 달라지면 호출이 막히고 재승인 전까지 풀리지 않으며(계약 변경 경보), 인자의 URL은 승인 조건 `allowed_hosts` 밖이면 막힌다. 서버가 스스로 접속하는 목적지는 보지 못한다.

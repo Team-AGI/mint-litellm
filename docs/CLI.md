@@ -30,6 +30,7 @@
 | `mint-litellm server register` | `admin` | LiteLLM에 등록된 서버를 승인 대기 상태로 등록한다. | `/v1/mcp/server/{server_id}` | `server_registered` |
 | `mint-litellm server register-local` | `admin` | 로컬 실행(stdio) 서버를 LiteLLM 없이 실행 계약(`--contract` JSON 파일)으로 승인 대기 상태로 등록한다. 서버가 접근할 경로는 계약 파일의 `file_access`나 `--read`·`--read-write`(반복 가능)로 선언한다. | - | `server_registered` |
 | `mint-litellm server suspend` | `admin` | 서버를 중지한다. 중지된 서버의 호출은 차단된다. | - | `server_suspended` |
+| `mint-litellm server terminate` | `admin` | 승인 또는 중지된 서버를 폐기 중으로 바꾼다(호출은 즉시 차단). 작업 실행기가 LiteLLM 관리 API로 그 서버에 저장된 사용자별 OAuth2·API 키 자격을 지우고, 목록을 다시 읽어 하나도 남지 않은 것을 확인한 뒤 폐기됨으로 닫고 `server_terminated`에 지운 개수를 남긴다. 남아 있으면 폐기 중에 머물며 재시도하고 경보 `server_credentials_remain`을 연다. 서버 자체 비밀·사용자별 환경 변수·동적 등록 클라이언트는 LiteLLM이 목록·삭제 경로를 주지 않아 읽어 확인하지 못한다. | - | `server_terminating`, `server_terminated` |
 | `mint-litellm server resume` | `admin` | 중지한 서버를 다시 승인 상태로 되돌린다. | - | `server_resumed` |
 | `mint-litellm relation add` | `admin` | 조직·팀·목적·서버를 묶는 이용 관계를 만든다. | - | `relation_created` |
 | `mint-litellm relation terminate` | `admin` | 이용 관계를 종료 중으로 바꾸고 그 관계의 활성 승인을 철회한다. 그 관계에 속한 승인과 매칭되는 호출은 `RELATION_TERMINATED`로 차단되고, LiteLLM 권한 회수를 읽어 확인한 결과가 사건으로 남는다. | - | `relation_terminating`, `approval_revoked` |
