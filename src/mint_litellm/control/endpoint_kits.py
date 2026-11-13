@@ -6,6 +6,7 @@
 
 import hashlib
 import secrets
+from datetime import datetime
 from typing import Any
 
 import psycopg
@@ -15,6 +16,7 @@ from mint_litellm.control.errors import ControlError
 from mint_litellm.control.litellm_write import KIT_ALIAS_PREFIX, LiteLLMKitKeys
 
 LIST_LIMIT = 200
+INVENTORY_LIMIT = 2000
 KEY_DAYS = 90  # 키 유효 기간 기본값(일). 만료 전 14일 안의 보고가 같은 기간만큼 늘린다.
 
 
@@ -100,6 +102,41 @@ def revoke_keys(
     issuer.delete_kit_keys(aliases)
     _mark_revoked(conn, instance_id, user_id)
     return len(aliases)
+
+
+def local_mcp_inventory(conn: psycopg.Connection, instance_id: str) -> list[dict[str, Any]]:
+    """단말에서 보고한, MINT가 관리하지 않는 MCP 항목(설치마다 한 줄).
+
+    값은 단말의 주장이다. 이름·하네스·전송 종류·실행 파일 이름이나 호스트·처음과 마지막으로 본
+    시각만 있고 인자·환경 변수·토큰은 받지 않는다. 해제된 키와 제거 보고는 제외하고,
+    ``endpoints``는 같은 항목(이름·종류·대상·패키지)을 보고한 활성 설치의 수이다.
+    """
+    rows = fetchall(
+        conn,
+        "SELECT i.user_id, i.key_alias, i.install_mode, i.reported_at,"
+        " x.item ->> 'harness' AS harness, x.item ->> 'name' AS name, x.item ->> 'kind' AS kind,"
+        " x.item ->> 'target' AS target, x.item ->> 'package' AS package,"
+        " x.item ->> 'first_seen' AS first_seen"
+        " FROM mint.endpoint_installs i,"
+        " LATERAL jsonb_array_elements(coalesce(i.local_mcp, '[]'::jsonb)) AS x(item)"
+        " WHERE i.instance_id = %s AND i.revoked_at IS NULL"
+        " AND i.install_mode IN ('managed', 'user')"
+        " ORDER BY x.item ->> 'name', i.user_id, i.key_alias LIMIT %s",
+        (instance_id, INVENTORY_LIMIT),
+    )
+    same: dict[tuple, set[str]] = {}
+    for row in rows:
+        same.setdefault(_same(row), set()).add(row["key_alias"])
+    for row in rows:
+        row["endpoints"] = len(same[_same(row)])
+        row["first_seen"] = datetime.fromisoformat(row["first_seen"]) if row["first_seen"] else None
+        row["last_seen"] = row.pop("reported_at")
+        row["state"] = row.pop("install_mode")
+    return rows
+
+
+def _same(row: dict[str, Any]) -> tuple:
+    return (row["name"], row["kind"], row["target"], row["package"])
 
 
 def installs(

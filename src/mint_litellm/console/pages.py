@@ -1,5 +1,6 @@
 """화면(서버 렌더링). 변경은 서비스 함수를 부르고, 실패하면 같은 화면에 오류를 보인다."""
 
+import json
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -92,6 +93,12 @@ def endpoints(request: Request, actor: Actor = Depends(page_actor)):
 
 
 # --- MCP 서버 -------------------------------------------------------------------------------
+
+
+@router.get("/endpoints/mcp")
+def endpoint_mcp(request: Request, actor: Actor = Depends(page_actor)):
+    rows = endpoint_kits.local_mcp_inventory(actor.conn, actor.instance)
+    return render(request, "endpoint_mcp.html", {"rows": rows}, actor=actor)
 
 
 @router.get("/servers")
@@ -834,6 +841,62 @@ def intake_page(request: Request, actor: Actor, intake_id: str, error=None, stat
         if e["gate"] == "approve" and e["state"] in ("missing", "expired")
     ]
     return render(request, "intake_detail.html", ctx, actor=actor, status=status)
+
+
+INTAKE_FIELDS = ("server_id", "provider", "owner_user_id", "purpose")
+
+
+def intake_new_page(request: Request, actor: Actor, form: dict, error=None, status=200):
+    ctx = {"f": form, "grades": intake_service.DATA_GRADES, "error": error}
+    return render(request, "intake_new.html", ctx, actor=actor, status=status)
+
+
+@router.get("/intakes/new")
+def intake_new(request: Request, actor: Actor = Depends(page_actor)):
+    """단말 MCP 목록의 항목에서 신청을 시작한다. 쿼리 값으로 입력란을 미리 채운다."""
+    query = request.query_params
+    form = {key: query.get(key, "")[:256] for key in INTAKE_FIELDS}
+    form["data_grade"] = "internal"
+    return intake_new_page(request, actor, form)
+
+
+@router.post("/intakes")
+def create_intake(
+    request: Request,
+    server_id: str = Form(...),
+    provider: str = Form(...),
+    owner_user_id: str = Form(...),
+    purpose: str = Form(...),
+    data_grade: str = Form(...),
+    allowed_resources: str = Form("[]"),
+    credential_notice: str = Form(...),
+    revocation_record: str = Form(...),
+    audit_access_days: int = Form(...),
+    data_return_terms: str = Form(...),
+    actor: Actor = Depends(page_actor),
+):
+    form = {
+        "server_id": server_id, "provider": provider, "owner_user_id": owner_user_id,
+        "purpose": purpose, "data_grade": data_grade, "allowed_resources": allowed_resources,
+        "credential_notice": credential_notice, "revocation_record": revocation_record,
+        "audit_access_days": audit_access_days, "data_return_terms": data_return_terms,
+    }
+
+    def action():
+        intake_service.create(
+            actor.ctx, actor.litellm(), server_id.strip(), purpose=purpose, data_grade=data_grade,
+            allowed_resources=json.loads(allowed_resources or "[]"), provider=provider,
+            owner_user_id=owner_user_id,
+            readiness={"credential_notice": credential_notice.strip(),
+                       "revocation_record": revocation_record.strip(),
+                       "audit_access_days": audit_access_days},
+            data_return_terms=data_return_terms,
+        )
+
+    return act(
+        actor, action, "intake_created", "/intakes",
+        lambda **kw: intake_new_page(request, actor, form, **kw),
+    )
 
 
 @router.get("/intakes/{intake_id}")

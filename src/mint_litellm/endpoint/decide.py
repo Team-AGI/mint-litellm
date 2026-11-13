@@ -32,7 +32,7 @@ log = logging.getLogger("mint_litellm.endpoint")
 
 MAX_BODY_BYTES = 64 * 1024
 # 경로마다 정상 본문이 이보다 작다(결과 보고는 참조와 결과 종류, 설치 보고는 서버 이름 목록).
-BODY_LIMITS = {DECIDE_PATH: MAX_BODY_BYTES, RESULT_PATH: 4 * 1024, REPORT_PATH: 32 * 1024}
+BODY_LIMITS = {DECIDE_PATH: MAX_BODY_BYTES, RESULT_PATH: 4 * 1024, REPORT_PATH: 96 * 1024}
 NOT_READY_CODE = "MINT-ENDPOINT-NOT-READY"
 _REFERENCE = re.compile(r"^([0-9a-f-]{36}):([1-9][0-9]{0,8})$")
 
@@ -90,6 +90,23 @@ class RemovedItem(BaseModel):
     target: str | None = Field(default=None, max_length=256)
 
 
+# 실행 파일 이름·호스트에는 자격 증명이 들어갈 자리(사용자 정보, 경로, 질의, 인자)가 없다.
+_TARGET = r"^[A-Za-z0-9._-]{1,128}$"
+_PACKAGE = r"^(@[a-z0-9._-]{1,64}/)?[a-z0-9._-]{1,64}(@[A-Za-z0-9._-]{1,32})?$"
+
+
+class LocalMcpItem(BaseModel):
+    """하네스 설정에 있는, 관리 대상이 아닌 MCP 항목. 인자·환경 변수·토큰은 받지 않는다."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    harness: Literal["claude", "codex"]
+    name: str = Field(min_length=1, max_length=128)
+    kind: Literal["stdio", "http", "sse"]
+    target: str = Field(pattern=_TARGET)  # stdio는 실행 파일 이름, 원격은 호스트
+    package: str | None = Field(default=None, pattern=_PACKAGE, max_length=140)
+
+
 class ReportBody(BaseModel):
     """설치 묶음이 설치·제거를 마치고 보내는 상태 보고. 파일 경로나 키는 받지 않는다."""
 
@@ -106,6 +123,7 @@ class ReportBody(BaseModel):
     processes: list[ProcessItem] | None = Field(default=None, max_length=64)
     autostart: list[AutostartItem] | None = Field(default=None, max_length=64)
     removed: list[RemovedItem] | None = Field(default=None, max_length=256)
+    local_mcp: list[LocalMcpItem] | None = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def _mode_matches_action(self) -> ReportBody:
@@ -293,6 +311,7 @@ def make_router(
                 processes=_dump(body.processes),
                 autostart=_dump(body.autostart),
                 removed=_dump(body.removed),
+                local_mcp=_dump(body.local_mcp),
             )
         except Exception as exc:
             raise HTTPException(status_code=503, detail="install store is not ready") from exc
@@ -308,9 +327,15 @@ def make_router(
             )
         except Exception:
             retired = None  # 목록을 못 만들면 싣지 않는다(단말은 마지막 목록을 그대로 쓴다)
+        try:
+            desired = await runtime.database.desired_servers(runtime.config.instance_id)
+        except Exception:
+            desired = None  # 마찬가지로 못 만들면 싣지 않는다(단말은 설정을 바꾸지 않는다)
         answer: dict[str, Any] = {"recorded": True, "renewed": outcome == "renewed"}
         if retired is not None:
             answer["retired"] = retired
+        if desired is not None:
+            answer["desired"] = desired
         return answer
 
     return router

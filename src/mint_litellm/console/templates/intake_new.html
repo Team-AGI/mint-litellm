@@ -1,0 +1,25 @@
+{% extends "base.html" %}{% import "macros.html" as m %}
+{% block title %}신청 시작 · MINT{% endblock %}
+{% block body %}
+<h1>신청 시작</h1>
+{% if actor.role != 'viewer' %}
+<form method="post" action="/intakes" class="form">
+  {{ m.csrf(actor) }}
+  <div class="row">
+    <label>서버 이름<input name="server_id" value="{{ f.server_id }}" required></label>
+    <label>제공자<input name="provider" value="{{ f.provider }}" required></label>
+    <label>책임자(사용자 식별자)<input name="owner_user_id" value="{{ f.owner_user_id }}" required></label>
+  </div>
+  <label>목적<textarea name="purpose" maxlength="256" required>{{ f.purpose }}</textarea></label>
+  <div class="row">
+    <label>자료 등급<select name="data_grade">{% for g in grades %}<option value="{{ g }}"{% if f.data_grade == g %} selected{% endif %}>{{ g }}</option>{% endfor %}</select></label>
+    <label>감사 열람 기간(일)<input type="number" name="audit_access_days" min="1" value="{{ f.audit_access_days or 90 }}" required></label>
+  </div>
+  <label>허용 자원(JSON 배열)<textarea name="allowed_resources">{{ f.allowed_resources or '[]' }}</textarea></label>
+  <label>자격 증명 변경 안내<input name="credential_notice" value="{{ f.credential_notice }}" required></label>
+  <label>철회 기록 방법<input name="revocation_record" value="{{ f.revocation_record }}" required></label>
+  <label>자료 삭제·반환 조건<textarea name="data_return_terms" required>{{ f.data_return_terms }}</textarea></label>
+  <div class="actions"><button class="primary" type="submit">신청 등록</button><a class="button" href="/endpoints/mcp">취소</a></div>
+</form>
+{% else %}{{ m.empty('이 콘솔에서는 신청을 등록할 수 없습니다', '/endpoints/mcp', '목록으로 돌아가기') }}{% endif %}
+{% endblock %}

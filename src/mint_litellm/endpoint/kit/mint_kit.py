@@ -46,6 +46,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -146,6 +147,7 @@ LAUNCHER = re.compile(r"mint_agent\.py\"?\s+run\b.*?--server[ =]\"?([^\s\"]+)")
 MCP_WORD = re.compile(r"mint_agent\.py|\bmcp\b|mcp[-_]server", re.IGNORECASE)
 MAX_ITEMS = 64
 MAX_TEXT = 65536
+SERVER_NAME = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 
 def server_of(command: str) -> str | None:
@@ -278,14 +280,18 @@ def codex_hooks(commands: dict) -> str:
     )
 
 
+def codex_identities(mcp: dict) -> str:
+    return "".join(
+        f"{NL}[mcp_servers.{toml(name)}]{NL}identity = {{ command = {toml(item['command'])} }}{NL}"
+        for name, item in sorted(mcp.items())
+    )
+
+
 def codex_requirements(mcp: dict, hooks: dict, programs: str, windows: bool) -> str:
     """Codex 관리자 요구 파일. 서버 표가 없으면 제한이 없고 비어 있으면 모두 꺼지므로 항상 둔다."""
     # ponytail: 서버 신원이 실행 명령(python)뿐이라 같은 python을 쓰는 다른 서버도 통과한다.
     # 서버마다 실행 래퍼를 두면 좁아진다.
-    identities = "".join(
-        f"{NL}[mcp_servers.{toml(name)}]{NL}identity = {{ command = {toml(item['command'])} }}{NL}"
-        for name, item in sorted(mcp.items())
-    )
+    identities = codex_identities(mcp)
     key = "windows_managed_dir" if windows else "managed_dir"
     return (
         f"allow_managed_hooks_only = true{NL}{NL}[features]{NL}hooks = true{NL}{NL}"
@@ -342,6 +348,134 @@ def is_ours_entry(entry: object, name: str) -> bool:
         and "--server" in args
         and args[args.index("--server") + 1 : args.index("--server") + 2] == [name]
     )
+
+
+def contract_version(contract: dict) -> str:
+    """계약 내용의 판본(MINT가 응답에 싣는 값과 같은 계산)."""
+    text = json.dumps(contract, sort_keys=True, separators=(",", ":"))
+    return sha256_bytes(text.encode())
+
+
+def codex_table(text: str, name: str) -> str | None:
+    """``[mcp_servers."이름"]`` 표의 본문(표 머리 다음 줄부터 다음 표 머리 앞까지). 없으면 None."""
+    header = f"[mcp_servers.{toml(name)}]"
+    body: list[str] | None = None
+    for line in text.splitlines(keepends=True):
+        bare = line.strip()
+        if body is not None and (bare.startswith("[") or bare in (BEGIN, END)):
+            break
+        if body is not None:
+            body.append(line)
+        elif bare == header:
+            body = []
+    return None if body is None else "".join(body)
+
+
+def codex_table_is_ours(body: str, name: str) -> bool:
+    """표가 이 묶음의 실행기로 ``name`` 서버를 시작하는 것인가(사용자가 쓴 표는 아니다)."""
+    return AGENT in body and f'"--server", {toml(name)}' in body
+
+
+def put_codex_tables(text: str, mcp: dict, identity: bool) -> tuple[str, list[str]]:
+    """서버 표를 더하거나 바꾼다. 이름이 같은 표가 이 묶음의 것이 아니면 건드리지 않는다.
+
+    ``identity``이면 요구 파일의 신원 표(실행 명령만 적는다)이고, 이미 있으면 그대로 둔다.
+    """
+    done = []
+    for name, item in sorted(mcp.items()):
+        body = codex_table(text, name)
+        if identity and body is not None:
+            continue
+        if body is not None and not codex_table_is_ours(body, name):
+            continue
+        if body is not None:
+            text = drop_tables(text, {name})[0]
+        if text and not text.endswith(NL):
+            text += NL
+        text += (codex_identities if identity else codex_servers)({name: item})
+        done.append(name)
+    return text, done
+
+
+def put_block_tables(text: str, mcp: dict) -> tuple[str, list[str]]:
+    """사용자 설정 파일의 표식 구간 안에서만 서버 표를 더하거나 바꾼다(구간 밖은 그대로)."""
+    found = re.search(rf"{re.escape(BEGIN)}.*?{re.escape(END)}", text, flags=re.S)
+    if found is None:
+        return text, []
+    body, done = put_codex_tables(found.group(0)[: -len(END)], mcp, False)
+    return text[: found.start()] + body + END + text[found.end() :], done
+
+
+# --- 단말의 하네스 설정에서 찾은, 이 묶음이 관리하지 않는 MCP 항목(자격 증명이 없는 값만) ---
+
+HOST_NAME = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+PACKAGE_NAME = re.compile(r"^(@[a-z0-9._-]{1,64}/)?[a-z0-9._-]{1,64}(@[A-Za-z0-9._-]{1,32})?$")
+RUNNERS = ("npx", "uvx", "bunx", "pipx")
+MAX_CONFIG = 8 << 20
+
+
+def local_mcp_item(harness: str, name: object, entry: object) -> dict | None:
+    """설정 항목 하나에서 보고할 값만 뽑는다: 이름, 전송 종류, 실행 파일 이름이나 호스트.
+
+    인자·환경 변수·헤더·URL의 사용자 정보와 경로·질의는 읽지 않는다(토큰이 들어갈 자리다).
+    이 묶음의 실행기로 시작하는 항목(관리 대상)은 건너뛴다.
+    """
+    if not isinstance(name, str) or not name or not isinstance(entry, dict):
+        return None
+    raw = entry.get("args")
+    args = [a for a in raw if isinstance(a, str)] if isinstance(raw, list) else []
+    if any(a.replace("\\", "/").endswith("/" + AGENT) for a in args):
+        return None
+    package = None
+    url, command = entry.get("url"), entry.get("command")
+    if isinstance(url, str) and url:
+        try:
+            host = urllib.parse.urlsplit(url).hostname or ""
+        except ValueError:
+            host = ""
+        kind = "sse" if str(entry.get("type")).lower() == "sse" else "http"
+        target = host if HOST_NAME.match(host) else "unknown"
+    elif isinstance(command, str) and command.strip():
+        base = command.strip().replace("\\", "/").rsplit("/", 1)[-1].lower()
+        base = re.sub(r"\.(exe|cmd|bat)$", "", base)
+        kind, target = "stdio", (base if HOST_NAME.match(base) else "unknown")
+        if target in RUNNERS:
+            first = next((a for a in args if not a.startswith("-")), "")
+            package = first if PACKAGE_NAME.match(first) else None
+    else:
+        return None
+    return {"harness": harness, "name": name[:128], "kind": kind, "target": target,
+            "package": package}  # fmt: skip
+
+
+def scan_local_mcp(home: Path) -> list[dict]:
+    """홈의 Claude Code·Codex 설정에 있는, 관리 대상이 아닌 MCP 항목. 읽지 못하면 건너뛴다."""
+    found: dict[tuple, dict] = {}
+
+    def add(harness: str, servers: object) -> None:
+        for name, entry in (servers.items() if isinstance(servers, dict) else ()):
+            item = local_mcp_item(harness, name, entry)
+            if item:
+                found.setdefault(tuple(item.values()), item)
+
+    try:
+        if (home / ".claude.json").stat().st_size <= MAX_CONFIG:
+            data = json.loads((home / ".claude.json").read_text(encoding="utf-8-sig"))
+            add("claude", data.get("mcpServers"))
+            for project in (data.get("projects") or {}).values():
+                add("claude", project.get("mcpServers") if isinstance(project, dict) else None)
+    except (OSError, ValueError, AttributeError):
+        pass
+    try:
+        import tomllib
+
+        path = home / ".codex/config.toml"
+        if path.stat().st_size <= MAX_CONFIG:
+            text = strip_block(path.read_bytes().decode("utf-8-sig"))
+            add("codex", tomllib.loads(text).get("mcp_servers"))
+    except (ImportError, OSError, ValueError):
+        pass  # tomllib은 Python 3.11부터라 이전 판본에서는 Codex 설정을 읽지 않는다.
+    return sorted(found.values(), key=lambda i: (i["harness"], i["name"]))[:MAX_ITEMS]
 
 
 def proc_start(pid: int, windows: bool) -> str | None:
@@ -688,6 +822,7 @@ class Kit:
             "files": dict(previous.get("files", {})),
             "backups": dict(previous.get("backups", {})),
             "mcp_servers": [],
+            "python": "",
         }
         for kept in ("settings_backup", "codex_config_backup"):
             if kept in previous:
@@ -710,6 +845,7 @@ class Kit:
         else:
             python = shutil.which("python3") or sys.executable
         self.check_python(python)
+        state["python"] = python
         if self.config.get("ca_pem"):
             self.write_tracked(
                 state, self.programs / "ca.pem", f"{self.logical_programs}/ca.pem",
@@ -1073,7 +1209,8 @@ class Kit:
             autostart = scan_autostart(self.home, self.windows, self.account.name, **extra)
         except Exception:
             return {}
-        return {"processes": processes, "autostart": autostart}
+        found = {} if self.system_mode else {"local_mcp": scan_local_mcp(self.home)}
+        return {"processes": processes, "autostart": autostart, **found}
 
     def pending_removed(self, state: dict) -> list[dict]:
         """아직 보고하지 못한 제거 항목. 상태 파일을 쓸 수 있는(관리자 권한) 보고기만 보낸다."""
@@ -1280,6 +1417,122 @@ class Kit:
             self.save_state(state)
         return removed
 
+    # -- 승인 서버 목록 반영(관리형) --------------------------------------------------------------
+
+    def desired_items(self, desired: list, skip: set[str]) -> dict[str, dict]:
+        """응답의 ``desired``에서 형식과 판본이 맞는 항목만(이름 -> 계약). 틀린 항목은 버린다."""
+        items: dict[str, dict] = {}
+        for item in desired[:MAX_PENDING]:
+            name = item.get("name") if isinstance(item, dict) else None
+            contract = item.get("contract") if isinstance(item, dict) else None
+            if (
+                isinstance(name, str) and SERVER_NAME.match(name) and name not in skip
+                and isinstance(contract, dict) and isinstance(contract.get("executable"), str)
+                and item.get("version") == contract_version(contract)
+            ):
+                items[name] = contract
+        return items
+
+    def refresh(self, state: dict, desired: list, retired: list | None = None) -> list[str]:
+        """MINT가 승인한 서버 목록에 맞춰 관리형 설정에 서버를 더하거나(계약이 바뀌었으면 갱신)
+        한다. 돌려주는 값은 더하거나 갱신한 이름이다.
+
+        폐기 서버를 지우는 일은 ``remediate``가 한다. 여기서는 지우지 않는다. 사용자 수준 설치는
+        파일을 고치지 않고 바뀐 서버를 알리기만 한다. 관리형은 이 묶음이 쓴 계약 파일(기록한
+        해시와 같을 때만)과 이 묶음의 실행기로 시작하는 항목만 고치고, 같은 이름의 사용자 항목은
+        건드리지 않는다.
+        """
+        items = self.desired_items(desired, set(retired or ()))
+        logical = f"{self.logical_programs}/contracts.json"
+        path = self.programs / "contracts.json"
+        try:
+            raw = read_trusted(path, self.managed and self.root_owned())
+            current = json.loads(raw).get("servers", {})
+        except (OSError, ValueError, AttributeError):
+            return []
+        configured = set(state.get("mcp_servers", []))
+        todo = {n: c for n, c in items.items() if current.get(n) != c or n not in configured}
+        if not todo:
+            return []
+        if not self.managed:
+            print(
+                "MINT 승인 서버가 바뀌었습니다: " + ", ".join(sorted(todo))
+                + ". 설치 명령을 다시 실행하면 반영됩니다.",
+                file=sys.stderr,
+            )
+            return []
+        if state.get("files", {}).get(logical) != sha256_bytes(raw):
+            print("MINT 계약 파일이 바뀌어 있어 서버 목록을 갱신하지 않습니다.", file=sys.stderr)
+            return []
+        python = state.get("python") or sys.executable.replace("\\", "/")
+        agent = f"{self.logical_programs}/{AGENT}"
+        mcp = {
+            name: {
+                "command": python,
+                "args": [agent, "run", "--contracts", logical, "--server", name],
+            }
+            for name in sorted(todo)
+        }
+        data = json.dumps({"servers": {**current, **todo}}, indent=1).encode()
+        try:
+            write_atomic(path, data, 0o644)
+        except OSError:
+            return []
+        state.setdefault("files", {})[logical] = sha256_bytes(data)
+        done = self.put_configs(state, mcp)
+        state["mcp_servers"] = sorted(configured | done)
+        self.save_state(state)
+        return sorted(done)
+
+    def put_configs(self, state: dict, mcp: dict) -> set[str]:
+        """관리형 설정 파일에 서버 항목을 더하거나 바꾼다(이 묶음의 것만). 반영한 이름."""
+        done: set[str] = set()
+        if "claude" in self.harnesses:
+
+            def edit_json(text: str) -> tuple[str, list[str]]:
+                data = json.loads(text)
+                listed = data.setdefault("mcpServers", {})
+                put = [
+                    n for n in sorted(mcp) if n not in listed or is_ours_entry(listed.get(n), n)
+                ]
+                listed.update({n: mcp[n] for n in put})
+                return json.dumps(data, indent=2), put
+
+            logical = f"{self.claude_dir}/managed-mcp.json"
+            path = self.managed_dir / "managed-mcp.json"
+            done |= set(self.edit_file(state, path, logical, edit_json)[0])
+        if "codex" in self.harnesses:
+            found: set[str] = set()
+            accepted = mcp
+            if not self.windows:  # 서버 표를 못 더한 이름은 신원 표도 더하지 않는다.
+                gone, _ = self.edit_file(
+                    state, self.codex_managed_dir / "managed_config.toml",
+                    f"{self.codex_dir}/managed_config.toml",
+                    lambda text: put_codex_tables(text, mcp, False),
+                )  # fmt: skip
+                found.update(gone)
+                accepted = {n: mcp[n] for n in mcp if n in gone}
+            gone, _ = self.edit_file(
+                state, self.codex_managed_dir / "requirements.toml",
+                f"{self.codex_dir}/requirements.toml",
+                lambda text: put_codex_tables(text, accepted, True),
+            )  # fmt: skip
+            found.update(gone if self.windows else ())
+            if self.windows and not self.system_mode:  # 서버 정의가 사용자 설정의 표식 구간에 있다
+                config = self.codex_config()
+                try:
+                    current = config.read_bytes().decode("utf-8-sig")
+                    new, gone = put_block_tables(current, mcp)
+                    if gone:
+                        write_atomic(config, new.encode(), config.stat().st_mode & 0o777)
+                        if sha256_bytes(current.encode()) == state.get("codex_config_sha"):
+                            state["codex_config_sha"] = sha256_bytes(new.encode())
+                        found.update(gone)
+                except OSError:
+                    pass
+            done |= found
+        return done
+
 
 def report_installed(
     folder: Path,
@@ -1353,11 +1606,17 @@ def report_installed(
         run(lambda: stamp.unlink(missing_ok=True))  # 닿지 못했으면 다음 기회에 다시 보낸다.
         return 1
     retired = kit.answer.get("retired")
+    names: list[str] = []
+    changed = False
     if isinstance(retired, list):
         names = [n for n in retired if isinstance(n, str)][:MAX_PENDING]
         run(lambda: save_retired(home, names, now(), folder if system else None))
-        if kit.remediate(state, names):
-            kit.report(state, "installed")  # 지운 것을 곧바로 알린다.
+        changed = bool(kit.remediate(state, names))
+    desired = kit.answer.get("desired")
+    if isinstance(desired, list):
+        changed = bool(kit.refresh(state, desired, names)) or changed
+    if changed:
+        kit.report(state, "installed")  # 지우거나 더한 것을 곧바로 알린다.
     return 0
 
 

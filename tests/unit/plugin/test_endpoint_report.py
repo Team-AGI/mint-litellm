@@ -34,7 +34,8 @@ def test_a_managed_install_report_is_stored_for_the_calling_key(tmp_path, stored
     assert key_token == KEY
     assert fields == {"mode": "managed", "kit_version": "k" * 64,
                       "claude_version": "2.1.0 (Claude Code)", "mcp_servers": ["srv-1"],
-                      "processes": None, "autostart": None, "removed": None}
+                      "processes": None, "autostart": None, "removed": None,
+                      "local_mcp": None}
 
 
 def test_the_process_and_autostart_inventory_is_stored_as_plain_rows(tmp_path, stored):
@@ -93,7 +94,7 @@ def test_the_report_route_needs_a_key_and_a_ready_store(tmp_path, monkeypatch):
 
     monkeypatch.setattr(FakeDatabase, "report_install", broken, raising=False)
     assert post(client, REPORT, report()).status_code == 503
-    big = " " * (64 * 1024 + 1)
+    big = " " * (96 * 1024 + 1)
     assert client.post(REPORT, content=big, headers=KEY_HEADER).status_code == 413
 
 
@@ -172,3 +173,40 @@ def test_removed_items_are_passed_on_as_plain_rows(tmp_path, stored):
 def test_a_removed_list_that_does_not_fit_is_refused(tmp_path, stored, removed):
     client, _ = build(tmp_path)
     assert post(client, REPORT, report(removed=removed)).status_code == 422
+
+
+def test_unmanaged_mcp_entries_are_passed_on_as_plain_rows(tmp_path, stored):
+    client, _ = build(tmp_path)
+    items = [
+        {"harness": "claude", "name": "files", "kind": "stdio", "target": "npx",
+         "package": "@scope/server-files@1.2.0"},
+        {"harness": "codex", "name": "docs", "kind": "http", "target": "docs.example.com"},
+    ]
+    assert post(client, REPORT, report(local_mcp=items)).status_code == 200
+    assert stored[0][2]["local_mcp"] == [{**items[0]}, {**items[1], "package": None}]
+
+
+@pytest.mark.parametrize("item", [
+    {"target": "user:secret@host.example.com"},
+    {"target": "host.example.com/path?token=abc"},
+    {"target": "node", "package": "pkg --token abc"},
+    {"target": "node", "args": ["--token", "abc"]},
+    {"target": "node", "env": {"TOKEN": "abc"}},
+    {"kind": "websocket"},
+])
+def test_a_local_mcp_entry_cannot_carry_credentials_or_arguments(tmp_path, stored, item):
+    client, _ = build(tmp_path)
+    entry = {"harness": "claude", "name": "x", "kind": "stdio", "target": "node"} | item
+    assert post(client, REPORT, report(local_mcp=[entry])).status_code == 422
+    assert stored == []
+
+
+def test_the_answer_carries_the_approved_server_list(tmp_path, stored, monkeypatch):
+    desired = [{"name": "srv-1", "version": "v", "contract": {"executable": "/usr/bin/x"}}]
+
+    async def desired_servers(self, instance_id):
+        return desired
+
+    monkeypatch.setattr(FakeDatabase, "desired_servers", desired_servers, raising=False)
+    client, _ = build(tmp_path)
+    assert post(client, REPORT, report()).json()["desired"] == desired
