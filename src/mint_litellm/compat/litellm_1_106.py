@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from mint_litellm.compat import capabilities
 from mint_litellm.types.decision import ResolvedServer, normalize_auth_type, url_sha256
 from mint_litellm.types.identity import Principal, classify_principal
 from mint_litellm.types.reason_codes import Reason
@@ -624,15 +625,40 @@ def _lookup(module: str, path: str, importer: Callable[[str], Any]) -> bool:
     return True
 
 
-def missing_symbols(*, importer: Callable[[str], Any] = importlib.import_module) -> list[str]:
-    """지원 판본에서 쓰는 LiteLLM 심볼 중 없는 것의 이름. 모두 있으면 빈 목록이다."""
+def litellm_assessment() -> capabilities.Assessment:
+    return capabilities.assess(SUPPORTED_LITELLM_VERSIONS, version=installed_litellm_version())
+
+
+def missing_symbols(
+    *,
+    importer: Callable[[str], Any] = importlib.import_module,
+    env: Mapping[str, str] | None = None,
+) -> list[str]:
+    """기동을 막는 사유. 비어 있으면 이 LiteLLM에서 모든 보장이 성립한다.
+
+    등급 A이고 시험한 판본이면 비어 있다. 시험하지 않은 판본은 모든 능력이 감지되어도
+    ``MINT_ALLOW_UNTESTED_LITELLM=true``로 운영자가 명시해야 허용한다. 등급 B·C·D는
+    빠진 능력을 밝히고 거부한다(저하 운용은 아직 없다).
+    """
     missing = [
         f"{module}:{path}"
         for module, path in _REQUIRED_SYMBOLS
         if not _lookup(module, path, importer)
     ]
-    version = installed_litellm_version()
-    if version not in SUPPORTED_LITELLM_VERSIONS:
+    found = capabilities.assess(
+        SUPPORTED_LITELLM_VERSIONS, importer=importer, version=installed_litellm_version()
+    )
+    if found.version is None:
+        return [*missing, "litellm: not installed"]
+    if found.grade != "A":
+        missing.append(
+            f"litellm {found.version} grade {found.grade}: missing capability "
+            f"{', '.join(found.missing) or '-'} (only grade A can start)"
+        )
+    elif not found.tested and not capabilities.allow_untested(env):
         supported = ", ".join(SUPPORTED_LITELLM_VERSIONS)
-        missing.append(f"litellm in {{{supported}}} (installed: {version})")
+        missing.append(
+            f"litellm in {{{supported}}} (installed: {found.version}, untested; "
+            "MINT_ALLOW_UNTESTED_LITELLM=true allows it)"
+        )
     return missing

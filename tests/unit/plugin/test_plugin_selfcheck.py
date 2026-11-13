@@ -609,7 +609,7 @@ def test_descriptions_exist_for_every_item():
 def test_view_reports_missing_symbols_when_litellm_is_absent_or_other(monkeypatch):
     from mint_litellm.compat import litellm_1_106 as compat
 
-    monkeypatch.setattr(compat, "missing_symbols", lambda: ["litellm: not installed"])
+    monkeypatch.setattr(compat, "missing_symbols", lambda **_: ["litellm: not installed"])
     collected = collect_view({})
     assert collected.missing_symbols == ["litellm: not installed"]
     assert SelfCheckItem.COMPAT_SYMBOLS in failed(
