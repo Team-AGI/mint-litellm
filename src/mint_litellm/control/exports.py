@@ -14,9 +14,9 @@ import psycopg
 from mint_litellm.control import alerts, ledger
 from mint_litellm.control.db.connection import fetchone
 from mint_litellm.control.errors import ControlError
-from mint_litellm.control.jobs import JobContext
+from mint_litellm.control.jobs import JobContext, RestoreBlocked
 from mint_litellm.control.stage2_config import Stage2Settings
-from mint_litellm.restore import files
+from mint_litellm.restore import files, judge
 from mint_litellm.types.events import EventKind
 
 # 부정 상태 항목 여덟 종류(철회·거부·중지·종료·rejected 서버, 종료 관계, 닫힌 조직, 해제된 허용
@@ -267,7 +267,26 @@ def _epoch_of(job: JobContext) -> int:
     return int(number) if prefix == "export_negative" and number.isdigit() else 0
 
 
+def _refuse_when_latest_vanished(job: JobContext) -> None:
+    """이미 쓴 내보내기가 있는데 ``latest.json``이 없으면 새로 만들지 않고 멈춘다.
+
+    작업 실행기의 판정은 주기 동안 직전 값을 쓰므로, 파일이 사라진 직후에 도는 내보내기가
+    파일을 조용히 되살려 소실 차단을 놓치게 하면 안 된다. 복구는 복원 절차만 한다.
+    """
+    if files.latest_path(job.settings.export_dir, job.instance_id).exists():
+        return
+    row = fetchone(
+        job.conn,
+        "SELECT EXISTS (SELECT 1 FROM mint.exports WHERE instance_id = %s"
+        " AND status = 'written') AS written",
+        (job.instance_id,),
+    )
+    if row and row["written"]:
+        raise RestoreBlocked(judge.EXPORT_MISSING)
+
+
 def export_negative_state(job: JobContext) -> None:
+    _refuse_when_latest_vanished(job)
     write_export(
         job.conn, job.instance_id, job.settings, "negative_state",
         min_epoch=_epoch_of(job), guard=job.external_write,
@@ -275,6 +294,7 @@ def export_negative_state(job: JobContext) -> None:
 
 
 def export_checkpoint(job: JobContext) -> None:
+    _refuse_when_latest_vanished(job)
     write_export(job.conn, job.instance_id, job.settings, "checkpoint", guard=job.external_write)
     job.external_write()
     try:
