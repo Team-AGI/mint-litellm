@@ -287,8 +287,8 @@ def encode_decision_v2(snapshot: DecisionSnapshot) -> dict[str, Any]:
     """판정 본문 2판. 빈 값·기본값, 모두 통과한 단계, 판본에서 다시 찾을 수 있는 값을 뺀다.
 
     ``stages``에는 통과하지 않은 단계(걸림·정지·그 밖의 건너뜀)만 남고, 주체는 식별자만 남는다. 값이
-    비어 뺀 필드는 ``missing_reasons``가 사유를 그대로 말한다. 번들 해시는 ``policy_version_id``가 있으면 그
-    판본 행에서 찾는다. 읽는 쪽은 1판(``v`` 없음)과 2판을 모두 받아야 한다.
+    비어 뺀 필드는 ``missing_reasons``가 사유를 말한다. 번들 해시는 ``policy_version_id``가 있으면
+    그 판본 행에서 찾는다. 읽는 쪽은 1판(``v`` 없음)과 2판을 모두 받아야 한다.
     """
     full = snapshot.model_dump(mode="json")
     body: dict[str, Any] = {"v": PAYLOAD_VERSION}

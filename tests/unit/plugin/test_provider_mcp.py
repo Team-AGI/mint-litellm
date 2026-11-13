@@ -352,3 +352,58 @@ class TestBypassesFoundInReview:
         ):
             assert self.send(rig, {"model": "m", **body}, call_type)["model"] == "m"
         assert store.events == {}
+
+
+class TestCodeExecution:
+    """LiteLLM 샌드박스 코드 실행(스킬·코드 인터프리터)은 기본으로 거부한다."""
+
+    BODIES = [
+        {"container": {"skills": [{"skill_id": "litellm_skill_x"}]}},
+        {"container": "cntr_1"},
+        {"tools": [{"type": "code_interpreter", "container": {"type": "auto"}}]},
+        {"tools": [{"type": "code_execution_20250522", "name": "code_execution"}]},
+        {"tools": [{"type": "function", "function": {"name": "litellm_code_execution"}}]},
+        {"litellm_metadata": {"_litellm_code_execution_enabled": True}},
+        {"extra_body": {"container": {"skills": [{"skill_id": "s"}]}}},
+        {"extra_body": '{"container": {"id": "c"}}'},
+    ]
+
+    @pytest.fixture
+    def rig(self, tmp_path, monkeypatch):
+        import litellm
+
+        runtime, store, _ = build_runtime(tmp_path)
+        monkeypatch.setattr(litellm, "callbacks", [runtime.guardrail])
+        return runtime, store, ProxyLogging(user_api_key_cache=DualCache())
+
+    send = TestPreCallChain.send
+
+    @pytest.mark.parametrize("call_type", ["acompletion", "aresponses", "anthropic_messages"])
+    @pytest.mark.parametrize("body", BODIES)
+    def test_it_is_refused_with_its_own_reason(self, rig, body, call_type):
+        _, store, _ = rig
+        with pytest.raises(HTTPException) as raised:
+            self.send(rig, {"model": "m", "messages": [], **body}, call_type)
+        assert raised.value.status_code == 403
+        assert MintError.from_detail(raised.value.detail).code == "MINT-CODE-EXECUTION-FORBIDDEN"
+        (event,) = store.of_kind("decision_evaluated")
+        assert event.payload["stop"]["reason_code"] == "CODE_EXECUTION_FORBIDDEN"
+
+    def test_the_operator_allowance_lets_it_through(self, rig):
+        runtime, store, _ = rig
+        runtime.config = replace(runtime.config, allow_code_execution=True)
+        data = {"model": "m", "container": {"skills": [{"skill_id": "s"}]}}
+        assert self.send(rig, data, "acompletion")["model"] == "m"
+        assert store.events == {}
+
+    def test_ordinary_requests_are_not_affected(self, rig):
+        _, store, _ = rig
+        body = {"model": "m", "tools": [{"type": "function", "function": {"name": "f"}}]}
+        assert self.send(rig, body, "acompletion")["model"] == "m"
+        assert store.events == {}
+
+    def test_an_external_mcp_keeps_its_own_reason(self, rig):
+        data = {"model": "m", "container": "c", "tools": [mcp_tool(EXTERNAL)]}
+        with pytest.raises(HTTPException) as raised:
+            self.send(rig, data, "acompletion")
+        assert MintError.from_detail(raised.value.detail).code == "MINT-EXTERNAL-MCP-FORBIDDEN"

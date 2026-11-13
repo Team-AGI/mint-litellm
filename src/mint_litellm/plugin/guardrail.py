@@ -2,7 +2,8 @@
 
 ``guardrails`` 설정에서 ``pre_call``·``pre_mcp_call``·``post_mcp_call`` 세 모드,
 ``default_on: true``로 등록한다. ``pre_call``은 모델 요청의 사전 단계이며 공급자가 외부 MCP
-서버를 직접 부르게 하는 항목(``provider_mcp``)이 있으면 막는다. 패스스루 경로도 같은 사전
+서버를 직접 부르게 하는 항목(``provider_mcp``)이나 LiteLLM 샌드박스 코드 실행을 요구하는 항목
+(``code_exec``, ``MINT_ALLOW_CODE_EXECUTION``이 아니면)이 있으면 막는다. 패스스루 경로도 같은 사전
 단계를 지난다. 생성자가 병렬 실행(``run_in_parallel``)을 켜고 요청 원문 검사
 (``scan_raw_request``)를 끈다. LiteLLM은 병렬 가드레일을 순차 훅이 모두 끝난 뒤의 최종
 ``data``로 돌리고, 차단 예외가 나면 업스트림에 닿기 전에 요청을 거부한다. 판정하는 인자는
@@ -29,6 +30,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 
 from mint_litellm.compat import litellm_1_106 as compat
 from mint_litellm.endpoint.decide import install_from_env
+from mint_litellm.plugin.code_exec import code_execution
 from mint_litellm.plugin.logger import MintLogger, internal_block
 from mint_litellm.plugin.provider_mcp import external_mcp, is_realtime
 from mint_litellm.plugin.selfcheck import (
@@ -121,7 +123,11 @@ class MintGuardrail(CustomGuardrail):
             else:
                 reason, kind = Reason.EXTERNAL_MCP_FORBIDDEN, external_mcp(data, call_type)
                 if kind is None:
-                    return
+                    allowed = self._runtime.config.allow_code_execution
+                    kind = None if allowed else code_execution(data)
+                    if kind is None:
+                        return
+                    reason = Reason.CODE_EXECUTION_FORBIDDEN
             outcome = await self._runtime.judge_refused_request(
                 data, user_api_key_dict, reason, kind
             )

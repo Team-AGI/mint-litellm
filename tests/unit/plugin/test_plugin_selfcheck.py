@@ -327,6 +327,20 @@ def test_item_8_required_settings(override):
     assert failed(run_checks(view(**override))) == {SelfCheckItem.REQUIRED_SETTINGS}
 
 
+@pytest.mark.parametrize("versions", [["2025-11-25", "2026-07-28"], "2026-07-28"])
+def test_item_8_refuses_the_modern_mcp_revision_whose_subscription_relay_skips_the_hooks(versions):
+    general = {**GOOD_GENERAL, "mcp_advertised_versions": versions}
+    results = run_checks(view(general_settings=general))
+    assert failed(results) == {SelfCheckItem.REQUIRED_SETTINGS}
+    detail = next(r for r in results if r.item is SelfCheckItem.REQUIRED_SETTINGS).detail
+    assert "mcp_advertised_versions" in detail
+
+
+def test_item_8_accepts_legacy_only_advertised_versions():
+    legacy = {**GOOD_GENERAL, "mcp_advertised_versions": ["2025-06-18", "2025-11-25"]}
+    assert failed(run_checks(view(general_settings=legacy))) == set()
+
+
 @pytest.mark.parametrize(
     ("override", "policy"),
     [
@@ -1003,6 +1017,28 @@ def test_the_openai_websocket_passthrough_needs_the_explicit_realtime_allowance(
     assert failed(allowed) == set()
     off = view(general_settings={**GOOD_GENERAL, "enable_openai_websocket_passthrough": False})
     assert failed(run_checks(off)) == set()
+
+
+class CodeInterpreterInterceptionLogger(FakeLogger):
+    """LiteLLM의 코드 인터프리터 가로채기 로거 이름만 흉내 낸 대역."""
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [
+        {"sandbox_installed": True},
+        {"callbacks": [LOGGER, GUARDRAIL, CodeInterpreterInterceptionLogger()]},
+    ],
+    ids=["llm_sandbox", "interception"],
+)
+def test_a_setup_that_can_run_model_code_needs_the_explicit_allowance(layout):
+    on = view(**layout)
+    assert SelfCheckItem.REQUIRED_SETTINGS in failed(run_checks(on))
+    allowed = check_items(
+        on, logger=LOGGER, guardrail=GUARDRAIL, controlled=[registered()], allow_code_execution=True
+    )
+    assert failed(allowed) == set()
+    assert failed(run_checks(view())) == set()
 
 
 def test_buffered_events_reach_the_database_from_the_judgement_loop_without_calls(tmp_path):

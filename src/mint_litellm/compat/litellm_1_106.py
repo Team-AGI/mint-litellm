@@ -1,4 +1,4 @@
-"""LiteLLM 1.106 계열과의 접점.
+"""LiteLLM 1.106.6·1.108.5와의 접점.
 
 LiteLLM의 비공개 심볼과 훅 데이터 형태에 대한 의존은 모두 이 모듈에 둔다. 다른 모듈은
 LiteLLM을 직접 가져오지 않는다. 함수는 가져오기를 호출 시점으로 미뤄, LiteLLM이 설치되지
@@ -31,7 +31,8 @@ from mint_litellm.types.reuse_policy import (
     ssl_verify_on,
 )
 
-SUPPORTED_LITELLM_VERSION = "1.106.6"
+# 보장하는 판본. 앞의 것이 기준 판본(잠금 파일·기본 이미지)이다.
+SUPPORTED_LITELLM_VERSIONS = ("1.106.6", "1.108.5")
 
 CALL_TOOL = "call_mcp_tool"
 LIST_TOOLS = "list_mcp_tools"
@@ -153,7 +154,19 @@ def principal_from_auth(
     alias = master_alias if master_alias is not None else master_key_alias()
     key_id = getattr(user_api_key_dict, "token", None)
     metadata = getattr(user_api_key_dict, "metadata", None)
+    # JWT 인증(handle_jwt.py의 user_api_key_auth_from_result)은 api_key=None이라 token이 없고
+    # user_id·team_id는 검증된 클레임이다. 관리형 에이전트 맥락과 게이트웨이 입장 표지는 서버만
+    # 설정하는 값이다. 이 중 하나가 있을 때만 키 없는 사용자를 신원으로 인정한다.
+    keyless = (
+        key_id is None
+        and (
+            bool(getattr(user_api_key_dict, "jwt_claims", None))
+            or getattr(user_api_key_dict, "managed_agent_context", None) is not None
+            or getattr(user_api_key_dict, "mcp_admitted_user_subject", False) is True
+        )
+    )
     return classify_principal(
+        keyless_verified=keyless,
         instance_id=instance_id,
         key_id=key_id,
         user_id=getattr(user_api_key_dict, "user_id", None),
@@ -619,6 +632,7 @@ def missing_symbols(*, importer: Callable[[str], Any] = importlib.import_module)
         if not _lookup(module, path, importer)
     ]
     version = installed_litellm_version()
-    if version != SUPPORTED_LITELLM_VERSION:
-        missing.append(f"litellm=={SUPPORTED_LITELLM_VERSION} (installed: {version})")
+    if version not in SUPPORTED_LITELLM_VERSIONS:
+        supported = ", ".join(SUPPORTED_LITELLM_VERSIONS)
+        missing.append(f"litellm in {{{supported}}} (installed: {version})")
     return missing

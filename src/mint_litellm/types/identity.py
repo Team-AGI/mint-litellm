@@ -112,10 +112,13 @@ def classify_principal(
     metadata: Mapping[str, Any] | None,
     is_master_key: bool,
     claimed_end_user_id: str | None = None,
+    keyless_verified: bool = False,
 ) -> Principal:
     """LiteLLM이 검증한 키 정보로 주체를 분류한다. 조직은 ``with_org``로 따로 채운다.
 
     키가 없거나 사용자도 팀도 없는 키는 신원을 확정할 수 없어 익명으로 다룬다(항상 차단).
+    예외는 LiteLLM이 직접 검증한 키 없는 주체(JWT, 관리형 에이전트, 게이트웨이 입장 사용자)이며
+    ``keyless_verified``일 때 ``user_id``가 있으면 그 사용자로 다룬다(``key_id``는 없다).
     """
     provenance: dict[str, Provenance] = {}
     if claimed_end_user_id is not None:
@@ -131,6 +134,16 @@ def classify_principal(
             principal_type=PrincipalType.MASTER_KEY,
             key_id=key_id,
             provenance={**provenance, "key_id": verified},
+            **common,
+        )
+    if key_id is None and keyless_verified and user_id is not None:
+        if team_id is not None:
+            provenance["team_id"] = verified
+        return Principal(
+            principal_type=PrincipalType.USER,
+            principal_id=user_id,
+            team_id=team_id,
+            provenance={**provenance, "principal_id": verified},
             **common,
         )
     if key_id is None or (user_id is None and team_id is None):
