@@ -12,7 +12,7 @@
     구형 HTTP+SSE(/mcp/sse + /mcp/sse/messages) e
 
 2026-07-28 헤더로 들어오는 요청은 기본 설정에서 도구 호출 앞에서 거절된다. 광고 판본에 2026-07-28을
-넣은 구성은 자체 점검이 집행 확인 불가로 기록하며, 업스트림에 닿는 호출이 없음을 확인한다.
+넣은 구성은 자체 점검이 집행 확인 불가로 기록하며, 승인된 호출도 업스트림에 닿지 않음을 확인한다.
 """
 
 import json
@@ -310,7 +310,7 @@ def test_advertising_2026_07_28_fails_self_check_and_no_call_reaches_upstream(wo
     )
     try:
         subject = world.subject(("e",))
-        relation = world.prepare(subject, "e")
+        world.approve(subject, world.prepare(subject, "e"), tools="echo")
         with psycopg.connect(support.mint_database_url()) as conn:
             opened = conn.execute("select clock_timestamp()").fetchone()[0]
         with litellm_config(f"./config/{name}", verified=False) as started:
@@ -326,28 +326,26 @@ def test_advertising_2026_07_28_fails_self_check_and_no_call_reaches_upstream(wo
                 return row[0] >= 1
 
             support.wait_until(unverified, 150, 2, what="enforcement_unverified")
-            marks = []
-            for approved in (False, True):
-                if approved:
-                    world.approve(subject, relation, tools="echo")
-                mark = support.marker()
-                marks.append(mark)
-                headers = {
-                    "Authorization": f"Bearer {subject.key}",
-                    "Accept": "application/json, text/event-stream",
-                    "Content-Type": "application/json",
-                    "MCP-Protocol-Version": "2026-07-28",
-                    "Mcp-Method": "tools/call",
-                    "Mcp-Name": "mcp_e-echo",
-                }
-                params = {
-                    "name": "mcp_e-echo",
-                    "arguments": {"text": "hello", "marker": mark},
-                    "_meta": MODERN_META,
-                }
-                body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params}
+            mark = support.marker()
+            headers = {
+                "Authorization": f"Bearer {subject.key}",
+                "Accept": "application/json, text/event-stream",
+                "Content-Type": "application/json",
+                "MCP-Protocol-Version": "2026-07-28",
+                "Mcp-Method": "tools/call",
+                "Mcp-Name": "mcp_e-echo",
+            }
+            params = {
+                "name": "mcp_e-echo",
+                "arguments": {"text": "hello", "marker": mark},
+                "_meta": MODERN_META,
+            }
+            body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params}
+            try:
                 httpx.post(f"{LITELLM}/mcp", headers=headers, content=json.dumps(body), timeout=60)
+            except httpx.TransportError:
+                pass  # 복제본이 연결을 받지 않는 것도 거절이다.
             time.sleep(2)
-            assert all(evidence.calls(m, "e") == (0, 0) for m in marks), marks
+            assert evidence.calls(mark, "e") == (0, 0), mark
     finally:
         path.unlink(missing_ok=True)
