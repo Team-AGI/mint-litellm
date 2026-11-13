@@ -67,7 +67,7 @@ def test_the_menu_lists_only_screens_that_exist(admin):
     labels = re.findall(r'<nav class="sidebar".*?</nav>', html, re.S)[0]
     names = re.findall(r">([^<]+)</a>", labels)
     assert names == ["개요", "MCP 서버", "신청·수용검증", "승인 대기열", "계약 변경",
-                     "거부·철회", "호출별 승인", "단말 설치", "원장", "정책·관측 설정",
+                     "거부·철회", "호출별 승인", "단말 설치", "경보", "원장", "정책·관측 설정",
                      "운영자·조직"]
     for text in ("준비 중", "예정", "곧 제공", "TBD"):
         assert text not in html
