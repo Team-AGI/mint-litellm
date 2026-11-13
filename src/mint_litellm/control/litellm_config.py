@@ -171,6 +171,18 @@ def ensure_guardrail_modes(path: Path) -> list[str]:
     return missing
 
 
+def _server_defaults(cfg: object) -> dict[str, Any]:
+    """서버마다 채우는 기본값: 기본 한도, 그리고 LiteLLM이 토큰을 받는 OAuth 서버의 RFC 8707
+    resource(서버 주소). resource를 거부하는 인가 서버는 값을 빈 문자열로 적어 끈다."""
+    if not isinstance(cfg, dict):
+        return {}
+    wanted: dict[str, Any] = dict(SERVER_LIMITS)
+    if (str(cfg.get("auth_type", "")).lower() == "oauth2"
+            and cfg.get("delegate_auth_to_upstream") is not True and cfg.get("url")):
+        wanted["upstream_resource"] = "auto"
+    return wanted
+
+
 def _add_server_limits(
     lines: list[str], document: dict[str, Any], path: Path
 ) -> list[tuple[str, str]]:
@@ -178,11 +190,11 @@ def _add_server_limits(
     fail = ControlError(
         f"{path}의 mcp_servers를 자동으로 고칠 수 없습니다. 서버마다 "
         + ", ".join(f"{k}: {v}" for k, v in SERVER_LIMITS.items())
-        + "를 직접 더하십시오."
+        + "(OAuth 서버는 upstream_resource: auto도)를 직접 더하십시오."
     )
     added: list[tuple[str, str]] = []
     for name, cfg in (document.get("mcp_servers") or {}).items():
-        wanted = {k: v for k, v in SERVER_LIMITS.items() if isinstance(cfg, dict) and k not in cfg}
+        wanted = {k: v for k, v in _server_defaults(cfg).items() if k not in cfg}
         if not wanted:
             continue
         top = next(
@@ -250,7 +262,7 @@ def ensure_required_flags(path: Path) -> list[str]:
         expected[section] = {**(expected[section] or {}), key: True}
     limits = _add_server_limits(lines, document, path)
     for name, key in limits:
-        expected["mcp_servers"][name][key] = SERVER_LIMITS[key]
+        expected["mcp_servers"][name][key] = _server_defaults(expected["mcp_servers"][name])[key]
     added = [key for _, key in missing] + [f"mcp_servers.{n}.{k}" for n, k in limits]
     if not added:
         return []

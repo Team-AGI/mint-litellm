@@ -105,7 +105,8 @@ def test_the_reuse_policies_counted_are_the_ones_the_self_check_maps():
     from mint_litellm.types.settings import REUSE_POLICIES
 
     reuse = {p["id"] for p in _policies() if p["pr"] == 65}
-    assert reuse == set(REUSE_POLICIES)
+    # 번호가 없는 재사용 정책도 점검 표에 들 수 있다. 표에 있는 정책은 모두 집계에 든다.
+    assert reuse <= set(REUSE_POLICIES) <= {p["id"] for p in _policies()}
 
 
 def test_the_semi_automated_evidence_policies_are_the_evidence_kinds():

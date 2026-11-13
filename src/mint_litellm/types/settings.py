@@ -438,6 +438,21 @@ SETTINGS_TABLE: tuple[SettingRow, ...] = (
         reason="nonce 대조와 주체 결속, PKCE 강제를 켠다.",
     ),
     SettingRow(
+        key="mcp_servers.<이름>.upstream_resource",
+        location=SettingLocation.MCP_SERVERS,
+        value="LiteLLM이 토큰을 받는 OAuth 서버는 auto(서버 주소) 또는 자원 식별자",
+        grade=SettingGrade.REQUIRED,
+        self_checks=(SelfCheckItem.REQUIRED_SETTINGS,),
+        reason="인가 서버에 토큰의 대상(RFC 8707 resource)을 알려 다른 서버용 토큰을 막는다.",
+    ),
+    SettingRow(
+        key="mcp_servers.<이름>.auth_type",
+        location=SettingLocation.MCP_SERVERS,
+        value="true_passthrough·oauth_delegate 서버는 승인 조건 allow_token_forward로만 사용",
+        grade=SettingGrade.RECOMMENDED,
+        reason="호출자 토큰을 업스트림에 그대로 전달하는 서버는 승인에서 명시하지 않으면 막는다.",
+    ),
+    SettingRow(
         key="LEGACY_MULTI_INSTANCE_RATE_LIMITING",
         location=SettingLocation.ENVIRONMENT,
         value="미설정",
@@ -476,6 +491,8 @@ OBSERVATION_ITEMS: tuple[str, ...] = (
 # `mint check`가 정책마다 충족 여부 한 줄을 보인다.
 REUSE_POLICIES: dict[str, tuple[str, ...]] = {
     "POL-R-04": ("서버 이름·별칭 유일성",),
+    "POL-R-05": ("mcp_servers.<이름>.upstream_resource",),
+    "POL-R-06": ("mcp_servers.<이름>.auth_type",),
     "POL-R-07": ("mcp_servers.<이름>.issuer", "mcp_servers.<이름>.oauth_identity_binding.mode"),
     "POL-R-09": ("OAuth 리다이렉트 출처",),
     "POL-R-10": ("mcp_servers.<이름>.oauth_identity_binding.mode",),

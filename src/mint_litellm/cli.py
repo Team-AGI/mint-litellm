@@ -418,6 +418,7 @@ def _approve(run: Run) -> None:
             scan_result=not a.no_result_scan,
             response_scan=a.response_scan,
             allow_input_secrets=a.allow_input_secret,
+            allow_token_forward=a.allow_token_forward,
         ),
     )
     _created(run, approval_id)
@@ -965,6 +966,9 @@ ARGUMENTS: dict[str, list[Any]] = {
         _a("--allow-input-secret", action="append",
            help="인자에서 비밀을 찾아도 이 승인의 도구에 한해 허용할 탐지 종류(반복 가능). "
            "기본은 인자에 비밀이 있으면 막는다"),
+        _a("--allow-token-forward", action="store_true",
+           help="호출자 토큰을 업스트림에 그대로 전달하는 서버(true_passthrough·oauth_delegate)의 "
+           "호출을 이 승인에서 허용한다. 기본은 막는다"),
         _a("--confirm-tool", action="append",
            help="호출 때 본인 확인을 요구할 도구(반복 가능, 승인 도구 안에 있어야 한다)"),
         _a("--confirm-purpose", help="본인 확인의 목적(--confirm-tool과 함께)"),
