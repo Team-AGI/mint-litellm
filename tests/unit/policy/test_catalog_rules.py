@@ -83,8 +83,9 @@ def test_the_five_class_count_is_pinned():
     # 서버 폐기 때 사용자 자격 삭제와 읽어 확인(D-03)이 늘었다. 승인 재확인(O-14)은 기본 집행이라
     # 무조건으로, 경보 시험(O-17)은 새 도구 경보가 계약 관리 서버에만 열려 조건부로 옮겼다.
     # 폐기 서버 항목 잔존(D-02)은 관리형 설치에서 묶음이 지우고 실행기가 시작하지 않아
-    # 부분에서 조건부로 옮겼다.
-    assert (_count("unconditional"), _count("conditional"), _count("partial")) == (38, 16, 19)
+    # 부분에서 조건부로 옮겼다. 서버 실행기가 계약에서 만든 격리 안에서 서버를 시작해
+    # 파일·네트워크 접근 통제(O-13)와 선언 파일 접근(I-08)은 Linux 관리형 설치에서 조건부이다.
+    assert (_count("unconditional"), _count("conditional"), _count("partial")) == (38, 18, 17)
     assert auto == 73
     # 목표(90개 중 72개 이상) 산정은 반자동 수동 증거를 함께 센다.
     assert _count("semi_auto_evidence") == 12

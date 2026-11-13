@@ -17,6 +17,9 @@
 - 키 만료까지 7일 이하인 설치는 ``endpoint_key_expiring``. 보고하는 단말은 만료 14일 전부터 보고가
   키를 늘려 주므로 이 경보는 키가 갱신되지 못하고 있다는 뜻이다. 늘어나거나 키가 해제되면 닫힌다.
 
+- 관리형 설치가 격리 없이(``sandbox`` 값 ``none``) 실행 중인 서버를 보고하면
+  ``endpoint_unsandboxed``. Windows(``unsupported``)와 사용자 수준 설치는 격리를 요구하지 않는다.
+
 조건이 사라지면(재설치·제거·키 해제·서버 되살림) 같은 스캔이 경보를 닫는다.
 """
 
@@ -37,6 +40,7 @@ KINDS = (
     AlertKind.ENDPOINT_UNMANAGED.value,
     AlertKind.ENDPOINT_STALE_PROCESS.value,
     AlertKind.ENDPOINT_STALE_AUTOSTART.value,
+    AlertKind.ENDPOINT_UNSANDBOXED.value,
     AlertKind.ENDPOINT_SILENT.value,
     AlertKind.ENDPOINT_KEY_EXPIRING.value,
 )
@@ -86,6 +90,13 @@ def findings(
                 wanted[f"{kind}:{row['key_alias']}:{name}"] = (
                     kind, "high", {**who, "server_id": name, "count": item["count"]}
                 )
+        if row["install_mode"] == "managed":
+            for item in row.get("processes") or ():
+                if item.get("sandbox") == "none":
+                    kind = AlertKind.ENDPOINT_UNSANDBOXED.value
+                    wanted[f"{kind}:{row['key_alias']}:{item['server']}"] = (
+                        kind, "high", {**who, "server_id": item["server"]}
+                    )
         for item in row.get("autostart") or ():
             name = item.get("server")
             if name is not None and statuses.get(name) not in LIVE:
