@@ -458,6 +458,22 @@ class TestDenialAndApproval:
             code(decide(harness(tmp_path, snapshot(approvals=(row,))))) == "MINT-APPROVAL-EXPIRED"
         )
 
+    def test_a_held_approval_blocks_with_the_recertification_reason(self, tmp_path):
+        held = snapshot(approvals=(approval(recert_held=True),))
+        outcome = decide(harness(tmp_path, held))
+        assert code(outcome) == "MINT-APPROVAL-RECERT-REQUIRED"
+        assert outcome.snapshot.stop is not None
+
+    def test_a_confirmed_approval_is_usable_again(self, tmp_path):
+        assert decide(harness(tmp_path, snapshot(approvals=(approval(recert_held=False),)))).allowed
+
+    def test_a_hold_is_not_relaxed_by_observe_mode(self, tmp_path):
+        cfg = config(tmp_path, mode_ceiling=Mode.OBSERVE)
+        snap = snapshot(
+            approvals=(approval(recert_held=True),), settings=SettingsRow(mode=Mode.OBSERVE)
+        )
+        assert code(decide(harness(tmp_path, snap, cfg=cfg))) == "MINT-APPROVAL-RECERT-REQUIRED"
+
     def test_a_not_yet_valid_approval_is_not_a_grant_and_not_a_history(self, tmp_path):
         row = approval(valid_from=NOW + timedelta(seconds=1))
         outcome = decide(harness(tmp_path, snapshot(approvals=(row,))))

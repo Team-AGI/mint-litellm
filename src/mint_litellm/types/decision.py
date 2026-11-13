@@ -421,6 +421,8 @@ class ResolvedServer(BaseModel):
     # 레지스트리가 알려 주는 원격 자격의 주체(고정 토큰의 지문 또는 OAuth 클라이언트). 호출자별
     # 자격은 훅에서 보이지 않으므로 없다. 토큰 원문은 담지 않는다.
     credential_ref: str | None = Field(default=None, max_length=96)
+    # 서버 정의에 관리자가 설정한 OAuth 범위. 승인된 범위와 비교하는 데만 쓴다.
+    oauth_scopes: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def _identity_shape(self) -> Self:

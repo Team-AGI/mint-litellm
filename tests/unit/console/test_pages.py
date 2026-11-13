@@ -218,6 +218,55 @@ def test_revoking_without_a_denial_leaves_no_denial(world, admin):
     assert world.query("SELECT count(*) FROM mint.denials")[0][0] == 0
 
 
+def overdue(world, held: bool) -> str:
+    approval_id = add_approval(world)
+    world.query(
+        "UPDATE mint.approvals SET recert_confirmed_at = now() - interval '120 days',"
+        " recert_confirmed_by = 'earlier', recert_requested_at = now() - interval '30 days',"
+        " recert_held_at = CASE WHEN %s THEN now() END", held)
+    return approval_id
+
+
+def test_the_approval_list_shows_the_recertification_state_and_the_button(world, admin):
+    overdue(world, held=True)
+    html = admin.get("/approvals").text
+    assert "재확인 기한" in html and "보류됨" in html
+    assert re.search(r"<button[^>]*>재확인</button>", html)
+
+
+def test_confirming_from_the_screen_lifts_the_hold_and_records_who(world, admin):
+    approval_id = overdue(world, held=True)
+    version = world.query("SELECT state_version FROM mint.approvals")[0][0]
+    response = form_post(world, admin, f"/approvals/{approval_id}/recertify",
+                         state_version=version)
+    assert response.status_code == 303 and "recertified" in response.headers["location"]
+    held, by = world.query("SELECT recert_held_at, recert_confirmed_by FROM mint.approvals")[0]
+    assert held is None and by == "admin"
+    kinds = {r[0] for r in world.query("SELECT kind FROM mint.events")}
+    assert "approval_recert_confirmed" in kinds
+    assert "기한 내" in admin.get("/approvals").text
+
+
+def test_only_an_admin_can_confirm_from_the_screen(world):
+    approval_id = overdue(world, held=True)
+    version = world.query("SELECT state_version FROM mint.approvals")[0][0]
+    for role in ("approver", "viewer"):
+        client = world.session_client(role)
+        assert not re.search(r"<button[^>]*>재확인</button>", client.get("/approvals").text)
+        response = form_post(world, client, f"/approvals/{approval_id}/recertify",
+                             state_version=version)
+        assert response.status_code == 403
+    assert world.query("SELECT recert_held_at IS NOT NULL FROM mint.approvals")[0][0]
+
+
+def test_confirming_without_the_csrf_token_is_refused(world, admin):
+    approval_id = overdue(world, held=True)
+    version = world.query("SELECT state_version FROM mint.approvals")[0][0]
+    response = admin.post(f"/approvals/{approval_id}/recertify", data={"state_version": version})
+    assert response.status_code == 403
+    assert world.query("SELECT recert_held_at IS NOT NULL FROM mint.approvals")[0][0]
+
+
 def test_closing_an_org_needs_its_identifier_typed(world, admin):
     version = world.query("SELECT state_version FROM mint.orgs WHERE org_id = 'acme'")[0][0]
     # 이용 관계가 열려 있어도 닫기 자체는 서비스 규칙을 따른다. 이름 확인이 먼저다.

@@ -220,6 +220,10 @@ def _to_resolved(server: Any, candidates: int) -> ResolvedServer:
         auth_type=normalize_auth_type(server.auth_type),
         candidates_with_same_name=max(candidates, 1),
         credential_ref=_credential_ref(server),
+        oauth_scopes=tuple(sorted({
+            part for s in (getattr(server, "configured_scopes", None) or ())
+            if isinstance(s, str) for part in s.split()
+        })),
     )
 
 

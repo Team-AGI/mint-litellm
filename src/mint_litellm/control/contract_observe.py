@@ -11,7 +11,7 @@ from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import ControlError, conflict
 from mint_litellm.control.intake_checks import SERVER_CREDENTIAL_FLOW
-from mint_litellm.control.intake_jobs import _oauth2_flow_read
+from mint_litellm.control.intake_jobs import _oauth_config_read
 from mint_litellm.control.services import intakes
 from mint_litellm.control.services.base import transact
 from mint_litellm.types.canonical import canonical_text, sha256
@@ -366,6 +366,34 @@ def record_oauth2_flow(
     return True
 
 
+def record_oauth_scopes(ctx: Context, server_id: str, scopes: list[str]) -> bool:
+    """서버 정의의 OAuth 범위가 승인된 배포 계약보다 넓으면 배포 드리프트를 켠다(호출 차단).
+
+    승인 범위에 없는 범위가 하나라도 있으면 넓어진 것이다. 같거나 좁아지면 아무것도 하지 않는다.
+    넓어졌으면 참이다.
+    """
+    with transact(ctx):
+        server = fetchone(
+            ctx.conn,
+            "SELECT * FROM mint.servers WHERE instance_id=%s AND server_id=%s FOR UPDATE",
+            (ctx.instance_id, server_id),
+        )
+        contract = fetchone(
+            ctx.conn,
+            "SELECT * FROM mint.deployment_contracts"
+            " WHERE instance_id=%s AND server_id=%s AND status='approved'",
+            (ctx.instance_id, server_id),
+        )
+        if server is None or server["contract_status"] != "managed" or contract is None:
+            return False
+        wider = sorted(set(scopes) - set(contract["oauth_scopes"] or ()))
+        if not wider:
+            return False
+        _deployment_drift(ctx, server, contract, "oauth_scopes", {"wider_oauth_scopes": wider},
+                          ["oauth_scopes"], entity=uuid.uuid5(contract["id"], "oauth_scopes"))
+    return True
+
+
 def instance_differences(
     instances: Collection[str], rows: Iterable[tuple[str, str, str, str]]
 ) -> list[dict]:
@@ -514,8 +542,9 @@ def handle(job) -> None:
             # 서버 자격 흐름이 아니거나 읽지 못하면 차단한다(30일 증거 재검사를 기다리지 않는다).
             # 표지가 서버 판본을 올리므로 도구 관측이 끝난 뒤에 한다.
             job.checkpoint()
-            flow, readable = _oauth2_flow_read(
+            flow, scopes, readable = _oauth_config_read(
                 job.litellm, server["server_id"], frozenset({"approved"}))
-            record_oauth2_flow(ctx, server["server_id"], flow, readable)
+            if not record_oauth2_flow(ctx, server["server_id"], flow, readable) and readable:
+                record_oauth_scopes(ctx, server["server_id"], scopes)
     if failed:
         raise ControlError("일부 서버의 계약 관측이 실패했습니다.")

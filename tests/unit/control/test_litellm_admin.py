@@ -57,3 +57,9 @@ def test_unreachable_api_is_a_control_error():
     client = LiteLLMAdmin("http://localhost:9", "k", timeout=0.5)
     with pytest.raises(ControlError, match="연결할 수 없습니다"):
         client.list_servers()
+
+
+def test_scrub_keeps_only_the_oauth_scopes_of_credentials():
+    value = {"credentials": {"auth_value": "secret", "scopes": ["read", 3]}}
+    assert scrub(value) == {"credentials": {"scopes": ["read"]}}
+    assert scrub({"credentials": {"auth_value": "secret"}}) == {}

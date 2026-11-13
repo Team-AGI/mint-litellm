@@ -14,12 +14,18 @@
 {% else %}{{ m.empty('승인을 기다리는 서버가 없습니다', '/servers', '서버 목록 보기') }}{% endif %}
 <h2>승인 내역</h2>
 {% if rows %}
-<table><thead><tr><th>서버</th><th>대상</th><th>도구</th><th>구분</th><th>유효 기간</th><th>승인자</th><th>상태</th></tr></thead><tbody>
+<table><thead><tr><th>서버</th><th>대상</th><th>도구</th><th>구분</th><th>유효 기간</th><th>승인자</th><th>상태</th><th>재확인 기한</th><th></th></tr></thead><tbody>
 {% for a in rows %}<tr>
 <td><a href="/servers/{{ a.server_id | urlencode }}">{{ a.server_id }}</a></td>
 <td>{{ L.pick(L.SCOPE, a.scope_type) }} {{ a.scope_id }}</td><td>{{ a.tools | join }}</td>
 <td>{{ L.pick(L.APPROVAL_CLASS, a.class) }}</td><td>{{ a.valid_from | when }} ~ {{ a.valid_until | when }}</td>
 <td>{{ a.granted_by | who }}</td><td>{{ m.badge(L.APPROVAL, a.status) }}</td>
+<td>{% if a.recert %}{{ a.recert_due | when }} {{ m.badge(L.RECERT, a.recert) }}{% else %}—{% endif %}</td>
+<td>{% if a.recert and actor.role == 'admin' %}
+<form method="post" action="/approvals/{{ a.id }}/recertify">
+  {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ a.state_version }}">
+  <button type="submit"{% if a.recert in ('due', 'overdue', 'held') %} class="primary"{% endif %}>재확인</button>
+</form>{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
 {{ m.pager('/approvals', page, rows | length) }}

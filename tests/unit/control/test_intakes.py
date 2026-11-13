@@ -1687,6 +1687,28 @@ def oauth_world(world):
     return approved_world(world)
 
 
+def test_the_approved_oauth_scopes_are_recorded_and_a_wider_set_raises_a_drift_alert(world):
+    world.stub.servers["srv-a"] = {
+        "server_id": "srv-a", "transport": "http", "auth_type": "oauth2", "url": None,
+        "issuer": "https://idp.test", "oauth2_flow": "client_credentials",
+        "credentials": {"scopes": ["read", "write"]}}
+    world.allow("auth_server", "https://idp.test")
+    approved_world(world)
+    approved = fetchone(
+        world.conn, "SELECT oauth_scopes FROM mint.deployment_contracts WHERE status = 'approved'")
+    assert approved["oauth_scopes"] == ["read", "write"]
+
+    world.stub.servers["srv-a"]["credentials"] = {"scopes": ["read"]}  # 좁아짐: 아무 일 없음
+    observe(world)
+    assert world.server()["deployment_drift"] is False
+
+    world.stub.servers["srv-a"]["credentials"] = {"scopes": ["read", "write", "admin"]}
+    observe(world)
+    assert world.server()["deployment_drift_fields"] == ["oauth_scopes"]
+    alert = fetchone(world.conn, "SELECT 1 FROM mint.alerts WHERE kind = 'contract_drift'")
+    assert alert is not None
+
+
 def test_an_oauth2_flow_drift_keeps_the_block_until_the_flow_is_fixed_and_rechecked(world):
     from mint_litellm.control.contract_pin import finalize_reapproval
     from mint_litellm.control.errors import AdminError

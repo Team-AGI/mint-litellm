@@ -190,6 +190,8 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 | `MINT_LITELLM_KEY` | 제어 평면 LiteLLM 키(`proxy_admin`, `allowed_routes` 11개로 제한). `./mint.sh up`이 비워 둔 `.env`의 값을 대신해 만들어 비밀 폴더에 둔다. `init`이 이 키의 토큰을 도구 목록 면제 키로 저장한다(키를 넣은 뒤 `init`을 다시 실행하거나 `settings control-key`를 실행). 저장되지 않으면 서버 승인 때 도구 고정이 멈추고 경보 `sync_divergence`(`control_key_not_set`)가 열린다. | 위와 같음 |
 | `MINT_STAFF_DATABASE_URL` | 콘솔 직원 화면이 쓰는 `mint_staff_app` 로그인의 데이터베이스 주소 | 없으면 직원 화면을 열지 않음 |
 | `MINT_STAFF_CONSENT_MAX_DAYS` | 직원 본인 동의의 유효 기간 상한(일, 1~365) | `90` |
+| `MINT_RECERT_DAYS` | 승인 필요성 재확인 주기(일, 1~365). 마지막 재확인(없으면 승인 시작)부터 센다 | `90` |
+| `MINT_RECERT_GRACE_DAYS` | 재확인 요청 뒤 보류까지의 유예(일, 1~365) | `14` |
 | `MINT_CONSOLE_URL` | 경보 본문의 `console_url`에 넣을 콘솔 주소(선택). 없으면 `null`이다. | 없음 |
 | `MINT_LITELLM_CONFIG` | `check`·`status`가 읽는 LiteLLM `config.yaml` 경로. `--config`로 대신할 수 있다. | 없음 |
 | `MINT_MODE` | 모드 상한. `enforce`이면 `settings mode observe`가 거부된다. | `enforce` |
@@ -296,7 +298,7 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 
 ## 경보와 웹훅
 
-경보는 종류와 대상으로 묶인다. 같은 묶음의 미해결 경보가 있으면 새로 만들지 않고 `count`와 `last_at`만 올린다. `job_failed`는 작업이 최대 시도 횟수를 넘겨 실패할 때, 같은 종류·대상의 작업이 이후 성공하면 해결된다. `approval_expiring`은 7일 안에 만료될 대기·확정 건마다 한 번 열리며, 운영자가 닫은 뒤에는 다시 열리지 않는다.
+경보는 종류와 대상으로 묶인다. 같은 묶음의 미해결 경보가 있으면 새로 만들지 않고 `count`와 `last_at`만 올린다. `job_failed`는 작업이 최대 시도 횟수를 넘겨 실패할 때, 같은 종류·대상의 작업이 이후 성공하면 해결된다. `approval_expiring`은 7일 안에 만료될 대기·확정 건마다 한 번 열리며, 운영자가 닫은 뒤에는 다시 열리지 않는다. `approval_recert_due`는 승인이 재확인 주기에 닿으면, `approval_recert_held`는 유예 안에 확인이 없어 승인이 보류되면 열리고, 콘솔 승인 내역의 「재확인」으로 확인하면 닫힌다.
 
 경보가 열리면 `alert_opened`(순번 0), 확인되면 `alert_acknowledged`(순번 1), 해결되면 `alert_resolved`(순번 2) 사건을 같은 트랜잭션에 남긴다.
 

@@ -38,6 +38,13 @@ APPROVAL = {
     "expired": Status("만료", "off"),
     "revoked": Status("철회됨", "block"),
 }
+# 활성 승인의 재확인 상태(승인 내역 표시용)
+RECERT = {
+    "ok": Status("기한 내", "ok"),
+    "due": Status("재확인 필요", "wait"),
+    "overdue": Status("재확인 기한 초과", "error"),
+    "held": Status("보류됨", "block"),
+}
 CALL_APPROVAL = {
     "pending": Status("응답 대기", "wait"),
     "approved": Status("승인됨", "ok"),
@@ -310,6 +317,9 @@ EVENT_KIND = {
     "deployment_contract_approved": "배포 계약 승인",
     "deployment_drift_detected": "배포 변경 탐지",
     "deployment_contract_superseded": "배포 계약 교체",
+    "approval_recert_requested": "승인 재확인 요청",
+    "approval_held": "승인 보류",
+    "approval_recert_confirmed": "승인 재확인",
 }
 
 CONFIRMATION_EVENT = {
@@ -344,6 +354,7 @@ NOTICES = {
     "resumed": "서버를 재개했습니다.",
     "approved": "승인했습니다.",
     "revoked": "승인을 철회했습니다.",
+    "recertified": "승인을 재확인했습니다.",
     "revoked_denied": "승인을 철회하고 거부를 등록했습니다.",
     "denied": "거부를 등록했습니다.",
     "lifted": "해제했습니다.",

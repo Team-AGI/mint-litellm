@@ -77,7 +77,8 @@ SELECT jsonb_build_object(
               'true_passthrough') THEN 'per_user' ELSE 'server' END
     ),
     'deployment_basis', (
-        SELECT jsonb_build_object('url', d.url, 'tools', coalesce(d.allowed_tools, '{}') ||
+        SELECT jsonb_build_object('url', d.url, 'oauth_scopes', to_jsonb(d.oauth_scopes),
+            'tools', coalesce(d.allowed_tools, '{}') ||
             coalesce((SELECT array_agg(DISTINCT t.tool) FROM mint.tool_contracts t
                       WHERE t.instance_id = d.instance_id AND t.server_id = d.server_id
                         AND t.status = 'approved'), '{}'))
@@ -282,6 +283,8 @@ class ServerRow:
     identity_kind: str = "remote"
     exec_contract_sha256: str | None = None
     exec_contract_version: int | None = None
+    # 승인 계약의 OAuth 범위. None은 알 수 없음
+    approved_oauth_scopes: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -313,6 +316,8 @@ class ApprovalRow:
     valid_until: datetime
     conditions: Mapping[str, Any]
     status: str
+    # 재확인 유예가 지나 보류됐다(운영자가 재확인할 때까지 이 승인은 쓰지 않는다).
+    recert_held: bool = False
 
 
 @dataclass(frozen=True)
@@ -463,6 +468,9 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
             identity_kind=server.get("identity_kind", "remote"),
             exec_contract_sha256=server.get("exec_contract_sha256"),
             exec_contract_version=server.get("exec_contract_version"),
+            approved_oauth_scopes=(
+                None if basis.get("oauth_scopes") is None else tuple(basis["oauth_scopes"])
+            ),
         ),
         allowlists={
             a["id"]: AllowlistRow(
@@ -491,6 +499,7 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
                 valid_until=_time(a["valid_until"]),
                 conditions=a["conditions"],
                 status=a["status"],
+                recert_held=a.get("recert_held_at") is not None,
             )
             for a in doc["approvals"]
         ),

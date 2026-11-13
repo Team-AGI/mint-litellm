@@ -286,6 +286,7 @@ def denial_and_approval(
         a
         for a in in_org
         if a.status == "active"
+        and not a.recert_held
         and a.valid_from <= now < a.valid_until
         and relation_status[a.id] == "active"
     ]
@@ -307,6 +308,8 @@ def denial_and_approval(
         return ApprovalSelection([StageResult.finding(Reason.APPROVAL_ABSENT)], None)
     if any(a.status == "revoked" for a in in_org):
         return ApprovalSelection([StageResult.stop(Reason.APPROVAL_REVOKED)], None)
+    if any(a.status == "active" and a.recert_held for a in in_org):
+        return ApprovalSelection([StageResult.stop(Reason.APPROVAL_RECERT_REQUIRED)], None)
     if any(_approval_expired(a, now) for a in in_org):
         return ApprovalSelection([StageResult.stop(Reason.APPROVAL_EXPIRED)], None)
     return ApprovalSelection([StageResult.finding(Reason.APPROVAL_ABSENT)], None)
@@ -361,7 +364,7 @@ def bound_to_current_contract(snapshot: Snapshot, tool: str, bound: str | None) 
 
 
 def contract_result(
-    snapshot: Snapshot, tool: str, observe_seconds: int
+    snapshot: Snapshot, tool: str, observe_seconds: int, resolved: ResolvedServer | None = None
 ) -> StageResult | SkippedStage:
     server = snapshot.server
     if server is None or server.contract_status != "managed":
@@ -377,6 +380,13 @@ def contract_result(
         return StageResult.finding(Reason.CONTRACT_DRIFT, "input_schema")
     if server.deployment_drift:
         return StageResult.finding(Reason.CONTRACT_DRIFT, "deployment")
+    if (
+        resolved is not None
+        and server.approved_oauth_scopes is not None
+        and set(resolved.oauth_scopes) - set(server.approved_oauth_scopes)
+    ):
+        # 지금 서버 정의의 범위가 승인된 범위보다 넓다: 닫힌 쪽으로 막는다(좁아지거나 같으면 통과)
+        return StageResult.finding(Reason.CONTRACT_DRIFT, "oauth_scope")
     if (
         server.last_observed_at is None
         or (snapshot.now - server.last_observed_at).total_seconds() > 2 * observe_seconds
@@ -1178,7 +1188,7 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
     ):
         return
     run.current = Stage.CONTRACT
-    stages.add(Stage.CONTRACT, contract_result(snapshot, tool, config.observe_seconds))
+    stages.add(Stage.CONTRACT, contract_result(snapshot, tool, config.observe_seconds, resolved))
     if req.operation is OperationType.RUNTIME_DISCOVERY:
         return
     unknown_keys = input_keys_unknown(snapshot, tool, run.selected)

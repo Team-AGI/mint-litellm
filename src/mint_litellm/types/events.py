@@ -88,6 +88,9 @@ class EventKind(StrEnum):
     DEPLOYMENT_CONTRACT_APPROVED = "deployment_contract_approved"
     DEPLOYMENT_DRIFT_DETECTED = "deployment_drift_detected"
     DEPLOYMENT_CONTRACT_SUPERSEDED = "deployment_contract_superseded"
+    APPROVAL_RECERT_REQUESTED = "approval_recert_requested"
+    APPROVAL_HELD = "approval_held"
+    APPROVAL_RECERT_CONFIRMED = "approval_recert_confirmed"
 
 
 CALL_KINDS: frozenset[EventKind] = frozenset(
@@ -168,6 +171,9 @@ CONTROL_ENTITY: dict[EventKind, str] = {
     EventKind.DEPLOYMENT_CONTRACT_APPROVED: "deployment_contract",
     EventKind.DEPLOYMENT_DRIFT_DETECTED: "deployment_contract",
     EventKind.DEPLOYMENT_CONTRACT_SUPERSEDED: "deployment_contract",
+    EventKind.APPROVAL_RECERT_REQUESTED: "approval",
+    EventKind.APPROVAL_HELD: "approval",
+    EventKind.APPROVAL_RECERT_CONFIRMED: "approval",
 }
 
 _ENTITY_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
