@@ -29,6 +29,7 @@ from mint_litellm.compat.litellm_1_106 import RegistryEntry
 from mint_litellm.plugin.buffer import EvidenceRecorder, LocalBuffer, SystemEventKeys
 from mint_litellm.plugin.config import PluginConfig, configure_logging
 from mint_litellm.plugin.discovery import DiscoveryResult, evaluate_listed_tool
+from mint_litellm.plugin.list_seen import ListSeen
 from mint_litellm.plugin.pipeline import (
     CallRequest,
     Outcome,
@@ -397,13 +398,17 @@ class PluginRuntime:
     keys: SystemEventKeys = field(default_factory=SystemEventKeys, repr=False)
     _reported: dict[str, dict[str, str]] = field(default_factory=dict, repr=False)
     _observed_hashes: dict[str, dict[str, str]] = field(default_factory=dict, repr=False)
+    _list_seen: ListSeen | None = field(default=None, repr=False)
     _task: asyncio.Task[None] | None = field(default=None, repr=False)
     _observe_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _restore_task: asyncio.Task[None] | None = field(default=None, repr=False)
 
     @property
     def deps(self) -> PipelineDeps:
+        if self._list_seen is None and self.config.list_dedup_seconds > 0:
+            self._list_seen = ListSeen(self.config.list_dedup_seconds)
         return PipelineDeps(
+            list_seen=self._list_seen,
             config=self.config,
             snapshots=self.database,
             recorder=self.recorder,
