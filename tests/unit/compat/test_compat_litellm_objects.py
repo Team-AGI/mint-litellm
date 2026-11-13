@@ -1,6 +1,7 @@
 """고정 판본의 실제 LiteLLM 객체를 쓰는 접점 시험. LiteLLM이 설치되지 않으면 건너뛴다."""
 
 import asyncio
+from unittest import mock
 
 import pytest
 
@@ -39,7 +40,18 @@ def mcp_server(server_id, name, url="https://learn.test/api/mcp", **kw):
 
 def test_every_symbol_the_layer_uses_exists_in_the_pinned_release():
     assert compat.missing_symbols() == []
-    assert compat.installed_litellm_version() == compat.SUPPORTED_LITELLM_VERSION
+    assert compat.installed_litellm_version() in compat.SUPPORTED_LITELLM_VERSIONS
+
+
+def test_the_version_check_accepts_every_supported_release_and_rejects_others():
+    def importer(_name):
+        return mock.MagicMock()
+
+    for version in compat.SUPPORTED_LITELLM_VERSIONS:
+        with mock.patch.object(compat, "installed_litellm_version", return_value=version):
+            assert compat.missing_symbols(importer=importer) == []
+    with mock.patch.object(compat, "installed_litellm_version", return_value="1.107.0"):
+        assert any("1.107.0" in m for m in compat.missing_symbols(importer=importer))
 
 
 def test_the_local_name_normalizer_matches_litellm():

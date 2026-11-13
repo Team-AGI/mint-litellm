@@ -6,6 +6,9 @@ resolution-markers = [
     "python_full_version < '3.14'",
 ]
 
+[manifest]
+constraints = [{ name = "litellm", specifier = "==1.106.6" }]
+
 [[package]]
 name = "aiohappyeyeballs"
 version = "2.7.1"
@@ -1688,7 +1691,7 @@ requires-dist = [
     { name = "jinja2", marker = "extra == 'console'", specifier = ">=3.1" },
     { name = "jinja2", marker = "extra == 'dev'", specifier = ">=3.1" },
     { name = "jinja2", marker = "extra == 'litellm'", specifier = ">=3.1" },
-    { name = "litellm", extras = ["proxy"], marker = "extra == 'litellm'", specifier = "==1.106.6" },
+    { name = "litellm", extras = ["proxy"], marker = "extra == 'litellm'", specifier = ">=1.106.6,<=1.108.5" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'dev'", specifier = ">=3.3" },
     { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'litellm'", specifier = ">=3.3" },
