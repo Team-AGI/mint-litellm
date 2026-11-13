@@ -1,0 +1,1 @@
+- 결과 크기·항목 수 상한(POL-E-16)에 기본값을 둔다. 승인 조건에 `max_result_bytes`·`max_result_items`가 없으면 계약 관리 서버 호출에 1 MiB·1000항목(`MINT_DEFAULT_MAX_RESULT_BYTES`·`MINT_DEFAULT_MAX_RESULT_ITEMS`, 0이면 끔)을 채운다. 승인에 적은 값이 우선한다.

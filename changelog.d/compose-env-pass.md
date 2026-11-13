@@ -1,0 +1,1 @@
+- 배포 compose의 작업 실행기에 `MINT_OPA_URL`과 `MINT_OBSERVE_SECONDS`를 넘기고, LiteLLM에도 `MINT_OBSERVE_SECONDS`를 넘긴다.

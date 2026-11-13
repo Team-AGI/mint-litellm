@@ -44,14 +44,11 @@ def test_every_symbol_the_layer_uses_exists_in_the_pinned_release():
 
 
 def test_the_version_check_accepts_every_supported_release_and_rejects_others():
-    def importer(_name):
-        return mock.MagicMock()
-
     for version in compat.SUPPORTED_LITELLM_VERSIONS:
         with mock.patch.object(compat, "installed_litellm_version", return_value=version):
-            assert compat.missing_symbols(importer=importer) == []
+            assert compat.missing_symbols(env={}) == []
     with mock.patch.object(compat, "installed_litellm_version", return_value="1.107.0"):
-        assert any("1.107.0" in m for m in compat.missing_symbols(importer=importer))
+        assert any("1.107.0" in m for m in compat.missing_symbols(env={}))
 
 
 def test_the_local_name_normalizer_matches_litellm():

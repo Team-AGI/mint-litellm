@@ -46,9 +46,10 @@ def approve(
     second: Operator | None,
     *,
     expected_version: int | None = None,
+    window_minutes: int | None = None,
 ) -> None:
     lock_version(ctx, "call_approvals", call_id, expected_version)
-    domain.call_approve(ctx, call_id, second)
+    domain.call_approve(ctx, call_id, second, window_minutes)
 
 
 @service("call-approval reject")

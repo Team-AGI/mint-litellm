@@ -393,13 +393,15 @@ def decide_call(
     request: Request,
     state_version: int = Form(...),
     second_approver_token: str = Form(""),
+    window_minutes: int = Form(0),
     actor: Actor = Depends(page_actor),
 ):
     def action():
         if decision == "approve":
             second = api.second_approver(actor, second_approver_token)
             call_approval_service.approve(
-                actor.ctx, call_id, second, expected_version=state_version
+                actor.ctx, call_id, second, expected_version=state_version,
+                window_minutes=window_minutes or None,
             )
         elif decision == "reject":
             call_approval_service.reject(actor.ctx, call_id, expected_version=state_version)

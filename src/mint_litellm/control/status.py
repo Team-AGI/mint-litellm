@@ -3,6 +3,7 @@
 from datetime import timedelta
 from typing import Any
 
+from mint_litellm.compat import litellm_1_106 as compat
 from mint_litellm.control import approvals, checks, settings_store, todo
 from mint_litellm.control.config import ControlConfig
 from mint_litellm.control.context import Context
@@ -80,7 +81,14 @@ def collect(
     elif config is not None:
         observations = checks.run_checks(config, env, None, compat_probe=lambda: None).observations
     ceiling = cfg.mode_ceiling
+    found = compat.litellm_assessment()
     return {
+        "litellm_compat": {
+            "version": found.version,
+            "grade": found.grade,
+            "tested": found.tested,
+            "missing": list(found.missing),
+        },
         "instance_id": ctx.instance_id,
         "mode": {
             "stored": stored["mode"],
@@ -185,6 +193,17 @@ def shadow_line(shadow: dict[str, Any]) -> str:
     )
 
 
+def _compat_line(found: dict[str, Any] | None) -> str:
+    if not found or found["version"] is None:
+        return "LiteLLM: 확인 불가(이 환경에 설치되어 있지 않음)"
+    line = f"LiteLLM: {found['version']} 등급 {found['grade']}"
+    if not found["tested"]:
+        line += " (검증되지 않은 판본)"
+    if found["grade"] != "A":
+        line += f" - 빠진 능력: {', '.join(found['missing'])}; 등급 A만 기동한다"
+    return line
+
+
 def render(info: dict[str, Any]) -> str:
     mode = info["mode"]
     lines = [
@@ -192,6 +211,7 @@ def render(info: dict[str, Any]) -> str:
         f"모드: {mode['effective']} (저장 {mode['stored']}, 환경 상한 {mode['ceiling']})",
         f"기본 조직: {info['default_org_id'] or '없음'}",
         f"정책 판본: {info['policy_version'] or '없음'}",
+        _compat_line(info.get("litellm_compat")),
         "서버: " + (", ".join(f"{k} {v}" for k, v in sorted(info["servers"].items())) or "없음"),
         "경보: " + ("없음" if not info["alerts"] else ""),
     ]
