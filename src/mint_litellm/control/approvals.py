@@ -57,6 +57,23 @@ def parse_business_hours(text: str) -> dict:
     return {"tz": tz, "days": sorted(set(days)), "start": start, "end": end}
 
 
+def require_package_acceptance(ctx: Context, server_id: str) -> None:
+    """버전이 고정되지 않은 패키지를 실행하는 로컬 서버는 사용 승인 증빙이 있어야 승인할 수 있다."""
+    loose = fetchone(
+        ctx.conn,
+        "SELECT 1 AS x FROM mint.servers s JOIN mint.server_packages p"
+        " ON p.instance_id = s.instance_id AND p.server_id = s.server_id"
+        " AND p.exec_contract_sha256 = s.exec_contract_sha256"
+        " WHERE s.instance_id = %s AND s.server_id = %s AND NOT p.pinned"
+        " AND p.ecosystem <> 'executable' LIMIT 1",
+        (ctx.instance_id, server_id),
+    )
+    if loose:
+        from mint_litellm.control.services import evidence  # 서비스 틀이 이 모듈을 불러온다
+
+        evidence.require(ctx, "unpinned", "server", server_id)
+
+
 def build_conditions(
     *,
     high_risk_tools: list[str] | None,
@@ -359,6 +376,7 @@ def approve(
         )
         if not found:
             raise ControlError(f"유효한 허용 목록 항목이 아닙니다: {ref}")
+    require_package_acceptance(ctx, relation["server_id"])
     second_info = operators.require_distinct_person(ctx.operator, requested_by, second, "승인")
     check_scope_and_permission(ctx, litellm, relation, scope_type, scope_id)
     approval_id = new_uuid7()

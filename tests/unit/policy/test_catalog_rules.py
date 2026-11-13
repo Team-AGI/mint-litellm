@@ -78,12 +78,13 @@ def test_the_five_class_count_is_pinned():
     # 2단계 완료 기준 42(확인 26·조건부 10·부분 6)에서 엔드포인트 4, 재사용 설정 점검 13,
     # 3단계로 미룬 집행 4, 입력 쪽 비밀 차단(E-05), 통합 시험으로 LiteLLM 동작을 확인해 닫은
     # 재사용 2(R-17·E-24)를 더하고, 결과 상한 기본값으로 E-16이 무조건으로 옮겨 가며
-    # 목적지 통제(O-12)가 부분으로 늘었다.
-    assert (_count("unconditional"), _count("conditional"), _count("partial")) == (37, 13, 15)
-    assert auto == 65
+    # 목적지 통제(O-12), 프로세스·자동 시작 점검(D-04), 선언 파일 접근(I-08),
+    # 토큰 대상·전달(R-05·R-06), 패키지 기록·취약점 조회·치명 취약점 기한(O-06·O-07·O-08)이 늘었다.
+    assert (_count("unconditional"), _count("conditional"), _count("partial")) == (37, 14, 21)
+    assert auto == 72
     # 목표(90개 중 72개 이상) 산정은 반자동 수동 증거를 함께 센다.
     assert _count("semi_auto_evidence") == 10
-    assert auto + _count("semi_auto_evidence") == 75
+    assert auto + _count("semi_auto_evidence") == 82
 
 
 def test_policies_that_are_not_counted_stay_out_of_the_count():
@@ -113,4 +114,6 @@ def test_the_semi_automated_evidence_policies_are_the_evidence_kinds():
     from mint_litellm.control.services.evidence import KINDS
 
     evidence = {p["id"] for p in _policies() if p["class"] == "semi_auto_evidence"}
-    assert evidence == {kind.policy for kind in KINDS.values()}
+    # 승인 조건·예외를 받는 보조 증빙(unpinned·exception)은 반자동 정책의 증빙이 아니다.
+    own = {k.policy for k in KINDS.values() if k.gate not in {"unpinned", "exception"}}
+    assert evidence == own

@@ -50,3 +50,19 @@ def test_the_snapshot_carries_the_pin_marker_and_the_approved_contract_count(
     snap = read_server(fresh_db, iid)
     assert snap.server.pin_blocked is True
     assert contract_result(snap, "search", 60).reason_code == "CONTRACT_DRIFT_pin"
+
+
+def test_the_snapshot_carries_the_vulnerability_deadline_block(fresh_db, login_roles):
+    iid = f"t{uuid.uuid4().hex[:12]}"
+    with psycopg.connect(fresh_db, autocommit=True) as conn:
+        conn.execute("INSERT INTO mint.settings (instance_id) VALUES (%s)", (iid,))
+        conn.execute(
+            "INSERT INTO mint.servers (id, instance_id, server_id, status, url_sha256, transport,"
+            " auth_type, registered_by) VALUES (gen_random_uuid(), %s, 'srv-1',"
+            " 'awaiting_approval', repeat('a', 64), 'http', 'none', 'x')", (iid,))
+        conn.execute("UPDATE mint.servers SET status = 'approved' WHERE instance_id = %s", (iid,))
+    assert read_server(fresh_db, iid).server.vuln_blocked is False
+    with psycopg.connect(fresh_db, autocommit=True) as conn:
+        conn.execute("UPDATE mint.servers SET vuln_blocked_at = now() WHERE instance_id = %s",
+                     (iid,))
+    assert read_server(fresh_db, iid).server.vuln_blocked is True

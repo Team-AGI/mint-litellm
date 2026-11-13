@@ -176,7 +176,7 @@ def _alias(conn):
 
 def test_the_scan_opens_and_closes_alerts_for_a_leftover_process_and_autostart(ctx, conn):
     servers.register_local(ctx, "local-1", CONTRACT)
-    conn.execute("UPDATE mint.servers SET status = 'terminated' WHERE server_id = 'local-1'")
+    conn.execute("UPDATE mint.servers SET status = 'rejected' WHERE server_id = 'local-1'")
     endpoint_kits.issue_key(conn, Issuer(), INSTANCE, user_id="u1", team_id=None, issued_by="u1")
     conn.execute(
         "UPDATE mint.endpoint_installs SET install_mode = 'removed', kit_version = 'k',"

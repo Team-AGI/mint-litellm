@@ -376,6 +376,14 @@ def bound_to_current_contract(snapshot: Snapshot, tool: str, bound: str | None) 
     return contract is not None and bound == contract.id
 
 
+def vuln_result(snapshot: Snapshot) -> StageResult | None:
+    """치명 취약점 조치 기한이 지난 서버의 호출은 계약 관리 여부와 무관하게 막는다(닫힌 쪽)."""
+    server = snapshot.server
+    if server is not None and server.vuln_blocked:
+        return StageResult.finding(Reason.CONTRACT_DRIFT, ContractDriftKind.VULN_OVERDUE.value)
+    return None
+
+
 def contract_result(
     snapshot: Snapshot, tool: str, observe_seconds: int, resolved: ResolvedServer | None = None
 ) -> StageResult | SkippedStage:
@@ -1209,6 +1217,9 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         return
     run.current = Stage.CONTRACT
     stages.add(Stage.CONTRACT, contract_result(snapshot, tool, config.observe_seconds, resolved))
+    overdue = vuln_result(snapshot)
+    if overdue is not None:
+        stages.add(Stage.CONTRACT, overdue)
     if req.operation is OperationType.RUNTIME_DISCOVERY:
         return
     unknown_keys = input_keys_unknown(snapshot, tool, run.selected)
