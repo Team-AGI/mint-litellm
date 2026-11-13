@@ -111,12 +111,13 @@ def server_detail(server_id: str, request: Request, actor: Actor = Depends(page_
 
 def evidence_form(
     actor: Actor, subject_id: str, kind: str, summary: str, ref: str, valid_days: int | None,
-    not_applicable: str,
+    not_applicable: str, sha256: str = "",
 ) -> Callable[[], None]:
     def action():
         api.attach_evidence(actor, api.EvidenceBody(
             kind=kind, subject_id=subject_id, summary=summary, ref=ref.strip() or None,
-            valid_days=valid_days, not_applicable=bool(not_applicable)))
+            sha256=sha256.strip() or None, valid_days=valid_days,
+            not_applicable=bool(not_applicable)))
 
     return action
 
@@ -130,10 +131,11 @@ def attach_server_evidence(
     ref: str = Form(""),
     valid_days: int | None = Form(None),
     not_applicable: str = Form(""),
+    sha256: str = Form(""),
     actor: Actor = Depends(page_actor),
 ):
     return act(actor, evidence_form(actor, server_id, kind, summary, ref, valid_days,
-                                    not_applicable),
+                                    not_applicable, sha256),
                "evidence_attached", f"/servers/{server_id}",
                lambda **kw: server_page(request, actor, server_id, **kw))
 
@@ -667,10 +669,11 @@ def attach_intake_evidence(
     ref: str = Form(""),
     valid_days: int | None = Form(None),
     not_applicable: str = Form(""),
+    sha256: str = Form(""),
     actor: Actor = Depends(page_actor),
 ):
     return act(actor, evidence_form(actor, intake_id, kind, summary, ref, valid_days,
-                                    not_applicable),
+                                    not_applicable, sha256),
                "evidence_attached", f"/intakes/{intake_id}",
                lambda **kw: intake_page(request, actor, intake_id, **kw))
 

@@ -23,9 +23,9 @@ def test_state_follows_the_deadline():
 
 def test_every_kind_has_a_subject_a_gate_and_a_unique_label():
     kinds = list(evidence.KINDS.values())
-    assert len({k.label for k in kinds}) == len(kinds) == 12
+    assert len({k.label for k in kinds}) == len(kinds) == 14
     assert {k.subject for k in kinds} == {"intake", "server", "relation"}
-    gates = {"approve", "reapprove", "finish", "periodic", "unpinned", "exception"}
+    gates = {"approve", "reapprove", "finish", "periodic", "unpinned", "exception", "retire"}
     assert {k.gate for k in kinds} == gates
     assert all(k.subject == "intake" for k in kinds if k.gate == "approve")
     assert all(k.subject == "relation" for k in kinds if k.gate == "finish")

@@ -33,6 +33,8 @@ class Kind:
     days: int | None  # 기본 유효 일수. None이면 기한이 없다.
     gate: str  # approve | reapprove | finish | periodic
     not_applicable_ok: bool = False
+    needs_hash: bool = False  # 문서 해시값이 있어야 붙일 수 있다
+    when: str | None = None  # 이 조건의 대상에서만 요구한다(None이면 늘 요구)
 
 
 _KIND_LIST = (
@@ -51,6 +53,10 @@ _KIND_LIST = (
          "periodic", True),
     Kind("source_review", "POL-O-04", "server", "변경된 자료의 출처 확인", 90, "periodic", True),
     Kind("instruction_review", "POL-O-05", "server", "바뀐 지시문 재심사", 90, "periodic", True),
+    Kind("command_input_review", "POL-E-13", "intake", "명령·질의 입력 전달 방식 점검 결과", 180,
+         "approve", needs_hash=True, when="runs_commands"),
+    Kind("access_revocation", "POL-D-05", "server", "서버 계정·문서 공유 권한 회수 확인", None,
+         "retire"),
 )
 KINDS: dict[str, Kind] = {k.key: k for k in _KIND_LIST}
 
@@ -59,6 +65,41 @@ _SUBJECT_TABLE = {
     "server": ("servers", "server_id"),
     "relation": ("usage_relations", "id::text"),
 }
+
+
+# 명령·질의를 실행하는 서버: 로컬 실행(stdio)이거나 도구 이름에 실행·질의를 뜻하는 말이 있다.
+_COMMAND_WORDS = frozenset(
+    "exec execute shell command cmd bash eval script query sql search run".split()
+)
+
+
+def applies(conn: Any, instance_id: str, kind: Kind, subject_kind: str, subject_id: str) -> bool:
+    """``kind.when`` 조건에 이 대상이 드는지. 조건이 없으면 늘 참이다."""
+    if kind.when is None:
+        return True
+    table, column = _SUBJECT_TABLE[subject_kind]
+    server = fetchone(
+        conn, f"SELECT server_id FROM mint.{table} WHERE instance_id = %s AND {column} = %s",
+        (instance_id, subject_id),
+    )
+    if server is None:
+        return False
+    args = (instance_id, server["server_id"])
+    local = fetchone(
+        conn,
+        "SELECT 1 AS x FROM mint.deployment_contracts WHERE instance_id = %s AND server_id = %s"
+        " AND status IN ('candidate', 'approved') AND transport = 'stdio' LIMIT 1", args,
+    )
+    if local is not None:
+        return True
+    tools = fetchall(
+        conn,
+        "SELECT tool FROM mint.tool_contracts WHERE instance_id = %s AND server_id = %s"
+        " AND status IN ('candidate', 'approved')", args,
+    )
+    return any(
+        _COMMAND_WORDS & set(re.split(r"[^a-z0-9]+", t["tool"].lower())) for t in tools
+    )
 
 
 def kind_of(key: str) -> Kind:
@@ -103,7 +144,11 @@ def show(ctx: Context, subject_kind: str, subject_id: str) -> list[dict]:
     rows = current(ctx.conn, ctx.instance_id, subject_kind, str(subject_id))
     now = datetime.now(UTC)
     return [
-        {**k.__dict__, "state": state_of(rows.get(k.key), now), "row": rows.get(k.key)}
+        {**k.__dict__,
+         "state": state_of(rows.get(k.key), now)
+         if applies(ctx.conn, ctx.instance_id, k, subject_kind, str(subject_id))
+         else "not_applicable",
+         "row": rows.get(k.key)}
         for k in _KIND_LIST
         if k.subject == subject_kind
     ]
@@ -162,6 +207,8 @@ def attach(
         raise ControlError("증빙 요약(해당 없음이면 그 사유)이 필요합니다.")
     if not_applicable and not kind.not_applicable_ok:
         raise ControlError(f"{kind.label}은(는) 해당 없음으로 처리할 수 없습니다.")
+    if kind.needs_hash and not not_applicable and sha256 is None:
+        raise ControlError(f"{kind.label}은(는) 문서 해시값(소문자 16진 64자)이 필요합니다.")
     if sha256 is not None and not _SHA256.fullmatch(sha256):
         raise ControlError("문서 해시값은 소문자 16진 64자여야 합니다.")
     now = datetime.now(UTC)
@@ -223,8 +270,15 @@ def _subjects(conn: Any, instance_id: str) -> list[tuple[str, str, str, str]]:
         " WHERE instance_id = %s AND status = 'terminating'",
         (instance_id,),
     )
+    retired = fetchall(
+        conn,
+        "SELECT server_id FROM mint.servers WHERE instance_id = %s"
+        " AND status IN ('terminating', 'terminated')",
+        (instance_id,),
+    )
     return (
         [("intake", r["id"], r["server_id"], "approve") for r in intakes]
+        + [("server", r["server_id"], r["server_id"], "retire") for r in retired]
         + [("server", r["server_id"], r["server_id"], "periodic") for r in servers]
         + [("relation", r["id"], r["server_id"], "finish") for r in relations]
     )
@@ -244,6 +298,8 @@ def scan_alerts(conn: Any, instance_id: str) -> int:
             if kind.subject != subject_kind or kind.gate != gate:
                 continue
             state = state_of(rows.get(kind.key), now)
+            if not applies(conn, instance_id, kind, subject_kind, subject_id):
+                continue
             if state in ("valid", "not_applicable"):
                 continue
             until = rows[kind.key]["valid_until"] if kind.key in rows else None

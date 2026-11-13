@@ -2069,6 +2069,8 @@ def test_a_manual_recheck_takes_the_server_lock_before_the_intake_lock(world):
 
 def attach(world, kind, subject_id, **kwargs):
     kwargs.setdefault("summary", "확인함")
+    if evidence.KINDS[kind].needs_hash:
+        kwargs.setdefault("sha256", "a" * 64)
     return world.call(
         lambda ctx: evidence.attach(ctx, kind, subject_id, **kwargs),
         name="boss", user="boss-1", role="approver",
@@ -2087,7 +2089,7 @@ def test_approval_is_refused_until_every_required_evidence_is_attached(world):
     with pytest.raises(AdminError, match="시험 호출 결과") as raised:
         decide_raw(world, intake_id)
     assert raised.value.code == AdminCode.CONFLICT
-    gate = [k for k in evidence.KINDS.values() if k.gate == "approve"]
+    gate = [k for k in evidence.KINDS.values() if k.gate == "approve" and k.when is None]
     for kind in gate[:-1]:
         attach(world, kind.key, intake_id)
     with pytest.raises(AdminError, match=gate[-1].label):
@@ -2180,3 +2182,71 @@ def test_a_relation_cannot_finish_termination_without_deletion_proof(world):
     world.call(lambda ctx: relations.finish(ctx, relation_id))
     assert fetchone(world.conn, "SELECT status FROM mint.usage_relations")["status"] == "terminated"
     assert len(world.events("relation_terminated")) == 1
+
+
+COMMAND_TOOL = {**TOOL, "name": "run_query"}
+
+
+def test_command_input_review_is_required_only_for_servers_that_run_commands(world):
+    plain = passed(world)
+    shown = {e["key"]: e["state"] for e in world.call(
+        lambda ctx: evidence.show(ctx, "intake", plain))}
+    assert shown["command_input_review"] == "not_applicable"
+    for kind in evidence.KINDS.values():
+        if kind.gate == "approve" and kind.when is None:
+            attach(world, kind.key, plain)
+    assert decide_raw(world, plain)["decision"] == "approved"  # 명령 실행 서버가 아니면 불필요
+
+
+def test_command_input_review_blocks_approval_until_a_hashed_report_is_attached(world):
+    world.stub.tools = (200, {"tools": [COMMAND_TOOL], "error": None, "message": "ok"})
+    intake_id = passed(world)
+    for kind in evidence.KINDS.values():
+        if kind.gate == "approve" and kind.when is None:
+            attach(world, kind.key, intake_id)
+    with pytest.raises(AdminError, match="명령·질의 입력 전달 방식 점검 결과"):
+        decide_raw(world, intake_id)
+    with pytest.raises(ControlError, match="해시값"):
+        world.call(lambda ctx: evidence.attach(ctx, "command_input_review", intake_id,
+                                               summary="정적 분석 통과"),
+                   name="boss", user="boss-1", role="approver")
+    attach(world, "command_input_review", intake_id, summary="정적 분석 통과")
+    row = fetchone(world.conn, "SELECT document_sha256, attached_by, valid_until"
+                   " FROM mint.policy_evidence WHERE kind = 'command_input_review'")
+    assert row["document_sha256"] == "a" * 64 and row["attached_by"] == "boss"
+    assert row["valid_until"] is not None
+    assert decide_raw(world, intake_id)["decision"] == "approved"
+
+
+def test_an_expired_command_input_review_blocks_approval_again(world):
+    world.stub.tools = (200, {"tools": [COMMAND_TOOL], "error": None, "message": "ok"})
+    intake_id = passed(world)
+    for kind in evidence.KINDS.values():
+        if kind.gate == "approve":
+            attach(world, kind.key, intake_id)
+    world.conn.execute(
+        "ALTER TABLE mint.policy_evidence DISABLE TRIGGER policy_evidence_1_append_only"
+    )
+    world.conn.execute(
+        "UPDATE mint.policy_evidence SET attached_at = now() - interval '200 days',"
+        " valid_until = now() - interval '1 day' WHERE kind = 'command_input_review'"
+    )
+    world.conn.execute(
+        "ALTER TABLE mint.policy_evidence ENABLE TRIGGER policy_evidence_1_append_only"
+    )
+    with pytest.raises(AdminError, match=r"명령·질의 입력 전달 방식 점검 결과\(기한 지남\)"):
+        decide_raw(world, intake_id)
+
+
+def test_a_retired_server_keeps_an_alert_open_until_access_revocation_is_attached(world):
+    approved_world(world)
+    assert evidence.scan_alerts(world.conn, INSTANCE) >= 0
+    world.conn.execute("UPDATE mint.servers SET status = 'terminating' WHERE server_id = 'srv-a'")
+    world.conn.execute("DELETE FROM mint.alerts")
+    assert evidence.scan_alerts(world.conn, INSTANCE) == 1
+    alert = fetchone(world.conn, "SELECT * FROM mint.alerts WHERE kind = 'evidence_missing'")
+    assert [i["evidence"] for i in alert["subject"]["items"]] == ["access_revocation"]
+    attach(world, "access_revocation", "srv-a", summary="서비스 계정 삭제, 공유 권한 회수")
+    assert fetchone(world.conn, "SELECT status FROM mint.alerts WHERE id = %s",
+                    (alert["id"],))["status"] == "resolved"
+    assert evidence.scan_alerts(world.conn, INSTANCE) == 0
