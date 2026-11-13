@@ -2250,3 +2250,6 @@ def test_a_retired_server_keeps_an_alert_open_until_access_revocation_is_attache
     assert fetchone(world.conn, "SELECT status FROM mint.alerts WHERE id = %s",
                     (alert["id"],))["status"] == "resolved"
     assert evidence.scan_alerts(world.conn, INSTANCE) == 0
+    # 폐기 마무리 작업이 증빙을 기다리므로 붙이면 다시 등록된다
+    assert fetchone(world.conn, "SELECT status FROM mint.jobs WHERE kind = 'server_finalize'"
+                                " AND target_ref = 'srv-a'")["status"] == "pending"
