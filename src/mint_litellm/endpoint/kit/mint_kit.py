@@ -617,7 +617,7 @@ def scan_local_mcp(home: Path) -> list[dict]:
     found: dict[tuple, dict] = {}
 
     def add(harness: str, servers: object) -> None:
-        for name, entry in servers.items() if isinstance(servers, dict) else ():
+        for name, entry in (servers.items() if isinstance(servers, dict) else ()):
             item = local_mcp_item(harness, name, entry)
             if item:
                 found.setdefault(tuple(item.values()), item)
@@ -709,8 +709,7 @@ def save_retired(home: Path, names: list[str], now: float, folder: Path | None =
     try:
         write_atomic(
             (folder or home / STATE_REL) / RETIRED_FILE,
-            json.dumps({"servers": names, "at": now}).encode(),
-            0o644 if folder else 0o600,
+            json.dumps({"servers": names, "at": now}).encode(), 0o644 if folder else 0o600,
         )
     except OSError:
         return
@@ -1077,10 +1076,7 @@ class Kit:
         """주기 보고에 쓸 이 파일의 사본과 설정(키 제외)을 두고 타이머·예약 작업을 등록한다."""
         tool = f"{self.logical_programs}/mint_kit.py"
         self.write_tracked(
-            state,
-            self.programs / "mint_kit.py",
-            tool,
-            (self.folder / "mint_kit.py").read_bytes(),
+            state, self.programs / "mint_kit.py", tool, (self.folder / "mint_kit.py").read_bytes(),
             0o644,
         )
         config = {k: v for k, v in self.config.items() if k not in ("key", "servers")}
@@ -1352,9 +1348,7 @@ class Kit:
                     settings_path.unlink()
                 else:
                     write_atomic(
-                        settings_path,
-                        backup.encode(),
-                        settings_path.stat().st_mode & 0o777,
+                        settings_path, backup.encode(), settings_path.stat().st_mode & 0o777,
                         self.owner,
                     )
             else:
@@ -1401,10 +1395,7 @@ class Kit:
     def read_inventory(self) -> dict:
         try:
             processes = with_sandbox(
-                scan_processes(self.windows),
-                self.home,
-                self.windows,
-                not self.system_mode,
+                scan_processes(self.windows), self.home, self.windows, not self.system_mode,
                 windows_sandbox_status() if self.windows else None,
             )
             extra = {"profile": False} if self.system_mode else {}
@@ -1628,11 +1619,8 @@ class Kit:
             name = item.get("name") if isinstance(item, dict) else None
             contract = item.get("contract") if isinstance(item, dict) else None
             if (
-                isinstance(name, str)
-                and SERVER_NAME.match(name)
-                and name not in skip
-                and isinstance(contract, dict)
-                and isinstance(contract.get("executable"), str)
+                isinstance(name, str) and SERVER_NAME.match(name) and name not in skip
+                and isinstance(contract, dict) and isinstance(contract.get("executable"), str)
                 and item.get("version") == contract_version(contract)
             ):
                 items[name] = contract
@@ -1661,8 +1649,7 @@ class Kit:
             return []
         if not self.managed:
             print(
-                "MINT 승인 서버가 바뀌었습니다: "
-                + ", ".join(sorted(todo))
+                "MINT 승인 서버가 바뀌었습니다: " + ", ".join(sorted(todo))
                 + ". 설치 명령을 다시 실행하면 반영됩니다.",
                 file=sys.stderr,
             )
@@ -1698,7 +1685,9 @@ class Kit:
             def edit_json(text: str) -> tuple[str, list[str]]:
                 data = json.loads(text)
                 listed = data.setdefault("mcpServers", {})
-                put = [n for n in sorted(mcp) if n not in listed or is_ours_entry(listed.get(n), n)]
+                put = [
+                    n for n in sorted(mcp) if n not in listed or is_ours_entry(listed.get(n), n)
+                ]
                 listed.update({n: mcp[n] for n in put})
                 return json.dumps(data, indent=2), put
 
@@ -1884,11 +1873,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.action == "report":
         return report_installed(
-            Path(args.kit),
-            if_due=args.if_due,
-            jitter=args.jitter,
-            home=Path(args.home) if args.home else None,
-            user=args.user,
+            Path(args.kit), if_due=args.if_due, jitter=args.jitter,
+            home=Path(args.home) if args.home else None, user=args.user,
         )
     windows = sys.platform == "win32"
     if windows:

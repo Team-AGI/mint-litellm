@@ -85,7 +85,8 @@ def test_home_is_empty_and_only_declared_paths_appear_on_it():
 
 
 def test_an_executable_at_the_top_of_home_binds_only_the_file():
-    doc = {**CONTRACT, "executable": f"{HOME}/srv", "argv": [], "cwd": None, "file_access": []}
+    doc = {**CONTRACT, "executable": f"{HOME}/srv", "argv": [], "cwd": None,
+           "file_access": []}
     assert agent.sandbox_mounts(doc, HOME) == [(f"{HOME}/srv", "ro")]
     assert build(doc)[build(doc).index("--chdir") + 1] == "/"
 

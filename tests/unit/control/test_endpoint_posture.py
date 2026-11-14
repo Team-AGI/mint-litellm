@@ -318,3 +318,19 @@ def test_unfiltered_egress_raises_an_alert_for_the_flagged_server_only():
     wanted = endpoint_posture.findings([{**row("managed"), "processes": processes}], statuses)
     assert list(wanted) == ["endpoint_egress_unfiltered:mint-kit-a:a"]
     assert wanted["endpoint_egress_unfiltered:mint-kit-a:a"][1] == "medium"
+
+
+def test_a_hosts_contract_server_in_an_appcontainer_is_unfiltered_without_the_flag():
+    def found(sandbox, network, **extra):
+        item = {"server": "s", "count": 1, "sandbox": sandbox, **extra}
+        return endpoint_posture.findings(
+            [{**row("managed"), "processes": [item]}],
+            {"s": "approved"},
+            contracts={"s": {"network": network}},
+        )
+
+    key = "endpoint_egress_unfiltered:mint-kit-a:s"
+    assert key in found("appcontainer", "hosts")
+    assert not found("appcontainer", "none") and not found("appcontainer", "any")
+    assert not found("bwrap", "hosts") and not found("unsupported", "hosts")
+    assert key in found("none", "hosts", egress_unfiltered=True)
