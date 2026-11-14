@@ -106,3 +106,43 @@ def test_setting_defaults_to_observe_and_rejects_other_values():
     )
     with pytest.raises(RuntimeError):
         PluginConfig.from_env({**base, "MINT_TOKEN_AUDIENCE": "block"})
+
+
+def _config(mode):
+    base = {"MINT_INSTANCE_ID": "i1", "MINT_DATABASE_URL": "postgresql://x",
+            "MINT_OPA_URL": "http://o"}
+    return PluginConfig.from_env({**base, "MINT_TOKEN_AUDIENCE": mode})
+
+
+def test_missing_token_passthrough_turns_the_check_off_without_stopping_startup(caplog):
+    from mint_litellm.plugin.selfcheck import _audience_capability
+
+    assert _audience_capability(_config("observe"), lambda: None).token_audience == "observe"
+    off = _audience_capability(_config("observe"), lambda: "bearer passthrough: token not carried")
+    assert off.token_audience == "off"
+    assert "aud" in caplog.text
+
+
+def test_enforce_without_token_passthrough_refuses_to_start():
+    from mint_litellm.plugin.selfcheck import _audience_capability
+
+    with pytest.raises(RuntimeError, match="enforce"):
+        _audience_capability(_config("enforce"), lambda: "bearer passthrough: token not carried")
+
+
+def test_off_marks_forwarding_calls_unchecked_with_the_reason(tmp_path):
+    out = decide(tmp_path, jwt({"aud": "http://other.test"}), "off")
+    assert out.allowed
+    assert out.context["aud_unchecked"] is True
+    assert out.context["aud_unchecked_reason"] == "not_forwarded"
+    assert out.context["aud_mismatch"] is False
+
+
+def test_probe_passes_on_the_installed_litellm_and_the_argument_witness_is_independent():
+    from mint_litellm.compat.litellm_1_106 import (
+        arguments_witness_problem,
+        bearer_passthrough_problem,
+    )
+
+    assert bearer_passthrough_problem() is None
+    assert arguments_witness_problem() is None

@@ -197,6 +197,7 @@ async def observe_response(
         result_unenforced=bool(ctx.get("result_unenforced")),
         aud_mismatch=bool(ctx.get("aud_mismatch")),
         aud_unchecked=bool(ctx.get("aud_unchecked")),
+        aud_unchecked_reason=ctx.get("aud_unchecked_reason"),
         sensitive_findings=dict(ctx.get("sensitive_findings") or {}),
         unmanaged_findings=tuple(ctx.get("unmanaged_findings") or ()),
         outcome=response_outcome(

@@ -414,6 +414,7 @@ class ResponseObservation(BaseModel):
     # 업스트림에 전달된 호출자 토큰의 aud가 서버 대상과 다름(관측 모드) / 읽을 수 없어 확인하지 않음
     aud_mismatch: bool = False
     aud_unchecked: bool = False
+    aud_unchecked_reason: str | None = None  # opaque(불투명 토큰), not_forwarded(훅에 전달 안 됨)
     # 결과 단계 가드레일이 없는 LiteLLM(저하 운용): 걸려도 막지도 가리지도 못한 결과.
     result_unenforced: bool = False
     # 새 행부터 남는 결과 분류(success·tool_error·output_blocked).

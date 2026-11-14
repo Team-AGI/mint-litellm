@@ -98,20 +98,34 @@ def arguments_witness_problem() -> str | None:
 
         proxy = ProxyLogging.__new__(ProxyLogging)
         original = {"k": ["v", 1], "한글": 'it\'s "q"\n', "n": {"a": None, "b": 1.5}}
-        kwargs = {"name": "probe", "arguments": original, "server_name": "probe",
-                  "incoming_bearer_token": "probe-token"}
+        kwargs = {"name": "probe", "arguments": original, "server_name": "probe"}
         request = proxy.create_mcp_request_object_from_kwargs(kwargs)
         data = proxy.convert_mcp_to_llm_format(request, kwargs)
         # 변환기가 돌려준 값이 아니라 알려진 원래 입력과 직접 대조한다.
-        same = (
-            data["mcp_arguments"] == original
-            and arguments_match_original(data, original)
-            and data.get("incoming_bearer_token") == "probe-token"
-        )
+        same = data["mcp_arguments"] == original and arguments_match_original(data, original)
         other = arguments_match_original(data, {"k": ["x"]})
     except Exception as exc:
         return f"arguments witness: {type(exc).__name__}"
     return None if same and not other else "arguments witness: unexpected message shape"
+
+
+def bearer_passthrough_problem() -> str | None:
+    """사전 훅 데이터가 호출자 Bearer 토큰(``incoming_bearer_token``)을 싣는지. 아니면 이유.
+
+    토큰 대상(aud) 대조만 쓰는 선택 능력이라 인자 증인과 따로 본다. 실패해도 기동은 막지 않는다.
+    """
+    try:
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy = ProxyLogging.__new__(ProxyLogging)
+        kwargs = {"name": "probe", "arguments": {}, "server_name": "probe",
+                  "incoming_bearer_token": "probe-token"}
+        request = proxy.create_mcp_request_object_from_kwargs(kwargs)
+        data = proxy.convert_mcp_to_llm_format(request, kwargs)
+        carried = data.get("incoming_bearer_token") == "probe-token"
+    except Exception as exc:
+        return f"bearer passthrough: {type(exc).__name__}"
+    return None if carried else "bearer passthrough: token not carried"
 
 
 def effective_arguments(data: Mapping[str, Any]) -> Mapping[str, Any] | None:

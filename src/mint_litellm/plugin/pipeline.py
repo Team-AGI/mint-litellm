@@ -348,10 +348,16 @@ def audience_result(
 ) -> StageResult | None:
     """업스트림에 전달되는 호출자 토큰(POL-R-05)의 aud가 서버 대상과 다르면 ``enforce``에서 닫는다.
     ``observe``는 호출을 보내고 사건에만 남긴다. 읽을 수 없는 토큰은 확인하지 않았다고 남긴다."""
-    if resolved.auth_type not in FORWARDING_AUTH or not bearer:
+    if resolved.auth_type not in FORWARDING_AUTH:
+        return None
+    if mode == "off":
+        run.aud_unchecked, run.aud_unchecked_reason = True, "not_forwarded"
+        return None
+    if not bearer:
         return None
     verdict = audience_verdict(bearer, resolved.audiences)
     run.aud_unchecked = verdict == UNCHECKED
+    run.aud_unchecked_reason = "opaque" if run.aud_unchecked else None
     run.aud_mismatch = verdict == MISMATCH
     if run.aud_mismatch and mode == "enforce":
         return StageResult.stop(Reason.TOKEN_AUDIENCE_MISMATCH, detail=resolved.auth_type)
@@ -1049,6 +1055,7 @@ class _Run:
     # 전달되는 호출자 토큰의 aud 확인 결과(대상 불일치, 읽을 수 없어 확인하지 않음)
     aud_mismatch: bool = False
     aud_unchecked: bool = False
+    aud_unchecked_reason: str | None = None
 
 
 def _decision_snapshot(
@@ -1733,6 +1740,7 @@ def _context_document(
         "unmanaged_findings": list(dict.fromkeys(run.unmanaged_findings)),
         "aud_mismatch": run.aud_mismatch,
         "aud_unchecked": run.aud_unchecked,
+        "aud_unchecked_reason": run.aud_unchecked_reason,
     }
 
 
