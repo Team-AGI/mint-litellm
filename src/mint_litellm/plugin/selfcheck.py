@@ -163,6 +163,33 @@ def guardrail_definition_check(callbacks: Sequence[Any], guardrail: Any) -> tupl
     return True, ""
 
 
+_NOT_CHECKED: Any = object()
+
+
+def output_guardrail_check(callbacks: Sequence[Any], output: Any) -> tuple[bool, str]:
+    """출력 전용 가드레일이 하나이고 ``post_mcp_call``로만 돌며 재정의가 그대로인지."""
+    if output is None:
+        return False, "the MINT output guardrail is not registered"
+    registered = [cb for cb in callbacks if type(cb) is type(output)]
+    if len(registered) != 1 or registered[0] is not output:
+        return False, "exactly one MINT output guardrail must be registered"
+    if _hook_names(getattr(output, "event_hook", None)) != {"post_mcp_call"}:
+        return False, "the MINT output guardrail must run only on post_mcp_call"
+    if getattr(output, "default_on", False) is not True:
+        return False, "the MINT output guardrail must be default_on"
+    cls = type(output)
+    expected = getattr(cls, "mint_should_run_guardrail", None)
+    if expected is None or getattr(cls, "should_run_guardrail", None) is not expected:
+        return False, "the MINT output guardrail's should_run_guardrail was replaced"
+    native = getattr(output, "use_native_lifecycle_hooks", False)
+    if "apply_guardrail" not in cls.__dict__ or native:
+        return False, "the MINT output guardrail does not run through apply_guardrail"
+    for name in ("should_run_guardrail", "apply_guardrail"):
+        if name in getattr(output, "__dict__", {}):
+            return False, f"the MINT output guardrail's {name} was replaced on the instance"
+    return True, ""
+
+
 def _ws_passthrough_on(general_settings: Mapping[str, Any]) -> bool:
     setting = general_settings.get("enable_openai_websocket_passthrough")
     if isinstance(setting, str):
@@ -187,6 +214,7 @@ def check_items(
     fingerprint_key_set: bool = True,
     allow_realtime: bool = False,
     allow_code_execution: bool = False,
+    output_guardrail: Any = _NOT_CHECKED,
 ) -> list[CheckResult]:
     """8개 항목을 확인한다. ``controlled``가 ``None``이면 MINT DB를 읽지 못한 것이다."""
     results: list[CheckResult] = []
@@ -205,13 +233,23 @@ def check_items(
     )
 
     modes = _hook_names(getattr(guardrail, "event_hook", None)) if guardrail else set()
+    output_ok, output_detail = (
+        output_guardrail_check(callbacks, output_guardrail)
+        if view.result_guardrail and output_guardrail is not _NOT_CHECKED
+        else (True, "")
+    )
     add(
         SelfCheckItem.GUARDRAIL_MODES,
         guardrail is not None
         and id(guardrail) in positions
         and all(m in modes for m in _required_modes(view))
-        and getattr(guardrail, "default_on", False) is True,
-        "guardrail is missing, lacks a mode, or is not default_on",
+        and getattr(guardrail, "default_on", False) is True
+        and output_ok,
+        "; ".join(
+            filter(
+                None, ("guardrail is missing, lacks a mode, or is not default_on", output_detail)
+            )
+        ),
     )
 
     definition_ok, definition_detail = guardrail_definition_check(callbacks, guardrail)
@@ -440,6 +478,7 @@ class PluginRuntime:
     shadow: Any = None
     logger: Any = None
     guardrail: Any = None
+    output_guardrail: Any = None
     last_results: list[CheckResult] = field(default_factory=list)
     last_mismatches: list[tuple[str, str]] = field(default_factory=list)
     last_degraded: list[str] = field(default_factory=list)
@@ -579,6 +618,7 @@ class PluginRuntime:
             fingerprint_key_set=self.config.fingerprint_key is not None,
             allow_realtime=self.config.allow_realtime,
             allow_code_execution=self.config.allow_code_execution,
+            output_guardrail=self.output_guardrail,
         )
         self.last_results = results
         self.last_degraded = list(view.degraded)

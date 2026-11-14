@@ -80,6 +80,7 @@ def _emit(
     policy_ids: tuple[str, ...] | list[str] = (),
     approval_request_id: str | None = None,
     masked: dict[str, int] | None = None,
+    cause: str | None = None,
 ) -> None:
     try:
         if guardrail is None or not isinstance(request_data, dict):
@@ -90,6 +91,8 @@ def _emit(
         if reason:
             body["reason_code"] = reason
             body["reason_label"] = outcome_reason(reason)
+        if cause:
+            body["cause"] = cause
         if policy_ids:
             body["policy_ids"] = [str(i) for i in policy_ids]
         if approval_request_id:
@@ -154,9 +157,15 @@ def record_decision(
 
 
 def record_internal_error(
-    guardrail: Any, data: Any, reference: str, began: tuple[float, int], *, event: str
+    guardrail: Any,
+    data: Any,
+    reference: str,
+    began: tuple[float, int],
+    *,
+    event: str,
+    cause: str | None = None,
 ) -> None:
-    """판정 코드 자체의 오류로 막은 호출. 사유는 형식 오류이다."""
+    """판정 코드 자체의 오류로 막은 호출. 사유는 형식 오류이며 ``cause``는 막은 까닭의 짧은 이름."""
     _emit(
         guardrail,
         data,
@@ -166,6 +175,7 @@ def record_internal_error(
         event=event,
         began=began,
         reason="SCHEMA_ERROR",
+        cause=cause,
     )
 
 
@@ -174,13 +184,18 @@ def record_output(
 ) -> None:
     """결과 검사에서 막거나 가린 호출을 기록한다. 결과가 그대로 나간 호출은 기록하지 않는다.
 
-    ``details``는 호출 로깅 객체의 ``model_call_details``이다. 결과 단계에는 요청 데이터가 없어
+    같은 호출의 같은 상태(막음·가림)는 한 번만 남긴다. ``details``는 호출 로깅 객체의
+    ``model_call_details``이다. 결과 단계에는 요청 데이터가 없어
     지출 기록이 읽는 ``litellm_params``의 metadata로 바로 옮길 수 있는 임시 요청 데이터를 쓴다.
     """
     try:
         blocked, masked = bool(ctx.get("output_blocked")), bool(ctx.get("output_masked"))
+        state = "blocked" if blocked else "masked"
         if not (blocked or masked) or not isinstance(details, dict):
             return
+        if ctx.get("output_recorded") == state:
+            return
+        ctx["output_recorded"] = state
         findings = [str(i) for i in ctx.get("output_findings") or ()]
         counts = ctx.get("sensitive_findings")
         if not isinstance(details.get("litellm_params"), dict):
