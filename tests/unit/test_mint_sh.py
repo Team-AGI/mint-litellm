@@ -1,6 +1,7 @@
 """배포 스크립트의 환경 파일 처리. docker는 호출 인자만 기록하는 대역으로 바꾼다."""
 
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -223,7 +224,9 @@ def test_up_and_upgrade_make_the_kit_issuer_key_once_and_hand_it_to_the_console(
         tmp_path / "again", command, existing="sk-existing", existing_control="sk-control"
     )
     assert again.returncode == 0, again.stderr
-    assert "key/generate" not in second_log and "console-sees:sk-existing" in second_log
+    # 이미 있으면 새로 만들지 않는다(제어 키 허용 경로 갱신 실행은 있어도 된다).
+    assert not re.search(r"KEY_KIND=(kit|control)(?!-refresh)", second_log)
+    assert "console-sees:sk-existing" in second_log
 
 
 def test_a_failed_issuer_key_does_not_stop_the_stack_and_leaves_no_file(tmp_path):
@@ -262,7 +265,11 @@ def test_up_and_upgrade_make_the_control_key_once_store_it_and_hand_it_to_the_wo
         existing="sk-kit", existing_control="sk-existing-control",
     )
     assert again.returncode == 0, again.stderr
-    assert "KEY_KIND" not in second and second.count("init --out") == 1
+    assert not re.search(r"KEY_KIND=(kit|control)(?!-refresh)", second)
+    assert second.count("init --out") == 1
+    # 이미 있는 제어 키는 허용 경로만 다시 맞추고, 키 값은 인자가 아니라 환경으로 넘긴다.
+    assert "KEY_KIND=control-refresh" in second and "-e EXISTING_KEY" in second
+    assert "sk-existing-control" not in second.replace("worker-sees:sk-existing-control", "")
     assert "worker-sees:sk-existing-control" in second
 
 
