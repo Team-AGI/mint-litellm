@@ -293,16 +293,23 @@ def _server(row: Mapping[str, Any]) -> str | None:
     return str(value) if value else None
 
 
+def _facts(row: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """경보 주제에서 승인자가 판단에 쓰는 항목(서버·도구·동작·인자 미리보기)."""
+    subject = row.get("subject") or {}
+    pairs = (("서버", _server(row)), ("도구", subject.get("tool")),
+             ("동작", subject.get("action")), ("인자", subject.get("preview")))
+    return [(label, str(value)) for label, value in pairs if value]
+
+
 def _slack_escape(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _slack(row: Mapping[str, Any], summary: str, action: str, link: str | None) -> dict:
     severity = SEVERITY_LABEL.get(row["severity"], row["severity"])
-    server = _server(row)
     fields = [{"type": "mrkdwn", "text": f"*심각도*\n{_slack_escape(severity)}"}]
-    if server:
-        fields.append({"type": "mrkdwn", "text": f"*서버*\n{_slack_escape(server)}"})
+    for label, value in _facts(row):
+        fields.append({"type": "mrkdwn", "text": f"*{label}*\n{_slack_escape(value)}"})
     blocks: list[dict] = [
         {"type": "header", "text": {"type": "plain_text", "text": "MINT 경보"}},
         {"type": "section", "text": {"type": "mrkdwn", "text": _slack_escape(summary)}},
@@ -327,10 +334,8 @@ def _slack(row: Mapping[str, Any], summary: str, action: str, link: str | None) 
 
 def _teams(row: Mapping[str, Any], summary: str, action: str, link: str | None) -> dict:
     severity = SEVERITY_LABEL.get(row["severity"], row["severity"])
-    server = _server(row)
     facts = [{"title": "심각도", "value": severity}]
-    if server:
-        facts.append({"title": "서버", "value": server})
+    facts += [{"title": label, "value": value} for label, value in _facts(row)]
     card: dict[str, Any] = {
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "type": "AdaptiveCard",

@@ -679,12 +679,21 @@ def _call_update(
 
 
 CALL_APPROVAL_WINDOWS = (10, 30)
+DEFAULT_CALL_WINDOW = 30
 
 
 def call_approve(
-    ctx: Context, call_id: str, second: Operator | None, window_minutes: int | None = None
+    ctx: Context,
+    call_id: str,
+    second: Operator | None,
+    window_minutes: int | None = None,
+    default_window: bool = False,
 ) -> None:
-    """``window_minutes``가 없으면 1회 승인이고, 10·30이면 그 시간 동안 되풀이해 쓸 수 있다."""
+    """``window_minutes``가 없으면 1회 승인이고, 10·30이면 그 시간 동안 되풀이해 쓸 수 있다.
+
+    ``default_window``이고 기간을 주지 않았으면 기본 30분으로 승인하되, 1회만 되는 동작의 도구는
+    1회로 승인한다.
+    """
     if window_minutes is not None and window_minutes not in CALL_APPROVAL_WINDOWS:
         raise ControlError("사용 기간은 1회, 10분, 30분 중 하나여야 합니다.")
     current = fetchone(
@@ -697,6 +706,9 @@ def call_approve(
     )
     if current is None:
         raise not_found(f"호출별 승인 {call_id}이(가) 없습니다.")
+    if (default_window and window_minutes is None
+            and current["action_type"] not in ONE_SHOT_ACTIONS):
+        window_minutes = DEFAULT_CALL_WINDOW
     if window_minutes and current["action_type"] in ONE_SHOT_ACTIONS:
         raise ControlError(
             f"{current['action_type']} 도구는 기간 승인을 줄 수 없습니다. 1회 승인만 가능합니다."
@@ -716,6 +728,38 @@ def call_approve(
         extra["second_approver_user_id"] = second_info["user_id"]
     _call_update(ctx, call_id, "approved", ("pending",), EventKind.CALL_APPROVAL_APPROVED,
                  approver=ctx.operator.name, window_minutes=window_minutes, extra=extra)
+
+
+CALL_EXTEND_WITHIN_MINUTES = 10
+
+
+def call_extend(ctx: Context, call_id: str) -> None:
+    """만료가 가까운 기간 승인을 같은 기간만큼 한 번 연장한다. 연장한 사람이 행에 남는다."""
+    row = fetchone(
+        ctx.conn,
+        "UPDATE mint.call_approvals SET extended_by = %s, extended_at = clock_timestamp(),"
+        " valid_until = valid_until + make_interval(mins => window_minutes)"
+        " WHERE instance_id = %s AND id = %s AND status = 'approved'"
+        " AND window_minutes IS NOT NULL AND extended_at IS NULL"
+        " AND valid_until > clock_timestamp()"
+        " AND valid_until <= clock_timestamp() + make_interval(mins => %s)"
+        " RETURNING state_version, principal_type, principal_id, server_id, tool,"
+        " window_minutes, valid_until",
+        (ctx.operator.name, ctx.instance_id, call_id, CALL_EXTEND_WITHIN_MINUTES),
+    )
+    if row is None:
+        raise ControlError(
+            f"만료 {CALL_EXTEND_WITHIN_MINUTES}분 안으로 다가온 기간 승인이 아니거나 이미 한 번 "
+            f"연장했습니다: {call_id}"
+        )
+    ctx.emit(
+        EventKind.CALL_APPROVAL_APPROVED,
+        call_id,
+        row["state_version"],
+        {"call_approval_id": call_id, "server_id": row["server_id"], "tool": row["tool"],
+         "principal_type": row["principal_type"], "principal_id": row["principal_id"],
+         "extended_by": ctx.operator.name, "window_minutes": row["window_minutes"]},
+    )
 
 
 def call_reject(ctx: Context, call_id: str, reason: str | None = None) -> None:

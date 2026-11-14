@@ -41,8 +41,9 @@
 | `mint-litellm denial lift` | `admin`, `approver` | 거부를 해제한다. | - | `denial_lifted` |
 | `mint-litellm revoke` | `admin`, `approver` | 승인을 철회한다. `--deny`를 주면 같은 범위의 거부를 함께 만든다. | - | `approval_revoked`, `denial_created` |
 | `mint-litellm call-approval request` | `admin`, `approver` | 특정 주체·서버·도구·인자에 대한 호출별 승인을 요청한다. | - | `call_approval_requested` |
-| `mint-litellm call-approval approve` | `admin`, `approver` | 호출별 승인을 승인한다. 호출 주체와 같은 사용자의 운영자는 승인할 수 없다. `--for 10m`·`--for 30m`을 주면 그 시간 동안 같은 호출을 되풀이해 쓸 수 있고, 없으면 1회용이다. | - | `call_approval_approved` |
+| `mint-litellm call-approval approve` | `admin`, `approver` | 호출별 승인을 승인한다. 호출 주체와 같은 사용자의 운영자는 승인할 수 없다. `--for 10m`·`--for 30m`이면 그 시간 동안 같은 호출을 되풀이해 쓸 수 있고, `--for once`는 1회용이다. 주지 않으면 30분이며 1회만 되는 동작의 도구는 1회용이다. | - | `call_approval_approved` |
 | `mint-litellm call-approval reject` | `admin`, `approver` | 호출별 승인 요청을 거절한다. | - | `call_approval_rejected` |
+| `mint-litellm call-approval extend` | `admin`, `approver` | 만료 10분 안으로 다가온 기간 승인을 같은 기간만큼 한 번 연장한다. | - | `call_approval_approved` |
 | `mint-litellm call-approval cancel` | `admin`, `approver` | 요청 중이거나 승인된 호출별 승인을 취소한다. | - | `call_approval_cancelled` |
 | `mint-litellm consent add` | `admin` | 사용자 동의를 등록한다. 운영자 증명은 증거 참조와 증거 해시가 필수이다. | - | `consent_granted` |
 | `mint-litellm consent revoke` | `admin` | 등록된 동의를 철회한다. | - | `consent_revoked` |

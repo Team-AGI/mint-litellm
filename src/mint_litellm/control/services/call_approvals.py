@@ -47,9 +47,10 @@ def approve(
     *,
     expected_version: int | None = None,
     window_minutes: int | None = None,
+    default_window: bool = False,
 ) -> None:
     lock_version(ctx, "call_approvals", call_id, expected_version)
-    domain.call_approve(ctx, call_id, second, window_minutes)
+    domain.call_approve(ctx, call_id, second, window_minutes, default_window)
 
 
 @service("call-approval reject")
@@ -64,3 +65,9 @@ def reject(
 def cancel(ctx: Context, call_id: str, *, expected_version: int | None = None) -> None:
     lock_version(ctx, "call_approvals", call_id, expected_version)
     domain.call_cancel(ctx, call_id)
+
+
+@service("call-approval extend")
+def extend(ctx: Context, call_id: str, *, expected_version: int | None = None) -> None:
+    lock_version(ctx, "call_approvals", call_id, expected_version)
+    domain.call_extend(ctx, call_id)

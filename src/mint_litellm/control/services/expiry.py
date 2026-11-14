@@ -9,6 +9,7 @@ from datetime import timedelta
 import psycopg
 
 from mint_litellm.control import alerts, ledger
+from mint_litellm.plugin.policy.sensitive_scan import mask_text
 from mint_litellm.types.events import EventKind
 
 
@@ -118,6 +119,12 @@ def warn_expiring(conn: psycopg.Connection, instance_id: str) -> int:
 AUTO_REQUESTER = "mint-auto"
 
 
+def _preview(display: dict) -> str:
+    """알림에 싣는 인자 미리보기. 저장된 표시 값에 남은 비밀도 한 번 더 가리고 길이를 줄인다."""
+    text = mask_text(", ".join(f"{k}={v}" for k, v in display.items()))
+    return text if len(text) <= 300 else text[:300] + "…"
+
+
 def announce_requests(conn: psycopg.Connection, instance_id: str) -> int:
     """자동으로 열린 대기 요청마다 요청 사건과 경보 ``call_approval_requested``를 하나 남긴다.
 
@@ -127,7 +134,7 @@ def announce_requests(conn: psycopg.Connection, instance_id: str) -> int:
     with conn.transaction():
         rows = conn.execute(
             "SELECT t.id, t.org_id, t.principal_type, t.principal_id, t.server_id, t.tool,"
-            " t.policy_version_id, t.requested_by, t.state_version, t.target, t.action"
+            " t.policy_version_id, t.requested_by, t.state_version, t.target, t.action, t.display"
             " FROM mint.call_approvals t WHERE t.instance_id = %s AND t.requested_by = %s"
             " AND t.status = 'pending' AND t.expires_at > now()"
             " AND NOT EXISTS (SELECT 1 FROM mint.alerts a WHERE a.instance_id = t.instance_id"
@@ -135,7 +142,7 @@ def announce_requests(conn: psycopg.Connection, instance_id: str) -> int:
             (instance_id, AUTO_REQUESTER),
         ).fetchall()
         for (call_id, org_id, ptype, pid, server_id, tool, policy_id, requested_by, version,
-             target, action) in rows:
+             target, action, display) in rows:
             ledger.record(
                 conn, instance_id, EventKind.CALL_APPROVAL_REQUESTED, entity_id=str(call_id),
                 state_version=version, actor=alerts.AUTO_ACTOR,
@@ -149,6 +156,8 @@ def announce_requests(conn: psycopg.Connection, instance_id: str) -> int:
                 conn, instance_id, kind="call_approval_requested", severity="medium",
                 dedup_key=f"call_approval_requested:{call_id}",
                 subject={"id": str(call_id), "server_id": server_id, "tool": tool,
-                         "principal_id": pid},
+                         "principal_id": pid,
+                         **({"action": action} if action else {}),
+                         **({"preview": _preview(display)} if display else {})},
             )
     return announced
