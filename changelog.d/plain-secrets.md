@@ -1,0 +1,1 @@
+- LiteLLM 설정 파일에 평문으로 적힌 비밀(`api_key`·`master_key`·`*_secret`·`*_token`·`password`·인증 헤더·비밀번호가 든 접속 주소)을 `os.environ/` 참조가 아닌 값으로 발견하면 항목 경로만 알린다: `mint check` 경고, 플러그인 기동 경고 로그, 1시간마다 도는 작업 `config_secret_scan`의 경보 `config_plaintext_secret`(값은 보고하지 않고 기동은 막지 않는다). POL-R-13의 한계 문구를 줄였다(로그 파일은 여전히 확인하지 못함). 또 root로 실행할 때만 실패하던 비용 비교 시험이 가상 환경 경로 대신 시스템 인터프리터를 쓰도록 고쳤다.

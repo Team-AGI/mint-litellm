@@ -71,6 +71,7 @@ SUMMARY = {
     "result_unenforced": (
         "최근 {window_seconds}초 동안 결과 {calls}건이 검사에 걸렸지만 막지 못했습니다."
     ),
+    "config_plaintext_secret": "LiteLLM 설정 {count}곳에 비밀이 평문으로 적혀 있습니다.",
     "call_spike": "서버 {server_id}의 {tool} 호출이 최근 {calls}건입니다(평소 {baseline_calls}건).",
     "bulk_extraction": (
         "서버 {server_id}에서 최근 {items}항목({bytes}바이트)을 받아 갔습니다"

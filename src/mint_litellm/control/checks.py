@@ -18,6 +18,7 @@ from mint_litellm.control.litellm_config import GUARDRAIL_MODES, LOGGER_SUFFIXES
 from mint_litellm.control.policy_check import PolicyState
 from mint_litellm.types import fingerprint
 from mint_litellm.types.decision import normalize_auth_type, url_sha256
+from mint_litellm.types.plaintext_secrets import plaintext_secret_paths
 from mint_litellm.types.reuse_policy import (
     DEFAULT_TOOL_TIMEOUT_SECONDS,
     DISCOVERY_AUTH,
@@ -58,6 +59,7 @@ _OPTOUT_KEYS = ("opted_out_global_guardrails", "disable_global_guardrails")
 # 설정 표에는 없지만 필수로 취급하는 점검 항목
 POLICY_ITEM = "정책 번들 내용"
 FINGERPRINT_ITEM = "MINT_FINGERPRINT_KEY"
+PLAINTEXT_SECRET_ITEM = "설정 평문 비밀"  # 경고만 한다(기존 배포를 멈추지 않는다)
 KEY_NAME_IN_FILE = "MINT_FINGERPRINT_KEY"
 EXTRA_REQUIRED = frozenset({POLICY_ITEM, FINGERPRINT_ITEM})
 
@@ -203,6 +205,7 @@ def run_checks(
     if not file_missing:
         _check_file_rows(judge, config, general, lsettings, servers_cfg, env, replicas)
         _check_env_rows(judge, general, env)
+        _check_plaintext_secrets(report, config)
 
     # 관리 API 기반 행
     if litellm is not None:
@@ -235,6 +238,18 @@ def run_checks(
         _truthy(lsettings.get("enable_redis_auth_cache"))
     ).lower()
     return report
+
+
+def _check_plaintext_secrets(report: Report, config: Mapping[str, Any]) -> None:
+    paths = plaintext_secret_paths(config)
+    if paths:
+        report.add(
+            PLAINTEXT_SECRET_ITEM, Level.WARN,
+            "설정에 비밀이 평문으로 적혀 있습니다. os.environ/<이름> 참조로 바꾸십시오: "
+            + ", ".join(paths),
+        )
+    else:
+        report.add(PLAINTEXT_SECRET_ITEM, Level.OK)
 
 
 def _check_file_rows(judge, config, general, lsettings, servers_cfg, env, replicas) -> None:
