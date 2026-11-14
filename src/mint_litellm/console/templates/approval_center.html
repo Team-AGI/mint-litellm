@@ -5,12 +5,16 @@
 <h1>승인 센터</h1>
 <div class="cards">
   {{ m.kpi('응답 대기 호출', pending | length, '/approvals?tab=calls', level='wait' if pending else none) }}
-  {{ m.kpi('5분 넘게 대기', slow, '/approvals?tab=calls', level='danger' if slow else none) }}
+  {{ m.kpi('SLA 초과', slow, '/approvals?tab=calls', note=sla ~ '분 넘게 대기', level='danger' if slow else none) }}
   {{ m.kpi('평균 대기', wait.average_seconds | span, '/approvals?tab=calls') }}
   {{ m.kpi('오늘 처리', done_today) }}
   {{ m.kpi('서버 도입 대기', queue | length, '/approvals?tab=servers') }}
   {{ m.kpi('만료 임박 승인', (renewal.unchanged | length) + (renewal.changed | length), '/approvals?tab=renewals') }}
 </div>
+<form method="get" action="/approvals" class="actions"><input type="hidden" name="tab" value="{{ tab }}">
+  <label>처리 기한<select name="sla">{% for n in sla_options %}<option value="{{ n }}"{% if n == sla %} selected{% endif %}>{{ n }}분</option>{% endfor %}</select></label>
+  <button type="submit">적용</button>
+</form>
 {{ m.tabs(tabs, tab, '/approvals') }}
 {% if tab == 'calls' %}{% include "_approvals_calls.html" %}
 {% elif tab == 'servers' %}{% include "_approvals_servers.html" %}
