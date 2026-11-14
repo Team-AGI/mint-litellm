@@ -1016,6 +1016,29 @@ class PluginDatabase:
         row = await self._run(read)
         return None if row is None else str(row[0])
 
+    async def confirmation_status(
+        self, instance_id: str, wait: tuple[str, str, str, str]
+    ) -> str | None:
+        """같은 호출(주체·서버·도구·인자 지문)의 본인 확인 요청 상태. 본인 확인 보류가 읽는다.
+
+        기한 안의 대기·확인 요청이 있으면 그 상태를, 아니면 가장 최근에 거절·취소된 상태를 돌려준다.
+        소비된 것은 이 호출의 몫이 아니므로 보지 않는다. 없으면 None.
+        """
+        principal_id, server_id, tool, args_fp = wait
+
+        async def read(conn: Any) -> Any:
+            cursor = await conn.execute(
+                "SELECT status FROM mint.self_confirmations"
+                " WHERE instance_id = %s AND principal_id = %s AND server_id = %s AND tool = %s"
+                " AND args_fp = %s AND status <> 'consumed' AND expires_at > clock_timestamp()"
+                " ORDER BY created_at DESC LIMIT 1",
+                (instance_id, principal_id, server_id, tool, args_fp),
+            )
+            return await cursor.fetchone()
+
+        row = await self._run(read)
+        return None if row is None else str(row[0])
+
     async def recent_call_outcome(self, params: Mapping[str, Any]) -> tuple[str, str | None] | None:
         """같은 호출(주체·서버·도구·인자 지문)의 가장 최근 거부·만료 결과. 없으면 None.
 

@@ -31,7 +31,7 @@ from mint_litellm.console.core import (
     too_many_attempts,
 )
 from mint_litellm.console.templating import render
-from mint_litellm.control import endpoint_kits
+from mint_litellm.control import endpoint_kits, links
 from mint_litellm.control.db.connection import connect
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.litellm_admin import LiteLLMError
@@ -206,6 +206,16 @@ def confirmations_page(request: Request, actor: StaffActor, error=None, status=2
 @router.get("/staff/confirmations")
 def confirmations(request: Request, actor: StaffActor = Depends(staff_actor)):
     return confirmations_page(request, actor)
+
+
+@router.get("/staff/link/{token}")
+def open_link(token: str, actor: StaffActor = Depends(staff_actor)):
+    """본인 확인 링크. 로그인한 직원에게 확인 화면만 열고 아무것도 확인하지 않는다."""
+    key = actor.config.stage2.webhook_hmac_key
+    parsed = links.parse(key, token) if key else None
+    if parsed is None or parsed[0] != "confirm":
+        raise AdminError(AdminCode.NOT_FOUND, "링크가 만료되었거나 올바르지 않습니다.")
+    return RedirectResponse("/staff/confirmations", status_code=303)
 
 
 @router.post("/staff/confirmations/{confirmation_id}/{decision}")
