@@ -114,6 +114,7 @@ def stage(tmp_path, monkeypatch, mode="managed", answer=None):
     monkeypatch.setattr(kit_module, "post", lambda u, k, p, c: sent.append(p) or reply)
     monkeypatch.setattr(kit_module, "claude_version", lambda h: None)
     monkeypatch.setattr(kit_module, "scan_processes", lambda w: [])
+    monkeypatch.setattr(kit_module, "scan_outside", lambda w: [])
     monkeypatch.setattr(kit_module, "scan_autostart", lambda h, w, u: [])
     return programs, home, sent
 
