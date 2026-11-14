@@ -349,3 +349,25 @@ def test_one_alert_per_server_and_none_while_one_is_open(monkeypatch):
     assert raised[0]["kind"] == "server_address_internal"
     assert raised[0]["subject"]["kinds"] == ["rebind"]
     assert run(["server_address_internal:s1"]) == ["server_address_internal:s2"]
+
+
+def test_a_slow_lookup_times_out_but_fills_the_cache_for_the_next_call():
+    calls = []
+
+    async def slow(host):
+        calls.append(host)
+        await asyncio.sleep(0.2)
+        return [PUBLIC]
+
+    g = ResolveGuard(lookup=slow)
+
+    async def go():
+        first = await g.check("slow.example", 0.01)
+        again = await g.check("slow.example", 0.01)  # 같은 조회를 기다린다(새로 조회하지 않음)
+        await asyncio.sleep(0.3)
+        return first, again, g.cached("slow.example")
+
+    first, again, later = asyncio.run(go())
+    assert first.kind == "unresolved" and again.kind == "unresolved"
+    assert later is not None and later.kind is None
+    assert calls == ["slow.example"]
