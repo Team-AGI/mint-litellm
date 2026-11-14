@@ -48,7 +48,8 @@ def _focus(request: Request) -> str | None:
     return str(uuid.UUID(value)) if value else None
 
 
-SLOW_SECONDS = 300  # 호출 승인이 이만큼 기다리면 강조한다
+SLOW_SECONDS = 300  # 호출 승인이 이만큼 기다리면 강조한다(기본 처리 기한)
+SLA_MINUTES = (5, 15, 30, 60)
 TABS = ("calls", "servers", "renewals", "rules")
 ACCESS_TABS = ("approvals", "dormant", "denials", "allowlists")
 RULE_FIELDS = {  # 규칙 칸 -> 이전 링크의 쿼리 이름
@@ -70,13 +71,16 @@ def approvals_page(request: Request, actor: Actor, error=None, status=200, tab=N
     focus = _focus(request)
     calls = reads.call_approvals(actor.conn, actor.instance, page=page_number(request))
     pending = [c for c in calls if c["status"] == "pending"]
+    asked = query.get("sla", "")
+    sla = int(asked) if asked.isdigit() and int(asked) in SLA_MINUTES else SLOW_SECONDS // 60
     queue = reads.queue(actor.conn, actor.instance)
     renewal = renewal_service.candidates(actor.conn, actor.instance)
     rules = reads.call_approval_rules(actor.conn, actor.instance)
     ctx = {
         "tab": tab, "focus": focus, "error": error, "page": page_number(request),
         "rows": calls, "pending": pending, "queue": queue, "renewal": renewal, "rules": rules,
-        "slow": sum(1 for c in pending if (c["age_seconds"] or 0) >= SLOW_SECONDS),
+        "slow": sum(1 for c in pending if (c["age_seconds"] or 0) >= sla * 60),
+        "sla": sla, "sla_options": SLA_MINUTES,
         "wait": dashboard_reads.pending_wait(actor.conn, actor.instance),
         "done_today": dashboard_reads.decided_today(
             actor.conn, actor.instance, actor.config.time_zone
