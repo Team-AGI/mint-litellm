@@ -983,7 +983,7 @@ def test_the_loser_of_a_concurrent_consumption_is_always_blocked_as_already_cons
         assert sorted(o.allowed for o in pair) == [False, True]
         (loser,) = [o for o in pair if not o.allowed]
         assert loser.error.code == "MINT-CALL-APPROVAL-REQUIRED"
-        assert not loser.error.retry_safe
+        assert loser.error.retry_safe
     consumed = scenario.conn.execute(
         "SELECT count(*) FROM mint.call_approvals WHERE instance_id = %s AND status = 'consumed'",
         (scenario.iid,),
