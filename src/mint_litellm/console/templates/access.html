@@ -17,7 +17,7 @@
 <table class="clickable"><thead><tr><th>서버</th><th>대상</th><th>도구</th><th>유효 기간</th><th>승인자</th><th>재확인</th><th></th></tr></thead><tbody>
 {% for a in rows %}<tr{% if focus == a.id | string %} class="selected"{% endif %}>
 <td><a href="/servers/{{ a.server_id | urlencode }}">{{ a.server_id }}</a></td>
-<td>{{ L.pick(L.SCOPE, a.scope_type) }} {{ a.scope_id }}</td><td>{{ a.tools | join }}</td>
+<td>{{ L.pick(L.SCOPE, a.scope_type) }} {{ m.ident(a.scope_id) }}</td><td>{{ a.tools | join }}</td>
 <td class="nowrap">{{ a.valid_from | when }} ~ {{ a.valid_until | when }}</td><td>{{ a.granted_by | who }}</td>
 <td class="nowrap">{% if a.recert %}{{ a.recert_due | when }} {{ m.badge(L.RECERT, a.recert) }}{% else %}—{% endif %}</td>
 <td><span class="actions">
@@ -30,7 +30,7 @@
   <form method="post" action="/approvals/{{ a.id }}/revoke" hx-boost="false">
     {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ a.state_version }}">
     <h3 id="revoke-{{ a.id }}-title">승인 철회</h3>
-    <div class="effect">차단되는 대상: {{ L.pick(L.SCOPE, a.scope_type) }} {{ a.scope_id }}의 도구 {{ a.tools | length }}개, 서버 1개</div>
+    <div class="effect">차단되는 대상: {{ L.pick(L.SCOPE, a.scope_type) }} {{ m.ident(a.scope_id) }}의 도구 {{ a.tools | length }}개, 서버 1개</div>
     <label>사유<input name="reason" required></label>
     <div class="actions"><button type="button" data-dialog-close>취소</button>
       <button type="submit" name="deny" value="0" class="danger">철회</button>
@@ -51,7 +51,7 @@
 {% for a in rows %}<tr>
 <td>{% if actor.role == 'admin' %}<input type="checkbox" name="ids" value="{{ a.id }}:{{ a.state_version }}" aria-label="선택">{% endif %}</td>
 <td><a href="/servers/{{ a.server_id | urlencode }}">{{ a.server_id }}</a></td>
-<td>{{ L.pick(L.SCOPE, a.scope_type) }} {{ a.scope_id }}</td><td>{{ a.tools | join }}</td>
+<td>{{ L.pick(L.SCOPE, a.scope_type) }} {{ m.ident(a.scope_id) }}</td><td>{{ a.tools | join }}</td>
 <td>{{ L.pick(L.APPROVAL_CLASS, a.class) }}</td><td class="nowrap">{{ a.valid_from | when }} ~ {{ a.valid_until | when }}</td>
 <td>{{ a.granted_by | who }}</td>
 </tr>{% endfor %}
@@ -68,7 +68,7 @@
 {% if denials %}
 <table><thead><tr><th>대상</th><th>서버</th><th>도구</th><th>사유</th><th>등록자</th><th>상태</th><th></th></tr></thead><tbody>
 {% for d in denials %}<tr>
-<td>{{ L.pick(L.SCOPE, d.scope_type) }} {{ d.scope_id }}</td><td>{{ d.server_id | blank }}</td><td>{{ d.tools | join }}</td>
+<td>{{ L.pick(L.SCOPE, d.scope_type) }} {{ m.ident(d.scope_id) }}</td><td>{{ d.server_id | blank }}</td><td>{{ d.tools | join }}</td>
 <td>{{ d.reason }}</td><td>{{ d.created_by | who }}</td>
 <td>{{ m.badge({'a': L.Status('유효', 'block'), 'l': L.Status('해제됨', 'off')}, 'l' if d.lifted_at else 'a') }}</td>
 <td>{% if not d.lifted_at and actor.role != 'viewer' %}<form method="post" action="/denials/{{ d.id }}/lift">{{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ d.state_version }}"><button type="submit">해제</button></form>{% endif %}</td>

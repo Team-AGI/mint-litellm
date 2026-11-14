@@ -76,3 +76,6 @@
 {% endfor %}</div>
 {% endfor %}
 {% endmacro %}
+
+{# 긴 식별자(키 해시 등)는 앞 8자만 보이고 전체는 툴팁으로. #}
+{% macro ident(v) %}{% if v and v|length > 24 %}<span class="ident" title="{{ v }}">{{ v[:8] }}…</span>{% else %}{{ v }}{% endif %}{% endmacro %}
