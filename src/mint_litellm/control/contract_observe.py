@@ -126,16 +126,23 @@ def _alert(ctx: Context, entity_id: Any, digest: str, severity: str, payload: di
 
 
 def record_tools(
-    ctx: Context, server_id: str, scope: str, tools: dict[str, dict], expected_version: int
+    ctx: Context, server_id: str, scope: str, tools: dict[str, dict], expected_version: int,
+    *, local: bool = False,
 ) -> None:
-    """외부 읽기 뒤 서버 버전을 확인하며 관측·드리프트·사건을 원자적으로 기록한다."""
+    """외부 읽기 뒤 서버 버전을 확인하며 관측·드리프트·사건을 원자적으로 기록한다.
+
+    ``local``이면 계약 관리가 아닌 로컬(stdio) 서버도 다룬다(단말이 보고한 목록).
+    """
     with transact(ctx):
         server = fetchone(
             ctx.conn,
             "SELECT * FROM mint.servers WHERE instance_id=%s AND server_id=%s FOR UPDATE",
             (ctx.instance_id, server_id),
         )
-        if server is None or server["contract_status"] != "managed":
+        if server is None or (
+            server["contract_status"] != "managed"
+            and not (local and server["identity_kind"] == "stdio")
+        ):
             return
         if server["state_version"] != expected_version:
             raise conflict("관측 중 서버가 변경되었습니다.")
@@ -224,7 +231,7 @@ def record_tools(
             "UPDATE mint.servers SET last_observed_at=now() WHERE instance_id=%s AND server_id=%s",
             (ctx.instance_id, server_id),
         )
-        if recheck:  # 새 드리프트마다 승인한 신청의 재검사(후보 계약 생산)를 등록한다
+        if recheck and not local:  # 새 드리프트마다 승인한 신청의 재검사(후보 계약 생산)를 등록한다
             intakes.enqueue_drift_recheck(ctx, server_id)
 
 
@@ -552,10 +559,12 @@ def compare_instances(ctx: Context, grace_seconds: int = 0) -> int:
 
 
 def handle(job) -> None:
+    from mint_litellm.control import local_tools
     from mint_litellm.types.canonical import credential_scope
 
     ctx = Context(job.conn, job.instance_id, Operator("contract-observer", "admin", None))
     consume_deployment_events(ctx)
+    local_tools.consume(ctx)
     compare_instances(ctx, job.settings.instance_mismatch_grace_seconds if job.settings else 900)
     servers = fetchall(
         job.conn,

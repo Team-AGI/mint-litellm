@@ -23,6 +23,7 @@ from uuid import UUID
 from mint_litellm.endpoint.refresh import desired_servers, merge_local_mcp
 from mint_litellm.endpoint.remediation import remediation_events, retired_names
 from mint_litellm.plugin.buffer import ConsumeRequest, ConsumptionLost
+from mint_litellm.types.canonical import sha256
 from mint_litellm.types.events import Event
 from mint_litellm.types.identity import OrgStatus, SubjectType
 from mint_litellm.types.reason_codes import OBSERVATION_CANDIDATES, Reason
@@ -70,13 +71,20 @@ SELECT jsonb_build_object(
         FROM mint.tool_contracts t
         WHERE t.instance_id = %(iid)s AND t.server_id = %(server_id)s
           AND t.tool = %(tool)s AND t.status = 'approved'
-          AND EXISTS (SELECT 1 FROM srv WHERE contract_status = 'managed')
+          AND EXISTS (SELECT 1 FROM srv
+                      WHERE contract_status = 'managed' OR identity_kind = 'stdio')
     ),
     'approved_contracts', (
         SELECT count(*) FROM mint.tool_contracts t, srv
         WHERE t.instance_id = %(iid)s AND t.server_id = %(server_id)s AND t.status = 'approved'
           AND t.credential_scope = CASE WHEN srv.auth_type IN ('oauth_delegate',
               'true_passthrough') THEN 'per_user' ELSE 'server' END
+    ),
+    'provisional_contract', (
+        SELECT jsonb_build_object('action_type', p.action_type, 'risk_grade', p.risk_grade,
+            'input_keys', to_jsonb(p.input_keys))
+        FROM mint.provisional_contracts p
+        WHERE p.instance_id = %(iid)s AND p.server_id = %(server_id)s AND p.tool = %(tool)s
     ),
     'deployment_basis', (
         SELECT jsonb_build_object('url', d.url, 'oauth_scopes', to_jsonb(d.oauth_scopes),
@@ -450,6 +458,15 @@ class ToolContractRow:
 
 
 @dataclass(frozen=True)
+class ProvisionalRow:
+    """관측한 도구 목록으로 만든 임시 계약. 입력 항목이 없으면 ``input_keys``는 None(알 수 없음)."""
+
+    action_type: str
+    risk_grade: str
+    input_keys: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True)
 class Snapshot:
     now: datetime
     epoch: int | None
@@ -465,6 +482,7 @@ class Snapshot:
     consents: tuple[ConsentRow, ...]
     policy_version: PolicyVersionRow | None
     tool_contracts: tuple[ToolContractRow, ...] = ()
+    provisional: ProvisionalRow | None = None
     negative_relation: bool = False
     self_confirmations: tuple[ConfirmationRow, ...] = ()
     # (값, 조직 또는 None): 지금 유효한 허용 목적지 목록. 패턴 계산의 허용 호스트에 쓴다.
@@ -611,6 +629,15 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
                 None if c.get("input_keys") is None else tuple(c["input_keys"]),
             )
             for c in doc.get("tool_contracts", ())
+        ),
+        provisional=(
+            None
+            if not doc.get("provisional_contract")
+            else ProvisionalRow(
+                doc["provisional_contract"]["action_type"],
+                doc["provisional_contract"]["risk_grade"],
+                tuple(doc["provisional_contract"].get("input_keys") or ()) or None,
+            )
         ),
         negative_relation=bool(doc.get("negative_relation", False)),
         self_confirmations=tuple(
@@ -1146,6 +1173,7 @@ class PluginDatabase:
         outside_processes: Sequence[dict[str, Any]] | None = None,
         removed: Sequence[dict[str, Any]] | None = None,
         local_mcp: Sequence[dict[str, Any]] | None = None,
+        tool_lists: Sequence[dict[str, Any]] | None = None,
     ) -> str:
         """설치 묶음에 발급한 키의 설치 상태 보고를 남기고 결과를 돌려준다.
 
@@ -1188,6 +1216,17 @@ class PluginDatabase:
                      None if outside_processes is None else Jsonb(list(outside_processes)),
                      row[1], instance_id, key_token),
                 )
+                for item in tool_lists or ():
+                    await conn.execute(
+                        "INSERT INTO mint.endpoint_tool_lists (instance_id, server_id, key_token,"
+                        " tools, tools_sha256, truncated) VALUES (%s, %s, %s, %s, %s, %s)"
+                        " ON CONFLICT (instance_id, server_id, key_token) DO UPDATE SET"
+                        " tools = EXCLUDED.tools, tools_sha256 = EXCLUDED.tools_sha256,"
+                        " truncated = EXCLUDED.truncated, reported_at = clock_timestamp()"
+                        " WHERE mint.endpoint_tool_lists.tools_sha256 <> EXCLUDED.tools_sha256",
+                        (instance_id, item["server"], key_token, Jsonb(item["tools"]),
+                         sha256(item["tools"]), item["truncated"]),
+                    )
                 return ("renewed" if row[1] else "recorded", row[2], row[3])
 
         outcome = await self._run(write)

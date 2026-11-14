@@ -19,7 +19,14 @@ from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from mint_litellm.compat.litellm_1_106 import HookData
 from mint_litellm.endpoint.routes import DECIDE_PATH, OUTCOMES_PATH, REPORT_PATH, RESULT_PATH
@@ -33,7 +40,7 @@ log = logging.getLogger("mint_litellm.endpoint")
 
 MAX_BODY_BYTES = 64 * 1024
 # 경로마다 정상 본문이 이보다 작다(결과 보고는 참조와 결과 종류, 설치 보고는 서버 이름 목록).
-BODY_LIMITS = {DECIDE_PATH: MAX_BODY_BYTES, RESULT_PATH: 4 * 1024, REPORT_PATH: 96 * 1024,
+BODY_LIMITS = {DECIDE_PATH: MAX_BODY_BYTES, RESULT_PATH: 4 * 1024, REPORT_PATH: 192 * 1024,
     OUTCOMES_PATH: 1024}
 NOT_READY_CODE = "MINT-ENDPOINT-NOT-READY"
 _REFERENCE = re.compile(r"^([0-9a-f-]{36}):([1-9][0-9]{0,8})$")
@@ -133,6 +140,37 @@ class LocalMcpItem(BaseModel):
     package: str | None = Field(default=None, pattern=_PACKAGE, max_length=140)
 
 
+TOOL_SCHEMA_BYTES = 8 * 1024
+
+
+class ToolItem(BaseModel):
+    """서버가 ``tools/list``로 알린 도구 하나(이름·설명·입력 정의). 호출 인자·결과는 받지 않는다."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = Field(min_length=1, max_length=128)
+    description: str = Field(default="", max_length=500)
+    input_schema: dict[str, Any]
+
+    @field_validator("input_schema")
+    @classmethod
+    def _small(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if len(json.dumps(value)) > TOOL_SCHEMA_BYTES:
+            raise ValueError("input schema too large")
+        return value
+
+
+class ToolListItem(BaseModel):
+    """단말이 본 로컬 서버의 도구 목록(단말의 주장). 바뀐 목록만 보낸다."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    server: str = Field(min_length=1, max_length=128)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    truncated: bool = False
+    tools: list[ToolItem] = Field(max_length=100)
+
+
 class ReportBody(BaseModel):
     """설치 묶음이 설치·제거를 마치고 보내는 상태 보고. 파일 경로나 키는 받지 않는다."""
 
@@ -152,6 +190,8 @@ class ReportBody(BaseModel):
     outside_processes: list[OutsideProcessItem] | None = Field(default=None, max_length=64)
     removed: list[RemovedItem] | None = Field(default=None, max_length=256)
     local_mcp: list[LocalMcpItem] | None = Field(default=None, max_length=64)
+    # 실행기가 서버의 ``tools/list`` 응답에서 본 도구 목록. 이전 묶음은 보내지 않는다.
+    tool_lists: list[ToolListItem] | None = Field(default=None, max_length=8)
 
     @model_validator(mode="after")
     def _mode_matches_action(self) -> ReportBody:
@@ -341,6 +381,7 @@ def make_router(
                 outside_processes=_dump(body.outside_processes),
                 removed=_dump(body.removed),
                 local_mcp=_dump(body.local_mcp),
+                tool_lists=_dump(body.tool_lists),
             )
         except Exception as exc:
             raise HTTPException(status_code=503, detail="install store is not ready") from exc
