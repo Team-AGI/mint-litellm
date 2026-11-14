@@ -12,7 +12,7 @@ from fastapi.templating import Jinja2Templates
 from jinja2 import pass_context
 
 from mint_litellm.console import labels, setup_state
-from mint_litellm.console.core import DEFAULT_TIME_ZONE
+from mint_litellm.console.core import DEFAULT_TIME_ZONE, can, can_attach
 from mint_litellm.control.services import reads
 from mint_litellm.plugin.policy.sensitive_scan import mask_text
 
@@ -26,7 +26,8 @@ MENU = (
     ("서버", (("/servers", "서버", "servers"), ("/intakes", "도입 신청", "intakes"),
             ("/access", "접근 통제", None))),
     ("단말", (("/endpoints", "엔드포인트", "endpoints"),)),
-    ("감사", (("/ledger", "호출 기록", None), ("/policy", "정책", None))),
+    ("감사", (("/ledger", "호출 기록", None), ("/policy", "정책", None),
+            ("/reports/audit", "감사 보고서", None))),
     ("관리", (("/admin", "운영자·조직", None),)),
 )
 STAFF_MENU = (
@@ -117,6 +118,8 @@ templates.env.filters.update(
     masked=masked,
     who=labels.actor, countdown=countdown,
 )
+templates.env.globals.update(can=can)
+templates.env.tests["can_attach"] = lambda key, actor: can_attach(actor, key)
 templates.env.globals.update(L=labels, ICONS=ICONS, MENU=MENU, STAFF_MENU=STAFF_MENU, RANGES=RANGES)
 
 

@@ -168,16 +168,22 @@ def status_dots(o, workers, zone):
                 "title": "",
             }
         )
-        # 같은 LiteLLM이 워커마다 반복되므로 한 줄로 합치고, 문제가 있는 쪽을 보인다.
-        found = [w["litellm"] for w in workers if w["litellm"]]
-        if found:
-            worst = next((x for x in found if labels.litellm_missing(x)), found[0])
+        # 같은 LiteLLM이 워커마다 반복되므로 판본·등급이 같은 것끼리 한 줄로 합친다.
+        # 복제본마다 판본이 다르면(업그레이드 중 등) 서로 다른 줄로 모두 보인다.
+        distinct: dict[tuple, dict] = {}
+        for w in workers:
+            x = w["litellm"]
+            if x:
+                key = (x.get("version"), x.get("grade"), x.get("tested"),
+                       tuple(x.get("missing") or ()))
+                distinct.setdefault(key, x)
+        for x in reversed(list(distinct.values())):
             dots.insert(
                 0,
                 {
                     "name": "LiteLLM",
-                    "status": labels.litellm_badge(worst),
-                    "title": labels.litellm_missing(worst),
+                    "status": labels.litellm_badge(x),
+                    "title": labels.litellm_missing(x),
                 },
             )
     dots.append({"name": "원장 봉인", "status": stamp(o["last_seal"]), "title": ""})

@@ -190,9 +190,10 @@ def test_the_pending_queue_defaults_to_thirty_minutes_and_shows_the_age(world, a
     html = admin.get("/approvals?tab=calls").text
     assert html.count('<option value="30" selected>') == 1  # 일괄 처리
     assert html.count('name="window_minutes" value="30"') == 2  # 행마다 빠른 승인
+    assert html.count("30분 승인</button>") == 2  # 단추에 적용되는 기간이 보인다
     assert "선택 승인" in html and "경과" in html
     drawer = admin.get("/approvals?tab=calls&focus=" + ids[0]).text
-    assert "autofocus" in drawer and 'value="30" checked' in drawer
+    assert "autofocus" not in drawer and 'value="30" checked' in drawer
 
 
 def test_bulk_approval_uses_the_default_window_for_every_selected_row(world, admin):
@@ -248,14 +249,14 @@ def test_the_approval_center_has_four_tabs_with_counts_and_old_paths_redirect(wo
     assert moved.headers["location"] == f"/approvals?tab=renewals&focus={focus}"
 
 
-def test_deciding_a_call_opens_the_next_pending_one(world, admin):
+def test_deciding_a_call_returns_to_the_list_without_opening_the_next_one(world, admin):
     first, second = _pending_calls(world)
     rows = dict(world.query("SELECT id::text, state_version FROM mint.call_approvals"))
     response = form_post(world, admin, f"/call-approvals/{first}/reject",
                          state_version=rows[first])
     target = response.headers["location"]
-    assert response.status_code == 303 and f"focus={second}" in target
-    assert "ok=call_rejected" in target
+    assert response.status_code == 303 and "focus=" not in target
+    assert target == "/approvals?tab=calls&ok=call_rejected"
 
 
 def test_the_rule_drawer_previews_the_calls_a_rule_would_have_approved(world, admin):

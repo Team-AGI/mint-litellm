@@ -9,8 +9,8 @@
   <dt>목적</dt><dd>{{ relation.purpose }}</dd>
   <dt>높음·심각 도구</dt><dd>{{ high | join | blank }}</dd>
 </dl>
-{% if can_grant and actor.role != 'viewer' %}
-<form method="post" action="/approvals" class="form cols">
+{% if can_grant and can(actor, 'approve') %}
+<form method="post" action="/approvals" class="form cols" id="grant">
   {{ m.csrf(actor) }}
   <input type="hidden" name="relation_id" value="{{ relation.id }}">
   <input type="hidden" name="state_version" value="{{ relation.state_version }}">
@@ -30,7 +30,8 @@
   <label>결과 크기 상한(바이트)<input type="number" name="max_result_bytes" min="1"></label>
   <label>결과 항목 수 상한<input type="number" name="max_result_items" min="1"></label>
   <label class="full">승인 사유(예외는 필수)<textarea name="basis"></textarea></label>
-  <div class="actions full"><a class="button" href="/approvals?tab=servers">취소</a><button class="primary" type="submit"><span aria-hidden="true">✓</span> 승인</button></div>
+  <div class="actions full"><a class="button" href="/approvals?tab=servers">취소</a>
+  {{ m.confirm_submit('grant-confirm', '승인', '승인 범위 확정', relation.server_id ~ ' 서버를 입력한 범위와 기간으로 승인합니다. 철회하려면 접근 통제에서 승인을 철회해야 합니다.', 'grant', '승인', danger=false, trigger_class='primary') }}</div>
 </form>
 {% else %}{{ m.empty('이 콘솔에서는 승인할 수 없습니다', '/approvals?tab=servers', '서버 도입으로 돌아가기') }}{% endif %}
 {% endblock %}

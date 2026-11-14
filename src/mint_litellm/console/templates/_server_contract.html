@@ -2,11 +2,10 @@
 {% set base = '/servers/' ~ (s.server_id | urlencode) %}
 {% if c.provisional %}
 <h2>임시 계약</h2>
-<p class="muted">추정값 · 보호 규칙에만 적용</p>
 <table><thead><tr><th>도구</th><th>추정 동작</th><th>위험 등급</th><th>허용 인자 키</th><th>관측</th></tr></thead><tbody>
 {% for p in c.provisional %}<tr><td>{{ p.tool }}</td><td>{{ L.pick(L.ACTION, p.action_type) }}</td><td>{{ L.pick(L.RISK, p.risk_grade) }}</td><td>{{ p.input_keys | join }}</td><td>{{ p.observed_at | when }}</td></tr>{% endfor %}
 </tbody></table>
-{% if actor.role != 'viewer' %}
+{% if can(actor, 'contract reapprove') %}
 <form method="post" action="/contracts/{{ s.server_id | urlencode }}/approve-provisional" class="form cols">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ s.state_version }}">
   <div class="effect full">현재 도구 정의를 승인본으로 전환(실행 유형 제외)</div>
@@ -54,7 +53,7 @@
 </tbody></table>
 {% endif %}
 
-{% if actor.role != 'viewer' and (c.cand.tools or c.cand.deployments) %}
+{% if can(actor, 'contract reapprove') and (c.cand.tools or c.cand.deployments) %}
 <h2>재승인</h2>
 <form method="post" action="/contracts/{{ s.server_id | urlencode }}/reapprove" class="form cols">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ s.state_version }}">
@@ -62,7 +61,6 @@
   {% if c.cand.deployments %}<label>후보 배포 계약<select name="deployment_contract_id"><option value="">선택 안 함</option>{% for d in c.cand.deployments %}<option value="{{ d.id }}">판본 {{ d.version }}</option>{% endfor %}</select></label>{% endif %}
   {% if c.cand.tools %}<fieldset class="form full"><legend>후보 도구 계약</legend>
   {% for t in c.cand.tools %}<label class="radio"><input type="checkbox" name="tool_contract_ids" value="{{ t.id }}"> {{ t.tool }} (위험 등급 {{ L.pick(L.RISK, t.risk_grade) }}, {{ L.pick(L.ACTION, t.action_type) }})</label>{% endfor %}</fieldset>{% endif %}
-  <div class="effect full">선택한 계약의 재승인 계획만 등록합니다</div>
   <div class="actions full"><button type="submit" class="primary" {% if not c.cand.intakes %}disabled{% endif %}>재승인 계획 등록</button></div>
 </form>
 {% endif %}

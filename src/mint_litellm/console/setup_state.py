@@ -3,7 +3,7 @@
 from typing import Any
 
 from mint_litellm.console import labels
-from mint_litellm.console.core import Actor
+from mint_litellm.console.core import Actor, can
 from mint_litellm.console.labels import Status
 from mint_litellm.control import status as control_status
 from mint_litellm.control.db.connection import fetchone
@@ -103,6 +103,10 @@ def _servers(actor: Actor) -> dict:
             "승인된 서버가 없습니다.",
             "/approvals?tab=servers",
             "승인 센터",
+        )
+    if not can(actor, "intake create"):
+        return _item(
+            "servers", "MCP 서버 승인", OPEN, "등록된 서버가 없습니다.", "/intakes", "도입 신청"
         )
     return _item(
         "servers", "MCP 서버 승인", OPEN, "등록된 서버가 없습니다.", "/intakes/new", "신청 시작"

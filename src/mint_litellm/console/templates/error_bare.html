@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }} · MINT</title>
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<link rel="stylesheet" href="/static/console.css">
+</head>
+<body>
+<div class="login">
+  <h1>{{ title }}</h1>
+  {% if message %}<p>{{ message }}</p>{% endif %}
+  <p class="muted">참조 번호 {{ reference }}</p>
+  <div class="actions"><a class="button primary" href="{{ back_href }}">{{ back_name }}</a></div>
+</div>
+</body>
+</html>

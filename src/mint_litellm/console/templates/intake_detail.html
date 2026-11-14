@@ -12,7 +12,7 @@
   {{ m.kpi('높음 이상 도구', high_risk, note='낮음 ' ~ risk.low ~ ' · 보통 ' ~ risk.medium ~ ' · 높음 ' ~ risk.high ~ ' · 심각 ' ~ risk.critical, level='wait' if high_risk) }}
   {{ m.kpi('증빙 충족', proof[0] ~ ' / ' ~ proof[1], '?tab=evidence', level='danger' if lacking) }}
 </div>
-<div class="{{ 'grid' if actor.role != 'viewer' }}">
+<div class="{{ 'grid' if can(actor, 'intake approve') }}">
 <div>
 {{ m.tabs(tabs, tab, '/intakes/' ~ i.id) }}
 {% if tab == 'info' %}
@@ -48,7 +48,7 @@
 {% else %}<p class="muted">산정된 도구가 없습니다.</p>{% endif %}
 {% endif %}
 </div>
-{% if actor.role != 'viewer' %}
+{% if can(actor, 'intake approve') %}
 <aside>
 {% if actor.role == 'admin' and i.status == 'received' and not i.requested_by %}
 <h2>신청자 지정</h2>
@@ -58,7 +58,7 @@
   <label>신청자(사용자 식별자)<input name="user_id" required></label>
   <button type="submit" class="primary">지정</button>
 </form>
-{% else %}<p class="muted">제어 평면 키가 없어 지정할 수 없습니다.</p>{% endif %}
+{% endif %}
 {% endif %}
 
 {% if actor.role == 'admin' and i.requested_by and (i.status in ('received', 'passed', 'indeterminate') or (i.status == 'decided' and i.decision in ('approved', 'exception'))) %}
@@ -73,20 +73,25 @@
 
 {% if i.status in ('passed', 'indeterminate') %}
 <h2>결정</h2>
-<form method="post" action="/intakes/{{ i.id }}/decision" class="form">
+<form method="post" action="/intakes/{{ i.id }}/decision" class="form" id="decision">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ i.state_version }}">
   <div class="row">
     <label>대상 구분<select name="scope_type"><option value="user">사용자</option><option value="key">키</option><option value="team">팀</option></select></label>
     <label>대상 식별자<input name="scope_id" value="{{ i.owner_user_id or '' }}"></label>
     <label>유효 기간(일)<input type="number" name="valid_days" value="{{ strict_days if i.status == 'indeterminate' else days }}" min="1" max="{{ max_exception_days if i.status == 'indeterminate' else 365 }}"></label>
   </div>
-  <label>사유(거절·예외 승인은 필수)<textarea name="reason"></textarea></label>
+  <label>{{ '사유(필수)' if i.status == 'indeterminate' else '사유' }}<textarea name="reason"{% if i.status == 'indeterminate' %} required{% endif %}></textarea></label>
   {% if i.status == 'indeterminate' %}<label>두 번째 승인자 토큰<input type="password" name="second_approver_token" autocomplete="off"></label>{% endif %}
-  <div class="actions">
-    <button type="submit" name="decision" value="{{ 'except' if i.status == 'indeterminate' else 'approve' }}"><span aria-hidden="true">✓</span> {{ '예외 승인' if i.status == 'indeterminate' else '승인' }}</button>
-    <button type="submit" name="decision" value="reject">거절</button>
-  </div>
+  <input type="hidden" name="decision" value="{{ 'except' if i.status == 'indeterminate' else 'approve' }}">
 </form>
+<div class="actions">
+  {% set verb = '예외 승인' if i.status == 'indeterminate' else '승인' %}
+  {{ m.confirm_submit('decide-approve', verb, '신청 ' ~ verb, i.server_id ~ ' 신청을 ' ~ verb ~ '합니다. 이용 관계와 승인 대기 항목이 만들어집니다.', 'decision', verb, danger=false, trigger_class='primary') }}
+  {% call m.confirm_dialog('decide-reject', '거절', '신청 거절', i.server_id ~ ' 신청을 거절합니다. 입력한 사유가 신청 기록에 남습니다.', '/intakes/' ~ i.id ~ '/decision', actor, '거절') %}
+  <input type="hidden" name="state_version" value="{{ i.state_version }}"><input type="hidden" name="decision" value="reject">
+  <label>거절 사유<textarea name="reason" required maxlength="500"></textarea></label>
+  {% endcall %}
+</div>
 {% endif %}
 </aside>
 {% endif %}

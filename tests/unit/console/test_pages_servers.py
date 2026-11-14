@@ -76,7 +76,7 @@ def test_the_detail_is_split_into_tabs_and_a_viewer_gets_no_stop_button(world):
     for tab in ("overview", "contract", "tools", "packages", "vulns", "usage", "evidence"):
         assert viewer.get(f"/servers/srv-ok?tab={tab}").status_code == 200
     html = viewer.get("/servers/srv-ok").text
-    assert "계약 변경" in html and "data-dialog-open" not in html
+    assert "변경된 도구" in html and "data-dialog-open" not in html
     assert "임시 계약" in html
     assert "필수 증빙" not in html and "증빙 첨부" not in viewer.get(
         "/servers/srv-ok?tab=evidence").text
