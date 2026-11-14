@@ -174,7 +174,7 @@ def test_the_console_holds_the_control_key_only_through_a_read_only_client():
 
     client = ReadOnlyLiteLLM(LiteLLMAdmin("http://localhost:9", CONTROL_KEY))
     assert sorted(vars(client)) == [
-        "get_key", "get_server", "get_team", "get_user", "list_servers"]
+        "get_key", "get_server", "get_team", "get_user", "list_servers", "spend_guardrail"]
 
 
 def test_without_a_control_key_unverified_sessions_are_revoked_after_two_periods(world):

@@ -607,6 +607,32 @@ class TestResponseAndFailureEvents:
         assert event.payload["output_findings"] == ["POL-E-16"]
         assert event.payload["output_blocked"] is True
 
+    def test_a_scanner_error_blocks_the_result_when_enforced_and_passes_it_when_observed(
+        self, tmp_path, monkeypatch
+    ):
+        from litellm.types.mcp import MCPPostCallResponseObject
+        from mcp.types import TextContent
+
+        from mint_litellm.plugin import logger as logger_module
+
+        def broken(*args, **kwargs):
+            raise RuntimeError("scanner failure")
+
+        monkeypatch.setattr(logger_module, "screen_result", broken)
+        for enforce in (True, False):
+            hook, _ = self.hook(tmp_path)
+            ctx = self.context(result_policy={"response_scan": "mask", "enforce": enforce})
+            response = MCPPostCallResponseObject(
+                mcp_tool_call_response=[TextContent(type="text", text="raw value")],
+                hidden_params={},
+            )
+            run(hook.async_post_mcp_tool_call_hook({MINT_CTX_KEY: ctx}, response, None, None))
+            (block,) = response.mcp_tool_call_response
+            assert (block.text != "raw value") is enforce
+            if enforce:
+                assert json.loads(block.text)["code"] == "MINT-OUTPUT-BLOCKED"
+                assert ctx["output_blocked"] is True
+
     def test_an_observe_mode_finding_is_recorded_without_touching_the_result(self, tmp_path):
         from litellm.types.mcp import MCPPostCallResponseObject
         from mcp.types import TextContent

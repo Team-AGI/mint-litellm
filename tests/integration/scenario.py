@@ -376,7 +376,7 @@ def insert_is_sleeping() -> bool:
 
 
 @contextlib.contextmanager
-def litellm_config(path: str, *, verified: bool = True):
+def litellm_config(path: str, *, verified: bool = True, env: dict | None = None):
     """두 복제본을 다른 설정 파일로 다시 띄웠다가 기본 설정으로 되돌린다.
 
     ``verified``가 참이면 두 복제본이 집행 점검을 통과해 사건을 남길 때까지 기다린다.
@@ -390,7 +390,7 @@ def litellm_config(path: str, *, verified: bool = True):
         "--force-recreate",
         "litellm1",
         "litellm2",
-        env={"MINT_E_LITELLM_CONFIG": path},
+        env={"MINT_E_LITELLM_CONFIG": path, **(env or {})},
         check=False,
     )
     try:

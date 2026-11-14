@@ -5,6 +5,8 @@
 - 키·팀 갱신: ``/key/update``, ``/team/update``. 본문은 대상 식별자와
   ``object_permission{mcp_servers, mcp_tool_permissions}``뿐이다. LiteLLM은 두 값을 각각 통째로
   바꾸므로 언제나 전체 목록과 전체 맵을 보낸다. 다른 필드는 보내기 전에 거부한다.
+- 차단·해제: ``/key/block``, ``/key/unblock``, ``/team/block``, ``/team/unblock``. 본문은 대상
+  식별자 하나뿐이다(사람이 승인한 차단 제안을 옮길 때만 쓴다).
 - 사용자 자격: 폐기하는 서버의 사용자별 API 키·OAuth2 토큰을 ``user_id`` 쿼리로 하나씩 지운다.
 - 서버: 승인·거절·고정·고정 해제 경로만 부른다. 서버 등록·수정·삭제·가져오기는 부르지 않는다.
 - 모든 쓰기 직전에 ``before_write``를 부른다(되돌림 상태·임대 확인 자리, 예외를 내면 쓰지 않는다).
@@ -30,6 +32,7 @@ WRITE_ROUTES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
         ("PUT", r"/v1/mcp/server"),  # 본문은 allow_all_keys 끄기와 호출 한도뿐이다(check_write)
         ("POST", r"/key/update"),
         ("POST", r"/team/update"),
+        ("POST", r"/(?:key|team)/(?:block|unblock)"),  # 본문은 대상 식별자 하나(check_write)
         ("PUT", _SERVER + r"/approve"),
         ("PUT", _SERVER + r"/reject"),
         ("POST", _SERVER + r"/pin"),
@@ -41,6 +44,7 @@ WRITE_ROUTES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
 
 LIMIT_FIELDS = ("rpm", "max_concurrent_requests")
 _ID_FIELD = {"/key/update": "key", "/team/update": "team_id"}
+_BLOCK_FIELD = {"key": "key", "team": "team_id"}
 _PERMISSION_FIELDS = frozenset({"mcp_servers", "mcp_tool_permissions"})
 
 
@@ -99,6 +103,16 @@ def check_write(method: str, path: str, body: Any) -> None:
             or not isinstance(body["review_notes"], str)
         ):
             raise WriteRefused("거절 본문은 {review_notes: 문자열}만 보낼 수 있습니다.")
+        return
+    if path.endswith(("/block", "/unblock")):
+        field = _BLOCK_FIELD[path.split("/")[1]]
+        if (
+            not isinstance(body, dict)
+            or set(body) != {field}
+            or not isinstance(body[field], str)
+            or not body[field]
+        ):
+            raise WriteRefused(f"{path} 본문은 비어 있지 않은 {field}만 보낼 수 있습니다.")
         return
     id_field = _ID_FIELD.get(path)
     if id_field is None:
@@ -239,6 +253,11 @@ class LiteLLMSync(LiteLLMAdmin):
                 },
             },
         )
+
+    def set_blocked(self, kind: str, target_id: str, blocked: bool) -> None:
+        """키(``key``)나 팀(``team``)의 차단을 걸거나 푼다. 결과는 부른 쪽이 다시 읽어 확인한다."""
+        field = _BLOCK_FIELD[kind]
+        self._write("POST", f"/{kind}/{'block' if blocked else 'unblock'}", {field: target_id})
 
     # --- 서버 ---------------------------------------------------------------
 

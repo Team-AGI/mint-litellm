@@ -109,6 +109,14 @@ class EventKind(StrEnum):
     CONFIG_IMPORTED = "config_imported"
     SIEM_TARGET_ADDED = "siem_target_added"
     SIEM_TARGET_REMOVED = "siem_target_removed"
+    KEY_BLOCK_PROPOSED = "key_block_proposed"
+    KEY_BLOCK_APPROVED = "key_block_approved"
+    KEY_BLOCK_REJECTED = "key_block_rejected"
+    KEY_BLOCK_EXPIRED = "key_block_expired"
+    KEY_BLOCK_APPLIED = "key_block_applied"
+    KEY_BLOCK_FAILED = "key_block_failed"
+    KEY_BLOCK_UNBLOCK_REQUESTED = "key_block_unblock_requested"
+    KEY_BLOCK_UNBLOCKED = "key_block_unblocked"
 
 
 CALL_KINDS: frozenset[EventKind] = frozenset(
@@ -208,6 +216,14 @@ CONTROL_ENTITY: dict[EventKind, str] = {
     EventKind.CONFIG_IMPORTED: "config",
     EventKind.SIEM_TARGET_ADDED: "siem_target",
     EventKind.SIEM_TARGET_REMOVED: "siem_target",
+    EventKind.KEY_BLOCK_PROPOSED: "key_block",
+    EventKind.KEY_BLOCK_APPROVED: "key_block",
+    EventKind.KEY_BLOCK_REJECTED: "key_block",
+    EventKind.KEY_BLOCK_EXPIRED: "key_block",
+    EventKind.KEY_BLOCK_APPLIED: "key_block",
+    EventKind.KEY_BLOCK_FAILED: "key_block",
+    EventKind.KEY_BLOCK_UNBLOCK_REQUESTED: "key_block",
+    EventKind.KEY_BLOCK_UNBLOCKED: "key_block",
 }
 
 _ENTITY_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
@@ -482,3 +498,4 @@ class AlertKind(StrEnum):
     SERVER_ADDRESS_INTERNAL = "server_address_internal"
     RESULT_UNENFORCED = "result_unenforced"
     CONFIG_PLAINTEXT_SECRET = "config_plaintext_secret"
+    KEY_BLOCK_PROPOSED = "key_block_proposed"

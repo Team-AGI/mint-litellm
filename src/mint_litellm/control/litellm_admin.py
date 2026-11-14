@@ -132,6 +132,28 @@ class LiteLLMAdmin:
         body = self._ok("/team/info", {"team_id": team_id}, missing_ok=True, key="team_info")
         return None if body is None else body["team_info"]
 
+    def spend_guardrail(self, call_id: str) -> list[dict]:
+        """호출 식별자의 지출 기록에 남은 MINT 가드레일 기록(결과·상태·판정 참조·시간)만 읽는다.
+
+        지출 기록 전체가 아니라 ``guardrail_provider``가 ``mint``인 항목의 이 네 필드만 돌려준다.
+        행이 없거나(지출 기록이 꺼져 있음) 항목이 없으면 빈 목록이다. 읽기 경로
+        (``/spend/logs``)가 제어 평면 키의 ``allowed_routes``에 없으면 오류이다.
+        """
+        rows = self._ok("/spend/logs", {"request_id": call_id}, missing_ok=True, shape=list)
+        found: list[dict] = []
+        for row in rows or []:
+            meta = row.get("metadata") if isinstance(row, dict) else None
+            entries = meta.get("guardrail_information") if isinstance(meta, dict) else None
+            for entry in entries if isinstance(entries, list) else []:
+                if isinstance(entry, dict) and entry.get("guardrail_provider") == "mint":
+                    found.append({
+                        "status": entry.get("guardrail_status"),
+                        "outcome": entry.get("guardrail_action"),
+                        "decision_ref": entry.get("guardrail_id"),
+                        "seconds": entry.get("duration"),
+                    })
+        return found
+
     def list_keys(self) -> list[dict]:
         """메타데이터와 객체 권한을 포함한 전체 객체. ``return_full_object``가 필요하다."""
         keys: list[dict] = []

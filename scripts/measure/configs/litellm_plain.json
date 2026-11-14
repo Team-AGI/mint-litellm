@@ -1,0 +1,10 @@
+{
+  "id": "litellm_plain",
+  "description": "순정 LiteLLM",
+  "kind": "none",
+  "base_url": "http://CONFIGURE_ME",
+  "endpoint": "/mcp/rest/tools/call",
+  "api_key_env": "MEASURE_KEY_LITELLM_PLAIN",
+  "status_to_action": {"200": "allow", "403": "deny", "202": "hold", "409": "hold"},
+  "restart_command": null
+}
