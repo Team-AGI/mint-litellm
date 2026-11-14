@@ -1,0 +1,91 @@
+{% import "macros.html" as m %}
+{% call m.filter_bar('/approvals?tab=calls', stats.range, range_options) %}<input type="hidden" name="tab" value="calls">{% endcall %}
+<div class="cards">
+  {{ m.kpi('열린 요청', '{:,}'.format(stats.opened)) }}
+  {{ m.kpi('사람이 승인', '{:,}'.format(stats.approved_by_person)) }}
+  {{ m.kpi('규칙이 자동 승인', '{:,}'.format(stats.approved_by_rule)) }}
+  {{ m.kpi('대기 중 승인되어 완료', '{:,}'.format(stats.held_completed)) }}
+  {{ m.kpi('거부', '{:,}'.format(stats.denied)) }}
+  {{ m.kpi('미사용 만료', '{:,}'.format(stats.expired_unused)) }}
+  {{ m.kpi('결정 중앙값', stats.median_seconds | span) }}
+  {{ m.kpi('결정 상위 10%', stats.p90_seconds | span) }}
+  {{ m.kpi('기간 승인으로 통과', ((stats.period_share * 100) | round | int ~ '%') if stats.period_share is not none else '—') }}
+</div>
+{% if stats.opened %}<div class="chart" data-bars="{{ stats.series | to_json }}"></div>
+<table><thead><tr><th>서버</th><th>도구</th><th class="num">요청</th></tr></thead><tbody>
+{% for t in stats.top %}<tr><td>{{ t.server_id }}</td><td>{{ t.tool }}</td><td class="num">{{ '{:,}'.format(t.n) }}</td></tr>{% endfor %}
+</tbody></table>{% endif %}
+{% set sg = stats.suggestion %}{% if sg and actor.role == 'admin' %}
+<p><a class="button" href="/approvals?tab=rules&amp;new=1&amp;rule_org={{ sg.org_id | urlencode }}&amp;rule_server={{ sg.server_id | urlencode }}&amp;rule_tool={{ sg.tool | urlencode }}&amp;rule_class={{ sg.action_type | urlencode }}">반복 승인 {{ sg.server_id }} · {{ sg.tool }} · {{ sg.n }}건 → 상시 승인 규칙 만들기</a></p>
+{% endif %}
+{% if rows %}
+{% if actor.role != 'viewer' and pending | length > 1 %}
+<form method="post" id="bulk" class="actions">{{ m.csrf(actor) }}
+  <select name="window_minutes" aria-label="선택 항목 사용 기간"><option value="0">1회</option><option value="10">10분</option><option value="30" selected>30분</option></select>
+  <button type="submit" formaction="/call-approvals/bulk/approve"><span aria-hidden="true">✓</span> 선택 승인</button>
+  <input type="text" name="reason" maxlength="500" aria-label="선택 항목 거부 사유">
+  <button type="submit" formaction="/call-approvals/bulk/reject">선택 거부</button>
+</form>
+{% endif %}
+<table class="clickable"><thead><tr><th></th><th>도구</th><th>요청 내용</th><th>주체</th><th>요청 시각</th><th>사용 기간</th><th>상태</th><th></th></tr></thead><tbody>
+{% for c in rows %}<tr{% if selected and selected.id == c.id %} class="selected"{% endif %}>
+<td>{% if c.status == 'pending' and actor.role != 'viewer' %}<input type="checkbox" name="ids" form="bulk" value="{{ c.id }}:{{ c.state_version }}" aria-label="선택">{% endif %}</td>
+<td><a href="/approvals?tab=calls&amp;range={{ stats.range }}&amp;focus={{ c.id }}">{{ c.tool }}</a><br><span class="muted">{{ c.server_id }}</span></td>
+<td>{% if c.target or c.action %}{% if c.target %}{{ c.target | masked(64) }}{% endif %}{% if c.action %} · {{ c.action | masked(64) }}{% endif %}{% else %}—{% endif %}</td>
+<td>{{ L.pick(L.PRINCIPAL, c.principal_type) }} {{ c.principal_id }}</td>
+<td class="nowrap">{{ c.requested_at | when if c.requested_at else '—' }}{% if c.status == 'pending' and c.age_seconds is not none %}<br>{{ c.age_seconds | span }} 경과{% endif %}</td>
+<td class="nowrap">{% if c.window_minutes %}{{ c.window_minutes }}분{% if c.status == 'approved' %} · 남은 {{ c.remaining_seconds | span }}{% endif %}{% else %}1회{% endif %}</td>
+<td>{{ m.badge(L.CALL_APPROVAL, c.status) }}</td>
+<td>{% if c.status == 'pending' and actor.role != 'viewer' %}<form method="post" action="/call-approvals/{{ c.id }}/approve">{{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ c.state_version }}"><input type="hidden" name="window_minutes" value="{{ 0 if c.action_type in one_shot else 30 }}"><button type="submit"><span aria-hidden="true">✓</span> 승인</button></form>{% endif %}</td>
+</tr>{% endfor %}
+</tbody></table>
+{{ m.pager('/approvals?tab=calls', page, rows | length) }}
+{% else %}{{ m.empty('승인을 기다리는 호출이 없습니다', '/ledger', '호출 기록 보기') }}{% endif %}
+{% if selected %}
+{% set c = selected %}
+{% call m.drawer('호출 승인', '/approvals?tab=calls&range=' ~ stats.range, true) %}
+<dl class="detail">
+  <dt>서버</dt><dd><a href="/servers/{{ c.server_id | urlencode }}">{{ c.server_id }}</a></dd>
+  <dt>도구</dt><dd>{{ c.tool }}</dd>
+  <dt>행위</dt><dd>{{ L.pick(L.ACTION, c.action_type) }}</dd>
+  <dt>조직</dt><dd>{{ c.org_id }}</dd>
+  <dt>주체</dt><dd>{{ L.pick(L.PRINCIPAL, c.principal_type) }} {{ c.principal_id }}</dd>
+  {% if c.target %}<dt>대상</dt><dd>{{ c.target | masked }}</dd>{% endif %}
+  {% if c.action %}<dt>동작</dt><dd>{{ c.action | masked }}</dd>{% endif %}
+  {% for k, v in (c.display or {}).items() %}<dt>{{ k | masked(64) }}</dt><dd>{{ v | masked }}</dd>{% endfor %}
+  <dt>상태</dt><dd>{{ m.badge(L.CALL_APPROVAL, c.status) }}</dd>
+  <dt>요청 시각</dt><dd>{{ c.requested_at | when if c.requested_at else '—' }}</dd>
+  <dt>만료</dt><dd>{{ (c.valid_until or c.expires_at) | when }}</dd>
+  {% if c.window_minutes %}<dt>사용 현황</dt><dd>{{ c.window_minutes }}분 · {{ c.uses }}회 사용{% if c.approved_by and c.approved_by.startswith('rule:') %} · 규칙 {{ c.approved_by[5:13] }}{% endif %}{% if c.extended_at %} · 연장됨({{ c.extended_by | masked(64) }}){% endif %}</dd>{% endif %}
+  {% if c.decision_reason %}<dt>거부 사유</dt><dd>{{ c.decision_reason | masked }}</dd>{% endif %}
+</dl>
+{% if actor.role != 'viewer' and c.status in ('pending', 'approved') %}
+<form method="post" class="form">
+  {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ c.state_version }}">
+  {% if c.status == 'pending' %}
+  <span class="segments" role="group" aria-label="사용 기간">
+    <label class="segment"><input type="radio" name="window_minutes" value="0"{% if c.action_type in one_shot %} checked{% endif %}>1회</label>
+    {% if c.action_type not in one_shot %}<label class="segment"><input type="radio" name="window_minutes" value="10">10분</label>
+    <label class="segment"><input type="radio" name="window_minutes" value="30" checked>30분</label>{% endif %}
+  </span>
+  <label>거부 사유<input type="text" name="reason" maxlength="500"></label>
+  <div class="actions">
+    <button type="submit" formaction="/call-approvals/{{ c.id }}/approve" autofocus><span aria-hidden="true">✓</span> 승인</button>
+    <button type="submit" formaction="/call-approvals/{{ c.id }}/reject">거부</button>
+  </div>
+  {% endif %}
+  <div class="actions">
+    {% if c.can_extend %}<button type="submit" formaction="/call-approvals/{{ c.id }}/extend">{{ c.window_minutes }}분 연장</button>{% endif %}
+    <button type="submit" formaction="/call-approvals/{{ c.id }}/cancel">요청 취소</button>
+  </div>
+</form>
+{% if actor.role == 'admin' and c.action_type in ('read', 'write') %}<p><a class="button" href="/approvals?tab=rules&amp;new=1&amp;rule_org={{ c.org_id | urlencode }}&amp;rule_server={{ c.server_id | urlencode }}&amp;rule_tool={{ c.tool | urlencode }}&amp;rule_class={{ c.action_type }}">이 조건으로 규칙 만들기</a></p>{% endif %}
+{% endif %}
+{% if history %}
+<h3>최근 이력</h3>
+<table><thead><tr><th>요청 시각</th><th>상태</th></tr></thead><tbody>
+{% for h in history %}<tr><td class="nowrap"><a href="/approvals?tab=calls&amp;focus={{ h.id }}">{{ h.requested_at | when if h.requested_at else '—' }}</a></td><td>{{ m.badge(L.CALL_APPROVAL, h.status) }}</td></tr>{% endfor %}
+</tbody></table>
+{% endif %}
+{% endcall %}
+{% endif %}

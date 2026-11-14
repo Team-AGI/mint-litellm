@@ -146,7 +146,8 @@ def test_the_screen_shows_the_cards_the_chart_and_the_prefilled_rule_link(world)
     html = page.get("/approvals?tab=calls&range=30d").text
     assert "사람이 승인" in html and "결정 중앙값" in html and "data-bars=" in html
     assert "상시 승인 규칙 만들기" in html and "rule_tool=echo" in html
-    form = page.get("/approvals?tab=calls&rule_server=srv-ok&rule_tool=echo&rule_class=write").text
+    form = page.get(
+        "/approvals?tab=rules&new=1&rule_server=srv-ok&rule_tool=echo&rule_class=write").text
     assert 'name="tool_pattern" value="echo"' in form and 'value="write" selected' in form
     viewer = world.session_client("viewer")
     assert "상시 승인 규칙 만들기" not in viewer.get("/approvals?tab=calls").text

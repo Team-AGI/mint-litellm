@@ -1,0 +1,17 @@
+{% extends "base.html" %}{% import "macros.html" as m %}
+{% block title %}승인 센터 · MINT{% endblock %}
+{% block page_class %}wide{% endblock %}
+{% block body %}
+<h1>승인 센터</h1>
+<div class="cards">
+  {{ m.kpi('응답 대기 호출', pending | length, '/approvals?tab=calls', level='wait' if pending else none) }}
+  {{ m.kpi('5분 넘게 대기', slow, '/approvals?tab=calls', level='danger' if slow else none) }}
+  {{ m.kpi('서버 도입 대기', queue | length, '/approvals?tab=servers') }}
+  {{ m.kpi('만료 임박 승인', (renewal.unchanged | length) + (renewal.changed | length), '/approvals?tab=renewals') }}
+</div>
+{{ m.tabs(tabs, tab, '/approvals') }}
+{% if tab == 'calls' %}{% include "_approvals_calls.html" %}
+{% elif tab == 'servers' %}{% include "_approvals_servers.html" %}
+{% elif tab == 'renewals' %}{% include "_approvals_renewals.html" %}
+{% else %}{% include "_approvals_rules.html" %}{% endif %}
+{% endblock %}

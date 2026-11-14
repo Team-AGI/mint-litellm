@@ -64,10 +64,10 @@ def open_link(token: str, actor: Actor = Depends(page_actor)):
     if parsed is not None:
         kind, ref = parsed
         target = {
-            "call": f"/call-approvals?focus={quote(ref)}",
-            "recert": f"/approvals?focus={quote(ref)}",
+            "call": f"/approvals?tab=calls&focus={quote(ref)}",
+            "recert": f"/access?tab=approvals&focus={quote(ref)}",
             "intake": f"/intakes/{quote(ref)}",
-            "dormant": f"/approvals?filter=dormant&server={quote(ref)}",
+            "dormant": f"/access?tab=dormant&server={quote(ref)}",
         }.get(kind)
     if target is None:
         raise AdminError(AdminCode.NOT_FOUND, "링크가 만료되었거나 올바르지 않습니다.")

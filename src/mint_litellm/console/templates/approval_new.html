@@ -1,45 +1,36 @@
 {% extends "base.html" %}{% import "macros.html" as m %}
-{% block title %}승인 검토 · MINT{% endblock %}
+{% block title %}승인 범위 지정 · MINT{% endblock %}
+{% block page_class %}narrow{% endblock %}
 {% block body %}
-<h1>승인 검토</h1>
+<h1>승인 범위 지정</h1>
 <dl class="detail">
   <dt>서버</dt><dd><a href="/servers/{{ relation.server_id | urlencode }}">{{ relation.server_id }}</a></dd>
-  <dt>조직</dt><dd>{{ relation.org_name }}</dd>
-  <dt>팀</dt><dd>{{ relation.team_id | blank }}</dd>
+  <dt>조직·팀</dt><dd>{{ relation.org_name }}{% if relation.team_id %} · {{ relation.team_id }}{% endif %}</dd>
   <dt>목적</dt><dd>{{ relation.purpose }}</dd>
-  <dt>높음·심각 도구</dt><dd>{{ high | join }}</dd>
+  <dt>높음·심각 도구</dt><dd>{{ high | join | blank }}</dd>
 </dl>
 {% if can_grant and actor.role != 'viewer' %}
-<form method="post" action="/approvals" class="form">
+<form method="post" action="/approvals" class="form cols">
   {{ m.csrf(actor) }}
   <input type="hidden" name="relation_id" value="{{ relation.id }}">
   <input type="hidden" name="state_version" value="{{ relation.state_version }}">
-  <div class="row">
-    <label>대상 구분<select name="scope_type"><option value="key">키</option><option value="user">사용자</option><option value="team"{% if relation.team_id %} selected{% endif %}>팀</option></select></label>
-    <label>대상 식별자<input name="scope_id" value="{{ relation.team_id or '' }}" required></label>
-  </div>
-  <label>도구(쉼표 또는 줄바꿈으로 구분)<textarea name="tools" required></textarea></label>
-  <div class="row">
-    <label>승인 구분<select name="class"><option value="standard">일반</option><option value="exception">예외</option></select></label>
-    <label>유효 기간(일)<input type="number" name="valid_days" value="{{ days }}" min="1" max="365" required></label>
-  </div>
+  <label>대상 구분<select name="scope_type"><option value="key">키</option><option value="user">사용자</option><option value="team"{% if relation.team_id %} selected{% endif %}>팀</option></select></label>
+  <label>대상 식별자<input name="scope_id" value="{{ relation.team_id or '' }}" required></label>
+  <label>승인 구분<select name="class"><option value="standard">일반</option><option value="exception">예외</option></select></label>
+  <label>유효 기간(일)<input type="number" name="valid_days" value="{{ days }}" min="1" max="365" required></label>
   <label>신청자(사용자 식별자)<input name="requested_by" required></label>
-  <fieldset class="form">
-    <legend>허용 경로</legend>
-    <label class="radio"><input type="radio" name="paths_mode" value="unset" checked> 허용 경로 없음</label>
-    <label class="radio"><input type="radio" name="paths_mode" value="listed"> 아래 경로만 허용</label>
-    <label>허용 경로(줄바꿈으로 구분)<textarea name="allowed_paths"></textarea></label>
-    <label class="radio"><input type="radio" name="paths_mode" value="unrestricted"> 제한 없음</label>
-  </fieldset>
-  <label>허용 호스트(줄바꿈으로 구분)<textarea name="allowed_hosts"></textarea></label>
-  <label>허용 인자 키(줄바꿈으로 구분)<textarea name="allowed_arg_keys"></textarea></label>
-  <div class="row">
-    <label>결과 크기 상한(바이트)<input type="number" name="max_result_bytes" min="1"></label>
-    <label>결과 항목 수 상한<input type="number" name="max_result_items" min="1"></label>
-  </div>
-  <label>승인 사유 (예외는 필수)<textarea name="basis"></textarea></label>
-  <label>두 번째 승인자 토큰 (신청자와 같은 사용자일 때)<input type="password" name="second_approver_token" autocomplete="off"></label>
-  <div class="actions"><button class="primary" type="submit">승인</button><a class="button" href="/approvals">취소</a></div>
+  <label>두 번째 승인자 토큰<input type="password" name="second_approver_token" autocomplete="off"></label>
+  <label class="full">도구(쉼표 또는 줄바꿈으로 구분)<textarea name="tools" required></textarea></label>
+  <label class="full">허용 경로
+    <select name="paths_mode"><option value="unset" selected>경로 없음</option><option value="listed">아래 경로만</option><option value="unrestricted">제한 없음</option></select>
+    <textarea name="allowed_paths" aria-label="허용 경로 목록"></textarea>
+  </label>
+  <label>허용 호스트<textarea name="allowed_hosts"></textarea></label>
+  <label>허용 인자 키<textarea name="allowed_arg_keys"></textarea></label>
+  <label>결과 크기 상한(바이트)<input type="number" name="max_result_bytes" min="1"></label>
+  <label>결과 항목 수 상한<input type="number" name="max_result_items" min="1"></label>
+  <label class="full">승인 사유(예외는 필수)<textarea name="basis"></textarea></label>
+  <div class="actions full"><a class="button" href="/approvals?tab=servers">취소</a><button class="primary" type="submit"><span aria-hidden="true">✓</span> 승인</button></div>
 </form>
-{% else %}{{ m.empty('이 콘솔에서는 승인할 수 없습니다', '/approvals', '대기열로 돌아가기') }}{% endif %}
+{% else %}{{ m.empty('이 콘솔에서는 승인할 수 없습니다', '/approvals?tab=servers', '서버 도입으로 돌아가기') }}{% endif %}
 {% endblock %}

@@ -1,0 +1,95 @@
+{% extends "base.html" %}{% import "macros.html" as m %}
+{% block title %}접근 통제 · MINT{% endblock %}
+{% block page_class %}wide{% endblock %}
+{% block body %}
+<h1>접근 통제</h1>
+<div class="cards">
+  {{ m.kpi('유효 승인', counts.active | length, '/access?tab=approvals') }}
+  {{ m.kpi('만료 임박', counts.expiring, '/approvals?tab=renewals') }}
+  {{ m.kpi('미사용 승인', stale, '/access?tab=dormant', level='wait' if stale else none) }}
+  {{ m.kpi('유효 거부', counts.denials, '/access?tab=denials') }}
+  {{ m.kpi('허용 목록', counts.allowlists, '/access?tab=allowlists') }}
+</div>
+{{ m.tabs(tabs, tab, '/access') }}
+{% if tab == 'approvals' %}
+{% if focus %}<p><a class="button" href="/access?tab=approvals">전체 보기</a></p>{% endif %}
+{% if rows %}
+<table class="clickable"><thead><tr><th>서버</th><th>대상</th><th>도구</th><th>유효 기간</th><th>승인자</th><th>재확인</th><th></th></tr></thead><tbody>
+{% for a in rows %}<tr{% if focus == a.id | string %} class="selected"{% endif %}>
+<td><a href="/servers/{{ a.server_id | urlencode }}">{{ a.server_id }}</a></td>
+<td>{{ L.pick(L.SCOPE, a.scope_type) }} {{ a.scope_id }}</td><td>{{ a.tools | join }}</td>
+<td class="nowrap">{{ a.valid_from | when }} ~ {{ a.valid_until | when }}</td><td>{{ a.granted_by | who }}</td>
+<td class="nowrap">{% if a.recert %}{{ a.recert_due | when }} {{ m.badge(L.RECERT, a.recert) }}{% else %}—{% endif %}</td>
+<td><span class="actions">
+{% if a.recert and actor.role == 'admin' %}<form method="post" action="/approvals/{{ a.id }}/recertify">
+  {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ a.state_version }}">
+  <button type="submit"{% if a.recert in ('due', 'overdue', 'held') %} class="primary"{% endif %}>재확인</button>
+</form>{% endif %}
+{% if actor.role != 'viewer' %}<button type="button" data-dialog-open="revoke-{{ a.id }}">철회</button>
+<dialog id="revoke-{{ a.id }}" class="confirm" aria-labelledby="revoke-{{ a.id }}-title">
+  <form method="post" action="/approvals/{{ a.id }}/revoke" hx-boost="false">
+    {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ a.state_version }}">
+    <h3 id="revoke-{{ a.id }}-title">승인 철회</h3>
+    <div class="effect">차단되는 대상: {{ L.pick(L.SCOPE, a.scope_type) }} {{ a.scope_id }}의 도구 {{ a.tools | length }}개, 서버 1개</div>
+    <label>사유<input name="reason" required></label>
+    <div class="actions"><button type="button" data-dialog-close>취소</button>
+      <button type="submit" name="deny" value="0" class="danger">철회</button>
+      <button type="submit" name="deny" value="1" class="danger">철회 + 거부</button></div>
+  </form>
+</dialog>{% endif %}
+</span></td>
+</tr>{% endfor %}
+</tbody></table>
+{{ m.pager('/access?tab=approvals', page, rows | length) }}
+{% else %}{{ m.empty('유효한 승인이 없습니다', '/approvals?tab=servers', '승인 센터 보기') }}{% endif %}
+
+{% elif tab == 'dormant' %}
+{% if rows %}
+<form method="post">
+{{ m.csrf(actor) }}
+<table><thead><tr><th></th><th>서버</th><th>대상</th><th>도구</th><th>구분</th><th>유효 기간</th><th>승인자</th></tr></thead><tbody>
+{% for a in rows %}<tr>
+<td>{% if actor.role == 'admin' %}<input type="checkbox" name="ids" value="{{ a.id }}:{{ a.state_version }}" aria-label="선택">{% endif %}</td>
+<td><a href="/servers/{{ a.server_id | urlencode }}">{{ a.server_id }}</a></td>
+<td>{{ L.pick(L.SCOPE, a.scope_type) }} {{ a.scope_id }}</td><td>{{ a.tools | join }}</td>
+<td>{{ L.pick(L.APPROVAL_CLASS, a.class) }}</td><td class="nowrap">{{ a.valid_from | when }} ~ {{ a.valid_until | when }}</td>
+<td>{{ a.granted_by | who }}</td>
+</tr>{% endfor %}
+</tbody></table>
+{% if actor.role == 'admin' %}<div class="actions">
+  <button type="submit" formaction="/approvals/dormant/keep">선택 유지</button>
+  <button type="submit" formaction="/approvals/dormant/revoke" class="danger">선택 철회</button>
+</div>{% endif %}
+</form>
+{% else %}{{ m.empty('미사용 ' ~ dormant_days ~ '일 넘은 승인이 없습니다', '/access?tab=approvals', '유효 승인 보기') }}{% endif %}
+
+{% elif tab == 'denials' %}
+{% if actor.role != 'viewer' %}<p class="actions"><a class="button primary" href="/access?tab=denials&amp;new=1">거부 등록</a></p>{% endif %}
+{% if denials %}
+<table><thead><tr><th>대상</th><th>서버</th><th>도구</th><th>사유</th><th>등록자</th><th>상태</th><th></th></tr></thead><tbody>
+{% for d in denials %}<tr>
+<td>{{ L.pick(L.SCOPE, d.scope_type) }} {{ d.scope_id }}</td><td>{{ d.server_id | blank }}</td><td>{{ d.tools | join }}</td>
+<td>{{ d.reason }}</td><td>{{ d.created_by | who }}</td>
+<td>{{ m.badge({'a': L.Status('유효', 'block'), 'l': L.Status('해제됨', 'off')}, 'l' if d.lifted_at else 'a') }}</td>
+<td>{% if not d.lifted_at and actor.role != 'viewer' %}<form method="post" action="/denials/{{ d.id }}/lift">{{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ d.state_version }}"><button type="submit">해제</button></form>{% endif %}</td>
+</tr>{% endfor %}
+</tbody></table>
+{% else %}{{ m.empty('등록된 거부가 없습니다', '/access?tab=approvals', '유효 승인 보기') }}{% endif %}
+{% if new and actor.role != 'viewer' %}
+{% call m.drawer('거부 등록', '/access?tab=denials', true) %}
+<form method="post" action="/denials" class="form">
+  {{ m.csrf(actor) }}
+  <label>대상 구분<select name="scope_type"><option value="key">키</option><option value="user">사용자</option><option value="team">팀</option><option value="server">서버</option></select></label>
+  <label>대상 식별자<input name="scope_id" required></label>
+  <label>서버<input name="server_id"></label>
+  <label>도구(비우면 서버 전체)<input name="tools"></label>
+  <label>사유<input name="reason" required></label>
+  <div class="actions"><a class="button" href="/access?tab=denials">취소</a><button type="submit" class="danger">거부 등록</button></div>
+</form>
+{% endcall %}
+{% endif %}
+
+{% else %}
+{% include "_allowlists.html" %}
+{% endif %}
+{% endblock %}

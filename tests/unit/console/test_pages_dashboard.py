@@ -87,7 +87,7 @@ def test_the_overview_shows_counts_and_the_decision_chart(world, admin):
 
 def test_an_empty_list_shows_a_title_and_one_next_action(world, admin):
     html = admin.get("/approvals?tab=calls").text
-    assert "호출별 승인 요청이 없습니다" in html
+    assert "승인을 기다리는 호출이 없습니다" in html
     assert html.count('class="empty"') == 1
 
 
