@@ -889,6 +889,18 @@ def _audience_capability(config: PluginConfig, probe) -> PluginConfig:
     return replace(config, token_audience="off")
 
 
+def _scope_capability(config: PluginConfig, probe) -> PluginConfig:
+    """호출자 토큰이 훅에 오지 않는 LiteLLM이면 범위 대조를 끈다(``off``). 집행을 요청했는데
+    확인할 수 없으면 조용히 풀지 않고 기동을 멈춘다."""
+    problem = probe()
+    if problem is None or config.token_scope == "off":
+        return config
+    if config.token_scope == "enforce":
+        raise RuntimeError(f"MINT_TOKEN_SCOPE=enforce cannot be honored: {problem}")
+    log.warning("호출자 토큰이 훅에 전달되지 않아 토큰 범위 확인을 끕니다: %s", problem)
+    return replace(config, token_scope="off")
+
+
 def get_runtime(env: Mapping[str, str] | None = None) -> PluginRuntime:
     """프로세스 전역 실행 상태. 처음 부를 때 환경 변수에서 설정을 읽는다."""
     global _runtime
@@ -896,6 +908,7 @@ def get_runtime(env: Mapping[str, str] | None = None) -> PluginRuntime:
         config = PluginConfig.from_env(os.environ if env is None else env)
         configure_logging(config.log_level)
         config = _audience_capability(config, compat.bearer_passthrough_problem)
+        config = _scope_capability(config, compat.bearer_passthrough_problem)
         database = PluginDatabase(
             config.database_url,
             max_size=config.db_pool_size,

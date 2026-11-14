@@ -417,6 +417,10 @@ class ResponseObservation(BaseModel):
     aud_mismatch: bool = False
     aud_unchecked: bool = False
     aud_unchecked_reason: str | None = None  # opaque(불투명 토큰), not_forwarded(훅에 전달 안 됨)
+    # 전달되는 호출자 토큰이 승인된 범위를 넘은 범위 이름(토큰은 담지 않음) / 확인하지 않은 이유
+    # (opaque, not_forwarded, no_approved_scopes)
+    scope_exceeded: tuple[str, ...] = ()
+    scope_unchecked_reason: str | None = None
     # 결과가 검사 상한을 넘어 끝까지 보지 못했는지, 구조화된 결과에서 비밀·개인정보가 걸린 JSON 경로
     # (값은 남기지 않는다).
     scan_truncated: bool = False

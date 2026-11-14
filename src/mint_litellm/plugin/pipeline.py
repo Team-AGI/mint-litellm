@@ -47,6 +47,7 @@ from mint_litellm.plugin.snapshot import (
 )
 from mint_litellm.plugin.timing import OFF, StageClock
 from mint_litellm.plugin.token_audience import MISMATCH, UNCHECKED, audience_verdict
+from mint_litellm.plugin.token_scope import exceeded_scopes
 from mint_litellm.types.canonical import credential_scope
 from mint_litellm.types.decision import (
     UNSUPPORTED_STAGE,
@@ -400,6 +401,34 @@ def audience_result(
     run.aud_mismatch = verdict == MISMATCH
     if run.aud_mismatch and mode == "enforce":
         return StageResult.stop(Reason.TOKEN_AUDIENCE_MISMATCH, detail=resolved.auth_type)
+    return None
+
+
+def scope_result(
+    bearer: str | None, resolved: ResolvedServer, snapshot: Snapshot, mode: str, run: _Run
+) -> StageResult | None:
+    """업스트림에 전달되는 호출자 토큰(POL-O-15)의 범위가 승인된 범위를 넘으면 ``enforce``에서
+    닫는다. ``observe``는 호출을 보내고 사건에만 남긴다. 승인된 범위를 모르거나(없음·빈 목록) 토큰을
+    읽을 수 없으면 확인하지 않았다고 이유와 함께 남긴다."""
+    if resolved.auth_type not in FORWARDING_AUTH:
+        return None
+    if mode == "off":
+        run.scope_unchecked_reason = "not_forwarded"
+        return None
+    if not bearer:
+        return None
+    server = snapshot.server
+    approved = server.approved_oauth_scopes if server is not None else None
+    if not approved:
+        run.scope_unchecked_reason = "no_approved_scopes"
+        return None
+    extra = exceeded_scopes(bearer, approved)
+    if extra is None:
+        run.scope_unchecked_reason = "opaque"
+        return None
+    run.scope_exceeded = list(extra)
+    if extra and mode == "enforce":
+        return StageResult.stop(Reason.TOKEN_SCOPE_EXCEEDED, detail=resolved.auth_type)
     return None
 
 
@@ -1097,6 +1126,9 @@ class _Run:
     aud_mismatch: bool = False
     aud_unchecked: bool = False
     aud_unchecked_reason: str | None = None
+    # 전달되는 호출자 토큰이 승인된 범위를 넘은 범위 이름, 확인하지 않은 이유
+    scope_exceeded: list[str] = field(default_factory=list)
+    scope_unchecked_reason: str | None = None
 
 
 def _decision_snapshot(
@@ -1330,6 +1362,10 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         audience = audience_result(req.hook.bearer, resolved, config.token_audience, run)
         if audience is not None:
             stages.add(Stage.DENIAL_APPROVAL, audience)
+            return
+        scope = scope_result(req.hook.bearer, resolved, snapshot, config.token_scope, run)
+        if scope is not None:
+            stages.add(Stage.DENIAL_APPROVAL, scope)
             return
 
     if req.operation is OperationType.RUNTIME_DISCOVERY and (
@@ -1786,6 +1822,8 @@ def _context_document(
         "aud_mismatch": run.aud_mismatch,
         "aud_unchecked": run.aud_unchecked,
         "aud_unchecked_reason": run.aud_unchecked_reason,
+        "scope_exceeded": list(run.scope_exceeded),
+        "scope_unchecked_reason": run.scope_unchecked_reason,
     }
 
 
