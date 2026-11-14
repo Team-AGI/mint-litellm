@@ -107,6 +107,14 @@ GUIDE: dict[str, tuple[str, str]] = {
         "등록합니다. 쓰지 않을 서버면 승인을 철회합니다. 막으려면 MINT_SCAN_UNMANAGED=enforce로 "
         "바꿉니다.",
     ),
+    "server_address_internal": (
+        "원격 서버의 주소가 호출 직전 조회에서 내부 주소(루프백·사설·링크 로컬·메타데이터 등)로 "
+        "풀렸습니다. 공개 주소였던 이름이 바뀐 경우(rebind)는 이름 조회를 가로챈 공격일 수 "
+        "있습니다.",
+        "콘솔의 기록에서 해당 서버와 걸린 종류를 확인합니다. 내부 서버가 맞으면 승인에 "
+        "allow_internal_address를 적고, 아니면 승인을 철회하거나 서버를 중지합니다. 막으려면 "
+        "MINT_RESOLVE_CHECK=enforce로 바꿉니다.",
+    ),
     "package_unpinned": (
         "서버가 버전이 고정되지 않은 패키지를 실행합니다. "
         "실행할 때마다 다른 코드가 내려올 수 있습니다.",

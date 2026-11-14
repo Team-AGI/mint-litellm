@@ -291,6 +291,7 @@ ALERT_KIND = {
     "call_spike": "호출량 급증",
     "bulk_extraction": "대량 추출 의심",
     "content_finding_unmanaged": "미관리 서버 내용 검사",
+    "server_address_internal": "서버 주소 내부 대역",
     "result_unenforced": "결과를 막지 못함",
     "approval_dormant": "미사용 승인",
     "endpoint_stale_server": "폐기 서버 항목 잔존",

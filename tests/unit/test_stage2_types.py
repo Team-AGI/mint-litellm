@@ -127,6 +127,7 @@ def test_reasons_are_the_stage_one_set_plus_the_later_additions():
         "REALTIME_FORBIDDEN",
         "CODE_EXECUTION_FORBIDDEN",
         "TOKEN_FORWARD_FORBIDDEN",
+        "RESOLVED_ADDRESS_FORBIDDEN",
         "APPROVAL_RECERT_REQUIRED",
     }
     later = ("CONFIRMATION_REQUIRED", "CONFIRMATION_STALE", "EXTERNAL_MCP_FORBIDDEN")

@@ -19,6 +19,7 @@ from enum import Enum
 from typing import Any
 
 from mint_litellm.compat import capabilities
+from mint_litellm.plugin.resolve_guard import host_of
 from mint_litellm.types.decision import ResolvedServer, normalize_auth_type, url_sha256
 from mint_litellm.types.identity import Principal, classify_principal
 from mint_litellm.types.reason_codes import Reason
@@ -231,6 +232,7 @@ def _to_resolved(server: Any, candidates: int) -> ResolvedServer:
     return ResolvedServer(
         server_id=server.server_id,
         url_sha256=url_sha256(server.url),
+        host=host_of(server.url),
         transport=_enum_text(server.transport),
         auth_type=normalize_auth_type(server.auth_type),
         candidates_with_same_name=max(candidates, 1),
