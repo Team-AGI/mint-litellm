@@ -460,6 +460,10 @@ EVENT_KIND = {
     "policy_shadow_set": "정책 시험 적용 시작",
     "policy_shadow_cleared": "정책 시험 적용 취소",
     "endpoint_remediated": "단말 항목 자동 제거",
+    "backup_created": "백업 생성",
+    "backup_restored": "백업 복원",
+    "config_exported": "설정 내보내기",
+    "config_imported": "설정 가져오기",
     "event_partition_exported": "원장 월 구간 내보냄",
     "event_partition_dropped": "원장 월 구간 삭제",
 }

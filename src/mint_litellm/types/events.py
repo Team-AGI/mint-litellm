@@ -102,6 +102,10 @@ class EventKind(StrEnum):
     EVENT_PARTITION_EXPORTED = "event_partition_exported"
     EVENT_PARTITION_DROPPED = "event_partition_dropped"
     ENDPOINT_REMEDIATED = "endpoint_remediated"
+    BACKUP_CREATED = "backup_created"
+    BACKUP_RESTORED = "backup_restored"
+    CONFIG_EXPORTED = "config_exported"
+    CONFIG_IMPORTED = "config_imported"
 
 
 CALL_KINDS: frozenset[EventKind] = frozenset(
@@ -194,6 +198,10 @@ CONTROL_ENTITY: dict[EventKind, str] = {
     EventKind.EVENT_PARTITION_EXPORTED: "event_partition",
     EventKind.EVENT_PARTITION_DROPPED: "event_partition",
     EventKind.ENDPOINT_REMEDIATED: "endpoint",
+    EventKind.BACKUP_CREATED: "backup",
+    EventKind.BACKUP_RESTORED: "backup",
+    EventKind.CONFIG_EXPORTED: "config",
+    EventKind.CONFIG_IMPORTED: "config",
 }
 
 _ENTITY_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")

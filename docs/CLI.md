@@ -24,6 +24,10 @@
 | `mint-litellm doctor` | 토큰 불필요 | 지금 비어 있거나 기다리는 일(운영자·제어 평면 키·정책 판본 없음, 승인 대기, 결정 대기 신청, 열린 경보, 실패한 작업, 보류된 동기화)과 다음에 실행할 명령을 보인다. 읽기 전용이며 데이터베이스만 읽는다. | - | - |
 | `mint-litellm upgrade policy` | `admin` | 저장소의 정책 카탈로그 해시가 적용 중인 판본과 다르면 `catalog-<해시 앞 12자>` 판본으로 활성화한다. `--check`는 바뀌었는지만 알린다. `./mint.sh upgrade`가 부른다. | - | `policy_activated` |
 | `mint-litellm upgrade report` | 모든 역할 | 업그레이드 뒤 사람이 정해야 하는 일(범위가 비어 막힌 OAuth 서버, `allow_token_forward`가 없는 전달 서버 승인, 재확인이 필요한 승인, 증빙이 없는 버전 미고정 패키지, 보고가 없거나 이전 판본인 단말 설치 묶음)을 데이터베이스에서 계산해 해결할 화면·명령과 함께 보인다. 읽기 전용이다. | - | - |
+| `mint-litellm backup create` | `admin` | `<파일>`에 `mint` 스키마의 일관된 백업을 만든다(`--format auto|pg_dump|json`). `MINT_BACKUP_PASSPHRASE`가 있으면 암호화한다. | - | `backup_created` |
+| `mint-litellm backup restore` | `admin` | `<파일>`로 `mint` 스키마를 되돌린다. 마이그레이션 수준·인스턴스가 다르면 거부하고 `--yes`가 필요하다. 관리 권한 접속은 `MINT_RESTORE_DATABASE_URL`. | - | `backup_restored` |
+| `mint-litellm config export` | `admin` | 비밀 없이 서버 정의·승인·규칙·거부·허용 목록·조직·운영자 역할·모드 설정을 `<파일>`(JSON)로 내보낸다. | - | `config_exported` |
+| `mint-litellm config import` | `admin` | 내보낸 설정을 자연 키로 되풀이해도 같게 가져온다. 서버·운영자·승인은 가져오지 않고 할 일로 알린다. `--dry-run`은 차이만 보인다. | - | `config_imported` |
 | `mint-litellm status` | 모든 역할 | 모드, 정책 판본, 경보, 관측 항목과 같은 「할 일」 목록을 표시한다. | `/v1/mcp/server`, `/key/list`, `/team/list` | - |
 | `mint-litellm operator add` | `admin` | 운영자를 등록하고 토큰을 발급한다. `--save-token <파일>`을 주면 토큰을 화면에 보이지 않고 0600 파일로만 받는다(파일이 이미 있으면 운영자를 만들기 전에 거부한다). `admin`·`approver`는 LiteLLM 사용자 식별자 (`--user-id`) 결속이 필수이다. | `/user/info` | `operator_added` |
 | `mint-litellm operator bootstrap` | 토큰 불필요 | `operators` 표가 비어 있을 때만 토큰 없이 첫 `admin` 운영자를 만들고 토큰을 발급한다. `--name`과 `--user-id`가 필요하며, 사용자가 LiteLLM의 사람 사용자로 존재하는지 확인한다. 행위자는 `bootstrap`으로 기록하고, 운영자가 이미 있으면 거부한다. | `/user/info` | `operator_added` |

@@ -1,0 +1,1 @@
+- 운영자용 `backup create|restore`(암호화 선택, 마이그레이션 수준 확인, 감사 사건)와 환경 사이 설정 이전 `config export|import`(비밀 없음, 되풀이 가능, `--dry-run`), 콘솔 「백업·이전」 탭을 더했다.

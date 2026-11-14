@@ -118,3 +118,14 @@ def test_the_endpoint_screen_has_no_explanatory_text_or_raw_enums(fleet):
     assert "<p>" not in html
     for enum in ("managed", "pending", "removed", "revoked"):
         assert enum not in html
+
+
+def test_transfer_tab_lists_commands_and_recent_backups_for_admins_only(world, admin):
+    world.query(
+        "INSERT INTO mint.events (event_id, instance_id, kind, source_key, actor, payload)"
+        " VALUES (gen_random_uuid(), %s, 'backup_created', 'backup:t1:1:backup_created',"
+        " 'admin', '{\"file\": \"b1.mbk\", \"mode\": \"json\", \"encrypted\": false}')", INSTANCE)
+    html = admin.get("/admin?tab=transfer").text
+    assert "mint-litellm backup create" in html and "b1.mbk" in html and "백업 생성" in html
+    viewer = world.session_client("viewer")
+    assert "mint-litellm backup" not in viewer.get("/admin?tab=transfer").text

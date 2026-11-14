@@ -332,6 +332,17 @@ def bindings(conn: psycopg.Connection, instance: str) -> list[dict]:
     )
 
 
+def transfers(conn: psycopg.Connection, instance: str, limit: int = 10) -> list[dict]:
+    """최근 백업·복원·설정 내보내기·가져오기 사건(감사 사건에서 읽는다)."""
+    return fetchall(
+        conn,
+        "SELECT inserted_at, kind, actor, payload->>'file' AS file,"
+        " payload->>'mode' AS mode, (payload->>'encrypted')::boolean AS encrypted"
+        " FROM mint.events WHERE instance_id = %s AND kind IN ('backup_created',"
+        " 'backup_restored', 'config_exported', 'config_imported')"
+        " ORDER BY inserted_at DESC LIMIT %s", (instance, limit))
+
+
 def operators(conn: psycopg.Connection, instance: str) -> list[dict]:
     return fetchall(
         conn,
