@@ -1,6 +1,8 @@
 # MINT for LiteLLM
 
-LiteLLM 프록시에 플러그인으로 붙어 MCP 서버와 도구 호출에 거버넌스를 더하는 Python 패키지입니다.
+MINT for LiteLLM은 AI 에이전트가 MCP(Model Context Protocol)를 통해 외부 도구와 서비스에 접근하는 과정을 중앙에서 관리하고 통제하기 위한 MCP 보안 거버넌스 솔루션입니다.
+
+MCP는 Claude Code, Codex 등의 AI 에이전트가 파일 시스템, 개발 도구, 데이터베이스, 외부 API와 상호작용할 수 있도록 지원합니다. 이를 통해 AI 에이전트는 정보 조회뿐 아니라 파일 수정, 코드 실행, 외부 서비스 호출과 같은 실제 작업을 수행할 수 있습니다.
 
 ![MINT for LiteLLM 간단 구성도](docs/images/architecture.png)
 
