@@ -106,6 +106,8 @@ class ResolveGuard:
         self._cache: dict[str, tuple[float, Verdict]] = {}
         # 공개 주소만 받았던 호스트. 내부 주소로 바뀌면 rebind로 가른다.
         self._was_public: dict[str, None] = {}
+        # 기다리다 시간이 다 된 조회. 끝까지 돌게 두고 결과를 캐시에 넣는다(같은 호스트는 하나만).
+        self._pending: dict[str, asyncio.Task[list[str]]] = {}
 
     def cached(self, host: str) -> Verdict | None:
         """캐시가 유효하면 판정, 아니면 None. 조회 없이 마이크로초 단위로 끝난다."""
@@ -119,13 +121,26 @@ class ResolveGuard:
         if hit is not None:
             return hit
         literal = _literal(host)
+        if literal:
+            return self._judge(host, [literal])
+        task = self._pending.get(host)
+        if task is None:
+            task = asyncio.ensure_future(self._lookup(host))
+            self._pending[host] = task
+            task.add_done_callback(lambda t, h=host: self._finish(h, t))
         try:
-            addresses = (
-                [literal] if literal else await asyncio.wait_for(self._lookup(host), timeout)
-            )
+            addresses = await asyncio.wait_for(asyncio.shield(task), timeout)
         except Exception:
-            # 조회 실패·시간 초과는 기억하지 않는다. 다음 호출이 다시 조회한다.
+            # 시간 초과면 조회는 뒤에서 계속되고 끝나면 캐시에 들어간다. 실패는 기억하지 않는다.
             return Verdict(UNRESOLVED)
+        return self._judge(host, addresses)
+
+    def _finish(self, host: str, task: asyncio.Task[list[str]]) -> None:
+        self._pending.pop(host, None)
+        if not task.cancelled() and task.exception() is None and self.cached(host) is None:
+            self._judge(host, task.result())
+
+    def _judge(self, host: str, addresses: list[str]) -> Verdict:
         if not addresses:
             return Verdict(UNRESOLVED)
         label = _first_internal(addresses)
