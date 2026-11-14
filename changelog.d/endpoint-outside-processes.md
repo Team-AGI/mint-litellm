@@ -1,0 +1,1 @@
+- 단말이 묶음 실행기 밖에서 직접 돌린 MCP 서버 패키지(`npx`·`uvx`·`python -m`·`docker run`)를 설치 보고의 `outside_processes`(패키지 이름·생태계·개수만, 마이그레이션 `041_endpoint_outside_processes`)로 보내고, 폐기 서버의 패키지면 경보 `endpoint_outside_retired`(높음), 승인된 서버의 패키지가 아니면 `endpoint_outside_unapproved`(중간)를 연다(POL-D-04, 부분). 알림만 하며 실행기 밖 프로세스는 끄지 않는다. 이전 묶음의 보고는 그대로 받는다.

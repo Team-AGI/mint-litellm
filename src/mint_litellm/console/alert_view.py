@@ -105,6 +105,8 @@ SUMMARY = {
     "endpoint_unmanaged": "단말 {key_alias}에 관리되지 않는 설치가 있습니다.",
     "endpoint_stale_process": "단말 {key_alias}에서 폐기된 서버 {server_id}가 실행 중입니다.",
     "endpoint_stale_autostart": "단말 {key_alias}에 폐기된 서버 {server_id}의 자동 시작 있음",
+    "endpoint_outside_retired": "단말 {key_alias}: 폐기 서버 패키지 {package}가 실행기 밖 실행 중",
+    "endpoint_outside_unapproved": "단말 {key_alias}: 미승인 패키지 {package}가 실행기 밖 실행 중",
     "endpoint_unsandboxed": "단말 {key_alias}에서 서버 {server_id}가 격리 없이 실행 중입니다.",
     "endpoint_egress_unfiltered": "단말 {key_alias}: 서버 {server_id}의 호스트 제한 미집행",
     "endpoint_egress_refused": "단말 {key_alias}: 서버 {server_id}의 허용 밖 접속 {count}건 거절",
