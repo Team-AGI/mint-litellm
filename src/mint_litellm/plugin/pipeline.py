@@ -38,6 +38,7 @@ from mint_litellm.plugin.policy.defaults import effective_conditions
 from mint_litellm.plugin.policy.input import policy_input as make_policy_input
 from mint_litellm.plugin.policy.opa_client import Evaluation
 from mint_litellm.plugin.policy.patterns import compute_patterns
+from mint_litellm.plugin.policy.provisional import infer as infer_provisional
 from mint_litellm.plugin.policy.sensitive_scan import INPUT_SECRET_KINDS, scan_arguments
 from mint_litellm.plugin.resolve_guard import ResolveGuard
 from mint_litellm.plugin.snapshot import (
@@ -485,6 +486,21 @@ def current_contract(snapshot: Snapshot, tool: str) -> ToolContractRow | None:
     )
 
 
+def tool_traits(
+    snapshot: Snapshot, tool: str, arguments: Mapping[str, Any]
+) -> tuple[str | None, str | None, bool]:
+    """(행위 유형, 위험 등급, 임시 계약 여부). 승인된 계약이 있으면 그 값, 계약 관리 서버가 아니면
+    도구 이름·인자로 추정한 임시 계약 값. 계약 관리 서버인데 승인된 계약이 없으면 값이 없다."""
+    contract = current_contract(snapshot, tool)
+    if contract is not None:
+        return contract.action_type, contract.risk_grade, False
+    server = snapshot.server
+    if server is not None and server.contract_status == "managed":
+        return None, None, False
+    guess = infer_provisional(tool, keys=arguments)
+    return guess.action_type, guess.risk_grade, True
+
+
 def bound_to_current_contract(snapshot: Snapshot, tool: str, bound: str | None) -> bool:
     """승인이 받은 때의 계약이 지금 승인된 계약인가. 계약 관리 서버가 아니면 묶인 계약이 없다."""
     server = snapshot.server
@@ -697,14 +713,17 @@ def build_policy_input(
         # 서버 행에 등록된 승인 대상 실행 계약. 보고된 계약과의 대조는 정책 규칙이 한다.
         server_doc["exec_approved_sha256"] = server.exec_contract_sha256
     managed = server is not None and server.contract_status == "managed"
-    server_doc["contract_status"] = "managed" if managed else "none"
-    # 승인된 계약의 위험 등급. 승인이 어떤 경로로 만들어졌든 정책이 같은 등급을 본다.
+    action_type, risk_grade, provisional = tool_traits(snapshot, tool, arguments)
+    server_doc["contract_status"] = (
+        "managed" if managed else "provisional" if provisional else "none"
+    )
+    # 승인된 계약(없으면 임시 계약)의 위험 등급. 어떤 경로의 승인이든 정책이 같은 등급을 본다.
     tool_doc: dict[str, Any] = {"name": tool}
     contract = current_contract(snapshot, tool)
-    if contract is not None:
-        tool_doc["risk_grade"] = contract.risk_grade
-        if contract.action_type is not None:
-            tool_doc["action_type"] = contract.action_type
+    if risk_grade is not None:
+        tool_doc["risk_grade"] = risk_grade
+    if action_type is not None:
+        tool_doc["action_type"] = action_type
 
     if selected is None:
         approval: dict[str, Any] = {"present": False}
@@ -719,7 +738,7 @@ def build_policy_input(
             "conditions": effective_conditions(
                 selected.conditions,
                 tool=tool,
-                action_type=None if contract is None else contract.action_type,
+                action_type=action_type,
                 input_keys=None if contract is None else contract.input_keys,
                 data_grade=snapshot.data_grade,
                 purpose=getattr(snapshot.relations.get(selected.relation_id), "purpose", None),
@@ -750,7 +769,7 @@ def build_policy_input(
         high_risk_tools=sorted(high_risk_tools),
         mode=mode.value,
         operation=operation.value,
-        # 인자 패턴 정책은 계약 관리 서버에만 판정한다. 1단계 서버는 입력도 만들지 않는다.
+        # 인자 패턴 정책은 계약 관리 서버와 임시 계약 서버에 판정한다.
         argument_patterns=(
             _argument_patterns(
                 snapshot,
@@ -760,7 +779,7 @@ def build_policy_input(
                 secret_markers,
                 timing,
             )
-            if managed
+            if managed or provisional
             else None
         ),
     )
@@ -937,8 +956,7 @@ def match_call_approval(
             Reason.CALL_APPROVAL_REQUIRED, detail="arguments cannot be fingerprinted"
         ), None
 
-    contract = current_contract(snapshot, tool)
-    one_shot_only = contract is not None and contract.action_type in ONE_SHOT_ACTIONS
+    one_shot_only = tool_traits(snapshot, tool, arguments)[0] in ONE_SHOT_ACTIONS
 
     def same_call(row: CallApprovalRow) -> bool:
         # 기간 승인은 인자 지문을 풀고 나머지 결속은 그대로 둔다. 1회 승인과 삭제·외부 전송·자격
