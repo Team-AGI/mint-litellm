@@ -25,3 +25,69 @@
 </form>
 {% endif %}
 {% endmacro %}
+
+{# --- 화면 뼈대 부품 ---------------------------------------------------------------------------- #}
+{% macro kpi(label, value, href=none, note=none, level=none, trend=none) %}
+<{{ 'a' if href else 'div' }} class="card kpi{{ ' ' ~ level if level }}"{% if href %} href="{{ href }}"{% endif %}>
+  <div class="label">{{ label }}</div>
+  <div class="value">{{ value }}</div>
+  {% if note or trend %}<div class="foot">{% if note %}<span class="note">{{ note }}</span>{% endif %}{% if trend %}{{ spark(trend) }}{% endif %}</div>{% endif %}
+</{{ 'a' if href else 'div' }}>
+{% endmacro %}
+
+{% macro spark(values, width=80, height=20) %}
+{% set top = values | max if values else 0 %}{% set n = values | length %}
+{% if n > 1 and top > 0 %}<svg class="spark" viewBox="0 0 {{ width }} {{ height }}" width="{{ width }}" height="{{ height }}" role="img" aria-label="추세"><polyline fill="none" stroke="currentColor" stroke-width="1.5" points="{% for v in values %}{{ (loop.index0 * width / (n - 1)) | round(1) }},{{ (height - 2 - v * (height - 4) / top) | round(1) }} {% endfor %}"/></svg>{% endif %}
+{% endmacro %}
+
+{% macro bullet(value, target, width=120, label='') %}
+{% set top = [value, target, 1] | max * 1.25 %}
+<svg class="bullet{{ ' over' if value > target }}" viewBox="0 0 {{ width }} 10" width="{{ width }}" height="10" role="img" aria-label="{{ label }} {{ value }} / {{ target }}"><rect class="range" x="0" y="0" width="{{ width }}" height="10"/><rect class="bar" x="0" y="3" width="{{ (value * width / top) | round(1) }}" height="4"/><rect class="goal" x="{{ (target * width / top) | round(1) }}" y="0" width="2" height="10"/></svg>
+{% endmacro %}
+
+{# kind: stacked(결정별 누적 막대) · donut · bars. data는 console.js의 data-chart 형식을 따른다. #}
+{% macro chart(kind, data, height=240) %}<div class="chart" style="height: {{ height }}px" data-chart="{{ dict(data, kind=kind) | to_json }}"></div>{% endmacro %}
+
+{% macro tabs(items, current, base) %}
+<nav class="tabs" aria-label="탭">{% for key, label, count in items %}<a href="{{ base }}?tab={{ key }}"{% if key == current %} aria-current="page" class="active"{% endif %}>{{ label }}{% if count %} <span class="count">{{ count }}</span>{% endif %}</a>{% endfor %}</nav>
+{% endmacro %}
+
+{# 시간 범위·새로고침 막대. 추가 필터는 호출 블록에 넣는다. #}
+{% macro filter_bar(action, current_range=none, ranges=RANGES) %}
+<form class="filterbar" method="get" action="{{ action }}">
+  {% if current_range is not none %}<span class="segments" role="group" aria-label="시간 범위">{% for key, label in ranges %}<label class="segment"><input type="radio" name="range" value="{{ key }}"{% if key == current_range %} checked{% endif %} onchange="this.form.requestSubmit()">{{ label }}</label>{% endfor %}</span>{% endif %}
+  {% if caller is defined %}{{ caller() }}{% endif %}
+  <a class="button" href="{{ action }}" aria-label="새로고침">새로고침</a>
+</form>
+{% endmacro %}
+
+{# 우측 드로어. 닫기 경로로 돌아가면 닫힌다. 입력이 있으면 바깥 눌러 닫기를 끈다. #}
+{% macro drawer(title, close_href, has_input=false) %}
+{% if not has_input %}<a class="drawer-backdrop" href="{{ close_href }}" aria-label="닫기"></a>{% else %}<div class="drawer-backdrop"></div>{% endif %}
+<aside class="drawer" role="dialog" aria-modal="true" aria-label="{{ title }}" data-close="{{ close_href }}">
+  <header><h2>{{ title }}</h2><a class="button" href="{{ close_href }}">닫기</a></header>
+  <div class="drawer-body">{{ caller() }}</div>
+</aside>
+{% endmacro %}
+
+{# 위험 작업 확인 창. effect는 「무엇을·몇 건·되돌릴 수 있는지」 한 줄. confirm_name이 있으면 이름을 입력해야 한다. #}
+{% macro confirm_dialog(id, trigger, title, effect, action, actor, verb, confirm_name=none, danger=true) %}
+<button type="button" class="{{ 'danger' if danger }}" data-dialog-open="{{ id }}">{{ trigger }}</button>
+<dialog id="{{ id }}" class="confirm" aria-labelledby="{{ id }}-title">
+  <form method="post" action="{{ action }}" hx-boost="false">
+    {{ csrf(actor) }}
+    <h3 id="{{ id }}-title">{{ title }}</h3>
+    <div class="effect">{{ effect }}</div>
+    {% if caller is defined %}{{ caller() }}{% endif %}
+    {% if confirm_name %}<label>이름 입력<input data-confirm="{{ confirm_name }}" autocomplete="off" placeholder="{{ confirm_name }}"></label>{% endif %}
+    <div class="actions"><button type="button" data-dialog-close>취소</button><button type="submit" class="{{ 'danger' if danger else 'primary' }}"{% if confirm_name %} data-needs-confirm{% endif %}>{{ verb }}</button></div>
+  </form>
+</dialog>
+{% endmacro %}
+
+{% macro nav(groups, path, badges) %}
+{% for group, items in groups %}<div class="group">{% if group %}<div class="group-title">{{ group }}</div>{% endif %}
+{% for href, text, key in items %}<a href="{{ href }}" class="{{ 'active' if nav_active(path, href) else '' }}">{{ text }}{% if key and badges and badges.get(key) %} <span class="badge error">{{ badges[key] }}</span>{% endif %}</a>
+{% endfor %}</div>
+{% endfor %}
+{% endmacro %}

@@ -19,27 +19,24 @@ from mint_litellm.plugin.policy.sensitive_scan import mask_text
 HERE = Path(__file__).parent
 templates = Jinja2Templates(directory=HERE / "templates")
 
+# (그룹 이름, ((경로, 이름, 배지 키), ...)). 그룹 이름이 None이면 구분선 없이 맨 위에 둔다.
 MENU = (
-    ("/", "개요"),
-    ("/servers", "MCP 서버"),
-    ("/intakes", "신청·수용검증"),
-    ("/approvals", "승인 대기열"),
-    ("/contracts", "계약 변경"),
-    ("/revocations", "거부·철회"),
-    ("/call-approvals", "호출별 승인"),
-    ("/endpoints", "단말 설치"),
-    ("/alerts", "경보"),
-    ("/ledger", "원장"),
-    ("/policy", "정책·관측 설정"),
-    ("/admin", "운영자·조직"),
+    (None, (("/", "대시보드", None),)),
+    ("처리할 일", (("/approvals", "승인 센터", "approvals"), ("/alerts", "경보", "alerts"))),
+    ("서버", (("/servers", "서버", "servers"), ("/intakes", "도입 신청", "intakes"),
+            ("/access", "접근 통제", None))),
+    ("단말", (("/endpoints", "엔드포인트", "endpoints"),)),
+    ("감사", (("/ledger", "호출 기록", None), ("/policy", "정책", None))),
+    ("관리", (("/admin", "운영자·조직", None),)),
 )
 STAFF_MENU = (
-    ("/staff", "사용 가능한 서버·도구"),
-    ("/staff/requests", "내 승인 요청"),
-    ("/staff/confirmations", "본인 확인 요청"),
-    ("/staff/endpoint", "단말 설치"),
-    ("/staff/consents", "동의 관리·내 기록"),
+    (None, (
+        ("/staff", "내 서버", None),
+        ("/staff/confirmations", "내 요청", "staff_requests"),
+        ("/staff/endpoint", "내 단말", None),
+    )),
 )
+RANGES = (("1h", "1시간"), ("24h", "24시간"), ("7d", "7일"), ("30d", "30일"))
 ICONS = {"ok": "✓", "wait": "◷", "error": "▲", "block": "⊘", "off": "–"}
 
 
@@ -120,7 +117,15 @@ templates.env.filters.update(
     masked=masked,
     who=labels.actor, countdown=countdown,
 )
-templates.env.globals.update(L=labels, ICONS=ICONS, MENU=MENU, STAFF_MENU=STAFF_MENU)
+templates.env.globals.update(L=labels, ICONS=ICONS, MENU=MENU, STAFF_MENU=STAFF_MENU, RANGES=RANGES)
+
+
+def nav_active(path: str, href: str) -> bool:
+    """좌측 메뉴 강조. 경로가 같거나 하위 경로이면 켠다(대시보드는 정확히 같을 때만)."""
+    return path == href or (href not in ("/", "/staff") and path.startswith(href))
+
+
+templates.env.globals["nav_active"] = nav_active
 
 
 def render(
@@ -138,7 +143,7 @@ def render(
         "zone_label": labels.pick(labels.TIME_ZONE, zone),
     }
     if actor is not None and not name.startswith("staff"):
-        base["alert_badge"] = reads.urgent_alert_count(actor.conn, actor.instance)
+        base["badges"] = {"alerts": reads.urgent_alert_count(actor.conn, actor.instance)}
     return templates.TemplateResponse(
         request, name, {**base, **(context or {})}, status_code=status
     )

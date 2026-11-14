@@ -250,18 +250,18 @@ def seed_drift(world, server="srv-ok"):
 def test_the_drift_list_shows_only_servers_with_changes(world):
     seed_drift(world)
     world.query("UPDATE mint.tool_contracts SET drift = 'description' WHERE tool = 'echo'")
-    html = world.session_client("viewer").get("/contracts").text
+    html = world.session_client("viewer").get("/servers?filter=changed").text
     assert "srv-ok" in html and "srv-wait" not in html and "비교" in html
 
 
 def test_an_empty_drift_list_has_one_next_action(world):
-    html = world.session_client("viewer").get("/contracts").text
+    html = world.session_client("viewer").get("/servers?filter=changed").text
     assert "계약 변경이 있는 서버가 없습니다" in html and html.count('class="empty"') == 1
 
 
 def test_the_comparison_lists_added_removed_and_changed_items(world):
     seed_drift(world)
-    html = world.session_client("viewer").get("/contracts/srv-ok").text
+    html = world.session_client("viewer").get("/servers/srv-ok?tab=contract").text
     pattern = r"<td>(\w+)</td><td><span class=\"badge \w+\"><span[^>]*>.</span>(\S+?)</span>"
     assert dict(re.findall(pattern, html)) == {"echo": "변경", "gone": "삭제", "fresh": "추가"}
 
@@ -269,7 +269,7 @@ def test_the_comparison_lists_added_removed_and_changed_items(world):
 def test_a_selected_item_shows_both_sides_with_changed_lines_marked_and_escaped(world):
     seed_drift(world)
     client = world.session_client("viewer")
-    response = client.get("/contracts/srv-ok?scope=server&name=echo")
+    response = client.get("/servers/srv-ok?tab=contract&scope=server&name=echo")
     html = response.text
     assert "승인본" in html and "현재본" in html
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
@@ -291,16 +291,17 @@ def test_a_deployment_change_is_listed(world):
         " entity_id, observed_sha256, canonical_text, change_seq) VALUES (%s, 'srv-ok',"
         " 'deployment', 'server', 'deployment', %s, %s, %s, 1)",
         INSTANCE, uuid.uuid4(), HEX, canon({"url": "http://b.example"}))
-    assert "(배포)" in world.session_client("viewer").get("/contracts/srv-ok").text
+    assert "(배포)" in world.session_client("viewer").get("/servers/srv-ok?tab=contract").text
 
 
 def test_the_reapproval_form_lists_candidates_and_states_that_only_a_plan_is_registered(world):
     seed_drift(world)
     intake = add_intake(world, server="srv-ok")
-    html = world.session_client("admin").get("/contracts/srv-ok").text
+    html = world.session_client("admin").get("/servers/srv-ok?tab=contract").text
     assert "후보 도구 계약" in html and "계획만 등록합니다" in html and "재승인 계획 등록" in html
     assert intake in html
-    assert "재승인 계획 등록" not in world.session_client("viewer").get("/contracts/srv-ok").text
+    viewer = world.session_client("viewer")
+    assert "재승인 계획 등록" not in viewer.get("/servers/srv-ok?tab=contract").text
 
 
 def test_reapproval_without_matching_evidence_is_refused_and_a_viewer_is_forbidden(world):
@@ -323,9 +324,9 @@ def test_the_plan_progress_is_shown(world):
         " requested_by, requested_user_id, plan) VALUES (%s, %s, 'srv-ok', %s, 'admin', 'human-1',"
         " %s)", uuid.uuid4(), INSTANCE, intake, json.dumps({}))
     viewer = world.session_client("viewer")
-    html = viewer.get("/contracts/srv-ok").text
+    html = viewer.get("/servers/srv-ok?tab=contract").text
     assert "반영 대기" in html and "작업 실행기가 반영하는 중" in html
-    assert "반영 대기" in viewer.get("/contracts").text
+    assert "반영 대기" in viewer.get("/servers?filter=changed").text
 
 
 def test_the_contract_api_returns_changes_and_the_drift_list(world):
@@ -340,7 +341,7 @@ def test_the_contract_api_returns_changes_and_the_drift_list(world):
     assert [r["server_id"] for r in listing] == ["srv-ok"]
 
 
-@pytest.mark.parametrize("path", ["/intakes", "/contracts"])
+@pytest.mark.parametrize("path", ["/intakes", "/servers?filter=changed"])
 def test_the_new_screens_need_a_session_and_carry_the_security_headers(world, path):
     assert world.client.get(path).status_code == 303
     response = world.session_client("viewer").get(path)
@@ -401,7 +402,7 @@ def test_an_oversized_schema_shows_the_skip_notice_on_the_screen(world):
     world.query("UPDATE mint.contract_observations SET canonical_text = %s WHERE name = 'echo'",
                 canon({"description": "x" * 300_000}))
     viewer = world.session_client("viewer")
-    html = viewer.get("/contracts/srv-ok?scope=server&name=echo").text
+    html = viewer.get("/servers/srv-ok?tab=contract&scope=server&name=echo").text
     assert "크기가 커서 줄 비교를 생략했습니다" in html and html.count("<code>") >= 2
     assert 'class="changed"' not in html
 
