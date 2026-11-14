@@ -26,6 +26,40 @@ test_pol_patterns_all_false_allow if {
 	d.missing_inputs == []
 }
 
+# 승인된 계약이 없는 서버의 임시 계약도 보호 규칙에는 같게 적용된다.
+provisional := object.union(managed, {
+	"server": object.union(sample.server, {"contract_status": "provisional"}),
+	"tool": {"name": "delete_file", "risk_grade": "high", "action_type": "delete"},
+})
+
+test_pol_provisional_applies_path_and_url_patterns if {
+	value := object.union(provisional, {"arguments": {"keys": [], "sizes": {}, "patterns": patterns({"path_traversal": true, "url_external": true})}})
+	d := evaluate(value)
+	d.decision == "Block"
+	d.policy_ids == ["POL-E-07", "POL-E-09"]
+}
+
+test_pol_provisional_high_risk_requires_call_approval if {
+	d := evaluate(provisional)
+	d.decision == "RequireApproval"
+	d.policy_ids == ["R2"]
+}
+
+test_pol_provisional_extra_key_blocked_when_the_approval_lists_keys if {
+	value := with_conditions(
+		object.union(provisional, {"arguments": {"keys": ["a", "b"], "sizes": {"a": 1, "b": 1}, "patterns": patterns({})}}),
+		{"allowed_arg_keys": ["a"]},
+	)
+	d := evaluate(value)
+	d.decision == "Block"
+	d.policy_ids == ["POL-E-08", "POL-E-15"]
+}
+
+test_pol_provisional_without_patterns_is_a_missing_input if {
+	value := replace(provisional, {"arguments": {"keys": [], "sizes": {}}})
+	"arguments.patterns" in evaluate(value).missing_inputs
+}
+
 test_pol_not_applied_to_stage1_servers_even_with_patterns if {
 	value := replace(with_patterns({"url_external": true, "private_host": true, "path_traversal": true}), {"server": sample.server})
 	evaluate(value).decision == "Allow"
