@@ -6,11 +6,11 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import Response
 
-from mint_litellm.console import api
+from mint_litellm.console import api, labels
 from mint_litellm.console.core import Actor, page_actor, require_csrf
 from mint_litellm.console.pages.common import act, lines, page_number, see_other
 from mint_litellm.console.templating import render
-from mint_litellm.control import dormant
+from mint_litellm.control import dormant, key_block
 from mint_litellm.control.approvals import DEFAULT_CALL_WINDOW
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import allowlists as allowlist_service
@@ -50,7 +50,7 @@ def _focus(request: Request) -> str | None:
 
 SLOW_SECONDS = 300  # 호출 승인이 이만큼 기다리면 강조한다(기본 처리 기한)
 SLA_MINUTES = (5, 15, 30, 60)
-TABS = ("calls", "servers", "renewals", "rules")
+TABS = ("calls", "servers", "renewals", "rules", "blocks")
 ACCESS_TABS = ("approvals", "dormant", "denials", "allowlists")
 RULE_FIELDS = {  # 규칙 칸 -> 이전 링크의 쿼리 이름
     "org_id": "rule_org", "server_id": "rule_server", "tool_pattern": "rule_tool",
@@ -76,7 +76,9 @@ def approvals_page(request: Request, actor: Actor, error=None, status=200, tab=N
     queue = reads.queue(actor.conn, actor.instance)
     renewal = renewal_service.candidates(actor.conn, actor.instance)
     rules = reads.call_approval_rules(actor.conn, actor.instance)
+    blocks = key_block.listing(actor.conn, actor.instance) if tab == "blocks" else []
     ctx = {
+        "blocks": blocks, "block_view": _block_view,
         "tab": tab, "focus": focus, "error": error, "page": page_number(request),
         "rows": calls, "pending": pending, "queue": queue, "renewal": renewal, "rules": rules,
         "slow": sum(1 for c in pending if (c["age_seconds"] or 0) >= sla * 60),
@@ -89,6 +91,7 @@ def approvals_page(request: Request, actor: Actor, error=None, status=200, tab=N
             ("calls", "호출", len(pending)), ("servers", "서버 도입", len(queue)),
             ("renewals", "갱신", len(renewal["unchanged"]) + len(renewal["changed"])),
             ("rules", "규칙", sum(1 for r in rules if r["status"] == "active")),
+            ("blocks", "차단 제안", key_block.count_waiting(actor.conn, actor.instance)),
         ],
         "can_grant": actor.config.litellm_admin is not None,
         "one_shot": ONE_SHOT_ACTIONS, "orgs": reads.orgs(actor.conn, actor.instance),
@@ -123,6 +126,25 @@ def approvals_page(request: Request, actor: Actor, error=None, status=200, tab=N
             tool_pattern=rule["tool_pattern"] or None,
         )
     return render(request, "approval_center.html", ctx, actor=actor, status=status)
+
+
+def _block_view(row: dict) -> dict:
+    """차단 제안 한 건의 화면 값. 증거에는 값이 없고 종류·건수·식별자만 있다."""
+    ev = row["evidence"]
+    lines = []
+    if ev.get("labels"):
+        lines.append("탐지: " + ", ".join(
+            "인자 비밀" if k == "input_secret" else labels.pick(labels.SENSITIVE_KIND, k)
+            for k in ev["labels"]))
+    for key, name in (("calls", "호출"), ("denials", "정책 거부")):
+        if ev.get(key):
+            lines.append(f"{name} {ev[key]}건")
+    if ev.get("server_id"):
+        lines.append(f"서버 {ev['server_id']}")
+    if ev.get("count"):
+        lines.append(f"접속 거절 {ev['count']}건")
+    error = labels.pick(labels.KEY_BLOCK_ERROR, row["last_error"]) if row["last_error"] else ""
+    return {"lines": lines, "events": len(ev.get("event_ids") or []), "error": error}
 
 
 @router.get("/approvals")
@@ -531,3 +553,34 @@ def lift_allowlist(
         "lifted", "/access?tab=allowlists",
         lambda **kw: access_page(request, actor, tab="allowlists", **kw),
     )
+
+
+@router.post("/key-blocks/{proposal_id}/{decision}")
+def decide_key_block(
+    proposal_id: str,
+    decision: str,
+    request: Request,
+    state_version: int = Form(...),
+    scope: str = Form("key"),
+    reason: str = Form(""),
+    acknowledge: str = Form(""),
+    actor: Actor = Depends(page_actor),
+):
+    def action():
+        if decision == "approve":
+            key_block.approve(actor.ctx, actor.litellm(), proposal_id, scope=scope, reason=reason,
+                              expected_version=state_version)
+        elif decision == "reject":
+            key_block.reject(actor.ctx, proposal_id, reason=reason, expected_version=state_version)
+        elif decision == "unblock":
+            key_block.request_unblock(
+                actor.ctx, actor.litellm(), proposal_id, reason=reason,
+                acknowledge=bool(acknowledge), expected_version=state_version,
+            )
+        else:
+            raise AdminError(AdminCode.NOT_FOUND, "알 수 없는 동작입니다.")
+
+    ok = {"approve": "key_block_approved", "reject": "key_block_rejected",
+          "unblock": "key_block_unblock"}
+    return act(actor, action, ok.get(decision, "key_block_approved"), "/approvals?tab=blocks",
+               lambda **kw: approvals_page(request, actor, tab="blocks", **kw))

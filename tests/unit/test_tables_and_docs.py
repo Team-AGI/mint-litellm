@@ -93,6 +93,10 @@ def test_control_plane_routes():
         "/guardrails/list",
         "/key/update",
         "/team/update",
+        "/key/block",
+        "/key/unblock",
+        "/team/block",
+        "/team/unblock",
     )
 
 

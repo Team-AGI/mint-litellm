@@ -43,7 +43,7 @@ import json, os, secrets, sys, time, urllib.error, urllib.request
 base = "http://litellm:4000"
 headers = {"Authorization": "Bearer " + os.environ["LITELLM_MASTER_KEY"],
            "Content-Type": "application/json"}
-if os.environ["KEY_KIND"] == "control":
+if os.environ["KEY_KIND"] in ("control", "control-refresh"):
     from mint_litellm.control.litellm_control import STAGE2_ALLOWED_ROUTES
     from mint_litellm.types.cli_commands import CONTROL_PLANE_ALLOWED_ROUTES
     user, prefix = "mint-control", "mint-control-"
@@ -58,6 +58,14 @@ def post(path, body):
     with urllib.request.urlopen(request, timeout=10) as reply:
         return json.loads(reply.read() or b"{}")
 
+
+if os.environ["KEY_KIND"] == "control-refresh":
+    # 이미 있는 제어 키의 허용 경로를 이 판본의 목록으로 맞춘다(새 기능의 경로가 빠지지 않게).
+    try:
+        post("/key/update", {"key": os.environ["EXISTING_KEY"], "allowed_routes": routes})
+    except (urllib.error.HTTPError, OSError):
+        sys.exit(1)
+    sys.exit(0)
 
 deadline = time.time() + 120
 while True:
@@ -128,6 +136,18 @@ ensure_control_key() {
             --fix-config /app/config/litellm.config.yaml >/dev/null
     fi
     load_control_key
+    refresh_control_routes "$file"
+}
+
+# mint.sh가 만든 제어 키(비밀 폴더 파일)의 허용 경로를 판본마다 다시 맞춘다. 실패해도 기동은 계속한다.
+refresh_control_routes() {
+    local file="$1"
+    [ -s "$file" ] || return 0
+    env "LITELLM_MASTER_KEY=$(env_value LITELLM_MASTER_KEY)" "EXISTING_KEY=$(head -n 1 "$file")" \
+        "${COMPOSE[@]}" run --rm --no-deps -T -e LITELLM_MASTER_KEY -e EXISTING_KEY \
+        -e KEY_KIND=control-refresh --entrypoint python control -c "$KEY_ISSUER_SCRIPT" \
+        >/dev/null 2>&1 \
+        || echo "제어 평면 키의 허용 경로를 갱신하지 못했습니다. 다음 up·upgrade에서 다시 시도합니다." >&2
 }
 
 # 첫 관리자 토큰과 이후 명령이 쓰는 토큰은 비밀 폴더의 operator.token에 둔다(환경 변수가 있으면 그것이 우선).
