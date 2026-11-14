@@ -10,7 +10,7 @@
 {% if s.instance_mismatch_at %}<div class="banner error" role="alert">다른 인스턴스와 계약·보안 설정이 달라 호출이 차단되었습니다</div>{% endif %}
 <div class="cards">
   {{ m.kpi('유효 승인', active_approvals, '?tab=usage') }}
-  {{ m.kpi('변경된 도구', changed_tools + (1 if s.deployment_drift else 0), '?tab=contract', level='danger' if changed_tools or s.deployment_drift) }}
+  {{ m.kpi('변경된 도구', (changed_tools or 0) + (1 if s.deployment_drift else 0), '?tab=contract', level='danger' if (changed_tools or 0) or s.deployment_drift) }}
   {{ m.kpi('치명 취약점', critical, '?tab=vulns', level='danger' if critical) }}
   {{ m.kpi('마지막 관측', s.last_observed_at | when) }}
 </div>

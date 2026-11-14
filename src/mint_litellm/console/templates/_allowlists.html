@@ -1,0 +1,20 @@
+{% import "macros.html" as m %}
+{% if actor.role == 'admin' %}<p class="actions"><a class="button primary" href="/access?tab=allowlists&amp;new=1">허용 추가</a></p>{% endif %}
+{% if allowlists %}
+<table><thead><tr><th>종류</th><th>값</th><th>유효 기간</th><th>메모</th><th>상태</th><th></th></tr></thead><tbody>
+{% for a in allowlists %}<tr><td>{{ L.pick(L.ALLOWLIST_KIND, a.kind) }}</td><td>{{ a.value }}</td><td class="nowrap">{{ a.valid_from | when }} ~ {{ a.valid_until | when }}</td><td>{{ a.note | blank }}</td><td>{{ m.badge(L.ALLOWLIST, a.status) }}</td>
+<td>{% if a.status == 'active' and actor.role == 'admin' %}<form method="post" action="/allowlists/{{ a.id }}/lift">{{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ a.state_version }}"><button type="submit">해제</button></form>{% endif %}</td></tr>{% endfor %}
+</tbody></table>
+{% else %}{{ m.empty('허용 목록이 비어 있습니다', '/access?tab=approvals', '유효 승인 보기') }}{% endif %}
+{% if new and actor.role == 'admin' %}
+{% call m.drawer('허용 추가', '/access?tab=allowlists', true) %}
+<form method="post" action="/allowlists" class="form">
+  {{ m.csrf(actor) }}
+  <label>종류<select name="kind">{% for k, v in L.ALLOWLIST_KIND.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></label>
+  <label>값<input name="value" required></label>
+  <label>유효 기간(일)<input type="number" name="valid_days" value="90" min="1" max="365"></label>
+  <label>메모<input name="note"></label>
+  <div class="actions"><a class="button" href="/access?tab=allowlists">취소</a><button type="submit" class="primary">추가</button></div>
+</form>
+{% endcall %}
+{% endif %}

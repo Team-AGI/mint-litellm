@@ -158,7 +158,7 @@ def test_time_and_kind_cells_do_not_wrap():
 
 
 def test_no_template_has_positive_tab_order_or_date_inputs_or_raw_code_cells():
-    allowed_code = {"approval_new.html"}
+    allowed_code: set[str] = set()
     for path in (CONSOLE / "templates").glob("*.html"):
         text = path.read_text(encoding="utf-8")
         assert not re.search(r'tabindex="[1-9]', text), path.name
@@ -358,7 +358,6 @@ SENTENCE = re.compile(r"<(p|small)\b[^>]*>(.*?)</\1>", re.S)
 # 40자를 넘는 설명 문장(빈 상태 제외)을 템플릿별로 이만큼까지만 허용한다. 화면을 정비하는 쪽에서
 # 줄여 나가며, 늘리지는 못한다.
 LONG_SENTENCE_ALLOWED = {
-    "call_approvals.html": 1,
 }
 
 

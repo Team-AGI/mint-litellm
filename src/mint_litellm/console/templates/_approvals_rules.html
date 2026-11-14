@@ -1,0 +1,40 @@
+{% import "macros.html" as m %}
+{% if actor.role == 'admin' %}<p class="actions"><a class="button primary" href="/approvals?tab=rules&amp;new=1">규칙 만들기</a></p>{% endif %}
+{% if rules %}
+<table><thead><tr><th>범위</th><th>서버</th><th>행위·기간</th><th>도구</th><th>만료</th><th class="num">자동 승인</th><th>상태</th><th></th></tr></thead><tbody>
+{% for r in rules %}<tr>
+<td>{% if r.scope_type == 'org' %}조직 {{ r.org_id }}{% else %}{{ L.pick(L.PRINCIPAL, r.principal_type) }} {{ r.scope_id }}{% endif %}</td>
+<td>{{ r.server_id or '전체' }}</td><td class="nowrap">{{ L.pick(L.ACTION, r.action_class) }} · {{ r.window_minutes }}분</td><td>{{ r.tool_pattern or '전체' }}</td>
+<td class="nowrap">{{ r.valid_until | when if r.valid_until else '—' }}</td>
+<td class="num">{{ r.opened }}</td><td>{{ m.badge(L.CALL_APPROVAL_RULE, r.status) }}</td>
+<td>{% if r.status == 'active' and actor.role == 'admin' %}<form method="post" action="/call-approval-rules/{{ r.id }}/disable">{{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ r.state_version }}"><button type="submit">해제</button></form>{% endif %}</td>
+</tr>{% endfor %}
+</tbody></table>
+{% else %}{{ m.empty('상시 승인 규칙이 없습니다', '/approvals?tab=calls', '호출 보기') }}{% endif %}
+{% if new and actor.role == 'admin' %}
+{% call m.drawer('규칙 만들기', '/approvals?tab=rules', true) %}
+<form method="get" action="/approvals" class="form">
+  <input type="hidden" name="tab" value="rules"><input type="hidden" name="new" value="1"><input type="hidden" name="preview" value="1">
+  <label>조직<select name="org_id" required>{% for o in orgs if o.status == 'active' %}<option value="{{ o.org_id }}"{% if o.org_id == rule.org_id %} selected{% endif %}>{{ o.org_id }}</option>{% endfor %}</select></label>
+  <label>주체 종류<select name="principal_type"><option value="">조직 전체</option>{% for k, v in L.PRINCIPAL.items() %}<option value="{{ k }}"{% if k == rule.principal_type %} selected{% endif %}>{{ v }}</option>{% endfor %}</select></label>
+  <label>주체 식별자<input name="principal_id" value="{{ rule.principal_id }}"></label>
+  <label>서버<input name="server_id" value="{{ rule.server_id }}"></label>
+  <label>행위<select name="action_class"><option value="read">읽기</option><option value="write"{% if rule.action_class == 'write' %} selected{% endif %}>쓰기</option></select></label>
+  <label>도구<input name="tool_pattern" value="{{ rule.tool_pattern }}"></label>
+  <label>기간<select name="window_minutes"><option value="30">30분</option><option value="10"{% if rule.window_minutes == '10' %} selected{% endif %}>10분</option></select></label>
+  <div class="actions"><button type="submit">영향 확인</button></div>
+</form>
+{% if impact %}
+<div class="cards">
+  {{ m.kpi('최근 7일 자동 승인 대상', '{:,}'.format(impact.matched), level='wait' if impact.matched else none) }}
+  {{ m.kpi('그중 사람이 처리', '{:,}'.format(impact.by_person)) }}
+</div>
+<form method="post" action="/call-approval-rules" class="actions">
+  {{ m.csrf(actor) }}
+  {% for k, v in rule.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+  <button type="submit" class="primary">규칙 만들기</button>
+  <a class="button" href="/approvals?tab=rules">취소</a>
+</form>
+{% endif %}
+{% endcall %}
+{% endif %}

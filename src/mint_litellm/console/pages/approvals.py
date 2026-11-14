@@ -9,7 +9,6 @@ from fastapi.responses import Response
 from mint_litellm.console import api
 from mint_litellm.console.core import Actor, page_actor, require_csrf
 from mint_litellm.console.pages.common import act, lines, page_number, see_other
-from mint_litellm.console.pages.endpoints_admin import admin_page
 from mint_litellm.console.templating import render
 from mint_litellm.control import dormant
 from mint_litellm.control.approvals import DEFAULT_CALL_WINDOW
@@ -49,40 +48,78 @@ def _focus(request: Request) -> str | None:
     return str(uuid.UUID(value)) if value else None
 
 
-def approvals_page(request: Request, actor: Actor, error=None, status=200, form=None):
+SLOW_SECONDS = 300  # 호출 승인이 이만큼 기다리면 강조한다
+TABS = ("calls", "servers", "renewals", "rules")
+ACCESS_TABS = ("approvals", "dormant", "denials", "allowlists")
+RULE_FIELDS = {  # 규칙 칸 -> 이전 링크의 쿼리 이름
+    "org_id": "rule_org", "server_id": "rule_server", "tool_pattern": "rule_tool",
+    "action_class": "rule_class", "principal_type": "", "principal_id": "", "window_minutes": "",
+}
+
+
+def _rule_values(request: Request) -> dict[str, str]:
+    query = request.query_params
+    return {k: query.get(k) or (query.get(old) if old else None) or ""
+            for k, old in RULE_FIELDS.items()}
+
+
+def approvals_page(request: Request, actor: Actor, error=None, status=200, tab=None):
+    """승인 센터: 호출·서버 도입·갱신·규칙 탭. 호출 탭이 기본이다."""
+    query = request.query_params
+    tab = tab or (query.get("tab") if query.get("tab") in TABS else "calls")
     focus = _focus(request)
-    dormant_view = (
-        request.query_params.get("filter") == "dormant"
-        or request.query_params.get("tab") == "dormant"
-    )
-    if dormant_view:
-        rows = dormant.find(actor.conn, actor.instance, actor.config.stage2.dormant_days)
-        server = request.query_params.get("server")
-        rows = [r for r in rows if not server or r["server_id"] == server]
-    else:
-        rows = reads.approvals(
-            actor.conn, actor.instance, page=page_number(request), only_id=focus
-        )
+    calls = reads.call_approvals(actor.conn, actor.instance, page=page_number(request))
+    pending = [c for c in calls if c["status"] == "pending"]
+    queue = reads.queue(actor.conn, actor.instance)
+    renewal = renewal_service.candidates(actor.conn, actor.instance)
+    rules = reads.call_approval_rules(actor.conn, actor.instance)
     ctx = {
-        "queue": [] if focus or dormant_view else reads.queue(actor.conn, actor.instance),
-        "rows": _with_recert(actor, rows),
-        "dormant_view": dormant_view,
-        "dormant_days": actor.config.stage2.dormant_days,
-        "focus": focus,
-        "form": form,
-        "page": page_number(request),
-        "error": error,
+        "tab": tab, "focus": focus, "error": error, "page": page_number(request),
+        "rows": calls, "pending": pending, "queue": queue, "renewal": renewal, "rules": rules,
+        "slow": sum(1 for c in pending if (c["age_seconds"] or 0) >= SLOW_SECONDS),
+        "tabs": [
+            ("calls", "호출", len(pending)), ("servers", "서버 도입", len(queue)),
+            ("renewals", "갱신", len(renewal["unchanged"]) + len(renewal["changed"])),
+            ("rules", "규칙", sum(1 for r in rules if r["status"] == "active")),
+        ],
         "can_grant": actor.config.litellm_admin is not None,
-        "renewal": renewal_service.candidates(actor.conn, actor.instance),
+        "one_shot": ONE_SHOT_ACTIONS, "orgs": reads.orgs(actor.conn, actor.instance),
+        "new": bool(query.get("new")), "rule": _rule_values(request), "impact": None,
+        "selected": None, "history": [], "stats": None,
+        "range_options": [("24h", "24시간"), ("7d", "7일"), ("30d", "30일")],
     }
-    return render(request, "approvals.html", ctx, actor=actor, status=status)
+    if tab == "calls":
+        chosen = query.get("range", "")
+        ctx["stats"] = approval_metrics.collect(
+            actor.conn, actor.instance,
+            chosen if chosen in approval_metrics.RANGES else approval_metrics.DEFAULT_RANGE,
+            actor.config.time_zone,
+        )
+        if focus:
+            ctx["selected"] = next((c for c in calls if str(c["id"]) == focus), None) or next(
+                iter(reads.call_approvals(actor.conn, actor.instance, only_id=focus)), None
+            )
+        if ctx["selected"]:
+            me = ctx["selected"]
+            same = (me["server_id"], me["tool"], me["principal_type"], me["principal_id"])
+            ctx["history"] = [
+                c for c in calls if c["id"] != me["id"]
+                and (c["server_id"], c["tool"], c["principal_type"], c["principal_id"]) == same
+            ][:5]
+    if tab == "rules" and ctx["new"] and query.get("preview") and ctx["rule"]["org_id"]:
+        rule = ctx["rule"]
+        ctx["impact"] = call_approval_rule_service.impact(
+            actor.conn, actor.instance, org_id=rule["org_id"], action_class=rule["action_class"],
+            principal_type=rule["principal_type"] or None,
+            principal_id=rule["principal_id"] or None, server_id=rule["server_id"] or None,
+            tool_pattern=rule["tool_pattern"] or None,
+        )
+    return render(request, "approval_center.html", ctx, actor=actor, status=status)
 
 
 @router.get("/approvals")
 def approvals(request: Request, actor: Actor = Depends(page_actor)):
     query = request.query_params
-    if query.get("tab") in ("calls", "rules"):
-        return calls_page(request, actor)
     if query.get("filter") == "dormant":
         return see_other(request, "/access", drop=("filter",), tab="dormant")
     if query.get("focus") and not query.get("tab"):
@@ -150,26 +187,53 @@ def grant_approval(
     def rebuild(**kw):
         return approval_form_page(request, actor, relation_id, days=valid_days, **kw)
 
-    return act(actor, action, "approved", "/approvals", rebuild)
+    return act(actor, action, "approved", "/approvals?tab=servers", rebuild)
 
 
-# --- 거부·철회 ------------------------------------------------------------------------------
+# --- 접근 통제 --------------------------------------------------------------------------------
 
 
-def revocations_page(request: Request, actor: Actor, error=None, status=200):
-    ctx = {
-        "approvals": reads.approvals(actor.conn, actor.instance, status="active"),
-        "denials": reads.denials(actor.conn, actor.instance),
-        "error": error,
+def access_page(request: Request, actor: Actor, error=None, status=200, tab=None):
+    """접근 통제: 승인·미사용·거부·허용 목록 탭."""
+    query = request.query_params
+    tab = tab or (query.get("tab") if query.get("tab") in ACCESS_TABS else "approvals")
+    focus = _focus(request)
+    days = actor.config.stage2.dormant_days
+    stale = dormant.find(actor.conn, actor.instance, days)
+    denials = reads.denials(actor.conn, actor.instance)
+    allowlists = reads.allowlists(actor.conn, actor.instance)
+    renewal = renewal_service.candidates(actor.conn, actor.instance)
+    counts = {
+        "active": reads.approvals(actor.conn, actor.instance, status="active"),
+        "denials": sum(1 for d in denials if not d["lifted_at"]),
+        "allowlists": sum(1 for a in allowlists if a["status"] == "active"),
+        "expiring": len(renewal["unchanged"]) + len(renewal["changed"]),
     }
-    return render(request, "revocations.html", ctx, actor=actor, status=status)
+    ctx = {
+        "tab": tab, "focus": focus, "error": error, "page": page_number(request),
+        "dormant_days": days, "denials": denials, "allowlists": allowlists,
+        "new": bool(query.get("new")), "counts": counts, "stale": len(stale),
+        "tabs": [
+            ("approvals", "승인", len(counts["active"])), ("dormant", "미사용", len(stale)),
+            ("denials", "거부", counts["denials"]),
+            ("allowlists", "허용 목록", counts["allowlists"]),
+        ],
+        "rows": [],
+    }
+    if tab == "approvals":
+        rows = reads.approvals(
+            actor.conn, actor.instance, status="active", page=page_number(request), only_id=focus
+        )
+        ctx["rows"] = _with_recert(actor, rows)
+    elif tab == "dormant":
+        server = query.get("server")
+        ctx["rows"] = [r for r in stale if not server or r["server_id"] == server]
+    return render(request, "access.html", ctx, actor=actor, status=status)
 
 
 @router.get("/access")
 def access(request: Request, actor: Actor = Depends(page_actor)):
-    if request.query_params.get("tab") == "dormant":
-        return approvals_page(request, actor)
-    return revocations_page(request, actor)
+    return access_page(request, actor)
 
 
 @router.post("/approvals/renew")
@@ -180,7 +244,8 @@ def renew_expiring(request: Request, actor: Actor = Depends(page_actor)):
             raise ControlError(f"갱신하지 못한 승인이 {len(failed)}건 있습니다. {failed[0]}")
 
     return act(
-        actor, action, "renewed", "/approvals", lambda **kw: approvals_page(request, actor, **kw),
+        actor, action, "renewed", "/approvals?tab=renewals",
+        lambda **kw: approvals_page(request, actor, tab="renewals", **kw),
     )
 
 
@@ -194,8 +259,8 @@ def _dormant_action(request: Request, actor: Actor, ids: list[str], one) -> Resp
             approval_id, _, version = item.rpartition(":")
             one(approval_id, int(version))
 
-    return act(actor, action, "dormant_done", "/approvals?filter=dormant",
-               lambda **kw: approvals_page(request, actor, **kw))
+    return act(actor, action, "dormant_done", "/access?tab=dormant",
+               lambda **kw: access_page(request, actor, tab="dormant", **kw))
 
 
 @router.post("/approvals/dormant/keep")
@@ -230,7 +295,8 @@ def recertify_approval(
     return act(
         actor,
         lambda: recert_service.confirm(actor.ctx, approval_id, expected_version=state_version),
-        "recertified", "/approvals", lambda **kw: approvals_page(request, actor, **kw),
+        "recertified", "/access?tab=approvals",
+        lambda **kw: access_page(request, actor, tab="approvals", **kw),
     )
 
 
@@ -249,8 +315,8 @@ def revoke_approval(
         lambda: approval_service.revoke(
             actor.ctx, approval_id, reason, with_denial, expected_version=state_version
         ),
-        "revoked_denied" if with_denial else "revoked", "/revocations",
-        lambda **kw: revocations_page(request, actor, **kw),
+        "revoked_denied" if with_denial else "revoked", "/access?tab=approvals",
+        lambda **kw: access_page(request, actor, tab="approvals", **kw),
     )
 
 
@@ -270,7 +336,8 @@ def create_denial(
             actor.ctx, scope_type=scope_type, scope_id=scope_id, server_id=server_id or None,
             tools=lines(tools) or None, reason=reason, org_id=None,
         ),
-        "denied", "/revocations", lambda **kw: revocations_page(request, actor, **kw),
+        "denied", "/access?tab=denials",
+        lambda **kw: access_page(request, actor, tab="denials", **kw),
     )
 
 
@@ -284,32 +351,12 @@ def lift_denial(
     return act(
         actor,
         lambda: denial_service.lift(actor.ctx, denial_id, expected_version=state_version),
-        "lifted", "/revocations", lambda **kw: revocations_page(request, actor, **kw),
+        "lifted", "/access?tab=denials",
+        lambda **kw: access_page(request, actor, tab="denials", **kw),
     )
 
 
 # --- 호출별 승인 요청 -------------------------------------------------------------------------
-
-
-def calls_page(request: Request, actor: Actor, error=None, status=200):
-    focus = _focus(request)
-    rows = reads.call_approvals(
-        actor.conn, actor.instance, page=page_number(request), only_id=focus
-    )
-    rules = reads.call_approval_rules(actor.conn, actor.instance) if not focus else []
-    chosen = request.query_params.get("range", "")
-    stats = None if focus else approval_metrics.collect(
-        actor.conn, actor.instance,
-        chosen if chosen in approval_metrics.RANGES else approval_metrics.DEFAULT_RANGE,
-        actor.config.time_zone,
-    )
-    prefill = {k: request.query_params.get(f"rule_{k}", "")
-               for k in ("org", "server", "tool", "class")}
-    return render(request, "call_approvals.html",
-                  {"rows": rows, "rules": rules, "orgs": reads.orgs(actor.conn, actor.instance),
-                   "stats": stats, "ranges": list(approval_metrics.RANGES), "prefill": prefill,
-                   "error": error, "focus": focus, "one_shot": ONE_SHOT_ACTIONS},
-                  actor=actor, status=status)
 
 
 @router.post("/call-approval-rules")
@@ -333,7 +380,8 @@ def add_call_approval_rule(
             server_id=server_id.strip() or None,
             tool_pattern=tool_pattern.strip() or None,
         ),
-        "rule_added", "/call-approvals", lambda **kw: calls_page(request, actor, **kw),
+        "rule_added", "/approvals?tab=rules",
+        lambda **kw: approvals_page(request, actor, tab="rules", **kw),
     )
 
 
@@ -349,7 +397,8 @@ def disable_call_approval_rule(
         lambda: call_approval_rule_service.disable(
             actor.ctx, rule_id, expected_version=state_version
         ),
-        "rule_disabled", "/call-approvals", lambda **kw: calls_page(request, actor, **kw),
+        "rule_disabled", "/approvals?tab=rules",
+        lambda **kw: approvals_page(request, actor, tab="rules", **kw),
     )
 
 
@@ -397,8 +446,8 @@ def decide_calls(
             raise ControlError(f"{done}건 처리, {len(failed)}건 실패: {failed[0]}")
 
     ok = {"approve": "call_approved", "reject": "call_rejected"}
-    return act(actor, action, ok.get(decision, "call_approved"), "/call-approvals",
-               lambda **kw: calls_page(request, actor, **kw))
+    return act(actor, action, ok.get(decision, "call_approved"), "/approvals?tab=calls",
+               lambda **kw: approvals_page(request, actor, tab="calls", **kw))
 
 
 @router.post("/call-approvals/{call_id}/{decision}")
@@ -432,8 +481,13 @@ def decide_call(
 
     ok = {"approve": "call_approved", "reject": "call_rejected", "cancel": "call_cancelled",
           "extend": "call_extended"}
-    return act(actor, action, ok.get(decision, "call_approved"), "/call-approvals",
-               lambda **kw: calls_page(request, actor, **kw))
+    back = "/approvals?tab=calls"
+    if decision in ("approve", "reject"):  # 처리하면 다음 대기 요청을 이어서 연다
+        later = [r for r in reads.call_approvals(actor.conn, actor.instance, status="pending")
+                 if str(r["id"]) != call_id]
+        back += f"&focus={later[0]['id']}" if later else ""
+    return act(actor, action, ok.get(decision, "call_approved"), back,
+               lambda **kw: approvals_page(request, actor, tab="calls", **kw))
 
 
 @router.post("/allowlists")
@@ -451,7 +505,8 @@ def add_allowlist(
         lambda: allowlist_service.add(
             actor.ctx, kind, value, now, now + timedelta(days=valid_days), None, note or None
         ),
-        "allowlist_added", "/admin", lambda **kw: admin_page(request, actor, **kw),
+        "allowlist_added", "/access?tab=allowlists",
+        lambda **kw: access_page(request, actor, tab="allowlists", **kw),
     )
 
 
@@ -465,5 +520,6 @@ def lift_allowlist(
     return act(
         actor,
         lambda: allowlist_service.lift(actor.ctx, allowlist_id, expected_version=state_version),
-        "lifted", "/admin", lambda **kw: admin_page(request, actor, **kw),
+        "lifted", "/access?tab=allowlists",
+        lambda **kw: access_page(request, actor, tab="allowlists", **kw),
     )
