@@ -17,6 +17,19 @@ function initConsole(root) {
       ],
     });
   });
+  root.querySelectorAll("[data-bars]").forEach(function (el) {
+    if (!window.echarts) return;
+    var data = JSON.parse(el.getAttribute("data-bars"));
+    var chart = echarts.getInstanceByDom(el) || echarts.init(el);
+    chart.setOption({
+      color: ["#0969da"],
+      tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
+      grid: { left: 40, right: 16, top: 16, bottom: 32 },
+      xAxis: { type: "category", data: data.labels },
+      yAxis: { type: "value", minInterval: 1 },
+      series: [{ name: "요청", type: "bar", data: data.values }],
+    });
+  });
   root.querySelectorAll("input[data-confirm]").forEach(function (input) {
     var button = input.form.querySelector("button[data-needs-confirm]");
     function sync() {
@@ -29,7 +42,7 @@ function initConsole(root) {
 document.addEventListener("DOMContentLoaded", function () { initConsole(document); });
 document.addEventListener("htmx:afterSettle", function (event) { initConsole(event.target); });
 window.addEventListener("resize", function () {
-  document.querySelectorAll("[data-chart]").forEach(function (el) {
+  document.querySelectorAll("[data-chart],[data-bars]").forEach(function (el) {
     var chart = window.echarts && echarts.getInstanceByDom(el);
     if (chart) chart.resize();
   });

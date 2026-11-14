@@ -23,6 +23,7 @@ from mint_litellm.control.approvals import build_conditions
 from mint_litellm.control.context import Operator
 from mint_litellm.control.errors import AdminCode, AdminError, AuthError, ControlError, forbidden
 from mint_litellm.control.services import allowlists as allowlist_service
+from mint_litellm.control.services import approval_metrics, metrics, reads
 from mint_litellm.control.services import approvals as approval_service
 from mint_litellm.control.services import call_approval_rules as call_approval_rule_service
 from mint_litellm.control.services import call_approvals as call_approval_service
@@ -30,7 +31,6 @@ from mint_litellm.control.services import contracts as contract_service
 from mint_litellm.control.services import denials as denial_service
 from mint_litellm.control.services import evidence as evidence_service
 from mint_litellm.control.services import intakes as intake_service
-from mint_litellm.control.services import metrics, reads
 from mint_litellm.control.services import operators as operator_service
 from mint_litellm.control.services import orgs as org_service
 from mint_litellm.control.services import relations as relation_service
@@ -351,6 +351,15 @@ def get_metrics(actor: Actor = Depends(api_actor)):
         metrics.exposition(actor.conn, actor.instance),
         media_type="text/plain; version=0.0.4; charset=utf-8",
     )
+
+
+@router.get("/metrics/approvals")
+def get_approval_metrics(
+    range: str = approval_metrics.DEFAULT_RANGE, actor: Actor = Depends(api_actor)
+):
+    if range not in approval_metrics.RANGES:
+        raise ControlError(f"range는 {', '.join(approval_metrics.RANGES)} 중 하나여야 합니다.")
+    return approval_metrics.collect(actor.conn, actor.instance, range, actor.config.time_zone)
 
 
 @router.get("/ledger")
