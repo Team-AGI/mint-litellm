@@ -155,3 +155,8 @@ def test_shadow_evaluation_is_off_unless_an_address_is_given():
                       ("MINT_SHADOW_MAX_PER_SECOND", "0")):
         with pytest.raises(RuntimeError):
             PluginConfig.from_env({**BASE, name: bad})
+
+
+def test_scan_max_chars_defaults_large_and_can_be_set():
+    assert PluginConfig.from_env(BASE).scan_max_chars == 32 * 1024 * 1024
+    assert PluginConfig.from_env({**BASE, "MINT_SCAN_MAX_CHARS": "5000"}).scan_max_chars == 5000

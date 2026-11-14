@@ -8,11 +8,10 @@ from dataclasses import replace
 import pytest
 from plugin_helpers import NOW, evaluator, harness, request, server_row, snapshot
 
-from mint_litellm.compat.litellm_1_106 import structured_texts
 from mint_litellm.control import content_finding
 from mint_litellm.plugin.config import PluginConfig
 from mint_litellm.plugin.pipeline import evaluate_request
-from mint_litellm.plugin.policy.result_scan import MAX_SCAN_CHARS, scan_instructions
+from mint_litellm.plugin.policy.result_scan import scan_instructions
 from mint_litellm.plugin.result import screen_result
 from mint_litellm.plugin.snapshot import ToolContractRow
 from mint_litellm.types.events import ResponseObservation
@@ -67,37 +66,69 @@ def test_clean_results_leave_no_trace():
     assert "output_findings" not in c and "unmanaged_findings" not in c
 
 
-def test_structured_content_is_scanned_for_markers_only():
+def test_structured_content_gets_the_marker_and_secret_scans_with_paths():
     c = ctx(unmanaged=False)
-    assert screen_result(c, size=1, items=1, texts=["ok"], structured=[INJECTION]) is True
+    assert screen_result(c, size=1, items=1, texts=["ok"], structured=[("$.a", INJECTION)]) is True
     c = ctx(unmanaged=False, response_scan="block")
-    assert screen_result(c, size=1, items=1, texts=["ok"], structured=[AWS_KEY]) is False
+    found = [("$.k[0].v", AWS_KEY)]
+    assert screen_result(c, size=1, items=1, texts=["ok"], structured=found) is True
+    assert c["finding_paths"] == ["$.k[0].v"] and c["sensitive_findings"] == {"cloud_access_key": 1}
+    assert AWS_KEY not in str(c)
+    # 가릴 수 없는 곳의 비밀은 가리기 모드에서도 막는다
+    c = ctx(unmanaged=False, response_scan="mask")
+    assert screen_result(c, size=1, items=1, texts=["ok"], structured=[("$.v", AWS_KEY)]) is True
+    c = ctx(unmanaged=False, response_scan="observe")
+    assert screen_result(c, size=1, items=1, texts=["ok"], structured=[("$.v", AWS_KEY)]) is False
+    assert c["finding_paths"] == ["$.v"] and c["output_blocked"] is False
 
 
-class _Result:
-    structured_content = {"rows": [{"note": INJECTION, "n": 1}], "ok": True}
+def test_a_result_beyond_the_bound_blocks_in_enforce_and_is_recorded_in_observe():
+    big = ["x" * 60, "y" * 60]
+    c = ctx(unmanaged=False)
+    assert screen_result(c, size=1, items=1, texts=big, max_chars=100) is True
+    assert c["scan_truncated"] is True and "MINT-RESULT-SCAN-LIMIT" in c["output_findings"]
+    c = ctx(unmanaged=False, enforce=False)
+    assert screen_result(c, size=1, items=1, texts=big, max_chars=100) is False
+    assert c["scan_truncated"] is True and c["output_blocked"] is False
+    c = ctx(unmanaged=True)
+    assert screen_result(c, size=1, items=1, texts=big, max_chars=100) is False
+    assert c["scan_truncated"] is True and "MINT-RESULT-SCAN-LIMIT" in c["unmanaged_findings"]
+    c = ctx(unmanaged=True, scan_enforce=True)
+    assert screen_result(c, size=1, items=1, texts=big, max_chars=100) is True
+    # 상한 안이면 흔적이 없다
+    c = ctx(unmanaged=False)
+    assert screen_result(c, size=1, items=1, texts=big, max_chars=200) is False
+    assert "scan_truncated" not in c
+    # 구조화된 결과를 훑다 잘렸으면 본문이 짧아도 같다
+    c = ctx(unmanaged=False)
+    assert screen_result(c, size=1, items=1, texts=["ok"], structured_truncated=True) is True
 
 
-def test_structured_texts_collects_values_and_keys_within_bounds():
-    texts = structured_texts(_Result())
-    assert INJECTION in texts and "rows" in texts
-    assert structured_texts(None) == []
-    assert set(structured_texts({"structuredContent": {"a": "x"}})) == {"a", "x"}
-    deep: object = "bottom"
-    for _ in range(30):
-        deep = [deep]
-    assert structured_texts({"structuredContent": deep}) == []
-    wide = {"structuredContent": [str(i) for i in range(10_000)]}
-    assert len(structured_texts(wide, limit=100)) == 100
+def test_a_marker_in_the_middle_of_a_large_result_is_found():
+    filler = "log line ok\n" * 200_000  # about 2.4 MiB
+    c = ctx(unmanaged=False)
+    assert screen_result(c, size=1, items=1, texts=[filler + INJECTION + filler]) is True
+    assert c["output_findings"] == ["POL-E-04"]
 
 
-def test_large_result_windows_cost():
+def test_the_response_event_accepts_truncation_and_paths():
+    obs = ResponseObservation(
+        is_error=False,
+        revocation_check="unchanged",
+        revoked_after_snapshot=False,
+        scan_truncated=True,
+        finding_paths=("$.x",),
+    )
+    assert obs.model_dump(mode="json")["finding_paths"] == ["$.x"]
+
+
+def test_large_result_scan_cost():
     text = "log line system status ok 한국어 문장\n" * 40_000 + INJECTION  # over 1 MiB
-    assert len(text) > MAX_SCAN_CHARS
     started = time.perf_counter()
     assert scan_instructions([text]) == ("instruction_override",)
     # 넉넉한 상한이다. 실제 비용은 수십 밀리초 규모.
     assert time.perf_counter() - started < 2.0
+
 
 
 def test_observation_carries_unmanaged_findings_and_server():
