@@ -949,7 +949,7 @@ class PluginDatabase:
                            WHERE instance_id = %(iid)s AND principal_id = %(principal_id)s
                              AND status = 'pending' AND expires_at > clock_timestamp()) < 20
                     ON CONFLICT DO NOTHING
-                """, {**params, "display": Jsonb(params["display"])})
+                """, {**params, "display": Jsonb(params.get("display") or {})})
 
         await self._run(write)
 
@@ -959,6 +959,7 @@ class PluginDatabase:
         열린 요청의 식별자(없으면 None: 주체별 대기 상한 초과). 승인은 하지 않는다.
         """
         from psycopg import IsolationLevel
+        from psycopg.types.json import Jsonb
 
         async def write(conn: Any) -> str | None:
             await conn.set_isolation_level(IsolationLevel.READ_COMMITTED)
@@ -983,23 +984,55 @@ class PluginDatabase:
                     INSERT INTO mint.call_approvals
                         (id, instance_id, org_id, principal_type, principal_id, server_id, tool,
                          args_fp, fp_key_version, policy_version_id, status, requested_by,
-                         expires_at, contract_id, exec_contract_sha256, target, action)
+                         expires_at, contract_id, exec_contract_sha256, target, action, display)
                     SELECT %(id)s, %(iid)s::mint.ident, %(org_id)s::mint.ident,
                            %(principal_type)s, %(principal_id)s, %(server_id)s, %(tool)s,
                            %(args_fp)s, %(fp_key_version)s, %(policy_version_id)s::mint.ident,
                            'pending', %(requested_by)s,
                            clock_timestamp() + make_interval(mins => %(minutes)s),
                            %(contract_id)s::uuid, %(exec_contract_sha256)s::text,
-                           %(target)s, %(action)s
+                           %(target)s, %(action)s, %(display)s
                     WHERE (SELECT count(*) FROM mint.call_approvals
                            WHERE instance_id = %(iid)s AND principal_id = %(principal_id)s
                              AND status = 'pending' AND expires_at > clock_timestamp()) < 20
                     RETURNING id
-                """, params)
+                """, {**params, "display": Jsonb(params.get("display") or {})})
                 row = await cursor.fetchone()
                 return None if row is None else str(row[0])
 
         return await self._run(write)
+
+    async def recent_call_outcome(self, params: Mapping[str, Any]) -> tuple[str, str | None] | None:
+        """같은 호출(주체·서버·도구·인자 지문)의 가장 최근 거부·만료 결과. 없으면 None.
+
+        ``minutes`` 안에 거부됐으면 ``("rejected", 사유)``, 승인이 쓰이지 않고 끝났으면
+        ``("expired", None)``이다. 행은 시간이 지나면 조회에서 빠지므로 거부가 쌓이지 않는다.
+        """
+
+        async def read(conn: Any) -> Any:
+            cursor = await conn.execute("""
+                SELECT outcome, reason FROM (
+                    SELECT CASE WHEN status = 'rejected' THEN 'rejected' ELSE 'expired' END
+                               AS outcome,
+                           decision_reason AS reason,
+                           CASE WHEN status = 'rejected' THEN coalesce(decided_at, expires_at)
+                                ELSE coalesce(valid_until, expires_at) END AS at
+                    FROM mint.call_approvals
+                    WHERE instance_id = %(iid)s AND principal_type = %(principal_type)s
+                      AND principal_id = %(principal_id)s AND server_id = %(server_id)s
+                      AND tool = %(tool)s AND args_fp = %(args_fp)s
+                      AND fp_key_version = %(fp_key_version)s
+                      AND (status IN ('rejected', 'expired')
+                           OR (status = 'approved'
+                               AND coalesce(valid_until, expires_at) <= clock_timestamp()))
+                ) t
+                WHERE at > clock_timestamp() - make_interval(mins => %(minutes)s)
+                ORDER BY at DESC LIMIT 1
+            """, params)
+            return await cursor.fetchone()
+
+        row = await self._run(read)
+        return None if row is None else (row[0], row[1])
 
     async def read_decision(
         self, instance_id: str, invocation_id: UUID, attempt_id: int

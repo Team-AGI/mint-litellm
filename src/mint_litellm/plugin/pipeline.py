@@ -23,6 +23,7 @@ from uuid import UUID
 
 from mint_litellm.compat.litellm_1_106 import HookData, ServerResolutionError
 from mint_litellm.plugin.buffer import ConfirmationConsume, ConsumeRequest, EvidenceRecorder
+from mint_litellm.plugin.call_display import call_display
 from mint_litellm.plugin.config import PluginConfig
 from mint_litellm.plugin.list_seen import ListSeen, list_key
 from mint_litellm.plugin.obligations import (
@@ -127,6 +128,10 @@ class SnapshotSource(Protocol):
     async def request_confirmation(self, params: Mapping[str, Any]) -> None: ...
 
     async def request_call_approval(self, params: Mapping[str, Any]) -> str | None: ...
+
+    async def recent_call_outcome(
+        self, params: Mapping[str, Any]
+    ) -> tuple[str, str | None] | None: ...
 
 
 @dataclass
@@ -1127,6 +1132,9 @@ class _Run:
     started_at: int = field(default_factory=time.perf_counter_ns)
     # 막힌 호출이 연(또는 다시 쓴) 호출별 승인 요청의 식별자
     call_approval_request: str | None = None
+    # 같은 호출의 직전 요청이 거부된 사유(거부 기억 안의 재시도), 승인이 쓰이지 않고 만료됐는지
+    denial_reason: str | None = None
+    previous_expired: bool = False
     # 계약 관리가 아닌 서버에서 관측만 한 검사 결과의 정책 식별자(입력 쪽)와 검사 설정
     unmanaged_findings: list[str] = field(default_factory=list)
     scan_unmanaged: str = "observe"
@@ -1491,6 +1499,7 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         binding,
     )
     timing.since("fingerprint", started)
+    check = await _previous_outcome(run, deps, check, resolved, tool, hook.arguments)
     for result in check.results:
         stages.add(Stage.OBLIGATIONS, result)
     if not check.results:
@@ -1527,6 +1536,47 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
     await _open_call_approval(run, deps, check, resolved, tool, hook.arguments, binding)
 
 
+async def _previous_outcome(
+    run: _Run, deps: PipelineDeps, check: ObligationCheck, resolved: ResolvedServer, tool: str,
+    arguments: Mapping[str, Any],
+) -> ObligationCheck:
+    """승인이 없어 막힌 호출의 직전 요청이 거부됐으면 새 요청 없이 그 사유로 거절한다.
+
+    거부는 그 요청 1건에 한정되고 ``call_denial_minutes`` 안에서만 기억한다. 직전 승인이 쓰이지
+    않고 만료됐으면 막힘은 그대로 두고 그 사실만 호출자에게 알린다(새 요청은 평소처럼 열린다).
+    """
+    config, principal, snapshot = deps.config, run.principal, run.snapshot
+    first = check.results[0] if check.results else None
+    if (
+        first is None or first.detail is not None
+        or first.reason_code not in (Reason.CALL_APPROVAL_REQUIRED, Reason.CALL_APPROVAL_STALE)
+        or config.call_denial_minutes <= 0 or config.fingerprint_key is None
+        or principal.principal_type not in (
+            PrincipalType.USER, PrincipalType.TEAM_KEY, PrincipalType.SERVICE_ACCOUNT)
+        or not principal.principal_id or snapshot is None
+    ):
+        return check
+    try:
+        async with asyncio.timeout(run.deadline.remaining()):
+            prior = await deps.snapshots.recent_call_outcome({
+                "iid": config.instance_id, "principal_type": principal.principal_type.value,
+                "principal_id": principal.principal_id, "server_id": resolved.server_id,
+                "tool": tool, "args_fp": argument_fingerprint(arguments, config.fingerprint_key),
+                "fp_key_version": config.fingerprint_key_version,
+                "minutes": config.call_denial_minutes,
+            })
+    except Exception as exc:
+        log.debug("직전 호출별 승인 결과 조회 실패: %s", type(exc).__name__)
+        return check
+    if prior is None:
+        return check
+    if prior[0] == "rejected":
+        run.denial_reason = prior[1]
+        return ObligationCheck([StageResult.stop(Reason.CALL_APPROVAL_DENIED)], None)
+    run.previous_expired = True
+    return check
+
+
 async def _open_call_approval(
     run: _Run, deps: PipelineDeps, check: ObligationCheck, resolved: ResolvedServer, tool: str,
     arguments: Mapping[str, Any], binding: Target | None,
@@ -1557,13 +1607,14 @@ async def _open_call_approval(
                 "fp_key_version": config.fingerprint_key_version,
                 "policy_version_id": snapshot.policy_version.id,
                 "requested_by": AUTO_REQUESTER, "minutes": AUTO_REQUEST_MINUTES,
+                "display": call_display(arguments),
                 "contract_id": contract.id if contract is not None else None,
                 "exec_contract_sha256": resolved.exec_contract_sha256,
                 "target": binding.target if binding is not None else None,
                 "action": binding.action if binding is not None else None,
             })
     except Exception as exc:
-        log.debug("호출별 승인 요청 실패: %s", type(exc).__name__)
+        log.warning("호출별 승인 요청을 열지 못했습니다: %s", type(exc).__name__)
 
 
 def _mark_written(run: _Run) -> Callable[[], None]:
@@ -1738,7 +1789,11 @@ async def _evaluate(run: _Run, deps: PipelineDeps) -> Outcome:
         if run.call_approval_request is not None and reason in (
             Reason.CALL_APPROVAL_REQUIRED, Reason.CALL_APPROVAL_STALE
         ):
-            error = error.model_copy(update={"approval_requested": True})
+            error = error.model_copy(update={
+                "approval_requested": True, "previous_expired": run.previous_expired,
+            })
+        elif reason == Reason.CALL_APPROVAL_DENIED:
+            error = error.model_copy(update={"denial_reason": run.denial_reason})
     return Outcome(
         allowed=allowed,
         snapshot=snapshot_doc,
