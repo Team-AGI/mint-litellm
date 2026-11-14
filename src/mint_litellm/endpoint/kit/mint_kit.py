@@ -929,6 +929,7 @@ def unlink_if_ours(path: str, digest: str | None) -> bool:
 SAFE_OWNERS = ("NT AUTHORITY\\SYSTEM", "BUILTIN\\Administrators", "NT SERVICE\\TrustedInstaller")
 OPEN_GROUPS = ("builtin\\users", "authenticated users", "everyone")
 WRITE_RIGHTS = {"F", "M", "W", "WD", "AD", "GW", "GA", "WO", "WDAC"}
+CREATE_RIGHTS = {"WD", "AD"}  # 폴더 안에 파일·하위 폴더만 만들 수 있는 권리
 
 
 def chain_of(path: str) -> list[str]:
@@ -967,7 +968,7 @@ def windows_untrusted_reason(path: str, run=None) -> str | None:
     """Windows: ``path``와 상위 폴더의 소유자가 SYSTEM·Administrators이고 Users·Authenticated
     Users·Everyone에 쓰기 권한이 없는지 본다. 아니면 이유."""
     run = run or capture
-    for item in chain_of(path.replace("/", "\\")):
+    for depth, item in enumerate(chain_of(path.replace("/", "\\"))):
         listing = run(["icacls", item])
         if not listing.strip():
             return f"{item} cannot be inspected"
@@ -975,6 +976,10 @@ def windows_untrusted_reason(path: str, run=None) -> str | None:
             if not any(group in line.lower() for group in OPEN_GROUPS):
                 continue
             rights = {t for part in re.findall(r"\(([^)]*)\)", line) for t in part.split(",")}
+            if "IO" in rights:
+                continue  # 상속 전용 항목은 이 폴더 자신에게는 적용되지 않는다.
+            if depth:
+                rights -= CREATE_RIGHTS  # 상위 폴더에 새로 만드는 항목은 있던 경로를 못 바꾼다.
             if rights & WRITE_RIGHTS:
                 return f"{item} is writable by other users"
         if windows_owner(item, run) not in SAFE_OWNERS:
@@ -1106,7 +1111,9 @@ class Kit:
     def shell_line(self, parts: list[str]) -> str:
         """하네스가 셸로 실행하는 한 줄. Codex는 Windows에서 PowerShell로 실행한다."""
         if self.windows:
-            return "& " + " ".join("'" + part.replace("'", "''") + "'" for part in parts)
+            call = "& " + " ".join("'" + part.replace("'", "''") + "'" for part in parts)
+            # 종료 코드를 넘기지 않으면 훅의 차단(2)이 1로 바뀌어 Codex가 그냥 통과시킨다.
+            return call + "; exit $LASTEXITCODE"
         return shlex.join(parts)
 
     @property

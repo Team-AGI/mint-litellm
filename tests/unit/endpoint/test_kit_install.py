@@ -298,6 +298,7 @@ def test_a_managed_windows_install_uses_program_files_and_powershell_hooks(
     assert requirements["hooks"]["windows_managed_dir"] == "C:/Program Files/MintEndpoint"
     command = requirements["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
     assert command.startswith("& '") and "'pre' '--url' 'https://mint.test'" in command
+    assert command.endswith("; exit $LASTEXITCODE")  # 차단(2)이 1로 바뀌면 호출이 통과한다.
     # Windows의 Codex는 관리자 서버 정의 파일이 없어 서버 정의가 사용자 설정 구간에 들어간다.
     block = tomllib.loads((tmp_path / "home/.codex/config.toml").read_text(encoding="utf-8"))
     assert sorted(block["mcp_servers"]) == ["srv-1", "srv-2"] and "hooks" not in block
