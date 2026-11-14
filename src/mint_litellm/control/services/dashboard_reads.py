@@ -231,3 +231,45 @@ def event(conn: psycopg.Connection, instance: str, event_id: str) -> dict[str, A
 def since_hours(since: datetime, now: datetime) -> int:
     """조회 시작부터 지금까지의 시간 수(올림, 최소 1)."""
     return max(int(-(-(now - since).total_seconds() // 3600)), 1)
+
+
+def period_decisions(
+    conn: psycopg.Connection, instance: str, start: datetime, end: datetime, servers: int = 10
+) -> dict[str, Any]:
+    """``[start, end)`` 구간의 판정 갈래별 건수, 차단 사유별 건수, 호출이 많은 서버."""
+    base = (
+        f"FROM (SELECT {_BUCKET} AS bucket, {_REASON} AS code,"
+        " payload->>'resolved_server_id' AS server_id FROM mint.events"
+        " WHERE instance_id = %s AND kind = 'decision_evaluated'"
+        " AND inserted_at >= %s AND inserted_at < %s) t"
+    )
+    args = (instance, start, end)
+    totals = (
+        fetchone(
+            conn,
+            "SELECT count(*) AS total,"
+            + ", ".join(f"count(*) FILTER (WHERE bucket = '{b}') AS {b}" for b in BUCKETS)
+            + " "
+            + base,
+            args,
+        )
+        or {}
+    )
+    reasons = fetchall(
+        conn,
+        "SELECT code, count(*) AS n " + base + " WHERE bucket = 'block' GROUP BY 1 ORDER BY n DESC,"
+        " code",
+        args,
+    )
+    top = fetchall(
+        conn,
+        "SELECT server_id, count(*) AS calls, count(*) FILTER (WHERE bucket = 'block') AS blocked "
+        + base
+        + " WHERE server_id IS NOT NULL GROUP BY 1 ORDER BY calls DESC, server_id LIMIT %s",
+        (*args, servers),
+    )
+    return {
+        "totals": {k: totals.get(k) or 0 for k in ("total", *BUCKETS)},
+        "reasons": reasons,
+        "servers": top,
+    }

@@ -150,3 +150,10 @@ def test_the_semi_automated_evidence_policies_are_the_evidence_kinds():
     # 승인 조건·예외를 받는 보조 증빙(unpinned·exception)은 반자동 정책의 증빙이 아니다.
     own = {k.policy for k in KINDS.values() if k.gate not in {"unpinned", "exception"}}
     assert evidence == own
+
+
+def test_every_counted_policy_has_a_one_line_operator_rule():
+    for policy in _catalog()["policies"]:
+        rule = policy.get("rule", "")
+        assert rule and "\n" not in rule, policy["id"]
+        assert not any(mark in rule for mark in (".py", "::", "src/", ".rego")), policy["id"]

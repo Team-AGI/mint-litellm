@@ -17,7 +17,8 @@ SCREENS = [
     "/access?tab=denials", "/access?tab=allowlists", "/endpoints?tab=installs",
     "/endpoints?tab=local-mcp", "/endpoints?state=violation", "/alerts?status=open",
     "/alerts?severity=high", "/ledger?result=blocked&range=7d",
-    "/policy", "/admin?tab=operators", "/admin?tab=orgs", "/admin?tab=suggestions",
+    "/policy", "/reports/audit", "/admin?tab=operators", "/admin?tab=orgs",
+    "/admin?tab=suggestions",
 ]
 # 구 경로 -> 도착지(경로 계약)
 LEGACY = {
