@@ -4,6 +4,11 @@
 주소는 설정(``MINT_VULN_FEED_URL``, 기본 공개 OSV)이다. 조회가 안 돼도 호출은 막지 않는다. 경보
 ``vuln_feed_unreachable`` 하나만 열고, 이미 알고 있는 결과로 기한 판정을 이어 간다.
 
+고정된 패키지가 끌고 오는 의존 패키지(전이 의존성)는 deps.dev 형식 API(``MINT_DEPS_GRAPH_URL``)로
+구해 같은 조회에 넣는다. 의존 그래프는 하루에 한 번만 다시 받고, 의존 패키지에서 나온 취약점은
+서버와 경로("A → B")를 경보에 적는다. 의존 그래프 조회가 안 돼도 경보 ``dep_graph_unreachable``
+하나만 열고 알고 있는 그래프로 이어 간다. 컨테이너 이미지는 조회할 공개 API가 없어 다루지 않는다.
+
 치명(점수 9.0 이상, 평가 등급 CRITICAL, 또는 악용 확인 표지)은 처음 확인한 시각부터 48시간 안에
 조치해야 한다. 확인 즉시 경보하고, 남은 시간이 24시간 이하가 되면 경보를 올리며, 기한이 지나면 그
 서버의 호출을 막는다(서버 행의 ``vuln_blocked_at``을 판정이 읽는다). 패키지를 고쳐 취약점이 조회에서
@@ -18,7 +23,7 @@ from urllib.parse import quote
 
 import httpx
 
-from mint_litellm.control import alerts
+from mint_litellm.control import alerts, depgraph
 from mint_litellm.control.db.connection import fetchall
 from mint_litellm.control.packages import OSV_ECOSYSTEM
 from mint_litellm.types.ids import new_uuid7
@@ -28,6 +33,7 @@ log = logging.getLogger(__name__)
 KIND_VULNERABLE = "package_vulnerable"
 KIND_DUE = "package_vuln_due"
 KIND_UNREACHABLE = "vuln_feed_unreachable"
+KIND_GRAPH_UNREACHABLE = "dep_graph_unreachable"
 DEADLINE = timedelta(hours=48)
 ESCALATE_REMAINING = timedelta(hours=24)
 BATCH = 500
@@ -181,20 +187,44 @@ def _store(conn: Any, instance: str, results: dict[tuple[str, str, str], dict[st
         )
 
 
+_FINDING_COLUMNS = (
+    "s.server_id, s.vuln_blocked_at, v.ecosystem, v.name, v.version, v.vuln_id,"
+    " v.severity, v.cvss, v.exploited, v.summary, v.first_seen_at"
+)
+_FINDING_WHERE = (
+    " WHERE s.instance_id = %s AND s.identity_kind = 'stdio'"
+    " AND s.status NOT IN ('rejected', 'terminated')"
+)
+_SERVER_PACKAGES = (
+    " FROM mint.servers s JOIN mint.server_packages p ON p.instance_id = s.instance_id"
+    " AND p.server_id = s.server_id AND p.exec_contract_sha256 = s.exec_contract_sha256"
+)
+
+
 def _findings(conn: Any, instance: str) -> list[dict]:
-    """서버의 현재 계약 패키지에 걸린, 아직 조회에서 사라지지 않은 취약점."""
+    """서버의 현재 계약 패키지와 그 의존 패키지에 걸린, 아직 조회에서 사라지지 않은 취약점.
+
+    의존 패키지에서 나온 행은 ``path``(예: ``A → B``)에 서버가 쓰는 패키지부터의 경로가 있다.
+    """
     return fetchall(
         conn,
-        "SELECT s.server_id, s.vuln_blocked_at, v.ecosystem, v.name, v.version, v.vuln_id,"
-        " v.severity, v.cvss, v.exploited, v.summary, v.first_seen_at FROM mint.servers s"
-        " JOIN mint.server_packages p ON p.instance_id = s.instance_id"
-        " AND p.server_id = s.server_id AND p.exec_contract_sha256 = s.exec_contract_sha256"
-        " JOIN mint.package_vulns v ON v.instance_id = p.instance_id"
+        "SELECT " + _FINDING_COLUMNS + ", NULL::text AS path" + _SERVER_PACKAGES
+        + " JOIN mint.package_vulns v ON v.instance_id = p.instance_id"
         " AND v.ecosystem = p.ecosystem AND v.name = p.name AND v.version = p.version"
-        " AND v.cleared_at IS NULL"
-        " WHERE s.instance_id = %s AND s.identity_kind = 'stdio'"
-        " AND s.status NOT IN ('rejected', 'terminated') ORDER BY v.first_seen_at",
-        (instance,),
+        " AND v.cleared_at IS NULL" + _FINDING_WHERE
+        + " UNION ALL SELECT " + _FINDING_COLUMNS + ", d.path" + _SERVER_PACKAGES
+        + " JOIN mint.package_deps t ON t.instance_id = p.instance_id"
+        " AND t.ecosystem = p.ecosystem AND t.name = p.name AND t.version = p.version"
+        " AND t.dep_name = t.name AND t.dep_version = t.version"
+        " JOIN mint.package_deps d ON d.instance_id = t.instance_id"
+        " AND d.ecosystem = t.ecosystem AND d.name = t.name AND d.version = t.version"
+        " AND d.resolved_at = t.resolved_at"
+        " AND NOT (d.dep_name = d.name AND d.dep_version = d.version)"
+        " JOIN mint.package_vulns v ON v.instance_id = d.instance_id"
+        " AND v.ecosystem = d.ecosystem AND v.name = d.dep_name AND v.version = d.dep_version"
+        " AND v.cleared_at IS NULL" + _FINDING_WHERE
+        + " ORDER BY first_seen_at",
+        (instance, instance),
     )
 
 
@@ -220,14 +250,20 @@ def plan(
     """저장된 취약점에서 열려 있을 경보 (종류, 키, 심각도, 본문)와 호출을 막을 서버를 정한다."""
     wanted: list[tuple[str, str, str, dict]] = []
     blocked: set[str] = set()
-    for f in rows:
+    unique: dict[str, dict] = {}
+    for f in rows:  # 같은 취약점이 직접·의존으로 겹치면 직접 쪽을 남긴다
         key = finding_key(f)
+        if key not in unique or (unique[key].get("path") and not f.get("path")):
+            unique[key] = f
+    for key, f in unique.items():
         subject = {
             "server_id": f["server_id"], "ecosystem": f["ecosystem"], "package": f["name"],
             "version": f["version"], "vuln_id": f["vuln_id"], "severity": f["severity"],
             "cvss": None if f["cvss"] is None else float(f["cvss"]),
             "exploited": f["exploited"], "summary": f["summary"],
         }
+        if f.get("path"):
+            subject["path"] = f["path"]
         wanted.append((KIND_VULNERABLE, f"{KIND_VULNERABLE}:{key}", f["severity"], subject))
         if not is_critical(f):
             continue
@@ -276,11 +312,76 @@ def evaluate(conn: Any, instance: str, now: datetime) -> set[str]:
     return blocked
 
 
+def _flag(conn: Any, instance: str, kind: str, failed: Exception | None, subject: dict) -> None:
+    """조회 실패 경보를 하나만 열어 두고, 성공하면 닫는다(호출은 막지 않는다)."""
+    with conn.transaction():
+        if failed is None:
+            alerts.resolve(conn, instance, kind)
+        elif not fetchall(
+            conn,
+            "SELECT 1 FROM mint.alerts WHERE instance_id = %s AND dedup_key = %s"
+            " AND status <> 'resolved'",
+            (instance, kind),
+        ):
+            alerts.raise_alert(
+                conn, instance, kind=kind, severity="medium", dedup_key=kind,
+                subject={**subject, "error": type(failed).__name__},
+            )
+
+
+Key = tuple[str, str, str]
+
+
+def _load_deps(
+    conn: Any, instance: str
+) -> tuple[dict[Key, datetime], dict[Key, list[depgraph.Dep]]]:
+    """저장된 의존 그래프: 패키지 버전별 조회 시각과 의존 패키지(가장 최근 조회분만)."""
+    rows = fetchall(
+        conn,
+        "SELECT ecosystem, name, version, dep_name, dep_version, path, resolved_at"
+        " FROM mint.package_deps WHERE instance_id = %s",
+        (instance,),
+    )
+    at = {
+        (r["ecosystem"], r["name"], r["version"]): r["resolved_at"]
+        for r in rows if (r["dep_name"], r["dep_version"]) == (r["name"], r["version"])
+    }
+    deps: dict[Key, list[depgraph.Dep]] = {k: [] for k in at}
+    for r in rows:
+        key = (r["ecosystem"], r["name"], r["version"])
+        own = (r["dep_name"], r["dep_version"]) == key[1:]
+        if key in at and r["resolved_at"] == at[key] and not own:
+            deps[key].append((r["dep_name"], r["dep_version"], r["path"]))
+    return at, deps
+
+
+def _store_deps(
+    conn: Any, instance: str, fresh: dict[Key, list[depgraph.Dep]], at: datetime
+) -> None:
+    for (eco, name, version), deps in fresh.items():
+        for dep_name, dep_version, path in [(name, version, name), *deps]:
+            conn.execute(
+                "INSERT INTO mint.package_deps (instance_id, ecosystem, name, version, dep_name,"
+                " dep_version, path, resolved_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+                " ON CONFLICT (instance_id, ecosystem, name, version, dep_name, dep_version)"
+                " DO UPDATE SET path = EXCLUDED.path, resolved_at = EXCLUDED.resolved_at",
+                (instance, eco, name, version, dep_name, dep_version, path, at),
+            )
+
+
+def with_deps(tops: list[Key], graph: dict[Key, list[depgraph.Dep]]) -> list[Key]:
+    """고정된 패키지와 그 의존 패키지를 한 목록으로(중복 없이, 순서 유지)."""
+    keys = list(tops)
+    for top in tops:
+        keys += [(top[0], name, version) for name, version, _ in graph.get(top, ())]
+    return list(dict.fromkeys(keys))
+
+
 def run(job) -> None:
     s = job.settings
     conn, instance = job.conn, job.instance_id
-    keys = _desired_packages(conn, instance)
-    if keys:
+    tops = _desired_packages(conn, instance)
+    if tops:
         known = {
             r["vuln_id"]: {k: r[k] if k != "cvss" else (None if r[k] is None else float(r[k]))
                            for k in ("severity", "cvss", "exploited", "summary")}
@@ -293,29 +394,27 @@ def run(job) -> None:
             )
         }
         job.checkpoint()
-        try:
-            with httpx.Client(
-                timeout=s.vuln_feed_timeout_seconds, follow_redirects=False
-            ) as http:
+        with httpx.Client(timeout=s.vuln_feed_timeout_seconds, follow_redirects=False) as http:
+            keys = list(tops)
+            if s.deps_graph_url:
+                at, graph = _load_deps(conn, instance)
+                now = datetime.now(UTC)
+                fresh, failed = depgraph.resolve(http, s.deps_graph_url, tops, at, now)
+                if failed:
+                    log.warning("의존 그래프 조회 실패: %s", type(failed).__name__)
+                with conn.transaction():
+                    _store_deps(conn, instance, fresh, now)
+                _flag(conn, instance, KIND_GRAPH_UNREACHABLE, failed, {"feed": s.deps_graph_url})
+                keys = with_deps(tops, {**graph, **fresh})
+            try:
                 results = fetch(http, s.vuln_feed_url, keys, known)
-        except (httpx.HTTPError, ValueError, KeyError, TypeError) as error:
-            log.warning("취약점 조회 실패: %s", type(error).__name__)
-            with conn.transaction():
-                if not fetchall(
-                    conn,
-                    "SELECT 1 FROM mint.alerts WHERE instance_id = %s AND dedup_key = %s"
-                    " AND status <> 'resolved'",
-                    (instance, KIND_UNREACHABLE),
-                ):
-                    alerts.raise_alert(
-                        conn, instance, kind=KIND_UNREACHABLE, severity="medium",
-                        dedup_key=KIND_UNREACHABLE,
-                        subject={"feed": s.vuln_feed_url, "error": type(error).__name__},
-                    )
-        else:
-            with conn.transaction():
-                _store(conn, instance, results)
-                alerts.resolve(conn, instance, KIND_UNREACHABLE)
+            except (httpx.HTTPError, ValueError, KeyError, TypeError) as error:
+                log.warning("취약점 조회 실패: %s", type(error).__name__)
+                _flag(conn, instance, KIND_UNREACHABLE, error, {"feed": s.vuln_feed_url})
+            else:
+                with conn.transaction():
+                    _store(conn, instance, results)
+                _flag(conn, instance, KIND_UNREACHABLE, None, {})
     job.checkpoint()
     # 조회가 실패해도 이미 알고 있는 결과로 기한을 판정한다(조회 실패가 호출을 막거나 풀지 않는다).
     evaluate(conn, instance, datetime.now(UTC))
