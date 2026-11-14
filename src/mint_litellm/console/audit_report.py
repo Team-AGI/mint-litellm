@@ -104,13 +104,8 @@ def _policy(catalog: dict[str, Any] | None) -> dict:
         return _section("정책 적용 범위", [("정책 목록", "읽지 못함")])
     policies = catalog.get("policies", [])
     count = Counter(p["class"] for p in policies)
-    rule: dict[str, list[str]] = {}
-    for item in (*catalog.get("rules", []), *catalog.get("checks", [])):
-        for pid in item.get("reference_policies", []):
-            if item["description"] not in rule.setdefault(pid, []):
-                rule[pid].append(item["description"])
     rows = [
-        [p["id"], labels.pick(POLICY_CLASS, p["class"]), " / ".join(rule.get(p["id"], [])) or "—"]
+        [p["id"], labels.pick(POLICY_CLASS, p["class"]), p.get("rule") or "—"]
         for p in policies
         if p["class"] in WATCHED
     ]

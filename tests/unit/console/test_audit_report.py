@@ -221,3 +221,8 @@ def test_the_page_renders_a_printable_document_with_downloads(seeded, admin):
     assert 'href="/reports/audit"' in admin.get("/").text
     css = admin.get("/static/report.css").text
     assert "size: A4" in css and "break-before: page" in css
+
+
+def test_no_listed_policy_is_left_without_its_rule(world):
+    rows = section(report(world), "정책")["tables"][0]["rows"]
+    assert rows and all(row[2] != "—" for row in rows)
