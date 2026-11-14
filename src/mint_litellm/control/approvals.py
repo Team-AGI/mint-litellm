@@ -13,6 +13,7 @@ from mint_litellm.control.errors import ControlError, forbidden, not_found, sepa
 from mint_litellm.control.litellm_admin import LiteLLMAdmin
 from mint_litellm.control.services import base
 from mint_litellm.types.canonical import credential_scope
+from mint_litellm.types.contracts import ONE_SHOT_ACTIONS
 from mint_litellm.types.events import EventKind
 from mint_litellm.types.ids import new_uuid7
 
@@ -686,12 +687,18 @@ def call_approve(
         raise ControlError("사용 기간은 1회, 10분, 30분 중 하나여야 합니다.")
     current = fetchone(
         ctx.conn,
-        "SELECT principal_type, principal_id, requested_by FROM mint.call_approvals"
-        " WHERE instance_id = %s AND id = %s FOR UPDATE",
+        "SELECT c.principal_type, c.principal_id, c.requested_by, t.action_type"
+        " FROM mint.call_approvals c LEFT JOIN mint.tool_contracts t"
+        " ON t.instance_id = c.instance_id AND t.id = c.contract_id"
+        " WHERE c.instance_id = %s AND c.id = %s FOR UPDATE OF c",
         (ctx.instance_id, call_id),
     )
     if current is None:
         raise not_found(f"호출별 승인 {call_id}이(가) 없습니다.")
+    if window_minutes and current["action_type"] in ONE_SHOT_ACTIONS:
+        raise ControlError(
+            f"{current['action_type']} 도구는 기간 승인을 줄 수 없습니다. 1회 승인만 가능합니다."
+        )
     if current["principal_type"] == "user" and current["principal_id"] == ctx.operator.user_id:
         raise separation_of_duties(
             "호출 주체와 같은 사용자의 운영자는 호출별 승인을 승인할 수 없습니다."

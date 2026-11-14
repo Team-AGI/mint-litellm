@@ -44,6 +44,12 @@ ACTION_SCORE: dict[ActionType, int] = {
     ActionType.CREDENTIAL_ACCESS: 3,
 }
 
+# 기간 승인을 허용하지 않고 호출마다 정확한 1회 승인만 받는 행위. 삭제·외부 전송은 본인 확인
+# 기본값(plugin/policy/defaults.CONFIRM_ACTIONS)과 같고, 자격 접근은 행위 점수가 가장 높다.
+ONE_SHOT_ACTIONS: frozenset[str] = frozenset(
+    {ActionType.DELETE, ActionType.EXTERNAL_SEND, ActionType.CREDENTIAL_ACCESS}
+)
+
 _BY_SCORE = (RiskGrade.LOW, RiskGrade.MEDIUM, RiskGrade.HIGH, RiskGrade.CRITICAL)
 
 HIGH_RISK_GRADES: frozenset[RiskGrade] = frozenset({RiskGrade.HIGH, RiskGrade.CRITICAL})

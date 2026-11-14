@@ -39,6 +39,7 @@ from mint_litellm.plugin.policy.patterns import compute_patterns
 from mint_litellm.plugin.policy.sensitive_scan import INPUT_SECRET_KINDS, scan_arguments
 from mint_litellm.plugin.resolve_guard import ResolveGuard
 from mint_litellm.plugin.snapshot import (
+    WINDOW_MAX_USES,
     ApprovalRow,
     CallApprovalRow,
     Snapshot,
@@ -49,6 +50,7 @@ from mint_litellm.plugin.timing import OFF, StageClock
 from mint_litellm.plugin.token_audience import MISMATCH, UNCHECKED, audience_verdict
 from mint_litellm.plugin.token_scope import exceeded_scopes
 from mint_litellm.types.canonical import credential_scope
+from mint_litellm.types.contracts import ONE_SHOT_ACTIONS
 from mint_litellm.types.decision import (
     UNSUPPORTED_STAGE,
     Action,
@@ -923,14 +925,22 @@ def match_call_approval(
             Reason.CALL_APPROVAL_REQUIRED, detail="arguments cannot be fingerprinted"
         ), None
 
+    contract = current_contract(snapshot, tool)
+    one_shot_only = contract is not None and contract.action_type in ONE_SHOT_ACTIONS
+
     def same_call(row: CallApprovalRow) -> bool:
+        # 기간 승인은 인자 지문을 풀고 나머지 결속은 그대로 둔다. 1회 승인과 삭제·외부 전송·자격
+        # 접근 도구는 지문까지 정확히 맞아야 한다. 기간 승인은 사용 횟수 상한이 있다.
+        windowed = row.valid_until is not None
+        fp_free = windowed and not one_shot_only
         return (
             row.org_id == principal.org_id
             and row.principal_type == principal.principal_type.value
             and row.principal_id == principal.principal_id
             and row.server_id == resolved.server_id
             and row.tool == tool
-            and row.args_fp == fingerprint
+            and (fp_free or row.args_fp == fingerprint)
+            and (not windowed or row.uses < WINDOW_MAX_USES)
             and row.fp_key_version == config.fingerprint_key_version
             and row.contract_version is None
             and bound_to_current_contract(snapshot, tool, row.contract_id)
