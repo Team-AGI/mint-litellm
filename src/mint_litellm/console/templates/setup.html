@@ -1,0 +1,18 @@
+{% extends "base.html" %}{% import "macros.html" as m %}
+{% block title %}시작하기 · MINT{% endblock %}
+{% block body %}
+<h1>시작하기</h1>
+<div class="cards">
+  {{ m.kpi('남은 필수 항목', pending, none, none, 'wait' if pending else none) }}
+  </div>
+<table class="compact"><thead><tr><th>항목</th><th>상태</th><th>현재</th><th></th></tr></thead><tbody>
+{% for i in items %}<tr id="step-{{ i.key }}">
+<td>{{ i.title }}{% if i.optional %} <span class="muted">(선택)</span>{% endif %}</td>
+<td>{{ m.status_badge(i.status) }}</td>
+<td>{{ i.line }}{% if i.commands and actor.role == 'admin' and i.status.text != '완료' %}{% for os, cmd in i.commands %}
+<div class="filters"><span class="muted">{{ os }}</span> <button type="button" class="copy" data-copy="{{ cmd }}" title="복사">{{ cmd }}</button></div>{% endfor %}{% endif %}</td>
+<td class="nowrap">{% if i.post %}<form method="post" action="{{ i.post }}" hx-boost="false">{{ m.csrf(actor) }}<button type="submit" class="primary">{{ i.action }}</button></form>
+{% elif i.href %}<a class="button" href="{{ i.href }}">{{ i.action }}</a>{% endif %}</td>
+</tr>{% endfor %}
+</tbody></table>
+{% endblock %}

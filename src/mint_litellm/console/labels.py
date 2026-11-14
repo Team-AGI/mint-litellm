@@ -492,6 +492,7 @@ SESSION_END_REASON = {
 }
 
 NOTICES = {
+    "webhook_tested": "시험 메시지를 보냈습니다.",
     "suspended": "서버를 중지했습니다.",
     "resumed": "서버를 재개했습니다.",
     "approved": "승인했습니다.",
