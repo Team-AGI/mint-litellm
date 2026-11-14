@@ -1,0 +1,10 @@
+{
+  "id": "standalone_a",
+  "description": "LiteLLM -> 단독 게이트웨이 -> 업스트림(출력 검사·승인 재개 포함, 기능 동등)",
+  "kind": "gateway_hop",
+  "base_url": "http://CONFIGURE_ME",
+  "endpoint": "/mcp/rest/tools/call",
+  "api_key_env": "MEASURE_KEY_STANDALONE_A",
+  "status_to_action": {"200": "allow", "403": "deny", "202": "hold", "409": "hold"},
+  "restart_command": null
+}
