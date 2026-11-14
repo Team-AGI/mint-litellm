@@ -1,0 +1,1 @@
+- 패키지 취약점 조회(POL-O-06·O-07·O-08)가 고정된 npm·PyPI 패키지의 의존 패키지(전이 의존성)까지 본다: 마이그레이션 `040_package_deps`, deps.dev 형식 API(`MINT_DEPS_GRAPH_URL`, 기본 공개 deps.dev, 비우면 끔)로 하루 한 번 구해 같은 조회에 넣고, 경보에 서버와 경로(`A → B`)를 적으며 치명이면 48시간 기한·차단도 같다. 조회가 안 되면 경보 `dep_graph_unreachable`만 연다. 컨테이너 이미지는 조회할 공개 API가 없어 계속 대상이 아니다.

@@ -253,7 +253,8 @@ def test_every_raised_alert_kind_has_a_korean_name():
     )))
     found |= {k.value for k in AlertKind}
     found |= {"approval_recert_due", "approval_recert_held", "package_vulnerable",
-              "package_vuln_due", "vuln_feed_unreachable"}
+              "package_vuln_due", "vuln_feed_unreachable",
+              "dep_graph_unreachable"}
     assert found - {"exec", "deployment", "negative_state", "checkpoint"} <= set(labels.ALERT_KIND)
     assert all(re.search("[가-힣]", t) for t in labels.ALERT_KIND.values())
 
