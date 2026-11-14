@@ -18,8 +18,14 @@ from uuid import UUID
 
 from mint_litellm.plugin.buffer import EvidenceRecorder
 from mint_litellm.plugin.config import PluginConfig
-from mint_litellm.plugin.policy.result_scan import scan_instructions
-from mint_litellm.plugin.policy.sensitive_scan import SCAN_LIMIT, scan_sensitive
+from mint_litellm.plugin.policy.result_scan import DEFAULT_MAX_SCAN_CHARS, scan_instructions
+from mint_litellm.plugin.policy.sensitive_scan import (
+    HIGH_ENTROPY,
+    SCAN_LIMIT,
+    SECRET_KINDS,
+    locate_sensitive,
+    scan_sensitive,
+)
 from mint_litellm.plugin.snapshot import NegativeStateQuery
 from mint_litellm.types.decision import RevocationCheck
 from mint_litellm.types.errors import output_blocked_error
@@ -39,6 +45,9 @@ POL_RESULT_INSTRUCTION = "POL-E-04"
 POL_RESULT_SENSITIVE = "POL-E-05"
 # 결과 검사 코드 자체의 오류. 검사하지 못한 결과는 막는다.
 POL_RESULT_SCAN_ERROR = "MINT-RESULT-SCAN-ERROR"
+# 결과가 검사 상한을 넘어 끝까지 보지 못했다. 집행 모드는 막고, 관측은 응답 사건에 남긴다.
+POL_RESULT_SCAN_LIMIT = "MINT-RESULT-SCAN-LIMIT"
+MAX_FINDING_PATHS = 20
 
 
 class RevocationSource(Protocol):
@@ -102,7 +111,12 @@ async def check_revocation(
 
 
 def inspect_result(
-    policy: Mapping[str, Any] | None, *, size: int | None, items: int, texts: Sequence[str]
+    policy: Mapping[str, Any] | None,
+    *,
+    size: int | None,
+    items: int,
+    texts: Sequence[str],
+    max_chars: int = DEFAULT_MAX_SCAN_CHARS,
 ) -> list[str]:
     """결과 한 건이 걸린 정책 식별자. 크기·항목 수 상한(E-16), 지시문 표지(E-04) 순으로 본다."""
     if not policy:
@@ -114,9 +128,20 @@ def inspect_result(
         max_items is not None and items > max_items
     ):
         findings.append(POL_RESULT_LIMIT)
-    if policy.get("scan") and scan_instructions(texts):
+    if policy.get("scan") and scan_instructions(texts, max_chars):
         findings.append(POL_RESULT_INSTRUCTION)
     return findings
+
+
+def _clip(texts: Sequence[str], budget: int) -> list[str]:
+    """합쳐서 ``budget`` 글자까지만 남긴 본문 목록."""
+    out: list[str] = []
+    for text in texts:
+        if budget <= 0:
+            break
+        out.append(text[:budget])
+        budget -= len(text)
+    return out
 
 
 def screen_result(
@@ -125,44 +150,86 @@ def screen_result(
     size: int | None,
     items: int,
     texts: Sequence[str],
-    structured: Sequence[str] = (),
+    structured: Sequence[tuple[str, str]] = (),
+    structured_truncated: bool = False,
+    max_chars: int = DEFAULT_MAX_SCAN_CHARS,
 ) -> bool:
     """결과를 검사해 호출 컨텍스트에 걸린 정책을 남긴다. 호출자에게 주지 않고 막아야 하면 참.
 
     허용된 호출만 본다. 남긴 값은 같은 호출의 응답 관측 사건이 읽는다. 비밀·개인정보는
     탐지 종류와 건수만 남기고, 가리기(``output_masked``)는 호출한 쪽이 결과 본문에 적용한다.
-    ``structured``(구조화된 결과의 문자열)는 지시문 표지 검사에만 더한다. 계약 관리가 아닌 서버의
-    지시문 표지는 설정이 enforce일 때만 막고, 아니면 걸린 사실만 ``unmanaged_findings``에 남긴다.
+    ``structured``(구조화된 결과의 ``(JSON 경로, 문자열)``)는 본문과 같은 검사를 받고, 걸리면 경로를
+    ``finding_paths``에 남긴다. 구조화된 결과의 개인정보는 경로만 남기고 통과시키며, 알려진 형식의
+    비밀은 가릴 수 없으므로 가리기 모드에서도 막는다. 고엔트로피 문자열은 건수만 남기고
+    막지 않는다. 본문과 구조화된 문자열이 합쳐 ``max_chars``를 넘으면 앞쪽만 보고
+    ``scan_truncated``를 남기며 집행 모드는 막는다.
+    계약 관리가 아닌 서버의 지시문 표지·상한 초과는 설정이 enforce일 때만 막고, 아니면 걸린 사실만
+    ``unmanaged_findings``에 남긴다.
     """
     if not ctx.get("allowed"):
         return False
     ctx["result_items"] = items
     policy = ctx.get("result_policy")
-    findings = inspect_result(policy, size=size, items=items, texts=[*texts, *structured])
-    watched: list[str] = []
-    if (
-        policy
-        and policy.get("unmanaged")
-        and not policy.get("scan_enforce")
-        and POL_RESULT_INSTRUCTION in findings
-    ):
-        findings.remove(POL_RESULT_INSTRUCTION)
-        watched.append(POL_RESULT_INSTRUCTION)
     mode = (policy or {}).get("response_scan")
-    sensitive = scan_sensitive(texts) if mode else {}
+    truncated = (
+        structured_truncated
+        or sum(map(len, texts)) + sum(len(t) for _, t in structured) > max_chars
+    )
+    body = _clip(texts, max_chars)
+    pairs = _clip([t for _, t in structured], max_chars - sum(map(len, body)))
+    structured = [(p, t) for (p, _), t in zip(structured, pairs, strict=False)]
+    findings = inspect_result(
+        policy, size=size, items=items, texts=[*body, *pairs], max_chars=max_chars
+    )
+    if truncated and policy and policy.get("scan"):
+        findings.append(POL_RESULT_SCAN_LIMIT)
+    if truncated and (mode or (policy or {}).get("scan")):
+        ctx["scan_truncated"] = True
+    watched: list[str] = []
+    watching = bool(policy and policy.get("unmanaged") and not policy.get("scan_enforce"))
+    if watching:
+        for code in (POL_RESULT_INSTRUCTION, POL_RESULT_SCAN_LIMIT):
+            if code in findings:
+                findings.remove(code)
+                watched.append(code)
+    sensitive: dict[str, int] = {}
+    entropy = 0
+    structured_secret = False
+    if mode:
+        sensitive = scan_sensitive(body, max_chars, entropy=True)
+        entropy = sensitive.pop(HIGH_ENTROPY, 0)
+        paths: list[str] = []
+        for path, kinds in locate_sensitive(structured):
+            paths.append(path)
+            entropy += kinds.pop(HIGH_ENTROPY, 0)
+            for kind, count in kinds.items():
+                # 구조화된 결과의 개인정보는 경로만 남기고 통과시킨다. 알려진 형식의 비밀만 센다.
+                if kind in SECRET_KINDS:
+                    sensitive[kind] = sensitive.get(kind, 0) + count
+                    structured_secret = True
+        if paths:
+            ctx["finding_paths"] = paths[:MAX_FINDING_PATHS]
+        if truncated and not watching:
+            sensitive[SCAN_LIMIT] = 1
     if sensitive:
         findings.append(POL_RESULT_SENSITIVE)
-        ctx["sensitive_findings"] = sensitive
+    if sensitive or entropy:
+        # 비밀처럼 보이는 긴 문자열은 오탐이 있어 기록과 경보에만 쓰고 막거나 가리지 않는다.
+        recorded = {**sensitive, HIGH_ENTROPY: entropy} if entropy else sensitive
+        ctx["sensitive_findings"] = dict(sorted(recorded.items()))
+    if entropy and policy and policy.get("unmanaged"):
+        ctx["unmanaged_findings"] = sorted({*(ctx.get("unmanaged_findings") or ()), HIGH_ENTROPY})
     if watched:
         ctx["unmanaged_findings"] = sorted({*(ctx.get("unmanaged_findings") or ()), *watched})
     if not findings and not watched:
         return False
     ctx["output_findings"] = [*findings, *watched]
     enforce = bool(policy and policy.get("enforce"))
-    # 한도·지시문 표지는 늘 막고, 비밀·개인정보는 승인 조건대로 한다. 끝까지 볼 수 없었던
-    # 결과(scan_limit)는 가릴 수 없으므로 관측이 아니면 막는다.
+    # 한도·지시문 표지·상한 초과는 늘 막고, 비밀·개인정보는 승인 조건대로 한다. 끝까지 볼 수
+    # 없었거나(scan_limit) 구조화된 결과에서 걸려 가릴 수 없는 결과는 관측이 아니면 막는다.
     others = any(f != POL_RESULT_SENSITIVE for f in findings)
-    block = others or mode == "block" or (mode == "mask" and SCAN_LIMIT in sensitive)
+    unmaskable = SCAN_LIMIT in sensitive or structured_secret
+    block = others or mode == "block" or (mode == "mask" and unmaskable)
     ctx["output_blocked"] = bool(findings) and enforce and block
     ctx["output_masked"] = bool(findings) and enforce and not block and mode == "mask"
     return ctx["output_blocked"]
@@ -197,6 +264,8 @@ async def observe_response(
         result_unenforced=bool(ctx.get("result_unenforced")),
         sensitive_findings=dict(ctx.get("sensitive_findings") or {}),
         unmanaged_findings=tuple(ctx.get("unmanaged_findings") or ()),
+        scan_truncated=bool(ctx.get("scan_truncated")),
+        finding_paths=tuple(ctx.get("finding_paths") or ()),
         outcome=response_outcome(
             is_error=is_error, output_blocked=bool(ctx.get("output_blocked"))
         ),

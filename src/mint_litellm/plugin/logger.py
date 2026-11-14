@@ -15,6 +15,7 @@ from fastapi import HTTPException
 from litellm.integrations.custom_logger import CustomLogger
 
 from mint_litellm.compat import litellm_1_106 as compat
+from mint_litellm.plugin.policy.result_scan import walk_structured
 from mint_litellm.plugin.policy.sensitive_scan import mask_text
 from mint_litellm.plugin.result import (
     POL_RESULT_SCAN_ERROR,
@@ -78,12 +79,18 @@ class MintLogger(CustomLogger):
             if isinstance(policy, dict):
                 ctx["result_policy"] = {**policy, "enforce": False}
         try:
+            limit = self._runtime.result_deps.config.scan_max_chars
+            structured, structured_cut = walk_structured(
+                compat.structured_root(kwargs.get("original_response")), limit
+            )
             if screen_result(
                 ctx,
                 size=compat.content_size(content),
                 items=len(content),
                 texts=compat.content_texts(content),
-                structured=compat.structured_texts(kwargs.get("original_response")),
+                structured=structured,
+                structured_truncated=structured_cut,
+                max_chars=limit,
             ):
                 compat.replace_tool_content(response_obj, blocked_output_detail(ctx))
             elif ctx.get("output_masked"):
