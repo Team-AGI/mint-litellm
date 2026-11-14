@@ -36,11 +36,10 @@ def listed(world):
 
 
 def test_the_list_shows_what_is_configured_and_how_many_endpoints_share_it(listed):
-    assert "단말 MCP 목록" in listed
+    assert "관리 밖 MCP" in listed
     assert "docs.example.com" in listed and "원격(HTTP)" in listed and "로컬 실행" in listed
     assert "@scope/server-files@1.2.0" in listed
     assert listed.count("2대") == 2 and "1대" in listed  # files는 두 단말, docs는 한 단말
-    assert "2026-01-" in listed  # 처음 확인 시각
     assert "Claude Code" in listed and "Codex" in listed
     assert "관리되지 않음" in listed and "관리형" in listed
 
@@ -50,12 +49,16 @@ def test_revoked_and_removed_installs_are_not_listed(listed):
 
 
 def test_each_row_starts_an_intake_prefilled_from_the_entry(listed):
+    assert "도입 신청" in listed
     assert "/intakes/new?server_id=docs&amp;provider=docs.example.com" in listed
     assert "owner_user_id=human-1" in listed
 
 
-def test_the_endpoint_list_links_to_the_mcp_list(world):
-    assert "/endpoints/mcp" in world.session_client("admin").get("/endpoints").text
+def test_the_old_mcp_path_redirects_to_the_tab(world):
+    response = world.session_client("admin").get("/endpoints/mcp", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/endpoints?tab=local-mcp"
+    assert "tab=local-mcp" in world.session_client("admin").get("/endpoints").text
 
 
 def test_an_empty_list_says_so(world):

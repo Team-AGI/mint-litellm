@@ -4,6 +4,7 @@
 block(차단), off(비활성). 겹치면 차단 > 오류 > 대기 > 정상이다.
 """
 
+import re
 from typing import NamedTuple
 
 
@@ -90,6 +91,10 @@ CONSENT = {
     "active": Status("유효", "ok"),
     "revoked": Status("철회됨", "block"),
     "expired": Status("만료", "off"),
+}
+CONSENT_STATE = {
+    "active": Status("동의함", "ok"),
+    "none": Status("동의 필요", "wait"),
 }
 RELATION = {
     "active": Status("이용 중", "ok"),
@@ -593,3 +598,62 @@ def response_notes(payload: dict | None) -> list[str]:
     if paths:
         out.append("발견 위치: " + ", ".join(paths))
     return out
+
+# 호출 판정을 묶는 네 갈래(허용·승인 필요·차단·관측)와 차단 사유의 한국어 이름
+OUTCOME_BUCKET = {"allow": "허용", "approve": "승인 필요", "block": "차단", "observe": "관측"}
+OUTCOME_REASON = {
+    "SERVER_UNREGISTERED": "등록되지 않은 서버",
+    "SERVER_NOT_APPROVED": "승인되지 않은 서버",
+    "APPROVAL_ABSENT": "승인 없음",
+    "TOOL_NOT_IN_APPROVAL": "승인 범위 밖 도구",
+    "POLICY_DETECT": "정책 탐지",
+    "CONTRACT_DRIFT": "계약 변경",
+    "OUTPUT_SCAN": "결과 검사",
+    "SERVER_REJECTED": "거절된 서버",
+    "SERVER_SUSPENDED": "중지된 서버",
+    "SERVER_TERMINATED": "폐기된 서버",
+    "RELATION_TERMINATED": "종료된 사용 관계",
+    "DENIED": "거부됨",
+    "APPROVAL_REVOKED": "철회된 승인",
+    "APPROVAL_EXPIRED": "만료된 승인",
+    "APPROVAL_RECERT_REQUIRED": "재승인 필요",
+    "CALL_APPROVAL_REQUIRED": "호출 승인 필요",
+    "CALL_APPROVAL_STALE": "호출 승인 기한 지남",
+    "CALL_APPROVAL_DENIED": "호출 승인 거절",
+    "CONSENT_REQUIRED": "동의 필요",
+    "CONSENT_EXPIRED": "동의 만료",
+    "CONSENT_REVOKED": "동의 철회",
+    "ALLOWLIST_EXPIRED": "허용 목록 만료",
+    "SERVER_IDENTITY_MISMATCH": "서버 신원 불일치",
+    "SERVER_IDENTITY_AMBIGUOUS": "서버 신원 모호",
+    "SERVER_UNRESOLVED": "서버를 찾지 못함",
+    "MASTER_KEY_FORBIDDEN": "마스터 키 사용 금지",
+    "EXTERNAL_MCP_FORBIDDEN": "외부 MCP 금지",
+    "REALTIME_FORBIDDEN": "실시간 연결 금지",
+    "CODE_EXECUTION_FORBIDDEN": "코드 실행 금지",
+    "TOKEN_FORWARD_FORBIDDEN": "토큰 전달 금지",
+    "RESOLVED_ADDRESS_FORBIDDEN": "허용되지 않은 주소",
+    "TOKEN_AUDIENCE_MISMATCH": "토큰 대상 불일치",
+    "TOKEN_SCOPE_EXCEEDED": "토큰 범위 초과",
+    "UNSUPPORTED": "지원하지 않는 호출",
+    "SCHEMA_ERROR": "형식 오류",
+    "POLICY_VERSION_MISMATCH": "정책 판본 불일치",
+    "DEPENDENCY_FAILURE": "검사 실패",
+    "AUDIT_FAILURE": "기록 실패",
+    "ORG_BOUNDARY": "조직 경계 위반",
+    "ANONYMOUS": "신원 없음",
+    "ENFORCEMENT_UNVERIFIED": "집행 미검증",
+    "CANCELLED": "취소됨",
+    "CONFIRMATION_REQUIRED": "본인 확인 필요",
+    "CONFIRMATION_STALE": "본인 확인 기한 지남",
+}
+
+
+def outcome_reason(code: str | None) -> str:
+    """판정 사유 코드의 한국어 이름. ``CONTRACT_DRIFT_<종류>``는 계약 변경으로 묶는다."""
+    if not code:
+        return "사유 없음"
+    if code in OUTCOME_REASON:
+        return OUTCOME_REASON[code]
+    head = re.split(r"_(?=[a-z])", code, maxsplit=1)[0]
+    return OUTCOME_REASON.get(head, "기타")

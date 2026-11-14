@@ -1,4 +1,4 @@
-"""직원 화면(서버 렌더링): 사용 가능한 서버·도구, 본인 확인 요청, 동의 관리와 내 기록.
+"""직원 화면(서버 렌더링): 내 서버(동의 포함), 내 요청, 내 단말.
 
 로그인은 관리자와 같은 본인 키 확인이지만 운영자 행이 필요 없고 세션 쿠키가 따로다. 모든 쓰기는
 ``control.services.staff``의 서비스 함수(데이터베이스의 ``mint.staff_*`` 함수)만 부르며, 직원
@@ -30,6 +30,7 @@ from mint_litellm.console.core import (
     require_origin,
     too_many_attempts,
 )
+from mint_litellm.console.pages.common import see_other
 from mint_litellm.console.templating import render
 from mint_litellm.control import endpoint_kits, links
 from mint_litellm.control.db.connection import connect
@@ -44,6 +45,8 @@ router = APIRouter(dependencies=[Depends(require_csrf)])
 public = APIRouter()
 
 RECENT_RECORDS = 50
+EXPIRING = timedelta(days=7)
+REQUESTS = "/staff/requests"
 log = logging.getLogger(__name__)
 
 
@@ -122,6 +125,20 @@ def act(
     return RedirectResponse(f"{back}?ok={ok}", status_code=303)
 
 
+def staff_render(
+    request: Request, name: str, ctx: dict, actor: StaffActor, status: int = 200
+) -> Response:
+    """직원 화면. 메뉴의 「내 요청」 배지에 확인을 기다리는 요청 수를 싣는다."""
+    now = datetime.now(UTC)
+    waiting = sum(
+        c["status"] == "pending" and c["expires_at"] > now
+        for c in staff.list_confirmations(actor.sctx)
+    )
+    return render(
+        request, name, {**ctx, "badges": {"staff_requests": waiting}}, actor=actor, status=status
+    )
+
+
 # --- 로그인·로그아웃 --------------------------------------------------------------------------
 
 
@@ -176,119 +193,7 @@ def logout(actor: StaffActor = Depends(staff_actor)) -> Response:
     return response
 
 
-# --- 11 사용 가능한 서버·도구 -------------------------------------------------------------------
-
-
-@router.get("/staff")
-def servers(request: Request, actor: StaffActor = Depends(staff_actor)):
-    rows = [r for r in staff.list_available(actor.sctx) if r["tools"]]
-    return render(request, "staff_servers.html", {"rows": rows}, actor=actor)
-
-
-# --- 12 본인 확인 요청 ------------------------------------------------------------------------
-
-
-def confirmations_page(request: Request, actor: StaffActor, error=None, status=200):
-    rows = staff.list_confirmations(actor.sctx)
-    separate = staff.requires_separate_key(actor.sctx)
-    now = datetime.now(UTC)
-    for row in rows:
-        pending_expired = row["status"] == "pending" and row["expires_at"] <= now
-        row["view"] = "expired" if pending_expired else row["status"]
-        row["same_key"] = separate and row["requested_by_key_token"] == actor.sctx.key_token
-    waiting = [r for r in rows if r["view"] in ("pending", "confirmed")]
-    history = [r for r in rows if r["view"] not in ("pending", "confirmed")][:RECENT_RECORDS]
-    return render(
-        request, "staff_confirmations.html",
-        {"waiting": waiting, "history": history, "error": error}, actor=actor, status=status,
-    )
-
-
-@router.get("/staff/confirmations")
-def confirmations(request: Request, actor: StaffActor = Depends(staff_actor)):
-    return confirmations_page(request, actor)
-
-
-@router.get("/staff/link/{token}")
-def open_link(token: str, actor: StaffActor = Depends(staff_actor)):
-    """본인 확인 링크. 로그인한 직원에게 확인 화면만 열고 아무것도 확인하지 않는다."""
-    key = actor.config.stage2.webhook_hmac_key
-    parsed = links.parse(key, token) if key else None
-    if parsed is None or parsed[0] != "confirm":
-        raise AdminError(AdminCode.NOT_FOUND, "링크가 만료되었거나 올바르지 않습니다.")
-    return RedirectResponse("/staff/confirmations", status_code=303)
-
-
-@router.post("/staff/confirmations/{confirmation_id}/{decision}")
-def decide(
-    confirmation_id: str,
-    decision: str,
-    request: Request,
-    actor: StaffActor = Depends(staff_actor),
-):
-    uuid.UUID(confirmation_id)
-    operations = {
-        "confirm": (staff.confirm, "staff_confirmed"),
-        "reject": (staff.reject, "staff_rejected"),
-        "cancel": (staff.cancel, "staff_cancelled"),
-    }
-    if decision not in operations:
-        raise AdminError(AdminCode.NOT_FOUND, "알 수 없는 동작입니다.")
-    function, ok = operations[decision]
-    return act(
-        actor, lambda: function(actor.sctx, actor.id_hash, confirmation_id), ok,
-        "/staff/confirmations", lambda **kw: confirmations_page(request, actor, **kw),
-    )
-
-
-# --- 승인 요청 현황 -----------------------------------------------------------------------------
-
-
-def my_approvals(actor: StaffActor) -> list[dict]:
-    """본인의 호출별 승인 요청과 기간 승인. 화면 상태(``view``)는 만료·사용 횟수를 반영한다."""
-    rows = reads.my_call_approvals(actor.sctx.control, actor.sctx.instance_id, actor.user_id)
-    now = datetime.now(UTC)
-    for row in rows:
-        windowed = row["valid_until"] is not None
-        end = row["valid_until"] or row["expires_at"]
-        view = row["status"]
-        if view in ("pending", "approved") and end <= now:
-            view = "expired"
-        elif view == "approved" and windowed and row["uses"] >= WINDOW_MAX_USES:
-            view = "consumed"
-        row["view"] = view
-        row["remaining_seconds"] = (
-            int((end - now).total_seconds()) if view == "approved" and windowed else None
-        )
-        row["uses_left"] = max(WINDOW_MAX_USES - row["uses"], 0) if windowed else None
-        by = row["approved_by"]
-        row["decider"] = "자동 규칙" if by and by.startswith("rule:") else by
-    return rows
-
-
-@router.get("/staff/requests")
-def requests_page(request: Request, actor: StaffActor = Depends(staff_actor)):
-    pending = [
-        c for c in staff.list_confirmations(actor.sctx)
-        if c["status"] == "pending" and c["expires_at"] > datetime.now(UTC)
-    ]
-    separate = staff.requires_separate_key(actor.sctx)
-    for c in pending:
-        c["same_key"] = separate and c["requested_by_key_token"] == actor.sctx.key_token
-    return render(
-        request, "staff_requests.html", {"rows": my_approvals(actor), "pending": pending},
-        actor=actor,
-    )
-
-
-@router.get("/api/v1/me/call-approvals")
-def my_approvals_api(actor: StaffActor = Depends(staff_actor)):
-    keep = ("id", "server_id", "tool", "action", "display", "view", "decider", "decision_reason",
-            "requested_at", "decided_at", "remaining_seconds", "uses_left")
-    return {"items": reads.jsonable([{k: r[k] for k in keep} for r in my_approvals(actor)])}
-
-
-# --- 13 동의 관리와 내 기록 -------------------------------------------------------------------
+# --- 11 내 서버(동의 포함) --------------------------------------------------------------------
 
 
 def event_label(row: dict) -> str:
@@ -300,32 +205,60 @@ def event_label(row: dict) -> str:
     return labels.EVENT_KIND.get(row["kind"], "기록")
 
 
-def consents_page(request: Request, actor: StaffActor, error=None, status=200, form=None):
+def servers_page(request: Request, actor: StaffActor, error=None, status=200, form=None):
     now = datetime.now(UTC)
-    consents = staff.list_consents(actor.sctx)
-    for row in consents:
+    by_server: dict[tuple, list[dict]] = {}
+    for row in staff.list_consents(actor.sctx):
         row["view"] = "revoked" if row["revoked_at"] else (
             "expired" if row["valid_until"] <= now else "active")
+        by_server.setdefault((row["org_id"], row["server_id"]), []).append(row)
+    available = staff.list_available(actor.sctx)
+    can_consent = {(t["org_id"], t["server_id"]) for t in available}
+    rows = [dict(r) for r in available if r["tools"]]
+    shown = {(r["org_id"], r["server_id"]) for r in rows}
+    rows += [  # 도구가 없어진 서버의 기존 동의도 철회할 수 있게 남긴다
+        {"org_id": o, "server_id": sid, "org_name": o, "transport": None, "auth_type": None,
+         "tools": [], "valid_until": None}
+        for (o, sid) in by_server if (o, sid) not in shown
+    ]
+    for row in rows:
+        key = (row["org_id"], row["server_id"])
+        row["ref"] = f"{key[0]}|{key[1]}"
+        row["consents"] = by_server.get(key, [])
+        active = [c for c in row["consents"] if c["view"] == "active"]
+        row["state"] = "active" if active else "none"
+        row["consent_until"] = max((c["valid_until"] for c in active), default=None)
+        row["expiring"] = bool(active) and row["consent_until"] < now + EXPIRING
+        row["can_consent"] = key in can_consent
+    tab = "records" if request.query_params.get("tab") == "records" else "servers"
     records = [
         {"at": e["inserted_at"], "label": event_label(e)}
         for e in staff.list_events(actor.sctx, RECENT_RECORDS)
-    ]
+    ] if tab == "records" else []
+    form = form or {}
+    opened = form.get("target") or request.query_params.get("open")
     ctx = {
-        "consents": consents,
-        "records": records,
-        "targets": staff.list_available(actor.sctx),
+        "rows": rows, "tab": tab, "records": records,
+        "need": sum(r["state"] == "none" for r in rows),
+        "expiring": sum(r["expiring"] for r in rows),
+        "selected": next((r for r in rows if r["ref"] == opened), None) if opened else None,
         "max_days": actor.config.stage2.staff_consent_max_days,
         "text_version": labels.CONSENT_TEXT_VERSION,
         "text": labels.CONSENT_TEXT[labels.CONSENT_TEXT_VERSION],
-        "form": form or {},
+        "form": form,
         "error": error,
     }
-    return render(request, "staff_consents.html", ctx, actor=actor, status=status)
+    return staff_render(request, "staff_servers.html", ctx, actor, status)
 
 
-@router.get("/staff/consents")
-def consents(request: Request, actor: StaffActor = Depends(staff_actor)):
-    return consents_page(request, actor)
+@router.get("/staff")
+def servers(request: Request, actor: StaffActor = Depends(staff_actor)):
+    return servers_page(request, actor)
+
+
+@router.get("/staff/consents", include_in_schema=False)
+def consents():
+    return RedirectResponse("/staff", status_code=303)
 
 
 @router.post("/staff/consents")
@@ -354,8 +287,8 @@ def give_consent(
         )
 
     form = {"target": target, "purpose": purpose, "data_scope": data_scope, "days": valid_days}
-    return act(actor, action, "consent_given", "/staff/consents",
-               lambda **kw: consents_page(request, actor, form=form, **kw))
+    return act(actor, action, "consent_given", "/staff",
+               lambda **kw: servers_page(request, actor, form=form, **kw))
 
 
 @router.post("/staff/consents/{consent_id}/revoke")
@@ -365,9 +298,118 @@ def withdraw_consent(
     uuid.UUID(consent_id)
     return act(
         actor, lambda: staff.revoke_consent(actor.sctx, actor.id_hash, consent_id),
-        "consent_withdrawn", "/staff/consents",
-        lambda **kw: consents_page(request, actor, **kw),
+        "consent_withdrawn", "/staff", lambda **kw: servers_page(request, actor, **kw),
     )
+
+
+# --- 12 내 요청(확인할 요청 · 내 승인 요청) ----------------------------------------------------
+
+
+def confirmation_rows(actor: StaffActor) -> list[dict]:
+    rows = staff.list_confirmations(actor.sctx)
+    separate = staff.requires_separate_key(actor.sctx)
+    now = datetime.now(UTC)
+    for row in rows:
+        pending_expired = row["status"] == "pending" and row["expires_at"] <= now
+        row["view"] = "expired" if pending_expired else row["status"]
+        row["same_key"] = separate and row["requested_by_key_token"] == actor.sctx.key_token
+    return rows
+
+
+def requests_page(request: Request, actor: StaffActor, error=None, status=200, tab=None):
+    tab = tab or request.query_params.get("tab")
+    rows = confirmation_rows(actor)
+    waiting = [r for r in rows if r["view"] in ("pending", "confirmed")]
+    history = [r for r in rows if r["view"] not in ("pending", "confirmed")][:RECENT_RECORDS]
+    mine = my_approvals(actor)
+    now = datetime.now(UTC)
+    pending = [r for r in waiting if r["view"] == "pending"]
+    opened = request.query_params.get("open")
+    ctx = {
+        "tab": "mine" if tab == "mine" else "pending",
+        "waiting": waiting, "history": history, "mine": mine, "error": error,
+        "pending_count": len(pending),
+        "soonest": min(
+            (int((r["expires_at"] - now).total_seconds()) for r in pending), default=None),
+        "mine_waiting": sum(r["view"] == "pending" for r in mine),
+        "selected": next((r for r in mine if str(r["id"]) == opened), None) if opened else None,
+    }
+    return staff_render(request, "staff_requests.html", ctx, actor, status)
+
+
+@router.get(REQUESTS)
+def requests(request: Request, actor: StaffActor = Depends(staff_actor)):
+    return requests_page(request, actor)
+
+
+@router.get("/staff/confirmations", include_in_schema=False)
+def confirmations(request: Request):
+    return see_other(request, REQUESTS, tab="pending")
+
+
+@router.get("/staff/link/{token}")
+def open_link(token: str, actor: StaffActor = Depends(staff_actor)):
+    """본인 확인 링크. 로그인한 직원에게 확인 화면만 열고 아무것도 확인하지 않는다."""
+    key = actor.config.stage2.webhook_hmac_key
+    parsed = links.parse(key, token) if key else None
+    if parsed is None or parsed[0] != "confirm":
+        raise AdminError(AdminCode.NOT_FOUND, "링크가 만료되었거나 올바르지 않습니다.")
+    return RedirectResponse(f"{REQUESTS}?tab=pending", status_code=303)
+
+
+@router.post("/staff/confirmations/{confirmation_id}/{decision}")
+def decide(
+    confirmation_id: str,
+    decision: str,
+    request: Request,
+    actor: StaffActor = Depends(staff_actor),
+):
+    uuid.UUID(confirmation_id)
+    operations = {
+        "confirm": (staff.confirm, "staff_confirmed"),
+        "reject": (staff.reject, "staff_rejected"),
+        "cancel": (staff.cancel, "staff_cancelled"),
+    }
+    if decision not in operations:
+        raise AdminError(AdminCode.NOT_FOUND, "알 수 없는 동작입니다.")
+    function, ok = operations[decision]
+    return act(
+        actor, lambda: function(actor.sctx, actor.id_hash, confirmation_id), ok,
+        f"{REQUESTS}?tab=pending",
+        lambda **kw: requests_page(request, actor, tab="pending", **kw),
+    )
+
+
+# --- 승인 요청 현황 -----------------------------------------------------------------------------
+
+
+def my_approvals(actor: StaffActor) -> list[dict]:
+    """본인의 호출별 승인 요청과 기간 승인. 화면 상태(``view``)는 만료·사용 횟수를 반영한다."""
+    rows = reads.my_call_approvals(actor.sctx.control, actor.sctx.instance_id, actor.user_id)
+    now = datetime.now(UTC)
+    for row in rows:
+        windowed = row["valid_until"] is not None
+        end = row["valid_until"] or row["expires_at"]
+        view = row["status"]
+        if view in ("pending", "approved") and end <= now:
+            view = "expired"
+        elif view == "approved" and windowed and row["uses"] >= WINDOW_MAX_USES:
+            view = "consumed"
+        row["view"] = view
+        row["remaining_seconds"] = (
+            int((end - now).total_seconds()) if view == "approved" and windowed else None
+        )
+        row["uses_left"] = max(WINDOW_MAX_USES - row["uses"], 0) if windowed else None
+        by = row["approved_by"]
+        row["decider"] = "자동 규칙" if by and by.startswith("rule:") else by
+    return rows
+
+
+@router.get("/api/v1/me/call-approvals")
+def my_approvals_api(actor: StaffActor = Depends(staff_actor)):
+    keep = ("id", "server_id", "tool", "action", "display", "view", "decider", "decision_reason",
+            "requested_at", "decided_at", "remaining_seconds", "uses_left")
+    return {"items": reads.jsonable([{k: r[k] for k in keep} for r in my_approvals(actor)])}
 
 
 # --- 14 단말 설치 -----------------------------------------------------------------------------
@@ -381,7 +423,7 @@ def endpoint_page(request: Request, actor: StaffActor, error=None, status=200):
         "rows": rows, "active": any(r["state"] != "revoked" for r in rows), "error": error,
         "platform": "windows" if windows else "linux",
     }
-    return render(request, "staff_endpoint.html", ctx, actor=actor, status=status)
+    return staff_render(request, "staff_endpoint.html", ctx, actor, status)
 
 
 @router.get("/staff/endpoint")

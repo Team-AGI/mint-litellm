@@ -278,7 +278,7 @@ def test_the_server_screen_lists_servers_with_the_tools_approved_for_this_user(s
     add_approval(sworld, "org", "acme", tools=("ping",))
     page = logged_in(sworld).get("/staff")
     assert page.status_code == 200
-    assert "사용 가능한 서버·도구" in page.text and "srv-ok" in page.text
+    assert "내 서버" in page.text and "srv-ok" in page.text
     assert "echo, ping" in page.text and "secret_tool" not in page.text
     assert "srv-wait" not in page.text
     assert "HTTP" in page.text and "없음" in page.text
@@ -313,13 +313,13 @@ def test_a_key_scoped_approval_is_shown_only_to_that_key(sworld):
 def test_the_confirmation_screen_lists_only_own_pending_requests_in_korean(sworld):
     mine = add_confirmation(sworld, display='{"받는 사람": "a@example.com"}')
     theirs = add_confirmation(sworld, OTHER, requested_key=OTHER_KEY, tool="their_tool")
-    page = logged_in(sworld).get("/staff/confirmations")
+    page = logged_in(sworld).get("/staff/requests")
     assert page.status_code == 200
     assert mine in page.text and theirs not in page.text and "their_tool" not in page.text
     assert "확인 대기" in page.text and "결제" in page.text
     assert "받는 사람" in page.text and "a@example.com" in page.text
     for english in ("pending", "confirmed", "rejected"):
-        assert english not in page.text
+        assert english not in page.text.replace("tab=pending", "")
 
 
 def test_a_different_key_confirms_the_request(sworld):
@@ -334,15 +334,15 @@ def test_a_different_key_confirms_the_request(sworld):
     events = sworld.query("SELECT kind, actor, payload->>'kind' FROM mint.events"
                           " WHERE kind = 'call_approval_approved'")
     assert events == [("call_approval_approved", STAFFER, "confirmation")]
-    after = client.get("/staff/confirmations")
+    after = client.get("/staff/requests")
     assert "확인됨" in after.text and "a@example.com" in after.text
 
 
 def test_the_same_key_as_the_call_cannot_confirm_but_can_reject(sworld):
     cid = add_confirmation(sworld, requested_key=CONSOLE)
     client = logged_in(sworld, CONSOLE)
-    page = client.get("/staff/confirmations")
-    assert "다른 키로 로그인해야 확인할 수 있습니다" in page.text and "disabled" in page.text
+    page = client.get("/staff/requests")
+    assert "다른 키로 로그인해야 합니다" in page.text and "disabled" in page.text
     refused = decide(client, cid, "confirm")
     assert refused.status_code == 403 and "다른 키로 로그인하십시오" in refused.text
     assert status_of(sworld, cid) == "pending"
@@ -359,7 +359,7 @@ def test_reject_and_cancel_clear_the_display_and_leave_no_value_in_events(sworld
     assert decide(client, second, "cancel").status_code == 303
     assert sworld.query("SELECT display FROM mint.self_confirmations"
                         " WHERE id IN (%s, %s)", first, second) == [(None,), (None,)]
-    page = client.get("/staff/confirmations")
+    page = client.get("/staff/requests")
     assert "SECRET" not in page.text and "취소됨" in page.text and "거절됨" in page.text
     everything = sworld.query("SELECT string_agg(e::text, ' ') FROM mint.events e")[0][0]
     assert "SECRET" not in everything
@@ -376,7 +376,7 @@ def test_a_decided_confirmation_cannot_be_decided_again(sworld):
 def test_an_expired_confirmation_shows_as_expired_and_cannot_be_confirmed(sworld):
     cid = add_confirmation(sworld, minutes=-1)
     client = logged_in(sworld, CONSOLE)
-    page = client.get("/staff/confirmations")
+    page = client.get("/staff/requests")
     assert "만료" in page.text and "확인할 요청이 없습니다" in page.text
     response = decide(client, cid, "confirm")
     assert response.status_code == 409 and status_of(sworld, cid) == "pending"
@@ -416,13 +416,13 @@ def test_a_revoked_session_cannot_decide(sworld):
 
 def test_a_long_display_value_is_clipped_to_256_characters_on_screen(sworld):
     add_confirmation(sworld, display='{"본문": "' + "x" * 300 + '"}')
-    page = logged_in(sworld).get("/staff/confirmations")
+    page = logged_in(sworld).get("/staff/requests")
     assert "x" * 256 + "…" in page.text and "x" * 257 not in page.text
 
 
 def test_display_values_are_escaped(sworld):
     add_confirmation(sworld, display='{"<b>키</b>": "<script>alert(1)</script>"}')
-    page = logged_in(sworld).get("/staff/confirmations")
+    page = logged_in(sworld).get("/staff/requests")
     assert "<script>alert" not in page.text and "&lt;script&gt;" in page.text
 
 
@@ -450,13 +450,16 @@ def test_a_staff_member_grants_a_purpose_consent_for_themselves(sworld):
     assert row[5] is None and row[6] == STAFFER
     kinds = sworld.query("SELECT kind, actor FROM mint.events WHERE kind = 'consent_granted'")
     assert kinds == [("consent_granted", STAFFER)]
-    page = client.get("/staff/consents")
-    assert "고객 응대" in page.text and "이메일 주소" in page.text and "유효" in page.text
-    assert "동의 부여" in page.text
+    page = client.get("/staff")
+    assert "동의함" in page.text
+    drawer = client.get("/staff?open=acme%7Csrv-ok")
+    assert "고객 응대" in drawer.text and "이메일 주소" in drawer.text and "유효" in drawer.text
+    assert "동의 부여" in client.get("/staff?tab=records").text
 
 
 def test_the_consent_screen_shows_the_consent_text_and_the_maximum_period(sworld):
-    page = logged_in(sworld).get("/staff/consents")
+    add_approval(sworld, "user", STAFFER, tools=("echo",))
+    page = logged_in(sworld).get("/staff?open=acme%7Csrv-ok")
     assert "철회할 수 있습니다" in page.text
     assert 'max="90"' in page.text and 'name="text_version" value="v1"' in page.text
 
@@ -496,8 +499,8 @@ def test_consent_can_be_withdrawn_and_cannot_be_withdrawn_twice(sworld):
     response = client.post(f"/staff/consents/{cid}/revoke", data={"csrf": csrf(client)})
     assert response.status_code == 303 and "ok=consent_withdrawn" in response.headers["location"]
     assert consents_of(sworld)[0][5] is not None
-    page = client.get("/staff/consents")
-    assert "철회됨" in page.text and "동의 철회" in page.text
+    assert "철회됨" in client.get("/staff?open=acme%7Csrv-ok").text
+    assert "동의 철회" in client.get("/staff?tab=records").text
     again = client.post(f"/staff/consents/{cid}/revoke", data={"csrf": csrf(client)})
     assert again.status_code == 403
 
@@ -507,7 +510,7 @@ def test_another_users_consent_is_not_listed_or_withdrawable(sworld):
     grant(other, purpose="타인 동의")
     cid = str(consents_of(sworld, OTHER)[0][0])
     mine = logged_in(sworld, CONSOLE)
-    assert "타인 동의" not in mine.get("/staff/consents").text
+    assert "타인 동의" not in mine.get("/staff?open=acme%7Csrv-ok").text
     response = mine.post(f"/staff/consents/{cid}/revoke", data={"csrf": csrf(mine)})
     assert response.status_code == 403
     assert consents_of(sworld, OTHER)[0][5] is None
@@ -532,7 +535,7 @@ def test_the_record_section_lists_only_own_events_with_korean_names(sworld):
     other_client = logged_in(sworld, OTHER_KEY)
     decide(other_client, other, "reject")
     grant(other_client, purpose="타인 동의")
-    page = mine.get("/staff/consents")
+    page = mine.get("/staff?tab=records")
     assert "본인 확인 확정" in page.text and "동의 부여" in page.text
     assert "직원 화면 로그인" in page.text
     assert "본인 확인 거절" not in page.text
@@ -570,7 +573,7 @@ def test_a_denied_tool_or_server_is_not_listed_as_usable(sworld):
 def test_a_server_without_any_approval_for_the_user_is_not_listed(sworld):
     page = logged_in(sworld).get("/staff")
     assert "쓸 수 있는 서버가 없습니다" in page.text
-    assert "srv-ok" in logged_in(sworld).get("/staff/consents").text
+    assert "srv-ok" not in logged_in(sworld).get("/staff").text
 
 
 def test_revoking_a_users_operator_sessions_leaves_their_staff_session_alone(sworld):
@@ -600,7 +603,7 @@ def test_a_staff_session_starts_with_its_team_list_in_one_statement(sworld):
 def test_staff_pages_are_not_kept_in_the_browser_history_cache(sworld):
     add_confirmation(sworld, display='{"받는 사람": "a@example.com"}')
     client = logged_in(sworld)
-    for path in ("/staff", "/staff/confirmations", "/staff/consents"):
+    for path in ("/staff", "/staff/requests", "/staff?tab=records"):
         response = client.get(path)
         assert 'hx-history="false"' in response.text, path
         assert response.headers["cache-control"] == "no-store", path
@@ -619,7 +622,7 @@ def test_the_record_section_never_shows_operator_actions_with_the_same_name(swor
     event("consent_granted", f"consent:{uuid.uuid4()}:1:consent_granted")
     event("console_session_started", f"console_session:{'44' * 32}:1:console_session_started",
           '{"subject": "admin"}')
-    records = logged_in(sworld).get("/staff/consents").text.rsplit("<h2>내 기록", 1)[1]
+    records = logged_in(sworld).get("/staff?tab=records").text.split('aria-label="탭"', 1)[1]
     for label in ("승인", "서버 중지", "동의 부여", "콘솔 로그인"):
         assert label not in records, label
     assert "직원 화면 로그인" in records
@@ -710,7 +713,7 @@ def test_the_page_shows_the_managed_and_the_unmanaged_state_in_korean(kits):
     client = logged_in(kits)
     download(client)
     page = client.get("/staff/endpoint").text
-    assert "보고 전" in page and "다시 내려받기" in page
+    assert "보고 전" in page and "설치 묶음 다시 받기" in page
     assert "team-a" in client.get("/staff/endpoint").text
     kits.query("UPDATE mint.endpoint_installs SET install_mode = 'user', kit_version = 'k',"
                " claude_version = '2.1.0', mcp_servers = '[\"local-1\"]', reported_at = now()")
@@ -811,17 +814,24 @@ def add_call_approval(world, user, tool, status="pending", approved_by=None, win
 def test_the_my_requests_screen_shows_only_own_requests_in_korean_with_the_outcome(sworld):
     add_call_approval(sworld, STAFFER, "waiting_tool")
     add_call_approval(sworld, STAFFER, "window_tool", "approved", "kim", window=30)
-    add_call_approval(sworld, STAFFER, "auto_tool", "approved", f"rule:{uuid.uuid4()}", window=10)
-    add_call_approval(sworld, STAFFER, "denied_tool", "rejected", "kim", reason="범위 밖")
+    auto = add_call_approval(sworld, STAFFER, "auto_tool", "approved", f"rule:{uuid.uuid4()}",
+                             window=10)
+    denied = add_call_approval(sworld, STAFFER, "denied_tool", "rejected", "kim", reason="범위 밖")
     add_call_approval(sworld, OTHER, "their_tool")
-    page = logged_in(sworld).get("/staff/requests")
+    client = logged_in(sworld)
+    page = client.get("/staff/requests?tab=mine")
     assert page.status_code == 200
     assert "their_tool" not in page.text
-    for text in ("waiting_tool", "대기", "승인", "남은", "50회 남음", "자동 규칙",
-                 "거부", "범위 밖", "kim", "a@example.com"):
+    for text in ("waiting_tool", "대기", "승인", "남은", "50회 남음", "거부"):
         assert text in page.text
-    for english in ("pending", "approved", "rejected", "rule:"):
-        assert english not in page.text
+    assert "범위 밖" not in page.text  # 처리자·사유는 행을 열었을 때만
+    assert "자동 규칙" in client.get(f"/staff/requests?tab=mine&open={auto}").text
+    drawer = client.get(f"/staff/requests?tab=mine&open={denied}").text
+    for text in ("거부 사유", "범위 밖", "kim", "a@example.com"):
+        assert text in drawer
+    for html in (page.text, drawer):
+        for english in ("pending", "approved", "rejected", "rule:"):
+            assert english not in html.replace("tab=pending", "")
 
 
 def test_the_my_requests_api_is_scoped_to_the_signed_in_user(sworld):
@@ -841,3 +851,34 @@ def test_a_pending_self_confirmation_can_be_confirmed_from_the_my_requests_scree
     cid = add_confirmation(sworld, display='{"받는 사람": "a@example.com"}')
     page = logged_in(sworld, CONSOLE).get("/staff/requests")
     assert f"/staff/confirmations/{cid}/confirm" in page.text
+
+
+# --- 합쳐진 화면과 옛 경로 ----------------------------------------------------------------------
+
+
+def test_the_old_staff_paths_redirect_to_the_merged_screens(sworld):
+    client = logged_in(sworld)
+    moved = client.get("/staff/confirmations")
+    assert moved.status_code == 303 and moved.headers["location"] == "/staff/requests?tab=pending"
+    moved = client.get("/staff/consents")
+    assert moved.status_code == 303 and moved.headers["location"] == "/staff"
+
+
+def test_the_menu_has_three_staff_screens_and_a_badge_for_requests_to_confirm(sworld):
+    add_confirmation(sworld)
+    page = logged_in(sworld).get("/staff/requests").text
+    assert page.count('class="active"') >= 1 and 'href="/staff/requests"' in page
+    assert "내 서버" in page and "내 단말" in page and "내 요청" in page
+    assert '내 요청 <span class="badge error">1</span>' in page
+    assert 'aria-current="page"' in page and "확인할 요청" in page and "내 승인 요청" in page
+
+
+def test_the_my_servers_screen_shows_consent_state_and_opens_the_consent_form(sworld):
+    add_approval(sworld, "user", STAFFER, tools=("t1",))
+    client = logged_in(sworld)
+    page = client.get("/staff").text
+    assert "동의 필요" in page and "내 기록" in page and "/staff/consents" not in page
+    drawer = client.get("/staff?open=acme%7Csrv-ok").text
+    assert 'action="/staff/consents"' in drawer and 'name="target" value="acme|srv-ok"' in drawer
+    assert grant(client).status_code == 303
+    assert "동의함" in client.get("/staff").text

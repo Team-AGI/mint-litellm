@@ -2,7 +2,14 @@
 {% block title %}운영자·조직 · MINT{% endblock %}
 {% block body %}
 <h1>운영자·조직</h1>
-<h2>운영자</h2>
+<div class="cards">
+  {% if actor.role != 'viewer' %}{{ m.kpi('운영자', operators | length, note='관리자 ' ~ (operators | selectattr('role', 'equalto', 'admin') | list | length) ~ ' · 승인자 ' ~ (operators | selectattr('role', 'equalto', 'approver') | list | length) ~ ' · 조회자 ' ~ (operators | selectattr('role', 'equalto', 'viewer') | list | length), href='/admin?tab=operators') }}{% endif %}
+  {{ m.kpi('조직', orgs | length, href='/admin?tab=orgs') }}
+  {{ m.kpi('조직 연결', bindings | length, href='/admin?tab=orgs') }}
+  {% if actor.role != 'viewer' %}{{ m.kpi('만료 임박(7일)', expiring, href='/admin?tab=operators', level='wait' if expiring) }}{% endif %}
+</div>
+{{ m.tabs([('operators', '운영자', operators | length), ('orgs', '조직', orgs | length), ('suggestions', '연결 제안', suggestions | length)], tab, '/admin') }}
+{% if tab == 'operators' %}
 {% if operators %}
 <table><thead><tr><th>이름</th><th>역할</th><th>사용자</th><th>만료</th><th></th></tr></thead><tbody>
 {% for o in operators %}<tr><td>{{ o.name }}</td><td>{{ L.pick(L.ROLE, o.role) }}</td><td>{{ o.user_id | blank }}</td><td class="nowrap">{{ o.expires_at | when }}</td>
@@ -12,45 +19,33 @@
   <label>역할<select name="role">{% for k in ['admin', 'approver', 'viewer'] %}<option value="{{ k }}"{% if o.role == k %} selected{% endif %}>{{ L.pick(L.ROLE, k) }}</option>{% endfor %}</select></label>
   <button type="submit">역할 변경</button>
 </form>
-<form method="post" action="/operators/{{ o.name | urlencode }}/remove" class="filters">
+<form method="post" action="/operators/{{ o.name | urlencode }}/remove" class="filters" title="토큰이 끝나고 이 사용자의 콘솔 세션이 폐기됩니다">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ o.state_version }}">
   <label>삭제하려면 이름 입력<input name="confirm_name" data-confirm="{{ o.name }}" autocomplete="off"></label>
   <button type="submit" class="danger" data-needs-confirm>운영자 삭제</button>
 </form>
-<small>토큰이 끝나고 이 사용자의 콘솔 세션이 폐기됩니다.</small>{% endif %}</td></tr>{% endfor %}
+{% endif %}</td></tr>{% endfor %}
 </tbody></table>
-{% elif actor.role == 'viewer' %}<p class="muted">조회자는 운영자 목록을 볼 수 없습니다.</p>
-{% else %}<p class="muted">등록된 운영자가 없습니다.</p>{% endif %}
-<h2>조직</h2>
+{% elif actor.role == 'viewer' %}<div class="empty"><h3>조회자는 운영자 목록을 볼 수 없습니다</h3></div>
+{% else %}<div class="empty"><h3>등록된 운영자가 없습니다</h3></div>{% endif %}
+{% elif tab == 'orgs' %}
 {% if orgs %}
 <table><thead><tr><th>식별자</th><th>이름</th><th>상태</th><th class="num">연결</th><th class="num">이용 관계</th><th></th></tr></thead><tbody>
 {% for o in orgs %}<tr><td>{{ o.org_id }}</td><td>{{ o.name }}</td><td>{{ m.badge(L.ORG, o.status) }}</td><td class="num">{{ o.bindings }}</td><td class="num">{{ o.relations }}</td>
 <td>{% if actor.role == 'admin' and o.status == 'active' %}
-<form method="post" action="/orgs/{{ o.org_id }}/close" class="filters">
+<form method="post" action="/orgs/{{ o.org_id }}/close" class="filters" title="연결 {{ o.bindings }}개와 이용 관계 {{ o.relations }}개에 영향">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ o.state_version }}">
   <label>조직 닫기: 식별자 입력<input name="confirm_name" data-confirm="{{ o.org_id }}" autocomplete="off"></label>
   <button type="submit" class="danger" data-needs-confirm>조직 닫기</button>
 </form>
-<small>연결 {{ o.bindings }}개와 이용 관계 {{ o.relations }}개에 영향</small>{% endif %}</td></tr>{% endfor %}
+{% endif %}</td></tr>{% endfor %}
 </tbody></table>
-{% else %}<p class="muted">조직이 없습니다.</p>{% endif %}
+{% else %}<div class="empty"><h3>조직이 없습니다</h3></div>{% endif %}
 {% if bindings %}
-<h3>조직 연결</h3>
+<h2>조직 연결</h2>
 <table><thead><tr><th>조직</th><th>구분</th><th>대상</th><th>등록자</th></tr></thead><tbody>
 {% for b in bindings %}<tr><td>{{ b.org_id }}</td><td>{{ L.pick(L.SCOPE, b.subject_type) }}</td><td>{{ b.subject_id }}</td><td>{{ b.created_by | who }}</td></tr>{% endfor %}
 </tbody></table>
-{% endif %}
-{% if suggestions %}
-<h3>조직 연결 제안</h3>
-{% for rule in L.ORG_RULE %}{% set group = suggestions | selectattr('rule', 'equalto', rule) | list %}{% if group %}
-<h4>{{ L.ORG_RULE[rule] }} ({{ group | length }}건)</h4>
-<table><thead><tr><th>구분</th><th>대상</th><th>조직</th><th>일치 값</th><th class="num">최근 7일 호출</th><th></th></tr></thead><tbody>
-{% for s in group %}<tr><td>{{ L.pick(L.SCOPE, s.subject_type) }}</td><td>{{ s.subject_id }}</td><td>{{ s.org_id }}</td><td>{{ s.matched }}</td><td class="num">{{ s.calls }}</td>
-<td>{% if actor.role == 'admin' %}<form method="post" action="/org-suggestions/{{ s.id }}/apply" class="filters">{{ m.csrf(actor) }}<button type="submit" class="primary">적용</button></form>
-<form method="post" action="/org-suggestions/{{ s.id }}/ignore" class="filters">{{ m.csrf(actor) }}<button type="submit">무시</button></form>{% endif %}</td></tr>{% endfor %}
-</tbody></table>
-{% if actor.role == 'admin' %}<form method="post" action="/org-suggestions/rule" class="filters">{{ m.csrf(actor) }}<input type="hidden" name="rule" value="{{ rule }}"><button type="submit">{{ L.ORG_RULE[rule] }} 제안 {{ group | length }}건 모두 적용</button></form>{% endif %}
-{% endif %}{% endfor %}
 {% endif %}
 {% if actor.role == 'admin' %}
 <form method="post" action="/orgs" class="filters">
@@ -59,21 +54,16 @@
   <button type="submit" class="primary">조직 생성</button>
 </form>
 {% endif %}
-<h2>허용 목록</h2>
-{% if allowlists %}
-<table><thead><tr><th>종류</th><th>값</th><th>유효 기간</th><th>메모</th><th>상태</th><th></th></tr></thead><tbody>
-{% for a in allowlists %}<tr><td>{{ L.pick(L.ALLOWLIST_KIND, a.kind) }}</td><td>{{ a.value }}</td><td>{{ a.valid_from | when }} ~ {{ a.valid_until | when }}</td><td>{{ a.note | blank }}</td><td>{{ m.badge(L.ALLOWLIST, a.status) }}</td>
-<td>{% if a.status == 'active' and actor.role == 'admin' %}<form method="post" action="/allowlists/{{ a.id }}/lift">{{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ a.state_version }}"><button type="submit">해제</button></form>{% endif %}</td></tr>{% endfor %}
+{% else %}
+{% for rule in L.ORG_RULE %}{% set group = suggestions | selectattr('rule', 'equalto', rule) | list %}{% if group %}
+<h2>{{ L.ORG_RULE[rule] }} ({{ group | length }}건)</h2>
+<table><thead><tr><th>구분</th><th>대상</th><th>조직</th><th>일치 값</th><th class="num">최근 7일 호출</th><th></th></tr></thead><tbody>
+{% for s in group %}<tr><td>{{ L.pick(L.SCOPE, s.subject_type) }}</td><td>{{ s.subject_id }}</td><td>{{ s.org_id }}</td><td>{{ s.matched }}</td><td class="num">{{ s.calls }}</td>
+<td>{% if actor.role == 'admin' %}<form method="post" action="/org-suggestions/{{ s.id }}/apply" class="filters">{{ m.csrf(actor) }}<button type="submit" class="primary">적용</button></form>
+<form method="post" action="/org-suggestions/{{ s.id }}/ignore" class="filters">{{ m.csrf(actor) }}<button type="submit">무시</button></form>{% endif %}</td></tr>{% endfor %}
 </tbody></table>
-{% else %}<p class="muted">허용 목록이 비어 있습니다.</p>{% endif %}
-{% if actor.role == 'admin' %}
-<form method="post" action="/allowlists" class="filters">
-  {{ m.csrf(actor) }}
-  <label>종류<select name="kind">{% for k, v in L.ALLOWLIST_KIND.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></label>
-  <label>값<input name="value" required></label>
-  <label>유효 기간(일)<input type="number" name="valid_days" value="90" min="1" max="365"></label>
-  <label>메모<input name="note"></label>
-  <button type="submit" class="primary">추가</button>
-</form>
+{% if actor.role == 'admin' %}<form method="post" action="/org-suggestions/rule" class="filters">{{ m.csrf(actor) }}<input type="hidden" name="rule" value="{{ rule }}"><button type="submit">{{ L.ORG_RULE[rule] }} 제안 {{ group | length }}건 모두 적용</button></form>{% endif %}
+{% endif %}{% endfor %}
+{% if not suggestions %}<div class="empty"><h3>조직 연결 제안이 없습니다</h3></div>{% endif %}
 {% endif %}
 {% endblock %}
