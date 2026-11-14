@@ -82,6 +82,40 @@ def test_structured_content_gets_the_marker_and_secret_scans_with_paths():
     assert c["finding_paths"] == ["$.v"] and c["output_blocked"] is False
 
 
+def test_personal_data_in_structured_results_is_recorded_not_blocked():
+    pii = [("$.commit.author.email", "dev@corp-mail.co.kr"), ("$.cal[0].tel", "010-1234-5678")]
+    for mode in ("mask", "block", "observe"):
+        c = ctx(unmanaged=False, response_scan=mode)
+        assert screen_result(c, size=1, items=1, texts=["ok"], structured=pii) is False
+        assert c["finding_paths"] == ["$.commit.author.email", "$.cal[0].tel"]
+        assert not c.get("output_blocked") and not c.get("output_findings")
+    # 같은 결과에 알려진 형식의 비밀이 있으면 막는다
+    c = ctx(unmanaged=False, response_scan="mask")
+    both = [*pii, ("$.env.key", AWS_KEY)]
+    assert screen_result(c, size=1, items=1, texts=["ok"], structured=both) is True
+
+
+def test_high_entropy_strings_are_recorded_but_never_block_or_mask():
+    token = "q3Zt9XvB7mKd2LpR8sWc5NyH4aGf6JeU"
+    # GitHub node_id 같은 긴 식별자도 막지 않는다
+    node_ids = ["PR_kwDOAbCdEf4zXyZ1", "MDExOlB1bGxSZXF1ZXN0MTIzNDU2Nzg5MA==", "I_kwDOGx4yZs5Jk9aB"]
+    for mode in ("mask", "block"):
+        c = ctx(unmanaged=False, response_scan=mode)
+        found = [("$.t", token)]
+        assert screen_result(c, size=1, items=1, texts=[token], structured=found) is False
+        assert c["sensitive_findings"] == {"high_entropy_token": 2}
+        assert not c.get("output_masked")
+        assert not c.get("output_findings")
+        c = ctx(unmanaged=False, response_scan=mode)
+        found = [(f"$.n[{n}].node_id", t) for n, t in enumerate(node_ids)]
+        assert screen_result(c, size=1, items=1, texts=node_ids, structured=found) is False
+        assert not c.get("output_findings")
+    # 계약 관리가 아닌 서버는 경보용으로 unmanaged_findings에 남는다
+    c = ctx(unmanaged=True)
+    assert screen_result(c, size=1, items=1, texts=[token]) is False
+    assert c["unmanaged_findings"] == ["high_entropy_token"]
+
+
 def test_a_result_beyond_the_bound_blocks_in_enforce_and_is_recorded_in_observe():
     big = ["x" * 60, "y" * 60]
     c = ctx(unmanaged=False)

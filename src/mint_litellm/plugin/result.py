@@ -20,7 +20,9 @@ from mint_litellm.plugin.buffer import EvidenceRecorder
 from mint_litellm.plugin.config import PluginConfig
 from mint_litellm.plugin.policy.result_scan import DEFAULT_MAX_SCAN_CHARS, scan_instructions
 from mint_litellm.plugin.policy.sensitive_scan import (
+    HIGH_ENTROPY,
     SCAN_LIMIT,
+    SECRET_KINDS,
     locate_sensitive,
     scan_sensitive,
 )
@@ -45,6 +47,7 @@ POL_RESULT_SENSITIVE = "POL-E-05"
 POL_RESULT_SCAN_ERROR = "MINT-RESULT-SCAN-ERROR"
 # 결과가 검사 상한을 넘어 끝까지 보지 못했다. 집행 모드는 막고, 관측은 응답 사건에 남긴다.
 POL_RESULT_SCAN_LIMIT = "MINT-RESULT-SCAN-LIMIT"
+MAX_FINDING_PATHS = 20
 
 
 class RevocationSource(Protocol):
@@ -156,8 +159,10 @@ def screen_result(
     허용된 호출만 본다. 남긴 값은 같은 호출의 응답 관측 사건이 읽는다. 비밀·개인정보는
     탐지 종류와 건수만 남기고, 가리기(``output_masked``)는 호출한 쪽이 결과 본문에 적용한다.
     ``structured``(구조화된 결과의 ``(JSON 경로, 문자열)``)는 본문과 같은 검사를 받고, 걸리면 경로를
-    ``finding_paths``에 남긴다(가릴 수 없는 곳이므로 가리기 모드에서는 막는다). 본문과 구조화된
-    문자열이 합쳐 ``max_chars``를 넘으면 앞쪽만 보고 ``scan_truncated``를 남기며 집행 모드는 막는다.
+    ``finding_paths``에 남긴다. 구조화된 결과의 개인정보는 경로만 남기고 통과시키며, 알려진 형식의
+    비밀은 가릴 수 없으므로 가리기 모드에서도 막는다. 고엔트로피 문자열은 건수만 남기고
+    막지 않는다. 본문과 구조화된 문자열이 합쳐 ``max_chars``를 넘으면 앞쪽만 보고
+    ``scan_truncated``를 남기며 집행 모드는 막는다.
     계약 관리가 아닌 서버의 지시문 표지·상한 초과는 설정이 enforce일 때만 막고, 아니면 걸린 사실만
     ``unmanaged_findings``에 남긴다.
     """
@@ -188,18 +193,32 @@ def screen_result(
                 findings.remove(code)
                 watched.append(code)
     sensitive: dict[str, int] = {}
+    entropy = 0
+    structured_secret = False
     if mode:
         sensitive = scan_sensitive(body, max_chars, entropy=True)
-        found, paths = locate_sensitive(structured)
-        for kind, count in found.items():
-            sensitive[kind] = sensitive.get(kind, 0) + count
+        entropy = sensitive.pop(HIGH_ENTROPY, 0)
+        paths: list[str] = []
+        for path, kinds in locate_sensitive(structured):
+            paths.append(path)
+            entropy += kinds.pop(HIGH_ENTROPY, 0)
+            for kind, count in kinds.items():
+                # 구조화된 결과의 개인정보는 경로만 남기고 통과시킨다. 알려진 형식의 비밀만 센다.
+                if kind in SECRET_KINDS:
+                    sensitive[kind] = sensitive.get(kind, 0) + count
+                    structured_secret = True
         if paths:
-            ctx["finding_paths"] = paths
+            ctx["finding_paths"] = paths[:MAX_FINDING_PATHS]
         if truncated and not watching:
             sensitive[SCAN_LIMIT] = 1
     if sensitive:
         findings.append(POL_RESULT_SENSITIVE)
-        ctx["sensitive_findings"] = dict(sorted(sensitive.items()))
+    if sensitive or entropy:
+        # 비밀처럼 보이는 긴 문자열은 오탐이 있어 기록과 경보에만 쓰고 막거나 가리지 않는다.
+        recorded = {**sensitive, HIGH_ENTROPY: entropy} if entropy else sensitive
+        ctx["sensitive_findings"] = dict(sorted(recorded.items()))
+    if entropy and policy and policy.get("unmanaged"):
+        ctx["unmanaged_findings"] = sorted({*(ctx.get("unmanaged_findings") or ()), HIGH_ENTROPY})
     if watched:
         ctx["unmanaged_findings"] = sorted({*(ctx.get("unmanaged_findings") or ()), *watched})
     if not findings and not watched:
@@ -209,7 +228,7 @@ def screen_result(
     # 한도·지시문 표지·상한 초과는 늘 막고, 비밀·개인정보는 승인 조건대로 한다. 끝까지 볼 수
     # 없었거나(scan_limit) 구조화된 결과에서 걸려 가릴 수 없는 결과는 관측이 아니면 막는다.
     others = any(f != POL_RESULT_SENSITIVE for f in findings)
-    unmaskable = SCAN_LIMIT in sensitive or bool(ctx.get("finding_paths"))
+    unmaskable = SCAN_LIMIT in sensitive or structured_secret
     block = others or mode == "block" or (mode == "mask" and unmaskable)
     ctx["output_blocked"] = bool(findings) and enforce and block
     ctx["output_masked"] = bool(findings) and enforce and not block and mode == "mask"

@@ -160,7 +160,8 @@ RANDOM_TOKEN = "q3Zt9XvB7mKd2LpR8sWc5NyH4aGf6JeU"  # 무작위로 보이는 32�
 def test_a_random_looking_token_is_found_only_when_entropy_scan_is_on():
     assert scan_sensitive([f"key={RANDOM_TOKEN}"]) == {}
     assert scan_sensitive([f"key={RANDOM_TOKEN}"], entropy=True) == {"high_entropy_token": 1}
-    assert mask_text(f"key={RANDOM_TOKEN}!") == "key=[MASKED:high_entropy_token]!"
+    # 오탐 위험이 있어 가리지 않는다
+    assert mask_text(f"key={RANDOM_TOKEN}!") == f"key={RANDOM_TOKEN}!"
 
 
 @pytest.mark.parametrize(
@@ -188,7 +189,7 @@ def test_a_blob_longer_than_the_token_window_is_not_a_candidate():
     assert scan_sensitive([RANDOM_TOKEN * 10], entropy=True) == {}
 
 
-def test_locate_reports_paths_not_values_and_skips_hash_fields():
+def test_locate_reports_paths_and_kinds_not_values_and_skips_hash_fields():
     items = [
         ("$.config.token", RANDOM_TOKEN),
         ("$.files[0].sha", RANDOM_TOKEN),
@@ -196,11 +197,12 @@ def test_locate_reports_paths_not_values_and_skips_hash_fields():
         ("$.rows[2].mail", "someone@corp-mail.co.kr"),
         ("$.rows[3].note", "plain"),
     ]
-    counts, paths = locate_sensitive(items)
-    assert counts == {"email": 1, "high_entropy_token": 1}
-    assert paths == ["$.config.token", "$.rows[2].mail"]
-    assert RANDOM_TOKEN not in str(paths)
-    assert len(locate_sensitive([(f"$[{n}]", FAKE_AWS) for n in range(50)], max_paths=5)[1]) == 5
+    found = locate_sensitive(items)
+    assert [(p, dict(k)) for p, k in found] == [
+        ("$.config.token", {"high_entropy_token": 1}),
+        ("$.rows[2].mail", {"email": 1}),
+    ]
+    assert RANDOM_TOKEN not in str(found)
 
 
 def test_the_whole_result_is_scanned_up_to_the_bound_even_beyond_four_mib():

@@ -171,24 +171,19 @@ def scan_sensitive(
 _SAFE_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,39}")
 
 
-def locate_sensitive(
-    items: Iterable[tuple[str, str]], *, max_paths: int = 20
-) -> tuple[dict[str, int], list[str]]:
+def locate_sensitive(items: Iterable[tuple[str, str]]) -> list[tuple[str, Counter[str]]]:
     """구조화된 결과의 ``(JSON 경로, 문자열)``을 고엔트로피 검사까지 더해 본다.
 
-    탐지 종류별 건수와 걸린 JSON 경로(값은 돌려주지 않는다)를 돌려준다. 해시·식별자 필드의 값은
+    걸린 경로마다 탐지 종류별 건수를 돌려준다(값은 돌려주지 않는다). 해시·식별자 필드의 값은
     고엔트로피 검사에서 뺀다.
     """
-    counts: Counter[str] = Counter()
-    paths: list[str] = []
+    found: list[tuple[str, Counter[str]]] = []
     for path, text in items:
         entropy = not _HASH_FIELD.search(path)
-        kinds = [kind for _, _, kind in _spans(text, entropy)]
+        kinds = Counter(kind for _, _, kind in _spans(text, entropy))
         if kinds:
-            counts.update(kinds)
-            if len(paths) < max_paths and path not in paths:
-                paths.append(path)
-    return dict(sorted(counts.items())), paths
+            found.append((path, kinds))
+    return found
 
 
 def safe_key(key: str) -> bool:
@@ -197,9 +192,9 @@ def safe_key(key: str) -> bool:
 
 
 def mask_text(text: str) -> str:
-    """탐지된 값을 ``[MASKED:종류]``로 바꾼 본문."""
+    """탐지된 값을 ``[MASKED:종류]``로 바꾼 본문. 고엔트로피 문자열은 가리지 않는다."""
     out, pos = [], 0
-    for start, end, kind in _spans(text, True):
+    for start, end, kind in _spans(text):
         out += [text[pos:start], f"[MASKED:{kind}]"]
         pos = end
     out.append(text[pos:])
@@ -208,6 +203,8 @@ def mask_text(text: str) -> str:
 
 # 도구로 보내는 인자에서 막는 종류. 인증정보와 검증식이 맞는 식별번호만 본다. 이메일·전화번호는
 # 수신자 같은 정상 입력이 많아 제외한다. 끝까지 볼 수 없는 인자(scan_limit)는 막는다.
+# 알려진 형식의 비밀(키·토큰 패턴). 구조화된 결과에서 이것이 걸리면 가릴 수 없으므로 막는다.
+SECRET_KINDS = frozenset({"private_key", "cloud_access_key", "access_token", "jwt", "bearer_token"})
 INPUT_SECRET_KINDS = frozenset({
     "private_key", "cloud_access_key", "access_token", "jwt", "bearer_token",
     "resident_registration_number", "card_number", SCAN_LIMIT,
