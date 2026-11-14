@@ -130,6 +130,14 @@ COMMANDS: tuple[CliCommand, ...] = (
         events=(EventKind.OPERATOR_ROLE_CHANGED,),
     ),
     CliCommand(
+        path=("operator", "chat-bind"),
+        summary="운영자를 채팅 사용자(Slack 사용자 식별자)에 결속하거나(`--slack-user`) 결속을 "
+        "지운다(`--clear`). 결속된 사용자만 채팅 단추로 호출별 승인을 처리할 수 있고, 처리는 "
+        "그 운영자의 권한과 직무 분리 규칙을 그대로 따른다.",
+        roles=ADMIN_ONLY,
+        events=(EventKind.OPERATOR_CHAT_BOUND,),
+    ),
+    CliCommand(
         path=("server", "register"),
         summary="LiteLLM에 등록된 서버를 승인 대기 상태로 등록한다.",
         roles=ADMIN_ONLY,

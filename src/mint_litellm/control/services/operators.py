@@ -1,5 +1,7 @@
 """운영자 등록 서비스."""
 
+import re
+
 import psycopg
 
 from mint_litellm.control import operators as domain
@@ -149,3 +151,47 @@ def set_role(
              {"name": name, "from": target["role"], "to": role.value,
               "user_id": target["user_id"]})
     _end_sessions(ctx, target["user_id"], "operator_changed")
+
+
+_SLACK_USER = re.compile(r"[UW][A-Z0-9]{2,31}")
+
+
+@service("operator chat-bind")
+def chat_bind(ctx: Context, name: str, slack_user: str | None) -> None:
+    """운영자를 Slack 사용자에 결속한다. ``slack_user``가 없으면 결속을 지운다."""
+    target = _active(ctx, name)
+    if slack_user is None:
+        ctx.conn.execute(
+            "DELETE FROM mint.operator_chat_bindings"
+            " WHERE instance_id = %s AND operator_name = %s AND channel = 'slack'",
+            (ctx.instance_id, name),
+        )
+    else:
+        if not _SLACK_USER.fullmatch(slack_user):
+            raise ControlError("--slack-user는 Slack 사용자 식별자(U로 시작)여야 합니다.")
+        if target["role"] == "viewer" or not target["user_id"]:
+            raise ControlError("LiteLLM 사용자에 결속된 admin·approver만 결속할 수 있습니다.")
+        taken = fetchone(
+            ctx.conn,
+            "SELECT operator_name FROM mint.operator_chat_bindings WHERE instance_id = %s"
+            " AND channel = 'slack' AND external_id = %s AND operator_name <> %s",
+            (ctx.instance_id, slack_user, name),
+        )
+        if taken:
+            raise conflict(f"그 Slack 사용자는 {taken['operator_name']}에 이미 결속되어 있습니다.")
+        ctx.conn.execute(
+            "INSERT INTO mint.operator_chat_bindings (instance_id, operator_name, channel,"
+            " external_id, bound_by) VALUES (%s, %s, 'slack', %s, %s)"
+            " ON CONFLICT (instance_id, operator_name, channel) DO UPDATE"
+            " SET external_id = excluded.external_id, bound_by = excluded.bound_by,"
+            " bound_at = clock_timestamp()",
+            (ctx.instance_id, name, slack_user, ctx.operator.name),
+        )
+    version = fetchone(  # 결속이 바뀔 때마다 운영자 행의 버전을 올려 사건 키가 겹치지 않게 한다
+        ctx.conn,
+        "UPDATE mint.operators SET name = name WHERE instance_id = %s AND name = %s"
+        " RETURNING state_version",
+        (ctx.instance_id, name),
+    )["state_version"]
+    ctx.emit(EventKind.OPERATOR_CHAT_BOUND, name, version,
+             {"name": name, "channel": "slack", "external_id": slack_user})
