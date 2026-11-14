@@ -13,7 +13,8 @@
 통과하며, 그 경우 판정한 인자와 전송되는 인자가 갈린다(보장과-한계에 적은 지원 범위 밖의
 구성이다). ``should_run_guardrail``을 재정의해 도구 호출과 모델 요청 사전 이벤트에서는 키·팀
 메타데이터의 가드레일 제외 설정과 무관하게 항상 판정한다. 도구 목록은 도구마다 이 훅이 불리고,
-예외를 던진 도구는 목록에서 빠진다. 응답·실패 관측용 로거는 이 생성자가 등록한다.
+예외를 던진 도구는 목록에서 빠진다. 응답·실패 관측용 로거와, 도구 결과를 통제하는 출력 전용
+가드레일(``MintOutputGuardrail``, ``post_mcp_call``)은 이 생성자가 등록한다. 로거를
 ``litellm_settings.callbacks``에 따로 적으면 두 번 등록되므로 기동을 거부한다.
 """
 
@@ -34,6 +35,7 @@ from mint_litellm.plugin import guardrail_log
 from mint_litellm.plugin.approval_hold import hold_if_confirmation_pending, hold_if_pending
 from mint_litellm.plugin.code_exec import code_execution
 from mint_litellm.plugin.logger import MintLogger, internal_block
+from mint_litellm.plugin.output_guardrail import MintOutputGuardrail
 from mint_litellm.plugin.provider_mcp import external_mcp, is_realtime
 from mint_litellm.plugin.selfcheck import (
     PluginRuntime,
@@ -68,6 +70,7 @@ class MintGuardrail(CustomGuardrail):
             self._runtime = runtime if runtime is not None else get_runtime()
             self._runtime.guardrail = self
             self._register_logger()
+            self._register_output_guardrail()
             self._runtime.ensure_started()
             install_from_env(os.environ)
         except RuntimeError:
@@ -97,6 +100,22 @@ class MintGuardrail(CustomGuardrail):
             logger = MintLogger(runtime=self._runtime)
         logger.registered_by_guardrail = True
         compat.register_callback(logger)
+
+    def _register_output_guardrail(self) -> None:
+        """결과 통제를 맡는 출력 전용 가드레일을 ``post_mcp_call`` 하나로 등록한다.
+
+        결과 단계 가드레일이 없는 LiteLLM(등급 C)에는 등록하지 않는다. 가드레일을 다시 만드는
+        경우 이전 등록을 지우고 다시 올린다.
+        """
+        if not self._runtime.result_enforced:
+            return
+        for existing in compat.litellm_callbacks():
+            if isinstance(existing, MintOutputGuardrail):
+                compat.unregister_callback(existing)
+        output = MintOutputGuardrail(
+            runtime=self._runtime, guardrail_name=f"{self.guardrail_name or 'mint'}-output"
+        )
+        compat.register_callback(output)
 
     def get_supported_event_hooks(self):
         hooks = [GuardrailEventHooks.pre_call, GuardrailEventHooks.pre_mcp_call]

@@ -522,6 +522,18 @@ def content_texts(content: object) -> list[str]:
     return texts
 
 
+def resource_texts(content: object) -> list[str]:
+    """내장 리소스 블록의 텍스트. LiteLLM의 결과 단계 변환기는 이 텍스트를 넘기지 않는다."""
+    texts: list[str] = []
+    for block in content if isinstance(content, (list, tuple)) else ():
+        if isinstance(getattr(block, "text", None), str):
+            continue
+        text = getattr(getattr(block, "resource", None), "text", None)
+        if isinstance(text, str):
+            texts.append(text)
+    return texts
+
+
 def structured_root(result: object) -> object:
     """도구 결과의 ``structuredContent`` 원본(없으면 ``None``)."""
     root = getattr(result, "structured_content", None)

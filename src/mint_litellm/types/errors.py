@@ -29,6 +29,11 @@ DENIAL_GUIDANCE = (
     "관리자가 이 호출을 거부해 실행되지 않았습니다. 같은 작업을 되풀이하지 말고 사용자에게 "
     "거부 사유를 알리십시오."
 )
+# 결과를 막은 오류. 도구는 이미 실행됐으므로 같은 작업을 되풀이하면 부작용이 겹친다.
+OUTPUT_GUIDANCE = (
+    "도구는 이미 실행되었고 결과만 막혔습니다. 같은 작업을 다시 요청하지 말고 사용자에게 "
+    "결과가 정책에 막혔다고 알리십시오."
+)
 
 
 class DispatchState(StrEnum):
@@ -57,7 +62,7 @@ class MintError(BaseModel):
     # 만료됐다는 사실. 요청자(에이전트)가 같은 시도를 되풀이하지 않도록 돌려준다.
     denial_reason: str | None = None
     previous_expired: bool = False
-    # 호출자(에이전트)가 취할 다음 행동 안내. 승인 대기 오류에만 있다.
+    # 호출자(에이전트)가 취할 다음 행동 안내. 승인 대기·거부·결과 차단 오류에만 있다.
     guidance: str | None = None
     # 본인 확인 화면으로 가는 서명된 단기 링크. 본인 확인 요청을 열었을 때만 있다.
     confirm_link: str | None = None
@@ -190,4 +195,5 @@ def output_blocked_error(reference: str) -> MintError:
         dispatch_state=DispatchState.DISPATCHED_COMPLETED,
         retry_safe=False,
         reference=reference,
+        guidance=OUTPUT_GUIDANCE,
     )
