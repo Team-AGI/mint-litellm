@@ -750,6 +750,7 @@ def decide_intake(actor: Actor, intake_id: str, body: IntakeDecisionBody) -> dic
         scope_type=body.scope_type, scope_id=body.scope_id, team_id=body.team_id,
         second=second_approver(actor, body.second_approver_token),
         expected_version=body.state_version,
+        litellm=None if body.decision == "reject" else actor.litellm,
     )
 
 

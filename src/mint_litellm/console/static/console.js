@@ -46,9 +46,9 @@ var CHARTS = {
   donut: function (d) {
     return Object.assign(base(), {
       tooltip: { trigger: "item" },
-      legend: { bottom: 0, textStyle: { color: token("--muted") } },
+      legend: { orient: "vertical", right: 8, top: "middle", textStyle: { color: token("--muted") } },
       series: [{
-        type: "pie", radius: ["55%", "80%"], label: { show: false },
+        type: "pie", center: ["32%", "50%"], radius: ["55%", "85%"], label: { show: false },
         data: d.items.map(function (it, i) {
           return { name: it.name, value: it.value, href: it.href, itemStyle: { color: colorOf(it.decision, i) } };
         }),

@@ -1,6 +1,6 @@
 """``status``: 모드, 정책 판본, 경보, 관측 항목."""
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from mint_litellm.compat import capabilities
@@ -163,6 +163,23 @@ def enforcement_states(ctx: Context) -> list[dict[str, Any]]:
             }
         )
     return sorted(states, key=lambda s: s["worker_id"])
+
+
+# 한 번 기동한 워커는 거의 동시에 점검을 마친다. 가장 최근 전환에서 이 시간보다 더 앞선 워커는
+# 업그레이드·재시작 전의 것으로 본다.
+BOOT_WINDOW = timedelta(minutes=15)
+
+
+def split_live_workers(states: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """(가장 최근 기동의 워커, 이전 기동에서 남은 워커 수). 워커는 전환 때만 보고하므로 보고가
+    가장 최근 전환에서 ``BOOT_WINDOW`` 안인 것만 지금의 워커로 센다."""
+    if not states:
+        return [], 0
+    newest = max(datetime.fromisoformat(s["last_transition_at"]) for s in states)
+    live = [
+        s for s in states if newest - datetime.fromisoformat(s["last_transition_at"]) <= BOOT_WINDOW
+    ]
+    return live, len(states) - len(live)
 
 
 def _mismatch_alerts(ctx: Context) -> list[dict[str, Any]]:

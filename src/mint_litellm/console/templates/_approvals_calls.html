@@ -13,7 +13,7 @@
 <form method="post" id="bulk" class="actions">{{ m.csrf(actor) }}
   <select name="window_minutes" aria-label="선택 항목 사용 기간"><option value="0">1회</option><option value="10">10분</option><option value="30" selected>30분</option></select>
   <button type="submit" formaction="/call-approvals/bulk/approve"><span aria-hidden="true">✓</span> 선택 승인</button>
-  <input type="text" name="reason" maxlength="500" aria-label="선택 항목 거부 사유">
+  <input type="text" name="reason" maxlength="500" placeholder="거부 사유" aria-label="선택 항목 거부 사유">
   <button type="submit" formaction="/call-approvals/bulk/reject">선택 거부</button>
 </form>
 {% endif %}
@@ -21,7 +21,7 @@
 {% for c in rows %}<tr{% if selected and selected.id == c.id %} class="selected"{% endif %}>
 <td>{% if c.status == 'pending' and actor.role != 'viewer' %}<input type="checkbox" name="ids" form="bulk" value="{{ c.id }}:{{ c.state_version }}" aria-label="선택">{% endif %}</td>
 <td><a href="/approvals?tab=calls&amp;range={{ stats.range }}&amp;focus={{ c.id }}">{{ c.tool }}</a><br><span class="muted">{{ c.server_id }}</span></td>
-<td>{% if c.target or c.action %}{% if c.target %}{{ c.target | masked(64) }}{% endif %}{% if c.action %} · {{ c.action | masked(64) }}{% endif %}{% else %}—{% endif %}</td>
+<td>{% if c.target or c.action %}{% if c.target %}{{ c.target | masked(64) }}{% endif %}{% if c.action %} · {{ c.action | masked(64) }}{% endif %}{% elif c.display %}{% for k, v in c.display.items() %}{% if loop.index <= 3 %}<div><span class="muted">{{ k | masked(24) }}</span> {{ v | masked(48) }}</div>{% endif %}{% endfor %}{% else %}—{% endif %}</td>
 <td>{{ L.pick(L.PRINCIPAL, c.principal_type) }} {{ c.principal_id }}</td>
 <td class="nowrap">{{ c.requested_at | when if c.requested_at else '—' }}{% if c.status == 'pending' and c.age_seconds is not none %}<br>{{ c.age_seconds | span }} 경과{% endif %}</td>
 <td class="nowrap">{% if c.window_minutes %}{{ c.window_minutes }}분{% if c.status == 'approved' %} · 남은 {{ c.remaining_seconds | span }}{% endif %}{% else %}1회{% endif %}</td>

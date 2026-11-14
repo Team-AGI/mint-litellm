@@ -7,6 +7,8 @@ block(차단), off(비활성). 겹치면 차단 > 오류 > 대기 > 정상이다
 import re
 from typing import NamedTuple
 
+from mint_litellm.types.reason_codes import policy_detect_name
+
 
 class Status(NamedTuple):
     text: str
@@ -662,5 +664,10 @@ def outcome_reason(code: str | None) -> str:
         return "사유 없음"
     if code in OUTCOME_REASON:
         return OUTCOME_REASON[code]
+    named = policy_detect_name(code)
+    if named:
+        return named
+    if code.startswith("POLICY_DETECT_"):
+        return OUTCOME_REASON["POLICY_DETECT"]
     head = re.split(r"_(?=[a-z])", code, maxsplit=1)[0]
     return OUTCOME_REASON.get(head, "기타")

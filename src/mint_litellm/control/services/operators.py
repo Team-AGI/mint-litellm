@@ -65,7 +65,16 @@ def _active(ctx: Context, name: str) -> dict:
         (ctx.instance_id, name),
     )
     if row is None:
-        raise not_found(f"운영자 {name}이(가) 없습니다.")
+        gone = fetchone(
+            ctx.conn,
+            "SELECT 1 AS x FROM mint.operators WHERE instance_id = %s AND name = %s",
+            (ctx.instance_id, name),
+        )
+        raise not_found(
+            f"운영자 {name}은(는) 이미 삭제되었습니다."
+            if gone
+            else f"운영자 {name}이(가) 없습니다."
+        )
     return row
 
 

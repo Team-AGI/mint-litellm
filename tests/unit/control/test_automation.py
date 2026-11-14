@@ -102,3 +102,17 @@ def test_a_contract_change_after_the_grant_moves_it_to_the_changed_list(ctx, lit
     assert found["unchanged"] == []
     assert [(str(r["id"]), r["reason"]) for r in found["changed"]] == [
         (approval_id, "배포 계약 변경")]
+
+
+def test_an_approval_with_weeks_left_does_not_alert(ctx, litellm, conn):
+    relation = prepare(ctx, litellm)
+    approve(ctx, litellm, relation, valid_until=NOW + timedelta(days=78))
+    assert expiry.warn_expiring(conn, INSTANCE) == 0
+    assert fetchone(conn, "SELECT count(*) AS n FROM mint.alerts")["n"] == 0
+
+
+def test_a_minutes_long_call_request_never_opens_an_expiry_alert(ctx, litellm, conn):
+    prepare(ctx, litellm)
+    with_policy(conn)
+    open_auto_request(conn)
+    assert expiry.warn_expiring(conn, INSTANCE) == 0

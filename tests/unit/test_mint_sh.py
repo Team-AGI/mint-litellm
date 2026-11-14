@@ -403,3 +403,29 @@ def test_a_failed_migration_stops_before_the_policy_and_litellm_steps(tmp_path):
     assert result.returncode != 0 and "[5/10]" in result.stderr
     log = (tmp_path / "docker.log").read_text(encoding="utf-8")
     assert "up -d opa" not in log and "up -d litellm" not in log
+
+
+ADD_DOCKER = BOOTSTRAP_DOCKER.replace('*"operator bootstrap"*', '*"operator add"*')
+
+
+def test_cli_save_token_writes_the_file_on_the_host_not_inside_the_container(tmp_path):
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    env = f"POSTGRES_PASSWORD=x\nMINT_SECRETS_DIR={secrets}\n"
+    target = tmp_path / "viewer.token"
+    result, _, _ = run(
+        tmp_path, env, "cli", "operator", "add", "--name", "v1", "--role", "viewer",
+        "--save-token", str(target), docker_tail=ADD_DOCKER,
+    )
+    assert result.returncode == 0, result.stderr
+    assert target.read_text(encoding="utf-8") == "mint_op-1_x\n"
+    if os.name != "nt":
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert "mint_op-1_x" not in result.stdout + result.stderr
+    log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+    assert "--save-token" not in log and "--json operator add --name v1 --role viewer" in log
+    again, _, _ = run(
+        tmp_path, env, "cli", "operator", "add", "--name", "v2", "--role", "viewer",
+        "--save-token", str(target), docker_tail=ADD_DOCKER,
+    )
+    assert again.returncode != 0 and "덮어쓰지 않습니다" in again.stderr

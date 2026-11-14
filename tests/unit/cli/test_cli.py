@@ -363,10 +363,11 @@ def test_check_without_a_config_file_fails(mint):
     assert code == 1 and "[실패] LiteLLM 설정 파일" in out
 
 
-def test_database_errors_are_reported_without_a_traceback(mint):
+def test_malformed_ids_are_reported_as_missing_without_a_database_error(mint):
     boss = bootstrap(mint)
     code, _, err = mint.run("denial", "lift", "not-a-uuid", token=boss)
-    assert code == 1 and "데이터베이스 오류" in err
+    assert code == 1 and "없습니다" in err and "데이터베이스 오류" not in err
+    assert "Traceback" not in err
 
 
 def test_rerunning_init_keeps_a_cleared_default_org_and_other_changes(mint):

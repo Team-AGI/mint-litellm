@@ -41,7 +41,7 @@ from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import connect, fetchall, fetchone
 from mint_litellm.control.db.migrate import apply_migrations
 from mint_litellm.control.db.roles import LOGIN_PASSWORD_VARIABLES, LOGIN_ROLES, ensure_login_roles
-from mint_litellm.control.errors import AuthError, ControlError
+from mint_litellm.control.errors import AuthError, ControlError, not_found
 from mint_litellm.control.litellm_admin import LiteLLMAdmin
 from mint_litellm.control.litellm_control import STAGE2_ALLOWED_ROUTES
 from mint_litellm.control.services import alerts as alert_service
@@ -860,6 +860,7 @@ def _intake_decide(decision: str) -> Handler:
         result = intake_service.decide(
             run.context(), a.intake_id, decision, reason=a.reason, valid_until=a.valid_until,
             scope_type=a.scope, scope_id=a.scope_id, team_id=a.team, second=_second(run),
+            litellm=None if decision == "reject" else run.litellm,
         )
         run.data["id"] = str(result["id"])
         for key in ("approval_id", "relation_id"):
@@ -1388,18 +1389,29 @@ ID_ARGUMENTS = {
     "consent_id": "consents",
     "allowlist_id": "allowlists",
 }
-_SHORT_ID = re.compile(r"[0-9a-fA-F-]{6,35}")
+_SHORT_ID = re.compile(r"[0-9a-fA-F-]{4,35}")
+
+
+def _is_uuid(text: str) -> bool:
+    try:
+        UUID(text)
+    except ValueError:
+        return False
+    return True
 
 
 def expand_ids(run: Run) -> None:
     """식별자 인자가 전체 형식이 아니면 이 배치에서 앞이나 끝이 일치하는 한 건으로 바꾼다.
 
-    일치하는 것이 없으면 그대로 두어 서비스가 없다고 알리고, 둘 이상이면 더 길게 입력하라고 한다.
+    일치하는 것이 없거나 식별자 꼴이 아니면 없다고 알리고(데이터베이스 오류를 내지 않는다),
+    둘 이상이면 더 길게 입력하라고 한다.
     """
     for name, table in ID_ARGUMENTS.items():
         value = getattr(run.args, name, None)
-        if not isinstance(value, str) or not _SHORT_ID.fullmatch(value):
+        if not isinstance(value, str) or _is_uuid(value):
             continue
+        if not _SHORT_ID.fullmatch(value):
+            raise not_found(f"{value}에 해당하는 항목이 없습니다. 목록의 식별자를 쓰십시오.")
         found = fetchall(
             run.conn,
             f"SELECT id::text AS id FROM mint.{table} WHERE instance_id = %s"
@@ -1408,8 +1420,9 @@ def expand_ids(run: Run) -> None:
         )
         if len(found) > 1:
             raise ControlError(f"{value}과(와) 일치하는 식별자가 둘 이상입니다. 더 길게 쓰십시오.")
-        if found:
-            setattr(run.args, name, found[0]["id"])
+        if not found:
+            raise not_found(f"{value}에 해당하는 항목이 없습니다. 목록의 식별자를 쓰십시오.")
+        setattr(run.args, name, found[0]["id"])
 
 
 def _missing_token_message(conn: psycopg.Connection, instance_id: str) -> str:

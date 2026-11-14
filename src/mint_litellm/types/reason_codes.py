@@ -102,6 +102,27 @@ OBSERVATION_CANDIDATES: frozenset[Reason] = frozenset(
 
 NON_CONVERTIBLE_REASONS: frozenset[Reason] = frozenset(Reason) - OBSERVATION_CANDIDATES
 
+# 정책 탐지(POLICY_DETECT_<정책>)의 정책별 이름. 운영자 화면과 오류 안내가 같은 말을 쓴다.
+POLICY_DETECT_NAMES: dict[str, str] = {
+    "POL-E-05": "인자 속 비밀",
+    "POL-E-07": "허용 목적지 밖 URL",
+    "POL-E-08": "허용 인자 밖 항목",
+    "POL-E-09": "승인 폴더 밖 경로",
+    "POL-E-14": "사설·내부 주소",
+    "POL-E-15": "정의되지 않은 인자 항목",
+    "POL-R-18": "승인된 실행 계약 없음",
+    "POL-R-20": "실행 계약 불일치",
+    "R1": "승인 범위 밖 호출",
+    "R3": "업무 시간 밖 호출",
+}
+
+
+def policy_detect_name(code: str) -> str | None:
+    """``POLICY_DETECT_<정책>`` 사유 코드의 정책 이름. 이름이 없으면 None."""
+    prefix = f"{Reason.POLICY_DETECT.value}_"
+    return POLICY_DETECT_NAMES.get(code[len(prefix) :]) if code.startswith(prefix) else None
+
+
 _QUALIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 
 

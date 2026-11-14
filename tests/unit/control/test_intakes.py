@@ -2257,3 +2257,22 @@ def test_a_retired_server_keeps_an_alert_open_until_access_revocation_is_attache
     # 폐기 마무리 작업이 증빙을 기다리므로 붙이면 다시 등록된다
     assert fetchone(world.conn, "SELECT status FROM mint.jobs WHERE kind = 'server_finalize'"
                                 " AND target_ref = 'srv-a'")["status"] == "pending"
+
+
+def test_approving_an_intake_runs_the_same_scope_and_litellm_permission_check_as_approve(
+    world, monkeypatch
+):
+    seen = []
+
+    def check(ctx, litellm, relation, scope_type, scope_id):
+        seen.append((litellm, relation["server_id"], relation["org_id"], scope_type, scope_id))
+        raise ControlError("사용자 u1에 LiteLLM에서 서버 srv-a의 권한이 부여되어 있지 않아")
+
+    monkeypatch.setattr(svc, "check_scope_and_permission", check)
+    intake_id = passed(world)
+    with pytest.raises(ControlError, match="권한이 부여되어 있지 않아"):
+        world.decide(intake_id, "approve", valid_until=FUTURE, scope_type="user", scope_id="u1",
+                     litellm=lambda: "admin")
+    assert seen == [("admin", "srv-a", "acme", "user", "u1")]
+    assert world.intake(intake_id)["status"] == "passed"  # 거부되면 아무것도 남지 않는다
+    assert fetchone(world.conn, "SELECT count(*) AS n FROM mint.approvals")["n"] == 0
