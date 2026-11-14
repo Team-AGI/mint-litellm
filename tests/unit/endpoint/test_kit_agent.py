@@ -414,3 +414,13 @@ def test_a_blocked_call_with_an_open_request_starts_the_notifier_and_opt_out_is_
     os.makedirs(world.state)
     open(os.path.join(world.state, agent.NOTIFY_OFF), "w").close()
     assert not agent.notify_enabled(world.state, {})
+
+
+def test_hook_streams_are_read_and_written_as_utf8_whatever_the_locale_code_page():
+    import io
+
+    stream = io.TextIOWrapper(io.BytesIO(), encoding="cp949")
+    agent.utf8_streams(stream, object())  # 바꿀 수 없는 객체는 건너뛴다.
+    stream.write("정책 위반")
+    stream.flush()
+    assert stream.buffer.getvalue().decode("utf-8") == "정책 위반"

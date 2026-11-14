@@ -55,13 +55,13 @@ def test_grants_skip_system_folders_and_missing_paths():
     assert [g[0] for g in grants(present={r"C:\data\in"})] == [r"C:\data\in"]
 
 
-def test_a_virtual_environment_also_grants_its_base_interpreter_folder():
+def test_a_virtual_environment_grants_its_whole_folder_and_its_base_interpreter_folder():
     doc = dict(WIN, executable=r"C:\proj\.venv\Scripts\python.exe", argv=[], cwd=None)
     got = agent.win_grants(
         doc, r"C:\Users\alice", ENV, exists=lambda p: True, real=lambda p: p,
         read_text=lambda p: "home = C:\\Python312\nversion = 3.12\n",
     )  # fmt: skip
-    assert {g[0] for g in got} >= {r"C:\proj\.venv\Scripts", r"C:\Python312"}
+    assert {(g[0], g[1]) for g in got} >= {(r"C:\proj\.venv", "RX"), (r"C:\Python312", "RX")}
 
 
 def test_package_runner_caches_are_modify_grants_and_other_programs_get_none():

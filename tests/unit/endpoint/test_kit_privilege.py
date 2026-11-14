@@ -91,6 +91,37 @@ def test_a_windows_path_other_users_can_write_is_refused(group, right):
     assert found and "writable by other users" in found
 
 
+STOCK_ROOT_ACL = (
+    "C:\\ BUILTIN\\Administrators:(OI)(CI)(F)\n  NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n"
+    "  BUILTIN\\Users:(OI)(CI)(RX)\n  NT AUTHORITY\\Authenticated Users:(OI)(CI)(IO)(M)\n"
+    "  NT AUTHORITY\\Authenticated Users:(AD)\n"
+)
+
+
+def acl_by_folder(folders, owner="BUILTIN\\Administrators"):
+    def run(command):
+        return folders.get(command[1], "") if command[0] == "icacls" else owner
+
+    return run
+
+
+def test_a_stock_drive_root_does_not_make_a_program_files_interpreter_untrusted():
+    folders = {
+        "C:\\Program Files\\Python312\\python.exe": SAFE_ACL,
+        "C:\\Program Files\\Python312": SAFE_ACL,
+        "C:\\Program Files": SAFE_ACL,
+        "C:\\": STOCK_ROOT_ACL,
+    }
+    path = "C:/Program Files/Python312/python.exe"
+    assert kit_module.windows_untrusted_reason(path, acl_by_folder(folders)) is None
+
+
+def test_create_rights_on_the_target_folder_itself_still_refuse():
+    target = SAFE_ACL + "  BUILTIN\\Users:(AD)\n"
+    run = acl_by_folder({"C:\\x": target, "C:\\": SAFE_ACL})
+    assert "writable by other users" in kit_module.windows_untrusted_reason("C:/x", run)
+
+
 def test_a_windows_path_owned_by_a_user_or_unreadable_is_refused():
     owned = kit_module.windows_untrusted_reason("C:/x", acl(SAFE_ACL, owner="PC\\alice"))
     assert owned and "not owned by an administrator" in owned
