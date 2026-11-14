@@ -61,9 +61,10 @@ def test_the_result_filter_has_one_option_per_name():
     assert set(labels.RESULT_FILTER) <= set(labels.RESULT)
 
 
-def test_the_menu_says_contract_change_not_drift():
-    assert ("/contracts", "계약 변경") in MENU
-    for _, text in MENU + STAFF_MENU:
+def test_the_menu_is_grouped_and_never_says_drift():
+    items = [item for _, group in MENU + STAFF_MENU for item in group]
+    assert len(MENU) == 6 and len(items) == 13
+    for _, text, _ in items:
         assert "드리프트" not in text
 
 
@@ -184,13 +185,18 @@ def ratio(foreground: str, background: str) -> float:
 
 def test_every_text_color_has_at_least_4_5_contrast_on_every_surface():
     css = (CONSOLE / "static" / "console.css").read_text(encoding="utf-8")
-    tokens = dict(re.findall(r"--([\w-]+):\s*(#[0-9a-f]{6});", css))
-    surfaces = [tokens["bg"], tokens["bg-subtle"], "#eaeef2", "#ddf4ff", "#fff0f0", "#f0fff4"]
-    for name in ("text", "muted", "accent", "ok", "wait", "danger", "off"):
-        for surface in surfaces:
-            assert ratio(tokens[name], surface) >= 4.5, (name, surface)
-    for name in ("accent", "danger"):  # 단추 바탕 위의 흰 글자
-        assert ratio("#ffffff", tokens[name]) >= 4.5, name
+    dark_at = css.index("prefers-color-scheme: dark")
+    for block in (css[:dark_at], css[dark_at:css.index("* { box-sizing")]):
+        tokens = dict(re.findall(r"--([\w-]+):\s*(#[0-9a-f]{6});", block))
+        if "bg" not in tokens:
+            tokens = {**dict(re.findall(r"--([\w-]+):\s*(#[0-9a-f]{6});", css[:dark_at])), **tokens}
+        surfaces = [tokens[n] for n in ("bg", "bg-subtle", "hover", "accent-soft", "danger-soft",
+                                        "ok-soft")]
+        for name in ("text", "muted", "accent", "ok", "wait", "danger", "off"):
+            for surface in surfaces:
+                assert ratio(tokens[name], surface) >= 4.5, (name, surface)
+        for name in ("accent", "danger"):  # 단추 바탕 위의 글자
+            assert ratio(tokens["on-accent"], tokens[name]) >= 4.5, name
 
 
 def test_the_decided_badge_is_readable():
@@ -313,7 +319,89 @@ def test_nested_subject_values_are_flattened_to_korean_lines():
 
 
 def test_the_menu_has_the_alert_screen_with_a_badge_for_urgent_alerts():
-    assert ("/alerts", "경보") in MENU
-    assert ">3</span>" in render("alerts.html", rows=[], page=1, alert_badge=3,
+    assert ("/alerts", "경보", "alerts") in [i for _, group in MENU for i in group]
+    assert ">3</span>" in render("alerts.html", rows=[], page=1, badges={"alerts": 3},
                                  filters={"kinds": [], "servers": []},
                                  q={k: "" for k in ("status", "severity", "kind", "server_id")})
+
+
+# --- 재발 방지 정적 검사 ----------------------------------------------------------------------
+
+TEMPLATES = sorted((CONSOLE / "templates").glob("*.html"))
+BANNED = {
+    "파일 이름": re.compile(r"\.py\b"),
+    "파일 줄 번호": re.compile(r"\.(?:py|sql|rego|md):\d+"),
+    "개발 문구": re.compile("부분 구현|한계|" + "TO" + "DO|FIX" + "ME"),
+    "국가·위치 입력": re.compile(
+        r'name="[^"]*(?:국가|지역|거주|country|residen|location)[^"]*"', re.I
+    ),
+}
+SENTENCE = re.compile(r"<(p|small)\b[^>]*>(.*?)</\1>", re.S)
+# 40자를 넘는 설명 문장(빈 상태 제외)을 템플릿별로 이만큼까지만 허용한다. 화면을 정비하는 쪽에서
+# 줄여 나가며, 늘리지는 못한다.
+LONG_SENTENCE_ALLOWED = {
+    "call_approvals.html": 1,
+    "contract_detail.html": 1,
+    "endpoint_mcp.html": 1,
+    "intake_detail.html": 1,
+    "server_detail.html": 3,
+    "staff_confirmations.html": 1,
+    "staff_endpoint.html": 1,
+}
+
+
+def long_sentences(text: str) -> int:
+    count = 0
+    for match in SENTENCE.finditer(text):
+        plain = re.sub(r"\{[{%].*?[}%]\}|<[^>]+>", "", match.group(2)).strip()
+        count += len(plain) > 40
+    return count
+
+
+@pytest.mark.parametrize("label", BANNED)
+def test_no_template_shows_dev_text_file_locations_or_location_inputs(label):
+    hits = [p.name for p in TEMPLATES if BANNED[label].search(p.read_text(encoding="utf-8"))]
+    assert hits == [], f"{label}: {hits}"
+
+
+def test_explanatory_sentences_do_not_grow():
+    over = {}
+    for path in TEMPLATES:
+        found = long_sentences(path.read_text(encoding="utf-8"))
+        if found > LONG_SENTENCE_ALLOWED.get(path.name, 0):
+            over[path.name] = found
+    assert over == {}
+
+
+def test_css_colours_live_in_tokens_only():
+    css = (CONSOLE / "static" / "console.css").read_text(encoding="utf-8")
+    first_rule = css.index("* { box-sizing")
+    outside = css[first_rule:]
+    assert re.findall(r"#[0-9a-fA-F]{3,8}\b", outside) == []
+    for token in ("--row-h:", "--row-h-compact:", "--pad-card:", "--gap:", "--w-wide:"):
+        assert token in css
+    assert "prefers-color-scheme: dark" in css
+
+
+def test_chart_kinds_and_shell_macros_exist():
+    script = (CONSOLE / "static" / "console.js").read_text(encoding="utf-8")
+    for kind in ("stacked", "donut", "bars"):
+        assert re.search(rf"\b{kind}: function", script)
+    macros = (CONSOLE / "templates" / "macros.html").read_text(encoding="utf-8")
+    for name in ("kpi", "drawer", "tabs", "confirm_dialog", "filter_bar", "spark", "bullet",
+                 "chart", "nav"):
+        assert f"{{% macro {name}(" in macros
+
+
+def test_shell_macros_render():
+    from jinja2 import Environment, FileSystemLoader
+
+    env = Environment(loader=FileSystemLoader(CONSOLE / "templates"), autoescape=True)
+    env.filters["to_json"] = templates.env.filters["to_json"]
+    env.globals.update(RANGES=(("24h", "24시간"),), ICONS={}, nav_active=lambda p, h: p == h)
+    ui = env.get_template("macros.html").module
+    assert "polyline" in str(ui.spark([1, 3, 2]))
+    assert "bullet" in str(ui.bullet(3, 5))
+    assert 'data-chart="' in str(ui.chart("donut", {"items": []}))
+    assert "aria-current" in str(ui.tabs([("a", "가", 2)], "a", "/x"))
+    assert "value" in str(ui.kpi("라벨", "1", href="/x", trend=[1, 2]))

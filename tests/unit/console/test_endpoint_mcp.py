@@ -32,7 +32,7 @@ def listed(world):
     add_install(world, "human-2", "user", [shared | {"harness": "codex"}])
     add_install(world, "human-3", "managed", [item("gone")], revoked=True)
     add_install(world, "human-4", "removed", [item("removed")])
-    return world.session_client("admin").get("/endpoints/mcp").text
+    return world.session_client("admin").get("/endpoints?tab=local-mcp").text
 
 
 def test_the_list_shows_what_is_configured_and_how_many_endpoints_share_it(listed):
@@ -59,7 +59,7 @@ def test_the_endpoint_list_links_to_the_mcp_list(world):
 
 
 def test_an_empty_list_says_so(world):
-    html = world.session_client("viewer").get("/endpoints/mcp").text
+    html = world.session_client("viewer").get("/endpoints?tab=local-mcp").text
     assert "보고된 관리 대상 밖의 MCP 서버가 없습니다" in html
 
 

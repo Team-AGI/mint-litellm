@@ -1,4 +1,4 @@
-<!doctype html>
+{% import "macros.html" as ui %}<!doctype html>
 <html lang="ko">
 <head>
 <meta charset="utf-8">
@@ -19,10 +19,9 @@
   </span>
 </header>
 <nav class="sidebar" aria-label="메뉴"><div class="menu">
-{% for href, text in STAFF_MENU %}<a href="{{ href }}" class="{{ 'active' if (path == href or (href != '/staff' and path.startswith(href))) else '' }}">{{ text }}</a>
-{% endfor %}
+{{ ui.nav(STAFF_MENU, path, badges) }}
 </div></nav>
-<main><div class="page">
+<main><div class="page {% block page_class %}{% endblock %}">
 {% if notice %}<div class="banner ok" role="status">{{ notice }}</div>{% endif %}
 {% if error %}<div class="banner error" role="alert">{{ error }}</div>{% endif %}
 {% block body %}{% endblock %}
