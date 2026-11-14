@@ -567,3 +567,16 @@ def test_a_server_that_forwards_the_callers_token_is_warned_about(healthy, updat
     found = levels(run(config, healthy))["mcp_servers.<이름>.auth_type"]
     assert Level.WARN in found and Level.FAIL not in found
     assert Level.OK in levels(run(good_config(), healthy))["mcp_servers.<이름>.auth_type"]
+
+
+def test_db_registered_oauth_servers_without_upstream_resource_fail(healthy, stub):
+    server = {**fixture("server_get"), "auth_type": "oauth2", "credentials": {"scopes": ["a"]}}
+    stub.set("/v1/mcp/server", [server])
+    item = checks.KEY_RESOURCE_DB
+    assert Level.FAIL in levels(run(good_config(), healthy))[item]
+    with_resource = {**server, "credentials": {"upstream_resource": "auto"}}
+    stub.set("/v1/mcp/server", [with_resource])
+    assert Level.OK in levels(run(good_config(), healthy))[item]
+    delegated = {**server, "delegate_auth_to_upstream": True}
+    stub.set("/v1/mcp/server", [delegated])
+    assert Level.OK in levels(run(good_config(), healthy))[item]

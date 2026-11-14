@@ -1,0 +1,1 @@
+- 호출자 토큰을 그대로 전달하는 서버로 가는 호출에서 JWT의 `aud`를 서버 대상과 대조하고(`MINT_TOKEN_AUDIENCE`, 기본 관측·경보 `token_audience_mismatch`), DB 등록 OAuth 서버의 `upstream_resource`도 점검한다.

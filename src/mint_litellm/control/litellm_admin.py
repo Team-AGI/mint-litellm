@@ -23,14 +23,20 @@ class LiteLLMError(ControlError):
 
 
 def scrub(value: Any) -> Any:
-    """자격 열을 모든 깊이에서 제거한 사본. 비밀이 아닌 ``credentials.scopes``만 남긴다."""
+    """자격 열을 모든 깊이에서 제거한 사본. 비밀이 아닌 ``scopes``와 ``upstream_resource``만 남긴다."""
     if isinstance(value, dict):
         out = {}
         for k, v in value.items():
             if k == "credentials":
                 scopes = v.get("scopes") if isinstance(v, dict) else None
+                resource = v.get("upstream_resource") if isinstance(v, dict) else None
+                kept = {}
                 if isinstance(scopes, list):
-                    out[k] = {"scopes": [s for s in scopes if isinstance(s, str)]}
+                    kept["scopes"] = [s for s in scopes if isinstance(s, str)]
+                if isinstance(resource, str) and resource:
+                    kept["upstream_resource"] = resource  # 비밀이 아닌 자원 식별자
+                if kept:
+                    out[k] = kept
             elif k not in _CREDENTIALS:
                 out[k] = scrub(v)
         return out

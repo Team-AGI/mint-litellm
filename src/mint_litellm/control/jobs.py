@@ -54,6 +54,7 @@ KINDS: dict[str, JobKind] = {
     "bulk_extraction_scan": JobKind(),
     "content_finding_scan": JobKind(),
     "result_unenforced_scan": JobKind(),
+    "token_audience_scan": JobKind(),
     "package_vuln_scan": JobKind(),
     # 사건 분할을 미리 만들고 닫힌 달을 내보낸다 / 보관 기간이 지난 달을 지운다.
     "event_partition_maintain": JobKind(external_write=True),
@@ -242,6 +243,12 @@ def _result_unenforced_scan(job: JobContext) -> None:
     result_unenforced.run(job)
 
 
+def _token_audience_scan(job: JobContext) -> None:
+    from mint_litellm.control import token_audience
+
+    token_audience.run(job)
+
+
 def _approval_dormant_scan(job: JobContext) -> None:
     from mint_litellm.control import dormant
 
@@ -343,6 +350,7 @@ HANDLERS: dict[str, Callable[[JobContext], None]] = {
     "bulk_extraction_scan": _bulk_extraction_scan,
     "content_finding_scan": _content_finding_scan,
     "result_unenforced_scan": _result_unenforced_scan,
+    "token_audience_scan": _token_audience_scan,
     "package_vuln_scan": _package_vuln_scan,
     "event_partition_maintain": _event_partition_maintain,
     "event_retention": _event_retention,
@@ -366,6 +374,7 @@ SCHEDULES: dict[str, Callable[[Any], int]] = {
     "bulk_extraction_scan": lambda s: 60,
     "content_finding_scan": lambda s: 60,
     "result_unenforced_scan": lambda s: 60,
+    "token_audience_scan": lambda s: 60,
     "package_vuln_scan": lambda s: s.vuln_scan_seconds,
     "event_partition_maintain": lambda s: 3600,  # 1시간(고정)
     "event_retention": lambda s: 3600,  # 1시간(고정). 보관 일수가 없으면 아무것도 하지 않는다.
