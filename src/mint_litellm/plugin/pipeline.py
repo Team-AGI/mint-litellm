@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 from mint_litellm.compat.litellm_1_106 import HookData, ServerResolutionError
+from mint_litellm.control import links
 from mint_litellm.plugin.buffer import ConfirmationConsume, ConsumeRequest, EvidenceRecorder
 from mint_litellm.plugin.call_display import call_display
 from mint_litellm.plugin.config import PluginConfig
@@ -176,6 +177,8 @@ class Outcome:
     timing: StageClock = OFF
     # 호출별 승인 요청을 열었거나 다시 쓴 막힘이면 그 요청의 식별자. 승인 대기 보류가 쓴다.
     approval_request_id: str | None = None
+    # 본인 확인 요청을 열어 둔 막힘이면 (주체, 서버, 도구, 인자 지문). 본인 확인 보류가 쓴다.
+    confirmation_wait: tuple[str, str, str, str] | None = None
 
 
 def scope_matches(scope_type: str, scope_id: str, principal: Principal, server_id: str) -> bool:
@@ -1080,6 +1083,8 @@ def confirmation_display(
         for name in fields if name in arguments for value in (arguments[name],)
     }
 
+# 본인 확인 링크는 요청의 유효 시간(10분)과 같이 만료된다.
+CONFIRMATION_LINK_TTL = 600
 
 _MISSING = {
     "litellm_call_id": "not_provided",
@@ -1136,6 +1141,8 @@ class _Run:
     started_at: int = field(default_factory=time.perf_counter_ns)
     # 막힌 호출이 연(또는 다시 쓴) 호출별 승인 요청의 식별자
     call_approval_request: str | None = None
+    # 막힌 호출이 연 본인 확인 요청의 (식별자, 주체, 서버, 도구, 인자 지문)
+    confirmation_request: tuple[str, str, str, str, str] | None = None
     # 같은 호출의 직전 요청이 거부된 사유(거부 기억 안의 재시도), 승인이 쓰이지 않고 만료됐는지
     denial_reason: str | None = None
     previous_expired: bool = False
@@ -1524,11 +1531,13 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         assert snapshot.policy_version is not None
         try:
             async with asyncio.timeout(run.deadline.remaining()):
+                confirmation_id = new_uuid7()
+                args_fp = argument_fingerprint(hook.arguments, config.fingerprint_key)
                 await deps.snapshots.request_confirmation({
-                    "id": new_uuid7(), "iid": config.instance_id,
+                    "id": confirmation_id, "iid": config.instance_id,
                     "org_id": run.principal.org_id, "principal_id": run.principal.principal_id,
                     "server_id": resolved.server_id, "tool": tool,
-                    "args_fp": argument_fingerprint(hook.arguments, config.fingerprint_key),
+                    "args_fp": args_fp,
                     "fp_key_version": config.fingerprint_key_version,
                     "policy_version_id": snapshot.policy_version.id,
                     "purpose": obligation.purpose, "key_token": run.principal.key_id,
@@ -1536,6 +1545,9 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
                     "contract_id": contract.id if contract is not None else None,
                     "exec_contract_sha256": resolved.exec_contract_sha256,
                 })
+            run.confirmation_request = (
+                str(confirmation_id), run.principal.principal_id, resolved.server_id, tool, args_fp
+            )
         except Exception as exc:
             # 확인을 만들지 못해도 이미 stop이며, 표시 값은 다른 저장소로 보내지 않는다.
             log.debug("본인 확인 요청 실패: %s", type(exc).__name__)
@@ -1784,6 +1796,7 @@ async def _evaluate(run: _Run, deps: PipelineDeps) -> Outcome:
     allowed = conclusion.enforced_action is Action.ALLOW
     error: MintError | None = None
     approval_request_id: str | None = None
+    confirmation_wait: tuple[str, str, str, str] | None = None
     if not allowed:
         reason = blocking_reason(
             conclusion, mode=run.mode, observation=run.observation, policy_observable=observable
@@ -1802,6 +1815,14 @@ async def _evaluate(run: _Run, deps: PipelineDeps) -> Outcome:
             approval_request_id = run.call_approval_request
         elif reason == Reason.CALL_APPROVAL_DENIED:
             error = error.model_copy(update={"denial_reason": run.denial_reason})
+        elif run.confirmation_request is not None and reason in (
+            Reason.CONFIRMATION_REQUIRED, Reason.CONFIRMATION_STALE
+        ):
+            request_id, *wait = run.confirmation_request
+            confirmation_wait = (wait[0], wait[1], wait[2], wait[3])
+            link = _confirmation_link(deps.config, request_id)
+            if link is not None:
+                error = error.model_copy(update={"confirm_link": link})
     return Outcome(
         allowed=allowed,
         snapshot=snapshot_doc,
@@ -1810,7 +1831,16 @@ async def _evaluate(run: _Run, deps: PipelineDeps) -> Outcome:
         context=_context_document(run, snapshot_doc, allowed, consume),
         timing=run.timing,
         approval_request_id=approval_request_id,
+        confirmation_wait=confirmation_wait,
     )
+
+
+def _confirmation_link(config: PluginConfig, confirmation_id: str) -> str | None:
+    """직원 화면의 본인 확인 링크. 주소나 서명 키가 없으면 None. 링크는 화면만 연다."""
+    if config.console_url is None or config.link_key is None:
+        return None
+    token = links.make(config.link_key, "confirm", confirmation_id, ttl=CONFIRMATION_LINK_TTL)
+    return f"{config.console_url.rstrip('/')}/staff/link/{token}"
 
 
 def _list_dedup_key(run: _Run, conclusion: Conclusion, deps: PipelineDeps) -> tuple | None:

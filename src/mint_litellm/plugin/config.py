@@ -52,6 +52,9 @@ class PluginConfig:
     approval_hold_seconds: int = DEFAULT_APPROVAL_HOLD_SECONDS
     fingerprint_key: bytes | None = None
     fingerprint_key_version: int = 1
+    # 본인 확인 링크의 주소와 서명 키. 둘 중 하나라도 없으면 링크 없이 안내만 돌려준다.
+    console_url: str | None = None
+    link_key: bytes | None = None
     readiness_url: str | None = None
     selfcheck_grace_seconds: float = DEFAULT_SELFCHECK_GRACE_SECONDS
     log_level: str | None = None
@@ -123,6 +126,8 @@ class PluginConfig:
                 MAX_APPROVAL_HOLD_SECONDS,
             ),
             fingerprint_key_version=_integer(env, "MINT_FINGERPRINT_KEY_VERSION", 1, 1),
+            console_url=(env.get("MINT_CONSOLE_URL") or "").strip() or None,
+            link_key=_hmac_key(env, "MINT_WEBHOOK_HMAC_KEY"),
             readiness_url=env.get("MINT_READINESS_URL") or None,
             log_level=_log_level(env.get("MINT_LOG_LEVEL")),
             observe_seconds=_integer(env, "MINT_OBSERVE_SECONDS", 3600, 20),
