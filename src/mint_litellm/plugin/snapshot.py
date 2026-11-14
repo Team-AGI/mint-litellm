@@ -980,6 +980,18 @@ class PluginDatabase:
                 row = await cursor.fetchone()
                 if row is not None:
                     return str(row[0])
+                # 맞는 상시 승인 규칙이 있으면 대기 없이 규칙이 정한 기간 승인으로 연다.
+                cursor = await conn.execute("""
+                    SELECT mint.open_rule_approval(
+                        %(id)s::uuid, %(iid)s::mint.ident, %(org_id)s::mint.ident,
+                        %(principal_type)s, %(principal_id)s, %(server_id)s, %(tool)s,
+                        %(args_fp)s, %(fp_key_version)s, %(policy_version_id)s::mint.ident,
+                        %(requested_by)s, %(minutes)s, %(contract_id)s::uuid,
+                        %(exec_contract_sha256)s::text, %(target)s, %(action)s, %(display)s)
+                """, {**params, "display": Jsonb(params.get("display") or {})})
+                row = await cursor.fetchone()
+                if row is not None and row[0] is not None:
+                    return str(row[0])
                 cursor = await conn.execute("""
                     INSERT INTO mint.call_approvals
                         (id, instance_id, org_id, principal_type, principal_id, server_id, tool,

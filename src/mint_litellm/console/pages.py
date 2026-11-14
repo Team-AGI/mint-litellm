@@ -20,6 +20,7 @@ from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import alerts as alert_service
 from mint_litellm.control.services import allowlists as allowlist_service
 from mint_litellm.control.services import approvals as approval_service
+from mint_litellm.control.services import call_approval_rules as call_approval_rule_service
 from mint_litellm.control.services import call_approvals as call_approval_service
 from mint_litellm.control.services import contracts as contract_service
 from mint_litellm.control.services import denials as denial_service
@@ -462,13 +463,57 @@ def calls_page(request: Request, actor: Actor, error=None, status=200):
     rows = reads.call_approvals(
         actor.conn, actor.instance, page=page_number(request), only_id=focus
     )
+    rules = reads.call_approval_rules(actor.conn, actor.instance) if not focus else []
     return render(request, "call_approvals.html",
-                  {"rows": rows, "error": error, "focus": focus}, actor=actor, status=status)
+                  {"rows": rows, "rules": rules, "orgs": reads.orgs(actor.conn, actor.instance),
+                   "error": error, "focus": focus},
+                  actor=actor, status=status)
 
 
 @router.get("/call-approvals")
 def call_approvals(request: Request, actor: Actor = Depends(page_actor)):
     return calls_page(request, actor)
+
+
+@router.post("/call-approval-rules")
+def add_call_approval_rule(
+    request: Request,
+    org_id: str = Form(...),
+    action_class: str = Form(...),
+    window_minutes: int = Form(30),
+    principal_type: str = Form(""),
+    principal_id: str = Form(""),
+    server_id: str = Form(""),
+    tool_pattern: str = Form(""),
+    actor: Actor = Depends(page_actor),
+):
+    return act(
+        actor,
+        lambda: call_approval_rule_service.add(
+            actor.ctx, org_id=org_id, action_class=action_class, window_minutes=window_minutes,
+            principal_type=principal_type.strip() or None,
+            principal_id=principal_id.strip() or None,
+            server_id=server_id.strip() or None,
+            tool_pattern=tool_pattern.strip() or None,
+        ),
+        "rule_added", "/call-approvals", lambda **kw: calls_page(request, actor, **kw),
+    )
+
+
+@router.post("/call-approval-rules/{rule_id}/disable")
+def disable_call_approval_rule(
+    rule_id: str,
+    request: Request,
+    state_version: int = Form(...),
+    actor: Actor = Depends(page_actor),
+):
+    return act(
+        actor,
+        lambda: call_approval_rule_service.disable(
+            actor.ctx, rule_id, expected_version=state_version
+        ),
+        "rule_disabled", "/call-approvals", lambda **kw: calls_page(request, actor, **kw),
+    )
 
 
 @router.post("/call-approvals/{call_id}/{decision}")
