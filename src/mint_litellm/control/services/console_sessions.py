@@ -19,6 +19,8 @@ from mint_litellm.control.errors import forbidden
 from mint_litellm.control.stage2_config import Stage2Settings
 from mint_litellm.types.events import EventKind
 
+# 키 없이 SSO로 연 세션의 key_token 접두사(뒤는 발급자와 주체의 SHA-256)
+SSO_PREFIX = "sso:"
 _ROLE_RANK = {"viewer": 0, "approver": 1, "admin": 2}
 
 
@@ -29,6 +31,10 @@ class SessionInfo:
     operator_name: str
     role: str
     key_token: str
+
+
+def is_sso_session(key_token: str) -> bool:
+    return key_token.startswith(SSO_PREFIX)
 
 
 def hash_id(session_id: str) -> str:
@@ -58,8 +64,11 @@ def create(
     *,
     user_id: str,
     key_token: str,
+    via: dict | None = None,
 ) -> tuple[str, SessionInfo]:
-    """활성 운영자 행이 있는 사용자의 세션을 만든다. 세션 식별자(평문)와 정보를 돌려준다."""
+    """활성 운영자 행이 있는 사용자의 세션을 만든다. 세션 식별자(평문)와 정보를 돌려준다.
+
+    ``via``는 로그인 수단의 기록(예: SSO 발급자와 주체)이며 시작 사건에 그대로 싣는다."""
     operator = active_operator(conn, instance_id, user_id)
     if operator is None:
         raise forbidden("운영자로 등록된 사용자가 아닙니다.")
@@ -78,7 +87,8 @@ def create(
         ledger.record(
             conn, instance_id, EventKind.CONSOLE_SESSION_STARTED, entity_id=id_hash,
             state_version=1, actor=operator["name"],
-            payload={"user_id": user_id, "role": operator["role"], "subject": "admin"},
+            payload={"user_id": user_id, "role": operator["role"], "subject": "admin",
+                     **(via or {})},
         )
     return session_id, SessionInfo(id_hash, user_id, operator["name"], operator["role"], key_token)
 
@@ -161,6 +171,15 @@ def teams_of(key_info: dict) -> tuple[str, ...]:
     """키 정보의 team_id(문자열일 때만). 화면 입력이나 사용자 정보는 쓰지 않는다."""
     team = key_info.get("team_id")
     return (team,) if isinstance(team, str) and team else ()
+
+
+def teams_of_user(user_info: dict) -> tuple[str, ...]:
+    """사용자 정보의 소속 팀(문자열 또는 ``team_id`` 항목). 토큰 클레임은 쓰지 않는다."""
+    teams = user_info.get("teams")
+    if not isinstance(teams, list):
+        return ()
+    ids = (t.get("team_id") if isinstance(t, dict) else t for t in teams)
+    return tuple(dict.fromkeys(t for t in ids if isinstance(t, str) and t))
 
 
 def set_teams(

@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from mint_litellm.console import api, chat, login, pages, staff_pages
+from mint_litellm.console import api, chat, login, oidc, pages, sso_pages, staff_pages
 from mint_litellm.console.core import (
     COOKIE,
     ConsoleConfig,
@@ -26,6 +26,7 @@ from mint_litellm.console.core import (
     too_many_attempts,
 )
 from mint_litellm.console.error_pages import error_reply, wants_page
+from mint_litellm.console.oidc import login_context
 from mint_litellm.console.templating import render
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import console_sessions
@@ -52,6 +53,7 @@ def create_app(
     app = FastAPI(title="MINT 관리자 콘솔", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.config = config
     app.state.attempts = {}
+    app.state.oidc = oidc.OidcClient(config.oidc) if config.oidc else None
 
     @app.middleware("http")
     async def common(request: Request, call_next):
@@ -143,6 +145,7 @@ def create_app(
     app.include_router(pages.router)
     app.include_router(chat.router)
     app.include_router(staff_pages.public)
+    app.include_router(sso_pages.router)
     app.include_router(staff_pages.router)
 
     @app.get("/healthz", include_in_schema=False)
@@ -151,17 +154,23 @@ def create_app(
 
     @app.get("/login", response_class=HTMLResponse)
     def login_form(request: Request) -> Response:
-        return render(request, "login.html", {"error": None})
+        return render(request, "login.html", login_context(request, None))
 
     @app.post("/login", dependencies=[Depends(require_origin)])
     def login_submit(
         request: Request, key: str = Form(""), conn: psycopg.Connection = Depends(db)
     ) -> Response:
         cfg = config_of(request)
+        if not cfg.key_login:
+            return render(
+                request, "login.html", login_context(request, "키 로그인은 사용하지 않습니다."),
+                status=403,
+            )
         if too_many_attempts(request):
             return render(
                 request, "login.html",
-                {"error": "로그인 시도가 너무 많습니다. 잠시 뒤 다시 시도하십시오."}, status=429,
+                login_context(request, "로그인 시도가 너무 많습니다. 잠시 뒤 다시 시도하십시오."),
+                status=429,
             )
         try:
             identity = login.verify(cfg.litellm_url, key)
@@ -171,11 +180,11 @@ def create_app(
                 key_token=identity.key_token,
             )
         except login.LoginRefused as refused:
-            return render(request, "login.html", {"error": str(refused)}, status=401)
+            return render(request, "login.html", login_context(request, str(refused)), status=401)
         except AdminError as error:
             if error.code != AdminCode.FORBIDDEN:
                 raise
-            return render(request, "login.html", {"error": error.message}, status=403)
+            return render(request, "login.html", login_context(request, error.message), status=403)
         response = RedirectResponse("/", status_code=303)
         response.set_cookie(
             COOKIE, session_id, httponly=True, secure=True, samesite="strict", path="/"
@@ -186,6 +195,7 @@ def create_app(
     def logout(request: Request, conn: psycopg.Connection = Depends(db)) -> Response:
         cfg = config_of(request)
         session_id = request.cookies.get(COOKIE)
+        info = None
         if session_id:
             info = console_sessions.lookup(conn, cfg.instance_id, cfg.stage2, session_id)
             if info is not None:
@@ -193,7 +203,10 @@ def create_app(
                     conn, cfg.instance_id, info.id_hash, actor=info.operator_name,
                     reason="logout",
                 )
-        response = RedirectResponse("/login", status_code=303)
+        target = "/login"
+        if info is not None and console_sessions.is_sso_session(info.key_token) and app.state.oidc:
+            target = app.state.oidc.logout_url(request, target) or target
+        response = RedirectResponse(target, status_code=303)
         response.delete_cookie(COOKIE, path="/", secure=True, httponly=True, samesite="strict")
         return response
 

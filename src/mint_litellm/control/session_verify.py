@@ -31,16 +31,17 @@ def _parse(value: object) -> datetime | None:
 def verdict(
     session: dict, key: dict | None, user: dict | None, operator: dict | None
 ) -> str | None:
-    """세션을 폐기해야 하면 사유 코드, 유지하면 None."""
-    if key is None or key.get("deleted_at"):
-        return "key_gone"
-    if key.get("blocked"):
-        return "key_blocked"
-    expires = _parse(key.get("expires"))
-    if expires is not None and expires <= datetime.now(UTC):
-        return "key_expired"
-    if key.get("user_id") != session["user_id"]:
-        return "key_owner_changed"
+    """세션을 폐기해야 하면 사유 코드, 유지하면 None. SSO 세션에는 키가 없어 키 검사를 건너뛴다."""
+    if not console_sessions.is_sso_session(session["key_token"]):
+        if key is None or key.get("deleted_at"):
+            return "key_gone"
+        if key.get("blocked"):
+            return "key_blocked"
+        expires = _parse(key.get("expires"))
+        if expires is not None and expires <= datetime.now(UTC):
+            return "key_expired"
+        if key.get("user_id") != session["user_id"]:
+            return "key_owner_changed"
     if user is None or user.get("user_role") not in HUMAN_ROLES:
         return "user_not_human"
     if session["subject"] == "admin" and (operator is None or operator["role"] != session["role"]):
@@ -62,7 +63,8 @@ def run(job: jobs.JobContext) -> None:
         try:
             if job.litellm is None:
                 raise unreachable
-            key = job.litellm.get_key(session["key_token"])
+            sso = console_sessions.is_sso_session(session["key_token"])
+            key = None if sso else job.litellm.get_key(session["key_token"])
             user = job.litellm.get_user(session["user_id"])
         except (LiteLLMError, ControlError) as error:
             unreachable = unreachable or error
@@ -75,7 +77,10 @@ def run(job: jobs.JobContext) -> None:
         reason = verdict(session, key, user, operator)
         if reason is None:
             if session["subject"] == "staff":
-                teams = console_sessions.teams_of(key or {})
+                teams = (
+                    console_sessions.teams_of_user(user or {}) if sso
+                    else console_sessions.teams_of(key or {})
+                )
                 console_sessions.set_teams(conn, instance, session["id_hash"], teams)
             console_sessions.mark_verified(conn, instance, session["id_hash"])
         else:

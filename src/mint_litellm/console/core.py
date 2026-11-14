@@ -13,6 +13,7 @@ import psycopg
 from fastapi import Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
+from mint_litellm.console.oidc import OidcConfig
 from mint_litellm.control import operators
 from mint_litellm.control.config import ControlConfig
 from mint_litellm.control.context import Context, Operator
@@ -102,6 +103,10 @@ class ConsoleConfig:
     # 호출 기록 상세에서 LiteLLM 지출 기록의 가드레일 기록을 읽는다. 제어 평면 키에
     # ``/spend/logs``를 열어 둔 배포만 켠다(MINT_SPEND_LOG_LOOKUP).
     spend_lookup: bool = False
+    # OIDC 로그인 설정(MINT_OIDC_*). 없으면 SSO 버튼을 보이지 않는다.
+    oidc: OidcConfig | None = None
+    # 본인 LiteLLM 키 입력 로그인. MINT_CONSOLE_KEY_LOGIN=off이면 끈다(OIDC가 있어야 한다).
+    key_login: bool = True
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "ConsoleConfig":
@@ -122,6 +127,11 @@ class ConsoleConfig:
             ca_pem = Path(ca_file).read_text(encoding="utf-8") if ca_file else None
         except OSError:
             raise ControlError("MINT_ENDPOINT_CA_FILE을 읽을 수 없습니다.") from None
+        oidc_config = OidcConfig.from_env(env)
+        key_login = (env.get("MINT_CONSOLE_KEY_LOGIN") or "on").strip().lower() not in (
+            "off", "0", "false", "no")
+        if not key_login and oidc_config is None:
+            raise ControlError("키 로그인을 끄려면 MINT_OIDC_ISSUER를 먼저 설정해야 합니다.")
         return cls(
             control, stage2, control.litellm_url, admin, control.require_database(), staff_url,
             zone,
@@ -132,6 +142,8 @@ class ConsoleConfig:
             endpoint_routes=_truthy(env.get("MINT_ENDPOINT_ROUTES")),
             policy_source=_policy_source(env),
             spend_lookup=_truthy(env.get("MINT_SPEND_LOG_LOOKUP")),
+            oidc=oidc_config,
+            key_login=key_login,
         )
 
     @property

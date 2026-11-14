@@ -1,0 +1,1 @@
+- 관리자 콘솔과 직원 화면에 OIDC 단일 로그인(Keycloak·Authentik 호환)을 더했다: 인가 코드 + PKCE, 서명·발급자·대상·만료·nonce 검증, 로그인 사용자는 LiteLLM에서 확인하고 운영자 역할은 기존 표를 따르며, `MINT_CONSOLE_KEY_LOGIN=off`로 키 로그인을 끌 수 있다.
