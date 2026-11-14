@@ -42,3 +42,50 @@ def test_hsts_is_sent_and_server_links_are_url_encoded(world, admin):
         " %s, 'http', 'none', 'admin')", INSTANCE, "ab" * 32)
     html = admin.get("/servers").text
     assert 'href="/servers/a%20b%22c"' in html
+
+
+def test_a_server_without_an_approved_contract_shows_the_provisional_badge(world, admin):
+    html = admin.get("/servers").text
+    assert "임시 계약" in html and html.count("data-dialog-open") == 1
+    world.query("UPDATE mint.servers SET contract_status = 'managed' WHERE server_id = 'srv-ok'")
+    managed = admin.get("/servers").text
+    assert "일치" in managed
+    assert 'href="/servers/srv-ok?tab=contract"' in managed
+    assert "임시 계약" in admin.get("/servers?filter=provisional").text
+    assert "srv-ok" not in admin.get("/servers?filter=provisional").text
+
+
+def test_the_list_has_a_status_donut_whose_slices_filter_the_rows(world, admin):
+    html = admin.get("/servers").text
+    assert 'data-chart="' in html and "status=waiting" in html
+    only = admin.get("/servers?status=waiting").text
+    assert "srv-wait" in only and "srv-ok" not in only
+
+
+def test_stopping_from_the_list_needs_the_name_and_returns_to_the_list(world, admin):
+    version = world.query("SELECT state_version FROM mint.servers WHERE server_id = 'srv-ok'")[0][0]
+    html = admin.get("/servers").text
+    assert 'name="confirm_name" data-confirm="srv-ok"' in html
+    ok = form_post(world, admin, "/servers/srv-ok/suspend", state_version=version,
+                   confirm_name="srv-ok", next="/servers")
+    assert ok.status_code == 303 and ok.headers["location"] == "/servers?ok=suspended"
+
+
+def test_the_detail_is_split_into_tabs_and_a_viewer_gets_no_stop_button(world):
+    viewer = world.session_client("viewer")
+    for tab in ("overview", "contract", "tools", "packages", "vulns", "usage", "evidence"):
+        assert viewer.get(f"/servers/srv-ok?tab={tab}").status_code == 200
+    html = viewer.get("/servers/srv-ok").text
+    assert "계약 변경" in html and "data-dialog-open" not in html
+    assert "임시 계약" in html
+    assert "필수 증빙" not in html and "증빙 첨부" not in viewer.get(
+        "/servers/srv-ok?tab=evidence").text
+
+
+def test_an_unknown_tab_falls_back_to_the_overview_and_old_paths_still_redirect(world, admin):
+    assert admin.get("/servers/srv-ok?tab=zz").status_code == 200
+    moved = admin.get("/contracts/srv-ok?scope=server&name=echo", follow_redirects=False)
+    assert moved.status_code == 303
+    assert moved.headers["location"].startswith("/servers/srv-ok?tab=contract")
+    assert admin.get("/contracts", follow_redirects=False).headers["location"] == (
+        "/servers?filter=changed")
