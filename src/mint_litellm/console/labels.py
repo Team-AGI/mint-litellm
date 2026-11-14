@@ -36,6 +36,7 @@ SENSITIVE_KIND = {
     "phone_number": "전화번호", "email": "이메일 주소",
     "high_entropy_token": "비밀로 보이는 긴 문자열",
 }  # fmt: skip
+PACKAGE_ECOSYSTEM = {"npm": "npm", "pypi": "PyPI", "container": "컨테이너 이미지"}
 INSTALL = {
     "managed": Status("관리형", "ok"),
     "user": Status("관리되지 않음", "error"),

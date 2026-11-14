@@ -120,3 +120,26 @@ def test_every_alert_kind_has_a_label_and_a_summary():
         assert kind in labels.ALERT_KIND, kind
         assert kind in alert_view.SUMMARY, kind
     assert not set(labels.ALERT_KIND) - set(alert_view.SUMMARY)
+
+
+def test_endpoint_list_shows_processes_running_outside_the_runner():
+    row = {
+        "user_id": "u", "team_id": "t", "state": "managed", "claude_version": "1",
+        "mcp_servers": [], "issued_at": None, "reported_at": None, "processes": [],
+        "outside_processes": [
+            {"package": "left-pad", "ecosystem": "npm", "count": 2},
+            {"package": "mcp-x", "ecosystem": "pypi", "count": 1},
+            {"package": "img/app", "ecosystem": "container", "count": 3},
+        ],
+    }  # fmt: skip
+    text = shown(render("endpoints.html", rows=[row]))
+    for want in ("left-pad (npm) 2개", "mcp-x (PyPI) 1개", "img/app (컨테이너 이미지) 3개"):
+        assert want in text
+    assert "pypi" not in text and "container" not in text
+
+
+def test_outside_alerts_have_label_and_summary():
+    for kind in ("endpoint_outside_retired", "endpoint_outside_unapproved"):
+        assert re.search("[가-힣]", labels.ALERT_KIND[kind])
+        text = alert_view.summary(kind, {"key_alias": "k", "package": "left-pad"})
+        assert "left-pad" in text and "{" not in text

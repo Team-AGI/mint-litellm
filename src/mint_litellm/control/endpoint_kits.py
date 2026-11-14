@@ -146,7 +146,7 @@ def installs(
     rows = fetchall(
         conn,
         "SELECT user_id, team_id, issued_at, revoked_at, install_mode, kit_version,"
-        " claude_version, mcp_servers, processes, reported_at, expires_at"
+        " claude_version, mcp_servers, processes, outside_processes, reported_at, expires_at"
         " FROM mint.endpoint_installs"
         " WHERE instance_id = %s AND (%s::text IS NULL OR user_id = %s)"
         " ORDER BY issued_at DESC LIMIT %s",
