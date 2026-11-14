@@ -65,6 +65,11 @@ CALL_APPROVAL = {
     "expired": Status("만료", "off"),
     "consumed": Status("사용됨", "off"),
 }
+CALL_APPROVAL_RULE = {
+    "active": Status("사용 중", "ok"),
+    "expired": Status("만료", "off"),
+    "disabled": Status("해제됨", "off"),
+}
 SELF_CONFIRMATION = {
     "pending": Status("확인 대기", "wait"),
     "confirmed": Status("확인됨", "ok"),
@@ -378,6 +383,8 @@ EVENT_KIND = {
     "call_approval_approved": "호출별 승인",
     "call_approval_rejected": "호출별 거부",
     "call_approval_cancelled": "호출별 승인 취소",
+    "call_approval_rule_created": "상시 승인 규칙 생성",
+    "call_approval_rule_disabled": "상시 승인 규칙 해제",
     "consent_granted": "동의 부여",
     "consent_revoked": "동의 철회",
     "allowlist_added": "허용 목록 추가",
@@ -465,6 +472,8 @@ NOTICES = {
     "call_approved": "호출을 승인했습니다.",
     "call_rejected": "호출을 거부했습니다.",
     "call_cancelled": "승인 요청을 취소했습니다.",
+    "rule_added": "상시 승인 규칙을 만들었습니다.",
+    "rule_disabled": "상시 승인 규칙을 해제했습니다.",
     "call_extended": "승인 기간을 한 번 연장했습니다.",
     "org_added": "조직을 생성했습니다.",
     "org_closed": "조직을 닫았습니다.",

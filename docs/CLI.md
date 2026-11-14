@@ -45,6 +45,8 @@
 | `mint-litellm call-approval reject` | `admin`, `approver` | 호출별 승인 요청을 거절한다. | - | `call_approval_rejected` |
 | `mint-litellm call-approval extend` | `admin`, `approver` | 만료 10분 안으로 다가온 기간 승인을 같은 기간만큼 한 번 연장한다. | - | `call_approval_approved` |
 | `mint-litellm call-approval cancel` | `admin`, `approver` | 요청 중이거나 승인된 호출별 승인을 취소한다. | - | `call_approval_cancelled` |
+| `mint-litellm call-approval-rule add` | `admin` | 상시 승인 규칙을 만든다. 범위(조직 전체 또는 특정 주체)·서버(생략하면 계약 관리 서버 전부)·행위 분류(read·write)·도구 패턴(선택)에 맞는 호출은 사람 승인 없이 10분·30분 기간 승인이 자동으로 열린다. 삭제·외부 전송·자격 접근에는 만들 수 없다. | - | `call_approval_rule_created` |
+| `mint-litellm call-approval-rule disable` | `admin` | 상시 승인 규칙을 해제한다. 이미 열린 기간 승인은 끝까지 쓰이며 필요하면 `call-approval cancel`로 취소한다. | - | `call_approval_rule_disabled` |
 | `mint-litellm consent add` | `admin` | 사용자 동의를 등록한다. 운영자 증명은 증거 참조와 증거 해시가 필수이다. | - | `consent_granted` |
 | `mint-litellm consent revoke` | `admin` | 등록된 동의를 철회한다. | - | `consent_revoked` |
 | `mint-litellm allowlist add` | `admin` | 허용 목록 항목을 등록한다. 종료일이 필수이다. | - | `allowlist_added` |

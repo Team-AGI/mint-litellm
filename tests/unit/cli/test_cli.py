@@ -178,7 +178,7 @@ def _minimal_argv(path):
         "--data-grade": "internal", "--allowed-resources": "[]", "--provider": "p",
         "--owner": "o", "--credential-notice": "n", "--revocation-record": "r",
         "--audit-access-days": "1", "--data-return-terms": "t", "--requester": "u",
-        "--contract": "c.json",
+        "--contract": "c.json", "--action-class": "read", "--for": "10m",
     }
     argv = list(path)
     leaf = parser

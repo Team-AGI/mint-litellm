@@ -23,6 +23,7 @@ from mint_litellm import cli_evidence, cli_restore, cli_upgrade
 from mint_litellm.control import (
     allowlists,
     approvals,
+    call_approval_rules,
     checks,
     ledger,
     litellm_config,
@@ -46,6 +47,7 @@ from mint_litellm.control.litellm_control import STAGE2_ALLOWED_ROUTES
 from mint_litellm.control.services import alerts as alert_service
 from mint_litellm.control.services import allowlists as allowlist_service
 from mint_litellm.control.services import approvals as approval_service
+from mint_litellm.control.services import call_approval_rules as call_approval_rule_service
 from mint_litellm.control.services import call_approvals as call_approval_service
 from mint_litellm.control.services import consents as consent_service
 from mint_litellm.control.services import contracts as contract_service
@@ -763,6 +765,19 @@ def _consent_add(run: Run) -> None:
     )
 
 
+def _rule_add(run: Run) -> None:
+    a = run.args
+    _created(
+        run,
+        call_approval_rule_service.add(
+            run.context(), org_id=a.org, action_class=a.action_class,
+            window_minutes=int(a.for_[:-1]), principal_type=a.principal_type,
+            principal_id=a.principal_id, server_id=a.server, tool_pattern=a.tool_pattern,
+            valid_until=a.valid_until,
+        ),
+    )
+
+
 def _allowlist_add(run: Run) -> None:
     a = run.args
     _created(
@@ -900,6 +915,8 @@ HANDLERS: dict[str, Handler] = {
     "call-approval extend": _done(call_approval_service.extend, "call_approval_id"),
     "consent add": _consent_add,
     "consent revoke": _done(consent_service.revoke, "consent_id"),
+    "call-approval-rule add": _rule_add,
+    "call-approval-rule disable": _done(call_approval_rule_service.disable, "rule_id"),
     "allowlist add": _allowlist_add,
     "allowlist lift": _done(allowlist_service.lift, "allowlist_id"),
     "org add": lambda r: org_service.add(r.context(), r.args.org_id, r.args.name),
@@ -1119,6 +1136,19 @@ ARGUMENTS: dict[str, list[Any]] = {
         _a("call_approval_id"), _a("--reason", help="요청자에게 전달할 거부 사유"),
     ],
     "call-approval cancel": [_a("call_approval_id")],
+    "call-approval-rule add": [
+        _a("--org", required=True),
+        _a("--action-class", required=True, choices=list(call_approval_rules.ACTION_CLASSES)),
+        _a("--for", dest="for_", required=True, choices=["10m", "30m"],
+           help="규칙에 맞는 호출에 자동으로 여는 기간 승인의 길이"),
+        _a("--principal-type", choices=list(approvals.PRINCIPAL_TYPES),
+           help="생략하면 조직 전체"),
+        _a("--principal-id"),
+        _a("--server", help="생략하면 계약 관리 서버 전부"),
+        _a("--tool-pattern", help="도구 이름 패턴(* 사용 가능)"),
+        _a("--valid-until", type=_when, help="이 시각 이후에는 규칙이 맞지 않는다"),
+    ],
+    "call-approval-rule disable": [_a("rule_id")],
     "call-approval extend": [_a("call_approval_id")],
     "consent add": [
         _a("--org", required=True),
@@ -1350,6 +1380,7 @@ ID_ARGUMENTS = {
     "alert_id": "alerts",
     "intake_id": "intakes",
     "call_approval_id": "call_approvals",
+    "rule_id": "call_approval_rules",
     "grant_id": "litellm_grants",
     "approval_id": "approvals",
     "denial_id": "denials",

@@ -262,6 +262,21 @@ def call_approvals(
     )
 
 
+def call_approval_rules(conn: psycopg.Connection, instance: str) -> list[dict]:
+    return fetchall(
+        conn,
+        "SELECT id, org_id, scope_type, principal_type, scope_id, server_id, action_class,"
+        " tool_pattern, window_minutes, valid_until, created_by, created_at,"
+        " CASE WHEN status = 'active' AND valid_until <= now() THEN 'expired' ELSE status END"
+        " AS status, state_version,"
+        " (SELECT count(*) FROM mint.call_approvals c WHERE c.instance_id = r.instance_id"
+        "  AND c.approved_by = 'rule:' || r.id::text) AS opened"
+        " FROM mint.call_approval_rules r WHERE r.instance_id = %s"
+        " ORDER BY (r.status = 'active') DESC, r.created_at DESC, r.id",
+        (instance,),
+    )
+
+
 def orgs(conn: psycopg.Connection, instance: str) -> list[dict]:
     return fetchall(
         conn,

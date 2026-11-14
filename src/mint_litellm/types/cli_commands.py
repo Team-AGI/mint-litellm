@@ -225,6 +225,20 @@ COMMANDS: tuple[CliCommand, ...] = (
         events=(EventKind.CALL_APPROVAL_CANCELLED,),
     ),
     CliCommand(
+        path=("call-approval-rule", "add"),
+        summary="상시 승인 규칙을 만든다. 범위·서버·행위 분류(read·write)에 맞는 호출은 사람 승인 "
+        "없이 10분·30분 기간 승인이 자동으로 열린다. 삭제·외부 전송·자격 접근에는 만들 수 없다.",
+        roles=ADMIN_ONLY,
+        events=(EventKind.CALL_APPROVAL_RULE_CREATED,),
+    ),
+    CliCommand(
+        path=("call-approval-rule", "disable"),
+        summary="상시 승인 규칙을 해제한다. 이미 열린 기간 승인은 그대로 끝까지 쓰이며 필요하면 "
+        "`call-approval cancel`로 취소한다.",
+        roles=ADMIN_ONLY,
+        events=(EventKind.CALL_APPROVAL_RULE_DISABLED,),
+    ),
+    CliCommand(
         path=("call-approval", "extend"),
         summary="만료가 가까운 기간 승인을 같은 기간만큼 한 번 연장한다.",
         roles=APPROVER_UP,

@@ -55,6 +55,8 @@ class EventKind(StrEnum):
     CALL_APPROVAL_APPROVED = "call_approval_approved"
     CALL_APPROVAL_REJECTED = "call_approval_rejected"
     CALL_APPROVAL_CANCELLED = "call_approval_cancelled"
+    CALL_APPROVAL_RULE_CREATED = "call_approval_rule_created"
+    CALL_APPROVAL_RULE_DISABLED = "call_approval_rule_disabled"
     CONSENT_GRANTED = "consent_granted"
     CONSENT_REVOKED = "consent_revoked"
     ALLOWLIST_ADDED = "allowlist_added"
@@ -146,6 +148,8 @@ CONTROL_ENTITY: dict[EventKind, str] = {
     EventKind.CALL_APPROVAL_APPROVED: "call_approval",
     EventKind.CALL_APPROVAL_REJECTED: "call_approval",
     EventKind.CALL_APPROVAL_CANCELLED: "call_approval",
+    EventKind.CALL_APPROVAL_RULE_CREATED: "call_approval_rule",
+    EventKind.CALL_APPROVAL_RULE_DISABLED: "call_approval_rule",
     EventKind.CONSENT_GRANTED: "consent",
     EventKind.CONSENT_REVOKED: "consent",
     EventKind.ALLOWLIST_ADDED: "allowlist",

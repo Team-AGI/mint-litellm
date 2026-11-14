@@ -29,6 +29,7 @@ _VERSIONED = {
     "approvals": ("id", "state_version"),
     "denials": ("id", "state_version"),
     "call_approvals": ("id", "state_version"),
+    "call_approval_rules": ("id", "state_version"),
     "consents": ("id", "state_version"),
     "litellm_grants": ("id", "state_version"),
     "allowlists": ("id", "state_version"),

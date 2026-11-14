@@ -24,6 +24,7 @@ from mint_litellm.control.context import Operator
 from mint_litellm.control.errors import AdminCode, AdminError, AuthError, ControlError, forbidden
 from mint_litellm.control.services import allowlists as allowlist_service
 from mint_litellm.control.services import approvals as approval_service
+from mint_litellm.control.services import call_approval_rules as call_approval_rule_service
 from mint_litellm.control.services import call_approvals as call_approval_service
 from mint_litellm.control.services import contracts as contract_service
 from mint_litellm.control.services import denials as denial_service
@@ -199,6 +200,17 @@ class RelationBody(BaseModel):
     team_id: str | None = None
 
 
+class CallApprovalRuleBody(BaseModel):
+    org_id: str
+    action_class: Literal["read", "write"]
+    window_minutes: Literal[10, 30]
+    principal_type: Literal["user", "team_key", "service_account"] | None = None
+    principal_id: str | None = None
+    server_id: str | None = None
+    tool_pattern: str | None = None
+    valid_until: datetime | None = None
+
+
 class AllowlistBody(BaseModel):
     kind: Literal["provider", "auth_server", "egress_target", "registry_source"]
     value: str
@@ -296,6 +308,11 @@ def list_call_approvals(
 ):
     rows = reads.call_approvals(actor.conn, actor.instance, status=status, page=page)
     return {"items": public(rows)}
+
+
+@router.get("/call-approval-rules")
+def list_call_approval_rules(actor: Actor = Depends(api_actor)):
+    return {"items": public(reads.call_approval_rules(actor.conn, actor.instance))}
 
 
 @router.get("/orgs")
@@ -615,6 +632,18 @@ def bind_org(org_id: str, body: BindingBody, actor: Actor = Depends(api_actor)):
 def unbind_org(body: BindingBody, actor: Actor = Depends(api_actor)):
     org_service.unbind(actor.ctx, body.subject_type, body.subject_id)
     return done(actor)
+
+
+@router.post("/call-approval-rules")
+def add_call_approval_rule(body: CallApprovalRuleBody, actor: Actor = Depends(api_actor)):
+    rid = call_approval_rule_service.add(actor.ctx, **body.model_dump())
+    return done(actor, id=rid)
+
+
+@router.post("/call-approval-rules/{rule_id}/disable")
+def disable_call_approval_rule(rule_id: str, body: Versioned, actor: Actor = Depends(api_actor)):
+    call_approval_rule_service.disable(actor.ctx, rule_id, expected_version=body.state_version)
+    return done(actor, id=rule_id)
 
 
 @router.post("/allowlists")
