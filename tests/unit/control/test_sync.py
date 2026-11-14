@@ -650,6 +650,23 @@ def test_a_submitted_server_is_approved_and_an_active_one_is_left_alone(admin, f
     assert len(events(admin, "sync_applied")) == 1
 
 
+def test_a_local_server_absent_from_the_registry_opens_no_divergence_alert(admin, fake, worker):
+    admin.execute(
+        "INSERT INTO mint.servers (id, instance_id, server_id, status, identity_kind,"
+        " exec_contract_sha256, exec_contract_version, transport, auth_type, registered_by)"
+        " VALUES (gen_random_uuid(), %s, 'local-1', 'awaiting_approval', 'stdio', %s, 1, 'stdio',"
+        " 'none', 't')", (INSTANCE, HEX))
+    admin.execute(
+        "INSERT INTO mint.usage_relations (id, instance_id, org_id, purpose, server_id)"
+        " VALUES (gen_random_uuid(), %s, 'acme', 'ops', 'local-1')", (INSTANCE,))
+    admin.execute("UPDATE mint.servers SET status = 'approved' WHERE server_id = 'local-1'")
+    add_approval(admin, "user", "u1", server_id="local-1")
+    enqueue(admin, "sync_server", "local-1")
+    reconcile(admin)
+    drain(worker)
+    assert alerts(admin, "sync_divergence") == []
+
+
 def test_a_server_that_was_already_active_is_recorded_as_preexisting(admin, fake, worker):
     add_server(admin)
     fake.add_server("srv-1")

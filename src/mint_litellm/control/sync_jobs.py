@@ -505,8 +505,10 @@ def sync_server(ctx: JobContext) -> None:
     key = f"sync_divergence:server:{server_id}"
     server = client.get_server(server_id)
     if server is None:
-        raise_alert(conn, inst, kind="sync_divergence", severity="high", dedup_key=key,
-                    subject={"server_id": server_id, "reason": "registry_missing"})
+        # 로컬 서버는 LiteLLM 레지스트리에 없는 것이 정상이다
+        if not _is_local(conn, inst, server_id):
+            raise_alert(conn, inst, kind="sync_divergence", severity="high", dedup_key=key,
+                        subject={"server_id": server_id, "reason": "registry_missing"})
         _record_server(ctx, server_id, observed=False, approved_now=False, first_seen_active=False)
         return
     status = server.get("approval_status")
@@ -1053,13 +1055,24 @@ def fill_call_limits(ctx: JobContext, client: LiteLLMSync, server_id: str, serve
     resolve_alert(conn, inst, key)
 
 
+def _is_local(conn: psycopg.Connection, instance_id: str, server_id: str) -> bool:
+    """로컬 실행(stdio) 서버인가. LiteLLM 레지스트리에 있어야 하는 서버가 아니다."""
+    return fetchone(
+        conn,
+        "SELECT 1 AS x FROM mint.servers WHERE instance_id = %s AND server_id = %s"
+        " AND identity_kind = 'stdio'",
+        (instance_id, server_id),
+    ) is not None
+
+
 def _reconcile_server(ctx: JobContext, client: LiteLLMSync, server_id: str) -> None:
     conn, inst = ctx.conn, ctx.instance_id
     key = f"sync_divergence:server:{server_id}"
     server = client.get_server(server_id)
     if server is None:
-        raise_alert(conn, inst, kind="sync_divergence", severity="high", dedup_key=key,
-                    subject={"server_id": server_id, "reason": "registry_missing"})
+        if not _is_local(conn, inst, server_id):
+            raise_alert(conn, inst, kind="sync_divergence", severity="high", dedup_key=key,
+                        subject={"server_id": server_id, "reason": "registry_missing"})
         return
     _close_allow_all_keys(ctx, client, server_id, server)
     fill_call_limits(ctx, client, server_id, server)

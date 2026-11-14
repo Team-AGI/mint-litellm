@@ -76,6 +76,10 @@ TOOLS_DIR = "tools"  # 실행기가 본 서버별 도구 목록(이름·설명·
 TOOLS_SENT = "tools_sent.json"  # 서버 -> 마지막으로 보고한 목록의 해시
 MAX_TOOL_LISTS = 4  # 보고 한 번에 싣는 서버 수(나머지는 다음 보고)
 SYSTEMD_DIR = "/etc/systemd/system"
+APPARMOR_DIR = "/etc/apparmor.d"
+APPARMOR_PROFILE = "mint-bwrap"
+BIN_DIR = "/usr/local/bin"
+SHIM = "mint"
 MAX_PENDING = 256
 UNIT = "mint-report"
 TASK_NAME = "MINT Endpoint Report"
@@ -607,11 +611,29 @@ def codex_identities(mcp: dict) -> str:
     )
 
 
-def codex_requirements(mcp: dict, hooks: dict, programs: str, windows: bool) -> str:
+def codex_gateway_server(gateway: dict) -> str:
+    """Codex의 게이트웨이 서버 표(주소와, 사용자에 결속된 MCP 전용 키를 담은 인증 머리글)."""
+    bearer = toml("Bearer " + gateway["key"])
+    return (
+        f"{NL}[mcp_servers.{toml(gateway['name'])}]{NL}url = {toml(gateway['url'])}{NL}"
+        f"http_headers = {{ Authorization = {bearer} }}{NL}"
+    )
+
+
+def codex_gateway_identity(gateway: dict) -> str:
+    return (
+        f"{NL}[mcp_servers.{toml(gateway['name'])}]{NL}"
+        f"identity = {{ url = {toml(gateway['url'])} }}{NL}"
+    )
+
+
+def codex_requirements(
+    mcp: dict, hooks: dict, programs: str, windows: bool, gateway: dict | None = None
+) -> str:
     """Codex 관리자 요구 파일. 서버 표가 없으면 제한이 없고 비어 있으면 모두 꺼지므로 항상 둔다."""
     # ponytail: 서버 신원이 실행 명령(python)뿐이라 같은 python을 쓰는 다른 서버도 통과한다.
     # 서버마다 실행 래퍼를 두면 좁아진다.
-    identities = codex_identities(mcp)
+    identities = codex_identities(mcp) + (codex_gateway_identity(gateway) if gateway else "")
     key = "windows_managed_dir" if windows else "managed_dir"
     return (
         f"allow_managed_hooks_only = true{NL}{NL}[features]{NL}hooks = true{NL}{NL}"
@@ -1043,6 +1065,51 @@ def keep_private(path: Path, account: str) -> None:
         )  # fmt: skip
 
 
+def prefix_clash(gateway: str, servers) -> str | None:
+    """하네스의 도구 이름 접두가 게이트웨이와 겹치는 승인 서버 이름(없으면 None)."""
+
+    def prefix(name: str) -> str:
+        return "mcp__" + re.sub(r"[^a-zA-Z0-9_-]", "_", name) + "__"
+
+    return next((n for n in sorted(servers) if prefix(n).startswith(prefix(gateway))), None)
+
+
+def bwrap_probe(bwrap: str) -> bool:
+    """bubblewrap이 이 계정으로 실제 격리를 만들 수 있는가(사용자 이름공간이 막혀 있으면 거짓)."""
+    probe = [bwrap, "--unshare-all", "--ro-bind", "/", "/", "--dev", "/dev", "--", "/bin/true"]
+    try:
+        done = subprocess.run(probe, capture_output=True, timeout=10, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
+
+def apparmor_blocks_userns() -> bool:
+    """AppArmor가 권한 없는 사용자의 사용자 이름공간을 막는 설정(Ubuntu 24.04 기본)인가."""
+    try:
+        text = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns").read_text()
+    except OSError:
+        return False
+    return text.strip() == "1"
+
+
+def apparmor_profile(bwrap: str) -> str:
+    """bubblewrap에만 사용자 이름공간을 허용하는 AppArmor 프로필(다른 프로그램은 그대로 막힌다)."""
+    return f"profile {APPARMOR_PROFILE} {bwrap} flags=(unconfined) {{{NL}  userns,{NL}}}{NL}"
+
+
+def codex_hook_trust(text: str) -> str | None:
+    """사용자 Codex 설정에서 이 묶음의 훅을 Codex가 신뢰했는지 추정한다. 묶음의 훅이 없으면 None.
+
+    Codex는 훅을 신뢰하기 전에는 실행하지 않고, 신뢰하면 설정의 ``[hooks.state...]`` 표에
+    ``trusted_hash``를 남긴다. 표의 이름을 몰라 어떤 훅이든 신뢰 기록이 있으면 신뢰로 본다.
+    """
+    if BEGIN not in text or "[[hooks." not in text:
+        return None
+    trusted = re.search(r"(?m)^\[hooks\.state\b[^\n]*\]", text) and "trusted_hash" in text
+    return "trusted" if trusted else "untrusted"
+
+
 @dataclass(frozen=True)
 class Account:
     """키와 사용자 수준 설정이 놓이는 계정. 관리자 권한으로 돌 때는 설치를 부른 사람이다."""
@@ -1082,7 +1149,9 @@ class Kit:
         else:
             managed_programs, self.claude_dir, self.codex_dir = PROGRAMS, MANAGED_DIR, CODEX_DIR
             user_programs = str(self.home / ".local/lib/mint-endpoint")
-        self.system_paths = (managed_programs, self.claude_dir, self.codex_dir, SYSTEMD_DIR)
+        self.system_paths = (
+            managed_programs, self.claude_dir, self.codex_dir, SYSTEMD_DIR, APPARMOR_DIR, BIN_DIR
+        )
         self.answer: dict = {}  # 마지막 보고의 응답
 
         self.logical_programs = managed_programs if self.managed else user_programs
@@ -1128,7 +1197,21 @@ class Kit:
 
     # -- 설치 -------------------------------------------------------------------------------------
 
-    def write_tracked(self, state: dict, path: Path, logical: str, data: bytes, mode: int) -> None:
+    def gateway(self) -> dict | None:
+        """관리형 단말의 하네스 설정에 넣을 게이트웨이(이름·주소·MCP 전용 키). 없으면 None."""
+        named, key = self.config.get("gateway"), self.config.get("gateway_key")
+        if not self.managed or not isinstance(named, dict) or not key:
+            return None
+        return {"name": named["name"], "url": named["url"], "key": key}
+
+    def secret_owner(self) -> tuple[int, int] | None:
+        """키가 든 관리형 파일의 소유자: root, 그룹은 설치한 사용자(그 사용자의 하네스만 읽는다)."""
+        return (0, self.account.gid) if self.owner is not None else None
+
+    def write_tracked(
+        self, state: dict, path: Path, logical: str, data: bytes, mode: int,
+        owner: tuple[int, int] | None = None,
+    ) -> None:
         """관리 대상 파일을 쓰되, 우리가 쓴 것이 아닌 기존 파일은 한 번만 백업해 둔다."""
         known = state["files"].get(logical)
         if path.exists() and (known is None or sha256_file(path) != known):
@@ -1137,7 +1220,7 @@ class Kit:
             if not backup.exists():
                 write_atomic(backup, path.read_bytes(), 0o600)
                 state["backups"][logical] = str(backup)
-        write_atomic(path, data, mode)
+        write_atomic(path, data, mode, owner)
         state["files"][logical] = sha256_bytes(data)
 
     def hook_common(self, contracts: str) -> list[str]:
@@ -1184,33 +1267,87 @@ class Kit:
         if reason:
             raise SystemExit(f"managed install needs a trusted interpreter: {reason}")
 
-    def ensure_sandbox_tool(self) -> None:
-        """관리형 Linux 설치는 서버 격리에 쓰는 bubblewrap이 있어야 한다. 없으면 설치를 시도하고,
-        못 하면 이유를 알리고 멈춘다(실행기는 격리할 수 없으면 서버를 시작하지 않는다)."""
+    def sandbox_works(self, bwrap: str) -> bool:
+        """설치한 사용자(관리자 계정이면 nobody)의 권한으로 bubblewrap을 실제로 한 번 돌려 본다."""
+        target = (self.account.uid, self.account.gid) if self.owner is not None else None
+        if target is not None and target[0] == 0:
+            target = drop_target("nobody")
+        if target is None:
+            return bwrap_probe(bwrap)
+        return bool(as_user(*target, lambda: bwrap_probe(bwrap)))
+
+    def allow_apparmor_userns(self, state: dict, bwrap: str) -> bool:
+        """AppArmor가 사용자 이름공간을 막고 있으면 bubblewrap에만 허용하는 프로필을 설치한다."""
+        parser = shutil.which("apparmor_parser")
+        if not apparmor_blocks_userns() or not parser:
+            return False
+        if not self.physical(APPARMOR_DIR).is_dir():
+            return False
+        logical = f"{APPARMOR_DIR}/{APPARMOR_PROFILE}"
+        path = self.physical(logical)
+        profile = apparmor_profile(os.path.realpath(bwrap)).encode()
+        self.write_tracked(state, path, logical, profile, 0o644)
+        done = subprocess.run(
+            [parser, "-r", str(path)], capture_output=True, stdin=subprocess.DEVNULL
+        )
+        if done.returncode != 0:
+            path.unlink(missing_ok=True)
+            state["files"].pop(logical, None)
+            sys.stderr.write(done.stderr.decode(errors="replace")[:500])
+            return False
+        state["apparmor"] = logical
+        return True
+
+    def ensure_sandbox_tool(self, state: dict) -> None:
+        """관리형 Linux 설치는 서버 격리에 쓰는 bubblewrap이 있고 실제로 동작해야 한다.
+
+        없으면 설치를 시도하고, 있어도 사용자 이름공간이 막혀 동작하지 않으면(Ubuntu 24.04의
+        AppArmor 기본 설정) 허용 프로필을 설치한다. 그래도 안 되면 이유와 조치를 알리고 멈춘다
+        (실행기는 격리할 수 없으면 서버를 시작하지 않는다). 격리 없는 시작을 허용한 묶음은 멈추는
+        대신 경고만 한다.
+        """
         if self.windows or not (self.managed and self.strict):
             return
-        if self.config.get("allow_unsandboxed"):
-            return
-        if shutil.which("bwrap"):
-            return
-        for manager, command in (
-            ("apt-get", ["apt-get", "install", "-y", "bubblewrap"]),
-            ("dnf", ["dnf", "install", "-y", "bubblewrap"]),
-            ("yum", ["yum", "install", "-y", "bubblewrap"]),
-            ("zypper", ["zypper", "--non-interactive", "install", "bubblewrap"]),
-            ("pacman", ["pacman", "-S", "--noconfirm", "bubblewrap"]),
-        ):
-            if shutil.which(manager):
-                subprocess.run(command, check=False, stdin=subprocess.DEVNULL)
-                break
-        if not shutil.which("bwrap"):
-            raise SystemExit(
+        allowed = bool(self.config.get("allow_unsandboxed"))
+        bwrap = shutil.which("bwrap")
+        if not bwrap:
+            for manager, command in (
+                ("apt-get", ["apt-get", "install", "-y", "bubblewrap"]),
+                ("dnf", ["dnf", "install", "-y", "bubblewrap"]),
+                ("yum", ["yum", "install", "-y", "bubblewrap"]),
+                ("zypper", ["zypper", "--non-interactive", "install", "bubblewrap"]),
+                ("pacman", ["pacman", "-S", "--noconfirm", "bubblewrap"]),
+            ):
+                if shutil.which(manager):
+                    subprocess.run(command, check=False, stdin=subprocess.DEVNULL)
+                    break
+            bwrap = shutil.which("bwrap")
+        if not bwrap:
+            problem = (
                 "관리형 설치에는 bubblewrap(bwrap)이 필요합니다. 자동으로 설치하지 못했습니다. "
                 "패키지 관리자로 bubblewrap을 설치한 뒤 다시 실행하세요."
             )
+        elif self.sandbox_works(bwrap) or (
+            self.allow_apparmor_userns(state, bwrap) and self.sandbox_works(bwrap)
+        ):
+            return
+        elif apparmor_blocks_userns():
+            problem = (
+                "이 단말은 AppArmor가 일반 사용자의 사용자 이름공간을 막고 있어"
+                "(kernel.apparmor_restrict_unprivileged_userns=1) bubblewrap이 서버를 격리하지 "
+                f"못합니다. {APPARMOR_DIR}/{APPARMOR_PROFILE}에 bubblewrap용 프로필(userns 허용)을 "
+                "두고 apparmor_parser -r로 적용하거나 이 sysctl을 0으로 바꾼 뒤 다시 실행하세요."
+            )
+        else:
+            problem = (
+                "bubblewrap이 서버를 격리하지 못합니다. 사용자 이름공간이 막혀 있는지"
+                "(user.max_user_namespaces, 컨테이너·보안 모듈 설정) 확인한 뒤 다시 실행하세요."
+            )
+        if not allowed:
+            raise SystemExit(problem)
+        sys.stderr.write(f"경고: {problem} 격리 없이 서버를 시작하도록 허용된 묶음입니다.{NL}")
 
     def install(self) -> dict:
-        self.ensure_sandbox_tool()
         previous = self.load_state()
         state = {
             "kit_version": self.config["kit_version"],
@@ -1224,15 +1361,25 @@ class Kit:
         for kept in ("settings_backup", "codex_config_backup"):
             if kept in previous:
                 state[kept] = previous[kept]
+        self.ensure_sandbox_tool(state)
         agent = f"{self.logical_programs}/{AGENT}"
         contracts = f"{self.logical_programs}/contracts.json"
         self.write_tracked(
             state, self.programs / AGENT, agent, (self.folder / AGENT).read_bytes(), 0o755
         )
         servers = self.config["servers"]
+        gateway = self.gateway()
+        listing: dict = {"servers": servers}
+        if gateway:
+            clash = prefix_clash(gateway["name"], servers)
+            if clash:
+                raise SystemExit(f"승인된 서버 이름 {clash}이(가) 게이트웨이 이름과 겹칩니다.")
+            # 호출 전 훅은 게이트웨이 호출을 통과시키고 판정은 서버 쪽 가드레일에 맡긴다.
+            listing["gateways"] = [gateway["name"]]
+            state["gateway"] = gateway["name"]
         self.write_tracked(
             state, self.programs / "contracts.json", contracts,
-            json.dumps({"servers": servers}, indent=1).encode(), 0o644,
+            json.dumps(listing, indent=1).encode(), 0o644,
         )  # fmt: skip
         fixed = "/usr/bin/python3"  # 관리자 권한으로 돌 보고기는 시스템 인터프리터를 쓴다
         if self.windows:
@@ -1269,6 +1416,7 @@ class Kit:
             names |= set(self.install_codex(state, mcp, hooks))
         state["mcp_servers"] = sorted(names)
         self.install_reporter(state, python)
+        self.install_shim(state, python)
         key = (self.config["key"] + "\n").encode()
         key_path = self.home / KEY_REL
         write_atomic(key_path, key, 0o600, self.owner)
@@ -1286,7 +1434,9 @@ class Kit:
             state, self.programs / "mint_kit.py", tool, (self.folder / "mint_kit.py").read_bytes(),
             0o644,
         )
-        config = {k: v for k, v in self.config.items() if k not in ("key", "servers")}
+        config = {
+            k: v for k, v in self.config.items() if k not in ("key", "servers", "gateway_key")
+        }
         self.write_tracked(
             state, self.programs / "kit.json", f"{self.logical_programs}/kit.json",
             json.dumps(config, indent=1).encode(), 0o644,
@@ -1311,6 +1461,23 @@ class Kit:
             self.schedule_task(state, command)
         else:
             self.schedule_timer(state, command)
+
+    def install_shim(self, state: dict, python: str) -> None:
+        """``mint status``·``mint check``를 부를 수 있는 짧은 명령(Windows는 설치 파일을 쓴다)."""
+        if self.windows:
+            return
+        if self.managed:
+            logical = f"{BIN_DIR}/{SHIM}"
+            path = self.physical(logical)
+        else:
+            path = self.home / ".local/bin" / SHIM
+            logical = str(path)
+        tool = f"{self.logical_programs}/mint_kit.py"
+        text = (
+            f"#!/bin/sh{NL}[ $# -gt 0 ] || set -- status{NL}"
+            f'exec {shlex.quote(python)} -I -B {shlex.quote(tool)} "$@"{NL}'
+        )
+        self.write_tracked(state, path, logical, text.encode(), 0o755, self.owner)
 
     def lock_programs(self) -> None:
         """설치 폴더의 접근 권한을 명시한다: SYSTEM·Administrators는 쓰기, Users는 읽기만, 키 사본은
@@ -1408,12 +1575,19 @@ class Kit:
 
     def install_managed(self, state: dict, mcp: dict, hooks: dict) -> None:
         settings = {"allowManagedHooksOnly": True, "hooks": hooks}
+        entries, gateway = dict(mcp), self.gateway()
+        if gateway:
+            entries[gateway["name"]] = {
+                "type": "http", "url": gateway["url"],
+                "headers": {"Authorization": "Bearer " + gateway["key"]},
+            }
         self.write_tracked(
             state,
             self.managed_dir / "managed-mcp.json",
             f"{self.claude_dir}/managed-mcp.json",
-            json.dumps({"mcpServers": mcp}, indent=2).encode(),
-            0o644,
+            json.dumps({"mcpServers": entries}, indent=2).encode(),
+            0o640 if gateway else 0o644,
+            self.secret_owner() if gateway else None,
         )
         self.write_tracked(
             state,
@@ -1460,7 +1634,10 @@ class Kit:
         names = sorted(mcp)
         in_user_config = not self.managed or self.windows  # Windows는 관리형 서버 정의 파일이 없다
         if self.managed:
-            requirements = codex_requirements(mcp, hooks, self.logical_programs, self.windows)
+            gateway = self.gateway()
+            requirements = codex_requirements(
+                mcp, hooks, self.logical_programs, self.windows, gateway
+            )
             self.write_tracked(
                 state, self.codex_managed_dir / "requirements.toml",
                 f"{self.codex_dir}/requirements.toml", requirements.encode(), 0o644,
@@ -1468,14 +1645,21 @@ class Kit:
             if not self.windows:
                 self.write_tracked(
                     state, self.codex_managed_dir / "managed_config.toml",
-                    f"{self.codex_dir}/managed_config.toml", codex_servers(mcp).lstrip(NL).encode(),
-                    0o644,
+                    f"{self.codex_dir}/managed_config.toml",
+                    (codex_servers(mcp) + (codex_gateway_server(gateway) if gateway else ""))
+                    .lstrip(NL).encode(),
+                    0o640 if gateway else 0o644, self.secret_owner() if gateway else None,
                 )  # fmt: skip
         if in_user_config:
-            names = self.write_codex_block(state, mcp, None if self.managed else hooks)
+            names = self.write_codex_block(
+                state, mcp, None if self.managed else hooks,
+                self.gateway() if self.windows else None,
+            )
         return names
 
-    def write_codex_block(self, state: dict, mcp: dict, hooks: dict | None) -> list[str]:
+    def write_codex_block(
+        self, state: dict, mcp: dict, hooks: dict | None, gateway: dict | None = None
+    ) -> list[str]:
         path = self.codex_config()
         raw = path.read_bytes() if path.exists() else None
         original = raw.decode("utf-8-sig") if raw is not None else None
@@ -1488,6 +1672,10 @@ class Kit:
             else:
                 mine[name] = item
         body = codex_servers(mine)
+        if gateway and not re.search(
+            rf"(?m)^\[mcp_servers\.[\"']?{re.escape(gateway['name'])}[\"']?\]", rest
+        ):
+            body += codex_gateway_server(gateway)
         if hooks:
             # 사용자가 [features] 표를 이미 갖고 있으면 같은 표를 다시 열 수 없어 그대로 둔다.
             body += codex_hooks(hooks)
@@ -1519,6 +1707,8 @@ class Kit:
         elif self.user_timer(state):
             # 유닛 파일을 지우기 전에 끈다. 지운 뒤에는 이미 떠 있는 타이머가 남는다.
             capture(["systemctl", "--user", "disable", "--now", f"{UNIT}.timer"])
+        if state.get("apparmor") and self.root is None and shutil.which("apparmor_parser"):
+            capture(["apparmor_parser", "-R", str(self.physical(state["apparmor"]))])
         for logical, digest in state.get("files", {}).items():
             path = self.physical(logical)
             if not path.exists():
@@ -1538,6 +1728,7 @@ class Kit:
             self.uninstall_user(state)
         if "codex_config_sha" in state:
             self.uninstall_codex_config(state)
+        self.clean_servers()
         shutil.rmtree(self.programs, ignore_errors=True)
         shutil.rmtree(self.home / STATE_REL, ignore_errors=True)
         extra = [self.codex_managed_dir.parent] if self.windows else []
@@ -1551,6 +1742,55 @@ class Kit:
             except OSError:
                 pass
         return {"mode": state.get("mode"), "kept": left, "kit_version": state.get("kit_version")}
+
+    def clean_servers(self) -> None:
+        """제거 전에 실행기가 띄운 서버를 끄고 Windows의 AppContainer 프로필·ACE 흔적을 지운다."""
+        if self.root is not None:
+            return
+        try:
+            self.stop_launched(None)
+        except OSError:
+            pass
+        agent = self.programs / AGENT
+        if self.windows and agent.exists():
+            time.sleep(1)  # 끈 실행기가 정리를 끝낼 틈을 준다
+            capture([
+                sys.executable, "-I", "-B", str(agent), "reconcile", "--contracts", "none",
+                "--state-dir", str(self.home / STATE_REL),
+            ])  # fmt: skip
+
+    def sync_codex_block(self, state: dict, write: bool = True) -> dict:
+        """Windows 관리형 Codex: 사용자 설정 구간의 서버 정의를 계약 파일·폐기 목록에 맞춘다.
+
+        SYSTEM 보고기는 사용자 프로필을 고치지 않으므로 사용자 권한으로 이 명령을 돌려야 한다.
+        """
+        path = self.codex_config()
+        todo: dict = {"added": [], "dropped": []}
+        if not (self.windows and self.managed and "codex" in self.harnesses and path.exists()):
+            return todo
+        listing: dict = {}
+        names: dict = {}
+        try:
+            listing = json.loads(read_trusted(self.programs / "contracts.json", False))
+            names = json.loads((self.programs / RETIRED_FILE).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+        retired = {n for n in (names.get("servers") or []) if isinstance(n, str)}
+        python = state.get("python") or sys.executable.replace("\\", "/")
+        agent = f"{self.logical_programs}/{AGENT}"
+        mcp = {
+            name: {"command": python,
+                   "args": [agent, "run", "--contracts", f"{self.logical_programs}/contracts.json",
+                            "--server", name]}
+            for name in sorted(listing.get("servers") or {}) if name not in retired
+        }  # fmt: skip
+        current = path.read_bytes().decode("utf-8-sig")
+        new, put = put_block_tables(current, mcp)
+        todo["added"] = [n for n in put if codex_table(current, n) is None]
+        new, todo["dropped"] = drop_block_tables(new, retired)
+        if write and new != current:
+            write_atomic(path, new.encode(), path.stat().st_mode & 0o777, self.owner)
+        return todo
 
     def uninstall_user(self, state: dict) -> None:
         settings_path = self.home / ".claude/settings.json"
@@ -1644,6 +1884,9 @@ class Kit:
         }
         if pending:
             payload["removed"] = pending
+        trust = self.hook_trust(state) if installed else None
+        if trust:
+            payload["hook_trust"] = trust
         url = self.config["decide_url"].rstrip("/") + REPORT_PATH
         ca_pem = self.config.get("ca_pem")
         if not ca_pem:
@@ -1663,6 +1906,48 @@ class Kit:
             state.pop("pending_removed", None)
             self.save_state(state)
         return bool(answer)
+
+    def hook_trust(self, state: dict) -> str | None:
+        """사용자 수준 Codex 설치의 훅을 Codex가 신뢰하는지(설정 파일 추정). 모르면 None."""
+        if state.get("mode") != "user" or "codex" not in self.harnesses:
+            return None
+
+        def read() -> str | None:
+            try:
+                return codex_hook_trust(self.codex_config().read_bytes().decode("utf-8-sig"))
+            except OSError:
+                return None
+
+        return self.run_as_user(read)
+
+    def check(self, state: dict) -> tuple[dict, list[str]]:
+        """설치 상태 점검: 상태 파일 내용과 이 계정에서 보이는 문제 목록(비어 있으면 이상 없음)."""
+        problems: list[str] = []
+        bwrap = shutil.which("bwrap")
+        if state.get("mode") == "managed" and not self.windows and not self.config.get(
+            "allow_unsandboxed"
+        ):
+            if not bwrap:
+                problems.append("bubblewrap이 없어 서버를 격리하지 못합니다.")
+            elif not bwrap_probe(bwrap):
+                problems.append(
+                    "bubblewrap이 이 계정에서 동작하지 않습니다(사용자 이름공간이 막혔을 수 있음)."
+                )
+        if self.windows and state.get("mode") == "managed":
+            stale = self.sync_codex_block(state, write=False)
+            if stale["added"] or stale["dropped"]:
+                problems.append(
+                    "Codex 서버 정의가 승인 서버 목록과 다릅니다. `install.cmd sync`로 맞추세요."
+                )
+        trust = self.hook_trust(state)
+        if trust == "untrusted":
+            problems.append(
+                "Codex가 MINT 훅을 아직 신뢰하지 않아 호출 전 판정이 실행되지 않습니다. "
+                "Codex에서 훅을 검토해 신뢰하세요."
+            )
+        if state.get("mode") == "user":
+            problems.append("사용자 수준 설치라 관리되지 않습니다. 관리자 권한으로 재설치하세요.")
+        return {**state, "problems": problems, "hook_trust": trust}, problems
 
     def save_state(self, state: dict) -> bool:
         try:
@@ -1687,7 +1972,9 @@ class Kit:
             new, gone = edit(raw.decode("utf-8-sig"))
             if not gone:
                 return [], True
-            write_atomic(path, new.encode(), path.stat().st_mode & 0o777)
+            info = path.stat()  # 키가 든 관리형 파일의 소유 그룹을 지킨다.
+            owner = (info.st_uid, info.st_gid) if self.root_owned() else None
+            write_atomic(path, new.encode(), info.st_mode & 0o777, owner)
         except (OSError, ValueError):
             return [], False
         self.retrack(state, logical, sha256_bytes(raw), new.encode())
@@ -1753,7 +2040,7 @@ class Kit:
             state["codex_config_sha"] = sha256_bytes(new.encode())
         return gone, True
 
-    def stop_launched(self, retired: set[str]) -> list[dict]:
+    def stop_launched(self, retired: set[str] | None) -> list[dict]:
         """실행기가 띄운 프로세스 중 폐기 서버의 것을 끈다(기록한 PID와 시작 시각이 맞을 때만)."""
         folder = self.home / STATE_REL / LAUNCHED
         removed = []
@@ -1763,7 +2050,7 @@ class Kit:
                 server, pid, start = str(record["server"]), int(record["pid"]), record.get("start")
             except (OSError, ValueError, KeyError, TypeError):
                 continue
-            if server not in retired:
+            if retired is not None and server not in retired:
                 continue
             if not start or proc_start(pid, self.windows) != start:
                 path.unlink(missing_ok=True)  # 이미 끝났거나 PID가 다른 프로세스에 재사용되었다.
@@ -1771,6 +2058,20 @@ class Kit:
             if self.kill(pid):
                 path.unlink(missing_ok=True)
                 removed.append({"kind": "process", "server": server, "target": None})
+        return removed
+
+    def stop_by_command(self, retired: set[str]) -> list[dict]:
+        """프로필을 읽지 않는 SYSTEM 보고기: 이 묶음의 실행기로 폐기 서버를 돌리는 프로세스를 끈다.
+
+        명령줄이 이 설치 폴더의 실행기로 ``run --server 이름``인 프로세스만 대상이다(자식 포함).
+        """
+        agent = f"{self.logical_programs}/{AGENT}".replace("\\", "/").lower()
+        removed = []
+        for pid, _, command in process_entries(self.windows):
+            server = server_of(command)
+            if server in retired and agent in command.replace("\\", "/").lower():
+                if self.kill(pid):
+                    removed.append({"kind": "process", "server": server, "target": None})
         return removed
 
     def kill(self, pid: int) -> bool:
@@ -1822,7 +2123,9 @@ class Kit:
         gone_names = set(retired)
         mine = set(state.get("mcp_servers", [])) & gone_names
         removed, failed = self.drop_configs(state, mine) if mine else ([], set())
-        if not self.system_mode:  # 실행기 기록은 사용자 프로필에 있다
+        if self.system_mode:  # 실행기 기록은 사용자 프로필에 있어 명령줄로 찾는다
+            removed += self.stop_by_command(gone_names)
+        else:
             removed += self.run_as_user(lambda: self.stop_launched(gone_names)) or []
         removed += self.drop_autostart(state, gone_names)
         state["mcp_servers"] = sorted(set(state.get("mcp_servers", [])) - (mine - failed))
@@ -1863,7 +2166,8 @@ class Kit:
         path = self.programs / "contracts.json"
         try:
             raw = read_trusted(path, self.managed and self.root_owned())
-            current = json.loads(raw).get("servers", {})
+            listing = json.loads(raw)
+            current = listing.get("servers", {})
         except (OSError, ValueError, AttributeError):
             return []
         configured = set(state.get("mcp_servers", []))
@@ -1889,7 +2193,7 @@ class Kit:
             }
             for name in sorted(todo)
         }
-        data = json.dumps({"servers": {**current, **todo}}, indent=1).encode()
+        data = json.dumps({**listing, "servers": {**current, **todo}}, indent=1).encode()
         try:
             write_atomic(path, data, 0o644)
         except OSError:
@@ -2083,7 +2387,8 @@ def codex_version(home: Path) -> str | None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="MINT endpoint kit")
     parser.add_argument(
-        "action", nargs="?", default="install", choices=["install", "uninstall", "status", "report"]
+        "action", nargs="?", default="install",
+        choices=["install", "uninstall", "status", "check", "sync", "report"],
     )
     parser.add_argument("--if-due", action="store_true")
     parser.add_argument("--jitter", type=int, default=0)
@@ -2128,9 +2433,27 @@ def main(argv: list[str] | None = None) -> int:
         Path(args.kit), root, managed, account, chown,
         strict=privileged and not args.dry_run, dry_run=args.dry_run,
     )  # fmt: skip
-    if args.action == "status":
-        print(json.dumps(kit.load_state() or {"mode": "none"}, indent=1))
-        return 0
+    if args.action in ("status", "check", "sync"):
+        state = kit.load_state()
+        if not state and not kit.managed:
+            # 관리형 설치는 시스템 경로에 있다. 일반 사용자도 상태 파일을 읽을 수 있다.
+            managed = Kit(Path(args.kit), root, True, account, False, strict=False)
+            state = managed.load_state()
+            if state:
+                kit = managed
+        if args.action == "status":
+            print(json.dumps(state or {"mode": "none"}, indent=1))
+            return 0
+        if args.action == "sync":
+            print(json.dumps(kit.sync_codex_block(state) if state else {}, ensure_ascii=False))
+            return 0
+        if not state:
+            print(json.dumps({"mode": "none"}, indent=1))
+            return 1
+        result, problems = kit.check(state)
+        result.pop("files", None)
+        print(json.dumps(result, indent=1, ensure_ascii=False))
+        return 1 if problems else 0
     if args.action == "install":
         state = kit.install()
         label = "관리형" if state["mode"] == "managed" else "사용자 수준(관리되지 않음)"
@@ -2149,6 +2472,13 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         reported = kit.report(state, "installed")
         print(f"설치 완료: {label}. MINT 보고 {'성공' if reported else '실패(설치는 유지됨)'}")
+        if state.get("gateway"):
+            print(f"게이트웨이 MCP 서버 {state['gateway']}을(를) 하네스 설정에 넣었습니다.")
+        if state["mode"] == "user" and "codex" in kit.harnesses:
+            print(
+                "참고: Codex는 사용자 수준 훅을 신뢰하기 전에는 실행하지 않습니다. Codex에서 훅을 "
+                "검토해 신뢰해야 호출 전 판정이 시작됩니다(`mint check`로 확인)."
+            )
         return 0
     result = kit.uninstall()
     reported = kit.report({"mode": result.get("mode")}, "removed")

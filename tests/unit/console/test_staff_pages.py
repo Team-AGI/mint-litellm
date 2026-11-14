@@ -664,7 +664,8 @@ def kits(sworld):
     issuer = KitIssuer()
     sworld.stub.own(CONSOLE, STAFFER, team_id="team-a")  # 세션의 첫 팀이 키에 걸린다.
     sworld.app.state.config = dataclasses.replace(
-        sworld.config, kit_issuer=issuer, endpoint_url="https://mint.test"
+        sworld.config, kit_issuer=issuer, endpoint_url="https://mint.test",
+        endpoint_routes=True,
     )
     sworld.issuer = issuer
     return sworld
@@ -690,8 +691,13 @@ def test_the_download_hands_out_a_kit_with_the_users_own_key_and_the_approved_se
     assert response.headers["content-type"] == "application/gzip"
     assert "mint-kit.tar.gz" in response.headers["content-disposition"]
     config = unpack(response)
-    ((user, team, alias),) = kits.issuer.made
+    (user, team, alias), (mcp_user, mcp_team, mcp_alias) = kits.issuer.made
     assert (user, team) == (STAFFER, "team-a") and config["key"] == f"sk-kit-{alias}"
+    # 게이트웨이 MCP 전용 키는 같은 사용자·팀에 결속되고 별칭만 표에 남는다.
+    assert (mcp_user, mcp_team) == (STAFFER, "team-a") and mcp_alias.startswith("mint-kit-mcp-")
+    assert config["gateway_key"] == f"sk-kit-{mcp_alias}"
+    assert config["gateway"] == {"name": "litellm-gateway", "url": "https://mint.test/mcp"}
+    assert kits.query("SELECT mcp_key_alias FROM mint.endpoint_installs") == [(mcp_alias,)]
     assert config["decide_url"] == "https://mint.test" and list(config["servers"]) == ["local-1"]
     ((stored_token, owner, stored_alias),) = kits.query(
         "SELECT key_token, user_id, key_alias FROM mint.endpoint_installs")
@@ -703,7 +709,7 @@ def test_a_second_download_replaces_the_first_key_and_other_users_are_untouched(
     other = download(logged_in(kits, OTHER_KEY))
     second = download(logged_in(kits))
     assert first.status_code == other.status_code == second.status_code == 200
-    assert kits.issuer.deleted == [[kits.issuer.made[0][2]]]
+    assert kits.issuer.deleted == [[kits.issuer.made[0][2], kits.issuer.made[1][2]]]
     rows = kits.query(
         "SELECT user_id, revoked_at IS NOT NULL FROM mint.endpoint_installs ORDER BY issued_at")
     assert rows == [(STAFFER, True), (OTHER, False), (STAFFER, False)]
@@ -734,7 +740,7 @@ def test_only_the_owner_sees_the_rows_and_revoking_disconnects_the_devices(kits)
     assert "보고 전" not in logged_in(kits, OTHER_KEY).get("/staff/endpoint").text
     response = client.post("/staff/endpoint/revoke", data={"csrf": csrf(client)})
     assert response.status_code == 303 and response.headers["location"].endswith("ok=kit_revoked")
-    assert kits.issuer.deleted == [[kits.issuer.made[0][2]]]
+    assert kits.issuer.deleted == [[kits.issuer.made[0][2], kits.issuer.made[1][2]]]
     assert "연결 해제" in client.get("/staff/endpoint").text
     again = client.post("/staff/endpoint/revoke", data={"csrf": csrf(client)})
     assert again.status_code == 400 and "해제할 단말 연결이 없습니다" in again.text
@@ -747,9 +753,20 @@ def test_without_key_issuance_or_approved_servers_there_is_no_kit(sworld):
     assert sworld.query("SELECT count(*) FROM mint.endpoint_installs") == [(0,)]
     import dataclasses
 
-    sworld.app.state.config = dataclasses.replace(sworld.config, kit_issuer=KitIssuer())
+    sworld.app.state.config = dataclasses.replace(
+        sworld.config, kit_issuer=KitIssuer(), endpoint_routes=True
+    )
     empty = download(client)
     assert empty.status_code == 409 and "승인된 로컬 서버가 없습니다" in empty.text
+
+
+def test_a_kit_is_refused_with_a_clear_message_while_the_endpoint_routes_are_off(kits):
+    import dataclasses
+
+    kits.app.state.config = dataclasses.replace(kits.app.state.config, endpoint_routes=False)
+    refused = download(logged_in(kits))
+    assert refused.status_code == 503 and "MINT_ENDPOINT_ROUTES" in refused.text
+    assert kits.issuer.made == []
 
 
 def test_the_download_needs_a_staff_session_and_a_csrf_token(kits):
@@ -783,7 +800,8 @@ def test_the_download_follows_the_chosen_system_and_tool(kits):
     for bad in ({"platform": "macos"}, {"harness": "vim"}):
         refused = client.post("/staff/endpoint/kit", data={"csrf": csrf(client), **bad})
         assert refused.status_code == 400
-    assert len(kits.issuer.made) == 1  # 잘못된 요청은 키를 발급하지 않는다.
+    # 잘못된 요청은 키를 발급하지 않는다(설치 키와 게이트웨이 키 한 쌍뿐).
+    assert len(kits.issuer.made) == 2
 
 
 # --- 내 승인 요청 ------------------------------------------------------------------------------

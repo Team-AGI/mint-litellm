@@ -1,0 +1,1 @@
+- 단말 묶음 시험에서 나온 결함 수정: 설치 보고 503 고착(자동 제거 사건 허용·원인 기록), 관리형 단말의 게이트웨이 MCP(사용자 결속 MCP 전용 키), Ubuntu 24.04 bubblewrap 사전 점검과 AppArmor 프로필, 단말 경로 기본 켬, 실행기 밖 승인 서버 패키지 경보, 로컬 서버의 동기화 불일치 경보 제외, 서버 등록 때 경보 권한, `mint status`·`mint check` 명령, 사용자 수준 Codex 훅 미신뢰 표시, Windows 폐기 서버 프로세스 정지·Codex 정의 동기화·AppContainer 잔존 정리.

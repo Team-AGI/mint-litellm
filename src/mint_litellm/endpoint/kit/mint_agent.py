@@ -229,6 +229,32 @@ def known_servers(path: str) -> list[str]:
         return []
 
 
+def gateway_servers(path: str) -> list[str]:
+    """설치가 하네스 설정에 넣은 LiteLLM 게이트웨이 서버 이름. 읽지 못하면 비어 있다."""
+    try:
+        with open(os.path.expanduser(path), encoding="utf-8") as handle:
+            names = json.load(handle).get("gateways") or []
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [name for name in names if isinstance(name, str)] if isinstance(names, list) else []
+
+
+def is_gateway_call(
+    event: Mapping[str, Any], known: Sequence[str], gateways: Sequence[str]
+) -> bool:
+    """게이트웨이 서버로 가는 호출인가. 이런 호출의 판정은 LiteLLM 안의 가드레일이 하므로
+    이 훅은 통과시킨다. 승인된 로컬 서버와 이름이 겹치면 로컬 서버를 앞세운다."""
+    name = event.get("tool_name")
+    if not isinstance(name, str) or not gateways:
+        return False
+    server = (event.get("mcp_server") or {}).get("name")
+    if isinstance(server, str):
+        return server in gateways and server not in known
+    if any(name.startswith(server_prefix(s)) for s in known):
+        return False
+    return any(name.startswith(server_prefix(g)) for g in gateways)
+
+
 def server_and_tool(event: Mapping[str, Any], known: Sequence[str] = ()) -> tuple[str, str]:
     name = event.get("tool_name")
     server = (event.get("mcp_server") or {}).get("name")
@@ -478,7 +504,10 @@ def decide(
     name = event.get("tool_name")
     if not isinstance(name, str) or not name.startswith("mcp__"):
         return  # MCP 호출이 아니면 이 훅의 대상이 아니다.
-    server, tool = server_and_tool(event, known_servers(contracts))
+    known = known_servers(contracts)
+    if is_gateway_call(event, known, gateway_servers(contracts)):
+        return
+    server, tool = server_and_tool(event, known)
     arguments = event.get("tool_input")
     if not isinstance(arguments, dict):
         raise Refuse("tool arguments are not an object")
@@ -2048,7 +2077,7 @@ def _give_up(code: int, message: str) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
-    commands = ["pre", "post", "post-failure", "run", "serve", "notify"]
+    commands = ["pre", "post", "post-failure", "run", "serve", "notify", "reconcile"]
     parser.add_argument("command", choices=commands)
     parser.add_argument("--url")
     parser.add_argument("--key-file")
@@ -2085,6 +2114,11 @@ def main(argv: list[str] | None = None) -> None:
                 )
         except BaseException:  # 알림은 어떤 경우에도 조용히 끝난다.
             pass
+        return
+    if args.command == "reconcile":
+        # 제거·폐기 뒤 남은 AppContainer 항목(프로필·고아 ACE)을 지운다(Windows).
+        if os.name == "nt":
+            reconcile_appcontainers(args.state_dir)
         return
     if args.command == "run":
         kick_report(os.path.dirname(os.path.abspath(__file__)))

@@ -22,7 +22,7 @@ from collections.abc import Callable
 from typing import Any
 
 from mint_litellm.control.litellm_admin import LiteLLMAdmin, LiteLLMError, scrub
-from mint_litellm.endpoint.routes import KIT_KEY_ROUTES
+from mint_litellm.endpoint.routes import KIT_KEY_ROUTES, MCP_KEY_ROUTES
 
 # 쓰기 허용 목록: (메서드, 경로 정규식). 서버 식별자 한 마디는 ``/``를 포함하지 않는다.
 _SERVER = r"/v1/mcp/server/[^/]+"
@@ -302,14 +302,16 @@ class LiteLLMSync(LiteLLMAdmin):
 
 
 KIT_ALIAS_PREFIX = "mint-kit-"
+# 게이트웨이 MCP 전용 키의 별칭(삭제 허용 접두를 따른다)
+MCP_ALIAS_PREFIX = KIT_ALIAS_PREFIX + "mcp-"
 _KIT_KEY_FIELDS = frozenset({"user_id", "team_id", "key_alias", "allowed_routes"})
 
 
 def check_kit_write(method: str, path: str, body: Any) -> None:
     """설치 묶음 키 발급 클라이언트가 보낼 수 있는 쓰기만 통과시킨다.
 
-    생성 본문은 사용자·팀·별칭과 훅 경로만의 ``allowed_routes``뿐이고, 삭제는 설치 묶음 별칭만
-    대상으로 한다.
+    생성 본문은 사용자·팀·별칭과 ``allowed_routes``뿐이다. 경로는 훅 경로만이거나, 별칭이
+    ``MCP_ALIAS_PREFIX``이면 MCP 경로만이다. 삭제는 설치 묶음 별칭만 대상으로 한다.
     """
     if (method, path) == ("POST", "/key/generate"):
         if (
@@ -317,11 +319,13 @@ def check_kit_write(method: str, path: str, body: Any) -> None:
             or not {"user_id", "key_alias", "allowed_routes"} <= set(body) <= _KIT_KEY_FIELDS
             or not all(isinstance(body[k], str) and body[k] for k in set(body) - {"allowed_routes"})
             or not body["key_alias"].startswith(KIT_ALIAS_PREFIX)
-            or body["allowed_routes"] != list(KIT_KEY_ROUTES)
+            or body["allowed_routes"] != list(
+                MCP_KEY_ROUTES if body["key_alias"].startswith(MCP_ALIAS_PREFIX) else KIT_KEY_ROUTES
+            )
         ):
             raise WriteRefused(
-                "/key/generate 본문은 사용자·팀·설치 묶음 별칭과 훅 경로만의 allowed_routes만 "
-                "보낼 수 있습니다."
+                "/key/generate 본문은 사용자·팀·설치 묶음 별칭과 훅 경로(게이트웨이 키는 MCP "
+                "경로)만의 allowed_routes만 보낼 수 있습니다."
             )
     elif (method, path) == ("POST", "/key/delete"):
         aliases = body.get("key_aliases") if isinstance(body, dict) else None
@@ -342,11 +346,15 @@ class LiteLLMKitKeys(LiteLLMSync):
     _check = staticmethod(check_kit_write)
 
     def generate_kit_key(self, *, user_id: str, team_id: str | None, alias: str) -> str:
-        """사용자 한 명의 설치 묶음 키를 만든다. 이 키는 결정·결과·보고 경로만 부를 수 있다."""
+        """사용자 한 명의 설치 묶음 키를 만든다. 이 키는 결정·결과·보고 경로만 부를 수 있다.
+
+        별칭이 ``MCP_ALIAS_PREFIX``이면 게이트웨이 MCP 경로만 부를 수 있는 키이다.
+        """
+        routes = MCP_KEY_ROUTES if alias.startswith(MCP_ALIAS_PREFIX) else KIT_KEY_ROUTES
         body: dict[str, Any] = {
             "user_id": user_id,
             "key_alias": alias,
-            "allowed_routes": list(KIT_KEY_ROUTES),
+            "allowed_routes": list(routes),
         }
         if team_id:
             body["team_id"] = team_id

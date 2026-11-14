@@ -13,7 +13,11 @@ import psycopg
 
 from mint_litellm.control.db.connection import fetchall
 from mint_litellm.control.errors import ControlError
-from mint_litellm.control.litellm_write import KIT_ALIAS_PREFIX, LiteLLMKitKeys
+from mint_litellm.control.litellm_write import (
+    KIT_ALIAS_PREFIX,
+    MCP_ALIAS_PREFIX,
+    LiteLLMKitKeys,
+)
 
 LIST_LIMIT = 200
 INVENTORY_LIMIT = 2000
@@ -41,11 +45,11 @@ def approved_contracts(conn: psycopg.Connection, instance_id: str) -> dict[str, 
 def _active_aliases(conn: psycopg.Connection, instance_id: str, user_id: str) -> list[str]:
     rows = fetchall(
         conn,
-        "SELECT key_alias FROM mint.endpoint_installs"
+        "SELECT key_alias, mcp_key_alias FROM mint.endpoint_installs"
         " WHERE instance_id = %s AND user_id = %s AND revoked_at IS NULL",
         (instance_id, user_id),
     )
-    return [r["key_alias"] for r in rows]
+    return [a for r in rows for a in (r["key_alias"], r["mcp_key_alias"]) if a]
 
 
 def _mark_revoked(conn: psycopg.Connection, instance_id: str, user_id: str) -> None:
@@ -88,6 +92,30 @@ def issue_key(
         " VALUES (%s, %s, %s, %s, %s, %s, clock_timestamp() + make_interval(days => %s), %s)",
         (instance_id, hashlib.sha256(key.encode()).hexdigest(), user_id, team_id, alias, issued_by,
          ttl_days, ttl_days),
+    )
+    return key
+
+
+def issue_gateway_key(
+    conn: psycopg.Connection,
+    issuer: LiteLLMKitKeys,
+    instance_id: str,
+    *,
+    user_id: str,
+    team_id: str | None,
+    kit_key: str,
+) -> str:
+    """방금 발급한 설치 묶음 키에 딸린 게이트웨이 MCP 전용 키를 만든다. 키 값을 돌려준다.
+
+    사용자에게 결속되고 MCP 경로만 부를 수 있다. 이 표에는 별칭만 남고, 같은 사용자의 다음 발급이나
+    해제 때 설치 묶음 키와 함께 지워진다.
+    """
+    alias = MCP_ALIAS_PREFIX + secrets.token_hex(8)
+    key = issuer.generate_kit_key(user_id=user_id, team_id=team_id, alias=alias)
+    conn.execute(
+        "UPDATE mint.endpoint_installs SET mcp_key_alias = %s"
+        " WHERE instance_id = %s AND key_token = %s",
+        (alias, instance_id, hashlib.sha256(kit_key.encode()).hexdigest()),
     )
     return key
 

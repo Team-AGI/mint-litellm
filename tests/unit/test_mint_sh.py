@@ -436,3 +436,9 @@ def test_cli_save_token_writes_the_file_on_the_host_not_inside_the_container(tmp
         "--save-token", str(target), docker_tail=ADD_DOCKER,
     )
     assert again.returncode != 0 and "덮어쓰지 않습니다" in again.stderr
+
+
+def test_the_compose_file_turns_the_endpoint_routes_on_for_the_gateway_and_the_console():
+    compose = (SCRIPT.parent / "compose.yaml").read_text(encoding="utf-8")
+    # 콘솔이 발급한 단말 묶음의 판정·보고 경로가 404가 되지 않게 기본으로 켠다.
+    assert compose.count("MINT_ENDPOINT_ROUTES: ${MINT_ENDPOINT_ROUTES:-true}") == 2
