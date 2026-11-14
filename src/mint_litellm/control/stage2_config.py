@@ -203,6 +203,8 @@ class Stage2Settings:
     # 조직 연결 제안: 팀 메타데이터에서 조직을 읽는 키와 점검 주기(초). 기본값은 MINT가 채운다.
     org_meta_key: str = "mint_org"
     org_suggest_seconds: int = 3600
+    # 평문 비밀 점검이 읽는 LiteLLM 설정 파일. 없으면 점검하지 않는다.
+    litellm_config: Path | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "Stage2Settings":
@@ -253,6 +255,8 @@ class Stage2Settings:
             org_suggest_seconds=_seconds(env, "MINT_ORG_SUGGEST_SECONDS", 3600, 60),
             vuln_feed_timeout_seconds=_seconds(env, "MINT_VULN_FEED_TIMEOUT_SECONDS", 15),
             event_retention_days=_retention_days(env),
+            litellm_config=Path(env["MINT_LITELLM_CONFIG"])
+            if env.get("MINT_LITELLM_CONFIG") else None,
             console_url=(env.get("MINT_CONSOLE_URL") or "").strip() or None,
         )
         if settings.session_idle_seconds > settings.session_absolute_seconds:

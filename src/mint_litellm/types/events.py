@@ -446,3 +446,4 @@ class AlertKind(StrEnum):
     BULK_EXTRACTION = "bulk_extraction"
     CONTENT_FINDING_UNMANAGED = "content_finding_unmanaged"
     RESULT_UNENFORCED = "result_unenforced"
+    CONFIG_PLAINTEXT_SECRET = "config_plaintext_secret"
