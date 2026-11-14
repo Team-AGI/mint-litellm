@@ -24,6 +24,7 @@ KEY = {
     "subject_id": "대상", "state": "상태", "source": "출처", "id": "대상",
     "expires_at": "만료 시각",
     "approval_id": "승인", "consecutive_failures": "연속 실패 횟수", "target": "대상",
+    "minutes": "경보 기준(분)",
     "fields": "바뀐 항목", "team_id": "팀", "relation_id": "이용 관계", "pending": "남은 항목",
     "remaining": "남은 자격 수", "deleted": "지운 자격", "status": "상태", "message": "내용",
     "plan": "계획", "action": "조치", "tools": "도구", "feed": "조회 주소", "error": "오류",
@@ -56,6 +57,7 @@ VALUE = {
         "CRITICAL": "심각", "HIGH": "높음", "MEDIUM": "보통", "LOW": "낮음",
     },
     "plan": {"cancelled": "취소됨"},
+    "last_error_code": labels.SIEM_ERROR,
     "reason": {
         "control_key_not_set": "제어 키 미설정", "forbidden": "권한 없음", "held": "보류됨",
         "not_active": "활성 상태 아님", "not_completed_within_one_hour": "한 시간 안에 끝나지 않음",
@@ -74,6 +76,7 @@ SUMMARY = {
     "result_unenforced": (
         "최근 {window_seconds}초 동안 결과 {calls}건이 검사에 걸렸지만 막지 못했습니다."
     ),
+    "siem_forward_failing": "SIEM 대상 {target}에 {minutes}분 넘게 전달하지 못했습니다.",
     "config_plaintext_secret": "LiteLLM 설정 {count}곳에 비밀이 평문으로 적혀 있습니다.",
     "call_spike": "서버 {server_id}의 {tool} 호출이 최근 {calls}건입니다(평소 {baseline_calls}건).",
     "bulk_extraction": (

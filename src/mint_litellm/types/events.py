@@ -106,6 +106,8 @@ class EventKind(StrEnum):
     BACKUP_RESTORED = "backup_restored"
     CONFIG_EXPORTED = "config_exported"
     CONFIG_IMPORTED = "config_imported"
+    SIEM_TARGET_ADDED = "siem_target_added"
+    SIEM_TARGET_REMOVED = "siem_target_removed"
 
 
 CALL_KINDS: frozenset[EventKind] = frozenset(
@@ -202,6 +204,8 @@ CONTROL_ENTITY: dict[EventKind, str] = {
     EventKind.BACKUP_RESTORED: "backup",
     EventKind.CONFIG_EXPORTED: "config",
     EventKind.CONFIG_IMPORTED: "config",
+    EventKind.SIEM_TARGET_ADDED: "siem_target",
+    EventKind.SIEM_TARGET_REMOVED: "siem_target",
 }
 
 _ENTITY_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")

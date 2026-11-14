@@ -8,7 +8,7 @@
   {{ m.kpi('조직 연결', bindings | length, href='/admin?tab=orgs') }}
   {% if actor.role != 'viewer' %}{{ m.kpi('만료 임박(7일)', expiring, href='/admin?tab=operators', level='wait' if expiring) }}{% endif %}
 </div>
-{{ m.tabs([('operators', '운영자', operators | length), ('orgs', '조직', orgs | length), ('suggestions', '연결 제안', suggestions | length)] + ([('transfer', '백업·이전', transfers | length)] if actor.role == 'admin' else []), tab, '/admin') }}
+{{ m.tabs([('operators', '운영자', operators | length), ('orgs', '조직', orgs | length), ('suggestions', '연결 제안', suggestions | length)] + ([('transfer', '백업·이전', transfers | length), ('siem', 'SIEM 전달', siem | length)] if actor.role == 'admin' else []), tab, '/admin') }}
 {% if tab == 'operators' %}
 {% if operators %}
 <table><thead><tr><th>이름</th><th>역할</th><th>사용자</th><th>만료</th><th></th></tr></thead><tbody>
@@ -61,6 +61,18 @@
 {% for t in transfers %}<tr><td class="nowrap">{{ t.inserted_at | when }}</td><td>{{ L.pick(L.EVENT_KIND, t.kind) }}</td><td>{{ t.actor | who }}</td><td>{{ t.file | blank }}</td><td>{{ t.mode | blank }}</td><td>{{ '예' if t.encrypted else '아니오' if t.encrypted is not none else '-' }}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}<div class="empty"><h3>백업·이전 기록이 없습니다</h3></div>{% endif %}
+{% elif tab == 'siem' and actor.role == 'admin' %}
+{{ m.copy_cmd('mint-litellm siem add 이름 --kind syslog --endpoint tls://호스트:6514') }}
+{{ m.copy_cmd('mint-litellm siem add 이름 --kind hec --endpoint https://호스트:8088 --token-env 토큰변수') }}
+{% if siem %}
+<table><thead><tr><th>이름</th><th>종류</th><th>주소</th><th>상태</th><th>마지막 전달</th><th class="num">밀린 사건</th><th class="num">보낸 사건</th><th>마지막 시험</th><th></th></tr></thead><tbody>
+{% for s in siem %}{% set st = 'error' if s.failing_since else ('ok' if s.last_delivered_at else 'wait') %}<tr><td>{{ s.name }}</td><td>{{ L.pick(L.SIEM_KIND, s.kind) }}</td><td>{{ s.address }}</td>
+<td>{{ m.badge(L.SIEM_STATE, st) }}{% if s.failing_since %} {{ L.siem_error(s.last_error) }} · {{ s.consecutive_failures }}회 연속 · {{ s.failing_since | when }}부터{% endif %}</td>
+<td class="nowrap">{{ s.last_delivered_at | when }}</td><td class="num">{{ s.backlog }}</td><td class="num">{{ s.sent_total }}</td>
+<td class="nowrap">{% if s.last_test_at %}{{ s.last_test_at | when }} · {{ '실패(' ~ L.siem_error(s.last_test_error) ~ ')' if s.last_test_error else '성공' }}{% else %}—{% endif %}</td>
+<td><form method="post" action="/admin/siem/{{ s.name | urlencode }}/test" class="row-actions">{{ m.csrf(actor) }}<button type="submit">시험 전송</button></form></td></tr>{% endfor %}
+</tbody></table>
+{% else %}<div class="empty"><h3>SIEM 전달 대상이 없습니다</h3></div>{% endif %}
 {% else %}
 {% for rule in L.ORG_RULE %}{% set group = suggestions | selectattr('rule', 'equalto', rule) | list %}{% if group %}
 <h2>{{ L.ORG_RULE[rule] }} ({{ group | length }}건)</h2>

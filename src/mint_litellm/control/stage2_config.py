@@ -219,6 +219,8 @@ class Stage2Settings:
     org_suggest_seconds: int = 3600
     # 평문 비밀 점검이 읽는 LiteLLM 설정 파일. 없으면 점검하지 않는다.
     litellm_config: Path | None = None
+    # SIEM 전달이 이 시간(분) 넘게 막히면 경보를 연다.
+    siem_alert_minutes: int = 15
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "Stage2Settings":
@@ -272,6 +274,7 @@ class Stage2Settings:
             event_retention_days=_retention_days(env),
             litellm_config=Path(env["MINT_LITELLM_CONFIG"])
             if env.get("MINT_LITELLM_CONFIG") else None,
+            siem_alert_minutes=_seconds(env, "MINT_SIEM_ALERT_MINUTES", 15),
             console_url=(env.get("MINT_CONSOLE_URL") or "").strip() or None,
         )
         if settings.session_idle_seconds > settings.session_absolute_seconds:

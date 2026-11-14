@@ -28,6 +28,10 @@
 | `mint-litellm backup restore` | `admin` | `<파일>`로 `mint` 스키마를 되돌린다. 마이그레이션 수준·인스턴스가 다르면 거부하고 `--yes`가 필요하다. 관리 권한 접속은 `MINT_RESTORE_DATABASE_URL`. | - | `backup_restored` |
 | `mint-litellm config export` | `admin` | 비밀 없이 서버 정의·승인·규칙·거부·허용 목록·조직·운영자 역할·모드 설정을 `<파일>`(JSON)로 내보낸다. | - | `config_exported` |
 | `mint-litellm config import` | `admin` | 내보낸 설정을 자연 키로 되풀이해도 같게 가져온다. 서버·운영자·승인은 가져오지 않고 할 일로 알린다. `--dry-run`은 차이만 보인다. | - | `config_imported` |
+| `mint-litellm siem add` | `admin` | SIEM 전달 대상을 추가한다. `--kind`는 `syslog`·`cef`(syslog 위 CEF)·`hec`(Splunk)·`elastic`·`otlp`, `--endpoint`는 syslog·cef가 `tls://호스트:포트`·`tcp://…`·`udp://…`, 나머지가 `http(s)://…`이다. 토큰은 `--token-env <환경 변수 이름>`이나 `--token-file <경로>`로 읽을 곳만 적고(작업 실행기가 보낼 때 읽으며 저장하지 않는다), `--index`·`--ca-file`·`--framing octet|newline`을 줄 수 있다. 기본은 지금부터의 사건을 보내고 `--from-start`는 처음부터 보낸다. | - | `siem_target_added` |
+| `mint-litellm siem list` | `admin` | 대상별 종류·주소(접속 지점만)·상태·밀린 사건 수·보낸 수·마지막 전달 시각을 보인다. | - | - |
+| `mint-litellm siem remove` | `admin` | 대상을 제거한다. | - | `siem_target_removed` |
+| `mint-litellm siem test` | `admin` | 대상에 시험 메시지를 보내도록 요청하고 작업 실행기의 결과를 기다린다(`--no-wait`는 요청만). | - | - |
 | `mint-litellm status` | 모든 역할 | 모드, 정책 판본, 경보, 관측 항목과 같은 「할 일」 목록을 표시한다. | `/v1/mcp/server`, `/key/list`, `/team/list` | - |
 | `mint-litellm operator add` | `admin` | 운영자를 등록하고 토큰을 발급한다. `--save-token <파일>`을 주면 토큰을 화면에 보이지 않고 0600 파일로만 받는다(파일이 이미 있으면 운영자를 만들기 전에 거부한다). `deploy/mint.sh cli`로 실행하면 파일은 컨테이너 안이 아니라 호스트의 그 경로에 만든다. `admin`·`approver`는 LiteLLM 사용자 식별자 (`--user-id`) 결속이 필수이다. | `/user/info` | `operator_added` |
 | `mint-litellm operator bootstrap` | 토큰 불필요 | `operators` 표가 비어 있을 때만 토큰 없이 첫 `admin` 운영자를 만들고 토큰을 발급한다. `--name`과 `--user-id`가 필요하며, 사용자가 LiteLLM의 사람 사용자로 존재하는지 확인한다. 행위자는 `bootstrap`으로 기록하고, 운영자가 이미 있으면 거부한다. | `/user/info` | `operator_added` |
@@ -227,6 +231,7 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 | `MINT_VULN_FEED_TIMEOUT_SECONDS` | 조회 요청 한 번의 제한 시간(초) | `15` |
 | `MINT_EVENT_RETENTION_DAYS` | 사건 원장 보관 일수(31 이상). 설정하면 달 전체가 이보다 오래되고 내보내기 파일을 다시 읽어 확인한 월 분할을 지운다. 없으면 아무것도 지우지 않는다. MINT는 기본값을 정하지 않는다 | 없음(끔) |
 | `MINT_WEBHOOK_FORMATS` | 웹훅 주소마다 하나씩, 같은 순서로 적는 전송 형식(`json`·`slack`·`teams`). 수가 맞지 않거나 모르는 값이면 기동을 거부한다. | 모두 `json` |
+| `MINT_SIEM_ALERT_MINUTES` | SIEM 전달이 이 시간(분)을 넘게 막히면 경보 `siem_forward_failing`(높음)을 연다. 전달이 풀리면 닫힌다. | `15` |
 | `MINT_LINK_TTL_SECONDS` | 알림 속 콘솔 바로가기 링크의 유효 시간(초, 최소 60). | `86400` |
 | `MINT_BULK_WINDOW_SECONDS`, `MINT_BULK_BASELINE_SECONDS` | 대량 추출 탐지의 최근 구간(초)과 평균을 내는 기간(초). 평균은 최근 구간 앞의 기간을 최근 구간 길이로 나눈 값이다. | `900`, `604800` |
 | `MINT_BULK_FACTOR` | 최근 구간의 결과량이 구간당 평균의 이 배수 이상이면 경보 후보이다. | `5` |

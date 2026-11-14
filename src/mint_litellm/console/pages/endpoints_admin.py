@@ -8,7 +8,8 @@ from mint_litellm.console import api
 from mint_litellm.console.core import Actor, page_actor, require_csrf
 from mint_litellm.console.pages.common import act
 from mint_litellm.console.templating import render
-from mint_litellm.control import endpoint_kits, org_suggest
+from mint_litellm.control import endpoint_kits, org_suggest, siem
+from mint_litellm.control.errors import AdminCode, AdminError
 from mint_litellm.control.services import operators as operator_service
 from mint_litellm.control.services import orgs as org_service
 from mint_litellm.control.services import reads
@@ -108,7 +109,8 @@ def admin_page(request: Request, actor: Actor, error=None, status=200, tab=None)
         "bindings": reads.bindings(actor.conn, actor.instance),
         "suggestions": org_service.list_suggestions(actor.ctx),
         "transfers": reads.transfers(actor.conn, actor.instance) if actor.role == "admin" else [],
-        "tab": tab if tab in ("orgs", "suggestions", "transfer") else "operators",
+        "siem": siem.listing(actor.conn, actor.instance) if actor.role == "admin" else [],
+        "tab": tab if tab in ("orgs", "suggestions", "transfer", "siem") else "operators",
         "error": error,
     }
     return render(request, "admin.html", ctx, actor=actor, status=status)
@@ -155,6 +157,20 @@ def remove_operator(
 
     return act(actor, action, "operator_removed", "/admin?tab=operators",
                tabbed(request, actor, "operators"))
+
+
+@router.post("/admin/siem/{name}/test")
+def siem_test(name: str, request: Request, actor: Actor = Depends(page_actor)):
+    """시험 전송 요청. 비밀은 작업 실행기만 읽으므로 요청만 남기고 실행기가 보낸다."""
+
+    def action():
+        if actor.role != "admin":
+            raise AdminError(AdminCode.FORBIDDEN, "관리자만 시험 전송을 할 수 있습니다.")
+        if not siem.request_test(actor.conn, actor.instance, name):
+            raise AdminError(AdminCode.NOT_FOUND, "SIEM 대상이 없습니다.")
+
+    return act(actor, action, "siem_test_requested", "/admin?tab=siem",
+               tabbed(request, actor, "siem"))
 
 
 @router.post("/orgs")

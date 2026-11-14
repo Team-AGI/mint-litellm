@@ -1,0 +1,1 @@
+- 결정 사건·승인·경보·관리자 변경을 SIEM으로 보내는 전달 작업을 더했다(syslog RFC 5424 TLS·TCP·UDP, CEF, Splunk HEC, Elastic 벌크, OTLP 로그). 대상별 위치·백오프로 최소 한 번 전달하고, 막히면 경보 `siem_forward_failing`을 열며, `siem add|list|remove|test`와 콘솔 「SIEM 전달」 탭으로 관리한다(마이그레이션 049).
