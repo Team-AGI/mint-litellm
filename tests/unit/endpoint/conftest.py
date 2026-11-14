@@ -22,5 +22,6 @@ def reports(monkeypatch):
     monkeypatch.setattr(kit_module, "codex_version", lambda home: None)
     monkeypatch.setattr(kit_module, "find_claude", lambda home: None)
     monkeypatch.setattr(kit_module, "scan_processes", lambda windows: [])
+    monkeypatch.setattr(kit_module, "scan_outside", lambda windows: [])
     monkeypatch.setattr(kit_module, "scan_autostart", lambda home, windows, user: [])
     return sent

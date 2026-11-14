@@ -415,6 +415,10 @@ class ResponseObservation(BaseModel):
     aud_mismatch: bool = False
     aud_unchecked: bool = False
     aud_unchecked_reason: str | None = None  # opaque(불투명 토큰), not_forwarded(훅에 전달 안 됨)
+    # 결과가 검사 상한을 넘어 끝까지 보지 못했는지, 구조화된 결과에서 비밀·개인정보가 걸린 JSON 경로
+    # (값은 남기지 않는다).
+    scan_truncated: bool = False
+    finding_paths: tuple[str, ...] = ()
     # 결과 단계 가드레일이 없는 LiteLLM(저하 운용): 걸려도 막지도 가리지도 못한 결과.
     result_unenforced: bool = False
     # 새 행부터 남는 결과 분류(success·tool_error·output_blocked).
@@ -441,6 +445,8 @@ class AlertKind(StrEnum):
     ENDPOINT_UNMANAGED = "endpoint_unmanaged"
     ENDPOINT_STALE_PROCESS = "endpoint_stale_process"
     ENDPOINT_STALE_AUTOSTART = "endpoint_stale_autostart"
+    ENDPOINT_OUTSIDE_RETIRED = "endpoint_outside_retired"
+    ENDPOINT_OUTSIDE_UNAPPROVED = "endpoint_outside_unapproved"
     ENDPOINT_UNSANDBOXED = "endpoint_unsandboxed"
     ENDPOINT_EGRESS_REFUSED = "endpoint_egress_refused"
     ENDPOINT_EGRESS_UNFILTERED = "endpoint_egress_unfiltered"
@@ -450,3 +456,4 @@ class AlertKind(StrEnum):
     BULK_EXTRACTION = "bulk_extraction"
     CONTENT_FINDING_UNMANAGED = "content_finding_unmanaged"
     RESULT_UNENFORCED = "result_unenforced"
+    CONFIG_PLAINTEXT_SECRET = "config_plaintext_secret"

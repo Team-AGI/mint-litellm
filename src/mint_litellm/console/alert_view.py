@@ -29,6 +29,7 @@ KEY = {
     "plan": "계획", "action": "조치", "tools": "도구", "feed": "조회 주소", "error": "오류",
     "cause": "원인", "file_epoch": "파일 세대", "ecosystem": "제공처", "package": "패키지",
     "name": "이름", "version": "버전", "registry": "저장소", "vuln_id": "취약점 번호",
+    "path": "의존 경로",
     "severity": "등급", "cvss": "점수", "exploited": "악용 확인", "deadline_at": "조치 기한",
     "excepted": "예외 증빙", "user_id": "사용자", "key_alias": "키 이름", "count": "건수",
     "autostart_kind": "자동 시작 방식", "autostart_name": "자동 시작 이름", "drift": "변경 유형",
@@ -71,6 +72,7 @@ SUMMARY = {
     "result_unenforced": (
         "최근 {window_seconds}초 동안 결과 {calls}건이 검사에 걸렸지만 막지 못했습니다."
     ),
+    "config_plaintext_secret": "LiteLLM 설정 {count}곳에 비밀이 평문으로 적혀 있습니다.",
     "call_spike": "서버 {server_id}의 {tool} 호출이 최근 {calls}건입니다(평소 {baseline_calls}건).",
     "bulk_extraction": (
         "서버 {server_id}에서 최근 {items}항목({bytes}바이트)을 받아 갔습니다"
@@ -100,10 +102,13 @@ SUMMARY = {
     "package_vulnerable": "서버 {server_id}의 패키지 {package} {version}에 취약점이 있습니다.",
     "package_vuln_due": "서버 {server_id}의 취약점 조치 기한이 다가오거나 지났습니다.",
     "vuln_feed_unreachable": "취약점 조회처에 연결하지 못했습니다.",
+    "dep_graph_unreachable": "의존 패키지 조회처에 연결하지 못했습니다.",
     "endpoint_stale_server": "단말 {key_alias}에 폐기된 서버 {server_id}가 남아 있습니다.",
     "endpoint_unmanaged": "단말 {key_alias}에 관리되지 않는 설치가 있습니다.",
     "endpoint_stale_process": "단말 {key_alias}에서 폐기된 서버 {server_id}가 실행 중입니다.",
     "endpoint_stale_autostart": "단말 {key_alias}에 폐기된 서버 {server_id}의 자동 시작 있음",
+    "endpoint_outside_retired": "단말 {key_alias}: 폐기 서버 패키지 {package}가 실행기 밖 실행 중",
+    "endpoint_outside_unapproved": "단말 {key_alias}: 미승인 패키지 {package}가 실행기 밖 실행 중",
     "endpoint_unsandboxed": "단말 {key_alias}에서 서버 {server_id}가 격리 없이 실행 중입니다.",
     "endpoint_egress_unfiltered": "단말 {key_alias}: 서버 {server_id}의 호스트 제한 미집행",
     "endpoint_egress_refused": "단말 {key_alias}: 서버 {server_id}의 허용 밖 접속 {count}건 거절",
@@ -117,7 +122,9 @@ def summary(kind: str, subject: dict[str, Any]) -> str:
         return labels.pick(labels.ALERT_KIND, kind)
     known = {k: v for k, v in (subject or {}).items() if v not in (None, "")}
     values = defaultdict(lambda: "—", known)
-    return text.format_map(values)
+    out = text.format_map(values)
+    path = (subject or {}).get("path") if kind.startswith("package_vuln") else None
+    return f"{out} (의존 경로: {path})" if path else out
 
 
 def _text(key: str, value: Any, zone: str) -> str:

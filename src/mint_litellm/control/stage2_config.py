@@ -138,6 +138,18 @@ def _feed_url(raw: str | None) -> str:
     return raw.strip().rstrip("/")
 
 
+def _graph_url(raw: str | None) -> str:
+    """의존 그래프 조회 주소. 설정하지 않으면 공개 deps.dev이고, 빈 값이면 조회하지 않는다."""
+    if raw is None:
+        return "https://api.deps.dev"
+    if not raw.strip():
+        return ""
+    parts = urlsplit(raw.strip())
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ControlError(f"MINT_DEPS_GRAPH_URL은 http 또는 https 주소여야 합니다: {raw!r}")
+    return raw.strip().rstrip("/")
+
+
 @dataclass(frozen=True)
 class Stage2Settings:
     export_dir: Path
@@ -196,6 +208,8 @@ class Stage2Settings:
     # 알려진 취약점 조회(OSV 형식 API): 주소, 조회 주기, 요청 제한 시간(초). 기본값은 MINT가 채운다.
     vuln_feed_url: str = "https://api.osv.dev"
     vuln_scan_seconds: int = 900
+    # 전이 의존성을 구하는 deps.dev 형식 API 주소. 빈 값이면 의존 패키지는 조회하지 않는다.
+    deps_graph_url: str = "https://api.deps.dev"
     instance_mismatch_grace_seconds: int = 900
     vuln_feed_timeout_seconds: int = 15
     # 사건 원장 보관 일수. 없으면(기본) 분할을 지우지 않는다. MINT는 기본값을 정하지 않는다.
@@ -203,6 +217,8 @@ class Stage2Settings:
     # 조직 연결 제안: 팀 메타데이터에서 조직을 읽는 키와 점검 주기(초). 기본값은 MINT가 채운다.
     org_meta_key: str = "mint_org"
     org_suggest_seconds: int = 3600
+    # 평문 비밀 점검이 읽는 LiteLLM 설정 파일. 없으면 점검하지 않는다.
+    litellm_config: Path | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "Stage2Settings":
@@ -246,6 +262,7 @@ class Stage2Settings:
             bulk_min_items=_seconds(env, "MINT_BULK_MIN_ITEMS", 2000),
             bulk_action=_bulk_action(env.get("MINT_BULK_EXTRACTION_ACTION")),
             vuln_feed_url=_feed_url(env.get("MINT_VULN_FEED_URL")),
+            deps_graph_url=_graph_url(env.get("MINT_DEPS_GRAPH_URL")),
             vuln_scan_seconds=_seconds(env, "MINT_VULN_SCAN_SECONDS", 900, 60),
             instance_mismatch_grace_seconds=_seconds(
                 env, "MINT_INSTANCE_MISMATCH_GRACE_SECONDS", 900, 0),
@@ -253,6 +270,8 @@ class Stage2Settings:
             org_suggest_seconds=_seconds(env, "MINT_ORG_SUGGEST_SECONDS", 3600, 60),
             vuln_feed_timeout_seconds=_seconds(env, "MINT_VULN_FEED_TIMEOUT_SECONDS", 15),
             event_retention_days=_retention_days(env),
+            litellm_config=Path(env["MINT_LITELLM_CONFIG"])
+            if env.get("MINT_LITELLM_CONFIG") else None,
             console_url=(env.get("MINT_CONSOLE_URL") or "").strip() or None,
         )
         if settings.session_idle_seconds > settings.session_absolute_seconds:

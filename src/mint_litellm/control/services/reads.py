@@ -96,14 +96,28 @@ def server(conn: psycopg.Connection, instance: str, server_id: str) -> dict | No
     row["vulns"] = fetchall(
         conn,
         "SELECT v.ecosystem, v.name, v.version, v.vuln_id, v.severity, v.cvss, v.exploited,"
-        " v.first_seen_at, v.first_seen_at + interval '48 hours' AS deadline_at"
+        " v.first_seen_at, v.first_seen_at + interval '48 hours' AS deadline_at, NULL::text AS path"
         " FROM mint.servers s JOIN mint.server_packages p"
         " ON p.instance_id = s.instance_id AND p.server_id = s.server_id"
         " AND p.exec_contract_sha256 = s.exec_contract_sha256 JOIN mint.package_vulns v"
         " ON v.instance_id = p.instance_id AND v.ecosystem = p.ecosystem AND v.name = p.name"
         " AND v.version = p.version AND v.cleared_at IS NULL"
-        " WHERE s.instance_id = %s AND s.server_id = %s ORDER BY v.first_seen_at",
-        (instance, server_id),
+        " WHERE s.instance_id = %s AND s.server_id = %s"
+        " UNION ALL SELECT v.ecosystem, v.name, v.version, v.vuln_id, v.severity, v.cvss,"
+        " v.exploited, v.first_seen_at, v.first_seen_at + interval '48 hours', d.path"
+        " FROM mint.servers s JOIN mint.server_packages p"
+        " ON p.instance_id = s.instance_id AND p.server_id = s.server_id"
+        " AND p.exec_contract_sha256 = s.exec_contract_sha256 JOIN mint.package_deps t"
+        " ON t.instance_id = p.instance_id AND t.ecosystem = p.ecosystem AND t.name = p.name"
+        " AND t.version = p.version AND t.dep_name = t.name AND t.dep_version = t.version"
+        " JOIN mint.package_deps d ON d.instance_id = t.instance_id AND d.ecosystem = t.ecosystem"
+        " AND d.name = t.name AND d.version = t.version AND d.resolved_at = t.resolved_at"
+        " AND NOT (d.dep_name = d.name AND d.dep_version = d.version)"
+        " JOIN mint.package_vulns v ON v.instance_id = d.instance_id"
+        " AND v.ecosystem = d.ecosystem AND v.name = d.dep_name AND v.version = d.dep_version"
+        " AND v.cleared_at IS NULL WHERE s.instance_id = %s AND s.server_id = %s"
+        " ORDER BY first_seen_at",
+        (instance, server_id, instance, server_id),
     )
     row["relations"] = relations(conn, instance, server_id)
     row["approvals"] = approvals(conn, instance, server_id=server_id)

@@ -73,6 +73,43 @@ def test_a_process_or_autostart_of_a_server_that_is_not_approved_is_stale():
     assert not endpoint_posture.findings(installs, {"live": "approved", "gone": "suspended"})
 
 
+def test_packages_run_outside_the_launcher_are_matched_against_the_servers_packages():
+    outside = [
+        {"package": "mcp-old", "ecosystem": "npm", "count": 1},
+        {"package": "Mcp_Both", "ecosystem": "pypi", "count": 2},
+        {"package": "@a/mcp-live", "ecosystem": "npm", "count": 1},
+        {"package": "mcp-new", "ecosystem": "npm", "count": 3},
+        {"package": "mcp/fetch", "ecosystem": "container", "count": 1},
+    ]
+    installs = [{**row("user"), "outside_processes": outside}]
+    status = {
+        ("npm", "mcp-old"): {"terminated"},
+        ("pypi", "mcp-both"): {"terminated", "approved"},  # 승인 서버도 같은 패키지를 씀
+        ("npm", "@a/mcp-live"): {"suspended"},
+        ("container", "mcp/fetch"): {"rejected"},
+    }
+    wanted = endpoint_posture.findings(installs, {}, package_status=status)
+    assert sorted(wanted) == [
+        "endpoint_outside_retired:mint-kit-a:npm:mcp-old",
+        "endpoint_outside_unapproved:mint-kit-a:container:mcp/fetch",
+        "endpoint_outside_unapproved:mint-kit-a:npm:mcp-new",
+        "endpoint_unmanaged:mint-kit-a",
+    ]
+    kind, severity, subject = wanted["endpoint_outside_retired:mint-kit-a:npm:mcp-old"]
+    assert (kind, severity) == ("endpoint_outside_retired", "high")
+    assert subject["package"] == "mcp-old" and subject["ecosystem"] == "npm"
+    assert wanted["endpoint_outside_unapproved:mint-kit-a:npm:mcp-new"][1] == "medium"
+    # 계약 쪽 이름은 구분 기호·대소문자·기본 저장소 접두어가 달라도 같은 패키지로 본다.
+    assert endpoint_posture.package_key("pypi", "MCP.Server_X") == ("pypi", "mcp-server-x")
+    assert endpoint_posture.package_key("container", "docker.io/library/mcp-a") == (
+        "container",
+        "mcp-a",
+    )
+    # 이전 묶음(필드 없음)이나 빈 목록은 아무것도 열지 않는다.
+    assert endpoint_posture.findings([row("managed")], {}) == {}
+    assert endpoint_posture.findings([{**row("managed"), "outside_processes": []}], {}) == {}
+
+
 def test_an_inventory_of_approved_servers_or_none_at_all_is_clean():
     clean = {**row("managed"), "processes": [{"server": "live", "count": 1}],
              "autostart": [{"kind": "autostart", "name": "a.desktop", "server": "live"}]}
@@ -90,6 +127,8 @@ def test_the_catalog_names_the_policies_these_alerts_report():
     assert by_id["endpoint_unmanaged"]["reference_policies"] == ["POL-E-06"]
     assert by_id["endpoint_stale_process"]["reference_policies"] == ["POL-D-04"]
     assert by_id["endpoint_stale_autostart"]["reference_policies"] == ["POL-D-04"]
+    assert by_id["endpoint_outside_retired"]["reference_policies"] == ["POL-D-04"]
+    assert by_id["endpoint_outside_unapproved"]["reference_policies"] == ["POL-D-04"]
     assert by_id["endpoint_unsandboxed"]["reference_policies"] == ["POL-O-13", "POL-I-08"]
     assert by_id["endpoint_egress_refused"]["reference_policies"] == ["POL-O-12", "POL-O-13"]
     assert "POL-D-04" in by_id["endpoint_silent"]["reference_policies"]
@@ -241,6 +280,37 @@ def test_the_scan_opens_and_closes_alerts_for_a_leftover_process_and_autostart(c
     assert open_alerts(conn) == []
 
 
+def test_the_scan_matches_outside_packages_with_registered_server_packages(ctx, conn):
+    npx = ExecContract(
+        executable="/usr/bin/npx", argv=["-y", "mcp-db@1.0.0"], executable_sha256="cd" * 32
+    )
+    servers.register_local(ctx, "local-1", npx)
+    conn.execute("UPDATE mint.servers SET status = 'approved' WHERE server_id = 'local-1'")
+    endpoint_kits.issue_key(conn, Issuer(), INSTANCE, user_id="u1", team_id=None, issued_by="u1")
+    outside = [
+        {"package": "mcp-db", "ecosystem": "npm", "count": 1},
+        {"package": "mcp-other", "ecosystem": "npm", "count": 1},
+    ]
+    conn.execute(
+        "UPDATE mint.endpoint_installs SET install_mode = 'managed', kit_version = 'k',"
+        " mcp_servers = '[]'::jsonb, reported_at = now(), outside_processes = %s::jsonb"
+        " WHERE revoked_at IS NULL",
+        (json.dumps(outside),),
+    )
+    alias = _alias(conn)
+    assert endpoint_posture.scan(conn, INSTANCE) == 1
+    assert open_alerts(conn) == [f"endpoint_outside_unapproved:{alias}:npm:mcp-other"]
+    # 서버가 폐기되면 같은 패키지는 폐기 서버 패키지의 경보로 바뀐다.
+    conn.execute("UPDATE mint.servers SET status = 'terminating' WHERE server_id = 'local-1'")
+    endpoint_posture.scan(conn, INSTANCE)
+    assert f"endpoint_outside_retired:{alias}:npm:mcp-db" in open_alerts(conn)
+    conn.execute(
+        "UPDATE mint.endpoint_installs SET outside_processes = '[]'::jsonb WHERE revoked_at IS NULL"
+    )
+    endpoint_posture.scan(conn, INSTANCE)
+    assert open_alerts(conn) == []
+
+
 def test_silence_and_expiry_alerts_open_and_close_with_the_reports(conn):
     endpoint_kits.issue_key(conn, Issuer(), INSTANCE, user_id="u1", team_id=None, issued_by="u1")
     report(conn, "managed", [])
@@ -318,3 +388,19 @@ def test_unfiltered_egress_raises_an_alert_for_the_flagged_server_only():
     wanted = endpoint_posture.findings([{**row("managed"), "processes": processes}], statuses)
     assert list(wanted) == ["endpoint_egress_unfiltered:mint-kit-a:a"]
     assert wanted["endpoint_egress_unfiltered:mint-kit-a:a"][1] == "medium"
+
+
+def test_a_hosts_contract_server_in_an_appcontainer_is_unfiltered_without_the_flag():
+    def found(sandbox, network, **extra):
+        item = {"server": "s", "count": 1, "sandbox": sandbox, **extra}
+        return endpoint_posture.findings(
+            [{**row("managed"), "processes": [item]}],
+            {"s": "approved"},
+            contracts={"s": {"network": network}},
+        )
+
+    key = "endpoint_egress_unfiltered:mint-kit-a:s"
+    assert key in found("appcontainer", "hosts")
+    assert not found("appcontainer", "none") and not found("appcontainer", "any")
+    assert not found("bwrap", "hosts") and not found("unsupported", "hosts")
+    assert key in found("none", "hosts", egress_unfiltered=True)

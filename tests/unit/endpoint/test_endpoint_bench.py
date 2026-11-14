@@ -10,7 +10,14 @@ import pytest
 from kit_loader import KIT
 from test_kit_broker import Server
 
-pytestmark = pytest.mark.skipif(not sys.platform.startswith("linux"), reason="서버 실행기")
+pytestmark = pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not Path("/usr/bin/python3").exists(),
+    reason="서버 실행기",
+)
+
+# 시스템 인터프리터라 소유자와 무관하게 격리 안에서 열린다. 가상 환경이 다른 사용자의 비공개 홈에
+# 있으면(root로 실행하는 경우) 격리 안에서 그 경로를 열지 못해 서버가 시작하지 못한다.
+SYSTEM_PYTHON = "/usr/bin/python3"
 
 spec = importlib.util.spec_from_file_location(
     "endpoint_cost", Path(__file__).parents[2] / "bench" / "endpoint_cost.py"
@@ -49,8 +56,8 @@ def test_the_comparison_counts_wrong_decisions_effects_revocation_and_storage(tm
     script = tmp_path / "server.py"
     script.write_text(FAKE_SERVER)
     contract = {
-        "schema_version": 1, "identity_kind": "stdio", "executable": sys.executable,
-        "argv": [str(script)], "cwd": None, "executable_sha256": sha(sys.executable),
+        "schema_version": 1, "identity_kind": "stdio", "executable": SYSTEM_PYTHON,
+        "argv": [str(script)], "cwd": None, "executable_sha256": sha(SYSTEM_PYTHON),
         "script_sha256": sha(script), "env": {}, "secret_refs": {},
         "file_access": [{"path": str(tmp_path), "mode": "rw"}],  # 격리 안에서도 쓸 수 있게
     }  # fmt: skip
@@ -69,7 +76,7 @@ def test_the_comparison_counts_wrong_decisions_effects_revocation_and_storage(tm
     srv = Server(answer=decide)
     workload = tmp_path / "w.json"
     workload.write_text(json.dumps({
-        "server": {"name": "srv", "argv": [sys.executable, str(script)]},
+        "server": {"name": "srv", "argv": [SYSTEM_PYTHON, str(script)]},
         "cases": [
             {"id": "a", "tool": "write", "expect": "allow",
              "arguments": {"path": str(tmp_path / "ok")}, "effect_file": str(tmp_path / "ok")},

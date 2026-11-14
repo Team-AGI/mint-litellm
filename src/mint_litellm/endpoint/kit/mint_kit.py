@@ -227,16 +227,289 @@ def scan_processes(windows: bool) -> list[dict]:
     return [{"server": n, "count": c} for n, c in sorted(counts.items())][:MAX_ITEMS]
 
 
+# --- 실행기 밖에서 직접 뜬 MCP 서버 패키지 ------------------------------------------------------
+# ``npx -y @범위/서버``처럼 실행기를 거치지 않고 패키지를 바로 돌리는 명령줄에서 패키지 식별자만
+# 읽는다(인자·경로·사용자 이름은 보고하지 않는다: 인자에 비밀이 들 수 있다). 이름에 ``mcp``나
+# ``modelcontextprotocol``이 든 패키지만 센다.
+OUTSIDE_TOKEN = re.compile(r"\"([^\"]*)\"|'([^']*)'|(\S+)")
+OUTSIDE_NAME = re.compile(r"^(?:@[a-z0-9._-]{1,64}/)?[a-z0-9._-]{1,64}$")
+OUTSIDE_IMAGE = re.compile(r"^[a-z0-9][a-z0-9._:/-]{0,200}$")
+OUTSIDE_MCP = re.compile(r"mcp|modelcontextprotocol", re.IGNORECASE)
+OUTSIDE_FLAGS = frozenset(
+    "--registry --cache --userconfig -c --call --index-url --index --default-index --with"
+    " --python --with-requirements --env -e --volume -v --publish -p --name --workdir -w --user -u"
+    " --network --net --entrypoint --mount --label -l --env-file --add-host --platform --memory -m"
+    " --cpus --hostname -h --pull --restart --cap-add --cap-drop --security-opt --device"
+    " --log-driver --tmpfs --dns --group-add --ulimit --shm-size".split()
+)
+# 실행기 앞에는 이런 감싸기 명령만 올 수 있다(``grep npx 파일``처럼 인자로 든 이름은 거른다).
+OUTSIDE_WRAPPERS = frozenset(
+    "cmd /c /k env sh bash zsh dash powershell pwsh node nodejs sudo exec start call -c -lc"
+    " -command -noprofile -nologo".split()
+)
+
+
+def outside_tokens(command: str) -> list[str]:
+    tokens: list[str] = []
+    for quoted, single, plain in OUTSIDE_TOKEN.findall(command):
+        word = quoted or single or plain
+        # ``cmd /c "npx -y 패키지"``처럼 한 덩어리로 감싼 명령줄은 한 번 더 쪼갠다.
+        if (quoted or single) and re.match(r"[^\s\\/]+\s", word.strip()):
+            tokens += [a or b or c for a, b, c in OUTSIDE_TOKEN.findall(word)]
+        else:
+            tokens.append(word)
+    return tokens
+
+
+def outside_base(token: str) -> str:
+    name = re.split(r"[\\/]", token)[-1].lower()
+    return re.sub(r"\.(exe|cmd|bat|ps1|js|cjs|mjs)$", "", name)
+
+
+def outside_positional(args: list[str], values: tuple[str, ...] = ()) -> str | None:
+    """옵션과 그 값을 건너뛴 첫 위치 인자. ``values`` 옵션의 값은 따로 우선한다."""
+    skip = False
+    for i, arg in enumerate(args):
+        if skip:
+            skip = False
+        elif arg.split("=", 1)[0] in values:
+            if "=" in arg:
+                return arg.split("=", 1)[1]
+            return args[i + 1] if i + 1 < len(args) else None
+        elif arg.startswith("-"):
+            skip = "=" not in arg and arg in OUTSIDE_FLAGS
+        else:
+            return arg
+    return None
+
+
+def outside_package(command: str) -> tuple[str, str] | None:
+    """패키지를 바로 돌리는 명령줄의 (생태계, 패키지 이름). MCP 서버 패키지가 아니면 None."""
+    tokens = outside_tokens(command)
+    found: tuple[str, str] | None = None
+    for i, token in enumerate(tokens):
+        if i and (prev := tokens[i - 1]).lower() not in OUTSIDE_WRAPPERS:
+            if outside_base(prev) not in OUTSIDE_WRAPPERS:
+                break
+        base, rest = outside_base(token), tokens[i + 1 :]
+        if base in ("npx", "npx-cli", "bunx"):
+            found = ("npm", outside_positional(rest, ("-p", "--package")) or "")
+        elif base in ("npm", "pnpm", "yarn", "bun") and rest[:1] in (["exec"], ["x"], ["dlx"]):
+            found = ("npm", outside_positional(rest[1:], ("-p", "--package")) or "")
+        elif base == "uvx" or (base == "uv" and rest[:2] == ["tool", "run"]):
+            args = rest[2:] if base == "uv" else rest
+            found = ("pypi", outside_positional(args, ("--from",)) or "")
+        elif base == "pipx" and rest[:1] == ["run"]:
+            found = ("pypi", outside_positional(rest[1:], ("--spec",)) or "")
+        elif base.startswith("python") and "-m" in rest and rest.index("-m") + 1 < len(rest):
+            found = ("pypi", rest[rest.index("-m") + 1])
+        elif base in ("docker", "podman") and rest[:1] == ["run"]:
+            found = ("container", outside_positional(rest[1:]) or "")
+        if found:
+            break
+    if not found:
+        return None
+    ecosystem, spec = found
+    if ecosystem == "npm":
+        at = spec.find("@", 1)
+        name = (spec[:at] if at > 0 else spec).lower()
+        ok = bool(OUTSIDE_NAME.match(name))
+    elif ecosystem == "pypi":
+        name = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", spec)
+        name = name.group(0).lower() if name else ""
+        ok = bool(name) and spec[len(name) :][:1] in ("", "=", "<", ">", "!", "~", "@", ";", "[")
+    else:
+        name = spec.split("@", 1)[0].lower()
+        tail = name.rsplit("/", 1)[-1]
+        name = name[: -len(tail.split(":", 1)[1]) - 1] if ":" in tail else name
+        ok = bool(OUTSIDE_IMAGE.match(name))
+    return (ecosystem, name) if ok and OUTSIDE_MCP.search(name) else None
+
+
+def process_entries(windows: bool) -> list[tuple[int, int, str]]:
+    """(PID, 부모 PID, 명령줄). 부모를 읽지 못하면 0."""
+    rows: list[tuple[int, int, str]] = []
+    if windows:
+        out = capture(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_Process | ForEach-Object"
+             ' { "$($_.ProcessId) $($_.ParentProcessId) $($_.CommandLine)" }']
+        )  # fmt: skip
+        for line in out.splitlines():
+            head = line.split(" ", 2)
+            if len(head) == 3 and head[0].isdigit() and head[1].isdigit():
+                rows.append((int(head[0]), int(head[1]), head[2]))
+        return rows
+    for entry in Path("/proc").glob("[0-9]*/cmdline"):
+        try:
+            command = entry.read_bytes().replace(b"\0", b" ").decode(errors="replace")
+            stat = (entry.parent / "stat").read_text(errors="replace")
+            parent = int(stat.rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            continue
+        rows.append((int(entry.parent.name), parent, command))
+    return rows
+
+
+def scan_outside(windows: bool) -> list[dict]:
+    """실행기 밖에서 직접 돈 MCP 서버 패키지: [{package, ecosystem, count}].
+
+    실행기가 띄운 프로세스의 자손(실행기 아래의 ``npx``·``docker`` 등)은 실행기 안이라 뺀다.
+    같은 패키지 명령이 부모·자식으로 겹치면(``cmd /c npx``) 하나로 센다.
+    """
+    entries = process_entries(windows)
+    inside = {pid for pid, _, command in entries if server_of(command)}
+    grew = True
+    while grew:
+        grew = False
+        for pid, parent, _ in entries:
+            if parent in inside and pid not in inside:
+                inside.add(pid)
+                grew = True
+    matched: dict[int, tuple[str, str]] = {}
+    counts: dict[tuple[str, str], int] = {}
+    for pid, parent, command in entries:
+        found = None if pid in inside else outside_package(command)
+        if found:
+            matched[pid] = found
+            if matched.get(parent) != found:
+                counts[found] = counts.get(found, 0) + 1
+    return [
+        {"package": name, "ecosystem": eco, "count": count}
+        for (eco, name), count in sorted(counts.items())
+    ][:MAX_ITEMS]
+
+
+def win_process_rows() -> list[tuple[int, int, str, str]]:
+    """Windows 프로세스 표 (PID, 부모 PID, 이미지 이름, 명령줄)."""
+    out = capture(
+        ["powershell", "-NoProfile", "-Command",
+         "Get-CimInstance Win32_Process | ForEach-Object "
+         '{ "$($_.ProcessId)|$($_.ParentProcessId)|$($_.Name)|$($_.CommandLine)" }']
+    )  # fmt: skip
+    rows = []
+    for line in out.splitlines():
+        parts = line.split("|", 3)
+        if len(parts) == 4 and parts[0].isdigit() and parts[1].isdigit():
+            rows.append((int(parts[0]), int(parts[1]), parts[2], parts[3]))
+    return rows
+
+
+def win_container_name(server: str, launcher_pid: int) -> str:
+    """실행기가 서버마다 만드는 AppContainer 프로필 이름(mint_agent의 규칙과 같아야 한다)."""
+    return "mint." + re.sub(r"[^A-Za-z0-9_-]", "_", server)[:32] + f".{launcher_pid}"
+
+
+def win_sids():
+    """(프로세스 PID -> 토큰 AppContainer SID 글자, 프로필 이름 -> SID 글자) 조회 함수 둘.
+
+    첫째는 AppContainer가 아니면 빈 글자, 열지 못하면 None. 사용자 프로필은 건드리지 않고
+    프로세스 토큰만 읽는다(PROCESS_QUERY_LIMITED_INFORMATION·TOKEN_QUERY)."""
+    import ctypes
+    from ctypes import wintypes as w
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    adv = ctypes.WinDLL("advapi32", use_last_error=True)
+    userenv = ctypes.WinDLL("userenv")
+    vp = ctypes.c_void_p
+    k32.OpenProcess.restype, k32.OpenProcess.argtypes = vp, [w.DWORD, w.BOOL, w.DWORD]
+    k32.CloseHandle.argtypes = [vp]
+    k32.LocalFree.argtypes = [vp]
+    adv.OpenProcessToken.argtypes = [vp, w.DWORD, vp]
+    adv.GetTokenInformation.argtypes = [vp, ctypes.c_int, vp, w.DWORD, vp]
+    adv.ConvertSidToStringSidW.argtypes = [vp, vp]
+    adv.FreeSid.argtypes = [vp]
+    userenv.DeriveAppContainerSidFromAppContainerName.argtypes = [ctypes.c_wchar_p, vp]
+
+    def text(sid) -> str:
+        buf = vp()
+        if not adv.ConvertSidToStringSidW(sid, ctypes.byref(buf)):
+            return ""
+        try:
+            return ctypes.wstring_at(buf)
+        finally:
+            k32.LocalFree(buf)
+
+    def of_process(pid: int) -> str | None:
+        handle = k32.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return None
+        token = vp()
+        try:
+            if not adv.OpenProcessToken(handle, 0x8, ctypes.byref(token)):
+                return None
+            try:
+                flag, size = w.DWORD(), w.DWORD()
+                if not adv.GetTokenInformation(
+                    token, 29, ctypes.byref(flag), 4, ctypes.byref(size)
+                ):
+                    return None
+                if not flag.value:
+                    return ""
+                buf = ctypes.create_string_buffer(512)
+                if not adv.GetTokenInformation(token, 31, buf, 512, ctypes.byref(size)):
+                    return None
+                return text(vp.from_buffer(buf).value)
+            finally:
+                k32.CloseHandle(token)
+        finally:
+            k32.CloseHandle(handle)
+
+    def of_name(name: str) -> str:
+        sid = vp()
+        if userenv.DeriveAppContainerSidFromAppContainerName(name, ctypes.byref(sid)) != 0:
+            return ""
+        try:
+            return text(sid)
+        finally:
+            adv.FreeSid(sid)
+
+    return of_process, of_name
+
+
+def classify_windows(rows, token_sid, container_sid) -> dict[str, str]:
+    """서버별 실제 격리 상태. 실행기 프로세스의 직계 자식(서버)의 토큰이 그 실행기가 만든
+    AppContainer이면 ``appcontainer``, 아니면 ``none``(하나라도 격리 밖이면 ``none``).
+    토큰을 읽지 못한 서버는 항목이 없다."""
+    launchers = {pid: name for pid, _, _, cmd in rows if (name := server_of(cmd))}
+    found: dict[str, str] = {}
+    for pid, parent, image, _ in rows:
+        server = launchers.get(parent)
+        if not server or pid in launchers or image.lower() == "conhost.exe":
+            continue
+        sid = token_sid(pid)
+        if sid is None:
+            continue
+        inside = bool(sid) and sid == container_sid(win_container_name(server, parent))
+        status = "appcontainer" if inside else "none"
+        found[server] = "none" if "none" in (status, found.get(server)) else status
+    return found
+
+
+def windows_sandbox_status() -> dict[str, str]:
+    """운영체제가 보는 서버별 격리 상태(기록 파일을 믿지 않는다). 조회하지 못하면 빈 값."""
+    try:
+        return classify_windows(win_process_rows(), *win_sids())
+    except Exception:
+        return {}
+
+
 def with_sandbox(
-    processes: list[dict], home: Path, windows: bool, read_records: bool = True
+    processes: list[dict],
+    home: Path,
+    windows: bool,
+    read_records: bool = True,
+    observed: dict[str, str] | None = None,
 ) -> list[dict]:
     """프로세스 항목에 서버별 격리 상태를 더한다(실행기가 남긴 기록 중 아직 살아 있는 것만).
 
     ``bwrap``·``appcontainer``는 기록된 모든 프로세스가 격리 안, ``none``은 하나라도 격리 없이.
-    기록이 없는 서버는 Linux에서는 비워 두고(이전 실행기가 띄운 것) Windows에서는
-    ``unsupported``이다(관리자 계정 보고기는 사용자 프로필의 기록을 읽지 않는다: ``read_records``).
+    Windows에서는 운영체제가 보는 값(``observed``: 서버 프로세스 토큰)이 기록보다 앞선다.
+    기록이 없고 토큰도 읽지 못한 서버는 Linux에서는 비워 두고 Windows에서는 ``unsupported``이다
+    (관리자 계정 보고기는 사용자 프로필의 기록을 읽지 않는다: ``read_records``).
     호스트 허용 목록 서버는 실행기가 센 거절 수 ``egress_refused``도 더하고, Windows에서 그 목록을
-    거르지 못한 채 도는 서버는 ``egress_unfiltered``를 더한다.
+    거르지 못한 채 도는 서버는 ``egress_unfiltered``를 더한다(관리자 계정 보고기는 기록을 읽지
+    않으므로 이 값을 내지 못한다).
     """
     seen: dict[str, str] = {}
     refused: dict[str, int] = {}
@@ -257,7 +530,11 @@ def with_sandbox(
                 if record.get("egress_unfiltered") is True:
                     unfiltered.add(server)
     for item in processes:
-        status = seen.get(item["server"]) or ("unsupported" if windows else None)
+        status = (
+            (observed or {}).get(item["server"])
+            or seen.get(item["server"])
+            or ("unsupported" if windows else None)
+        )
         if status:
             item["sandbox"] = status
         if item["server"] in refused:  # 호스트 허용 목록 서버가 거절당한 접속 수
@@ -1271,14 +1548,18 @@ class Kit:
     def read_inventory(self) -> dict:
         try:
             processes = with_sandbox(
-                scan_processes(self.windows), self.home, self.windows, not self.system_mode
+                scan_processes(self.windows), self.home, self.windows, not self.system_mode,
+                windows_sandbox_status() if self.windows else None,
             )
             extra = {"profile": False} if self.system_mode else {}
             autostart = scan_autostart(self.home, self.windows, self.account.name, **extra)
+            outside = scan_outside(self.windows)
         except Exception:
             return {}
         found = {} if self.system_mode else {"local_mcp": scan_local_mcp(self.home)}
-        return {"processes": processes, "autostart": autostart, **found}
+        return {
+            "processes": processes, "autostart": autostart, "outside_processes": outside, **found
+        }
 
     def pending_removed(self, state: dict) -> list[dict]:
         """아직 보고하지 못한 제거 항목. 상태 파일을 쓸 수 있는(관리자 권한) 보고기만 보낸다."""

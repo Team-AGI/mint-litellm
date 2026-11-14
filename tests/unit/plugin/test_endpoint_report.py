@@ -34,7 +34,8 @@ def test_a_managed_install_report_is_stored_for_the_calling_key(tmp_path, stored
     assert key_token == KEY
     assert fields == {"mode": "managed", "kit_version": "k" * 64,
                       "claude_version": "2.1.0 (Claude Code)", "mcp_servers": ["srv-1"],
-                      "processes": None, "autostart": None, "removed": None,
+                      "processes": None, "autostart": None, "outside_processes": None,
+                      "removed": None,
                       "local_mcp": None}
 
 
@@ -55,6 +56,15 @@ def test_the_process_and_autostart_inventory_is_stored_as_plain_rows(tmp_path, s
     ]
     assert fields["autostart"] == [{"kind": "cron", "name": "@reboot", "server": "srv-1"},
                                    {"kind": "systemd", "name": "mcp.service", "server": None}]
+
+
+def test_packages_run_outside_the_launcher_are_stored_and_arguments_are_refused(tmp_path, stored):
+    client, _ = build(tmp_path)
+    items = [{"package": "@a/mcp-x", "ecosystem": "npm", "count": 2}]
+    assert post(client, REPORT, report(outside_processes=items)).status_code == 200
+    assert stored[0][2]["outside_processes"] == items
+    bad = [{"package": "mcp-x --token=abc", "ecosystem": "npm", "count": 1}]
+    assert post(client, REPORT, report(outside_processes=bad)).status_code == 422
 
 
 @pytest.mark.parametrize(("body", "mode"), [

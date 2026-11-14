@@ -23,20 +23,28 @@
 
 - 보고한 서버가 허용 호스트 밖 접속을 거절당한 적이 있으면(``egress_refused``가 0보다 큼)
   ``endpoint_egress_refused``. 실행 중인 프로세스가 끝나면 기록이 사라져 닫힌다.
-- 보고한 서버가 허용 호스트 목록을 거르지 못한 채(Windows, ``egress_unfiltered``) 실행 중이면
+- 보고한 서버가 허용 호스트 목록을 거르지 못한 채(Windows, ``egress_unfiltered``, 또는 승인 계약이
+  ``network: hosts``인 서버가 ``appcontainer``로 실행 중) 실행 중이면
   ``endpoint_egress_unfiltered``. 선언한 호스트 제한이 집행되지 않는다는 뜻이며 프로세스가 끝나면
   닫힌다.
+
+- 묶음 실행기 밖에서 직접 도는 MCP 서버 패키지(``outside_processes``, 패키지 식별자만)는 서버
+  계약의 패키지와 이름으로 맞춰 본다. 폐기된 서버의 패키지만 해당하면 ``endpoint_outside_retired``
+  (높음), 승인(또는 중지) 상태 서버가 쓰는 패키지가 아니면 ``endpoint_outside_unapproved``(중간,
+  단말과 패키지마다 하나). 경보만 남기고 프로세스는 끄지 않는다. 이름에 ``mcp``가 든 패키지만
+  보고되므로 다른 이름의 패키지는 보지 못한다.
 
 조건이 사라지면(재설치·제거·키 해제·서버 되살림) 같은 스캔이 경보를 닫는다.
 """
 
+import re
 from collections.abc import Iterable, Mapping
 from datetime import timedelta
 from typing import Any
 
 import psycopg
 
-from mint_litellm.control import alerts
+from mint_litellm.control import alerts, endpoint_kits
 from mint_litellm.control.db.connection import fetchall
 from mint_litellm.endpoint.remediation import LIVE
 from mint_litellm.types.events import AlertKind
@@ -47,6 +55,8 @@ KINDS = (
     AlertKind.ENDPOINT_UNMANAGED.value,
     AlertKind.ENDPOINT_STALE_PROCESS.value,
     AlertKind.ENDPOINT_STALE_AUTOSTART.value,
+    AlertKind.ENDPOINT_OUTSIDE_RETIRED.value,
+    AlertKind.ENDPOINT_OUTSIDE_UNAPPROVED.value,
     AlertKind.ENDPOINT_UNSANDBOXED.value,
     AlertKind.ENDPOINT_EGRESS_REFUSED.value,
     AlertKind.ENDPOINT_EGRESS_UNFILTERED.value,
@@ -57,14 +67,29 @@ SILENT_AFTER = timedelta(hours=24)
 KEY_WARN = timedelta(days=7)
 
 
+def package_key(ecosystem: str, name: str) -> tuple[str, str]:
+    """계약의 패키지와 단말이 보고한 패키지를 맞추는 키(대소문자·구분 기호 차이를 지운다)."""
+    name = name.strip().lower()
+    if ecosystem == "pypi":
+        name = re.sub(r"[-_.]+", "-", name)
+    elif ecosystem == "container":
+        name = name.removeprefix("docker.io/").removeprefix("library/")
+    return ecosystem, name
+
+
 def findings(
     installs: Iterable[Mapping[str, Any]],
     statuses: Mapping[str, str],
     silent_after: timedelta = SILENT_AFTER,
+    package_status: Mapping[tuple[str, str], Iterable[str]] | None = None,
+    contracts: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, tuple[str, str, dict[str, str]]]:
     """설치 보고 행과 서버 상태에서 열려 있어야 할 경보. 경보 키 -> (종류, 심각도, 대상).
 
-    ``now``(데이터베이스 시각)가 없는 행은 시간 점검(침묵·키 만료)을 건너뛴다.
+    ``now``(데이터베이스 시각)가 없는 행은 시간 점검(침묵·키 만료)을 건너뛴다. ``contracts``는
+    승인된 서버의 실행 계약이며, 관리자 계정 Windows 보고기는 계약을 몰라 호스트 제한 미집행을
+    직접 보고하지 못하므로 ``network: hosts`` 계약 서버가 ``appcontainer``(Windows)로 돌면
+    보고에 플래그가 없어도 미집행으로 본다.
     """
     wanted: dict[str, tuple[str, str, dict[str, str]]] = {}
     for row in installs:
@@ -99,6 +124,22 @@ def findings(
                 wanted[f"{kind}:{row['key_alias']}:{name}"] = (
                     kind, "high", {**who, "server_id": name, "count": item["count"]}
                 )
+        for item in row.get("outside_processes") or ():
+            key = package_key(item["ecosystem"], item["package"])
+            seen = set((package_status or {}).get(key, ()))
+            if seen & set(LIVE):
+                continue
+            retired = bool(seen & set(TERMINATED))
+            kind = (
+                AlertKind.ENDPOINT_OUTSIDE_RETIRED
+                if retired
+                else AlertKind.ENDPOINT_OUTSIDE_UNAPPROVED
+            ).value
+            wanted[f"{kind}:{row['key_alias']}:{item['ecosystem']}:{item['package']}"] = (
+                kind, "high" if retired else "medium",
+                {**who, "ecosystem": item["ecosystem"], "package": item["package"],
+                 "count": item["count"]},
+            )  # fmt: skip
         if row["install_mode"] == "managed":
             for item in row.get("processes") or ():
                 if item.get("sandbox") == "none":
@@ -114,7 +155,8 @@ def findings(
                     {**who, "server_id": item["server"], "count": item["egress_refused"]},
                 )  # fmt: skip
         for item in row.get("processes") or ():
-            if item.get("egress_unfiltered"):
+            hosts = (contracts or {}).get(item["server"], {}).get("network") == "hosts"
+            if item.get("egress_unfiltered") or (hosts and item.get("sandbox") == "appcontainer"):
                 kind = AlertKind.ENDPOINT_EGRESS_UNFILTERED.value
                 wanted[f"{kind}:{row['key_alias']}:{item['server']}"] = (
                     kind, "medium", {**who, "server_id": item["server"]}
@@ -139,7 +181,7 @@ def scan(
     installs = fetchall(
         conn,
         "SELECT user_id, key_alias, install_mode, mcp_servers, processes, autostart,"
-        " reported_at, expires_at, clock_timestamp() AS now"
+        " outside_processes, reported_at, expires_at, clock_timestamp() AS now"
         " FROM mint.endpoint_installs WHERE instance_id = %s AND revoked_at IS NULL"
         " AND install_mode IN ('managed', 'user', 'removed')",
         (instance_id,),
@@ -153,7 +195,22 @@ def scan(
             (instance_id,),
         )
     }
-    wanted = findings(installs, statuses, silent_after)
+    package_status: dict[tuple[str, str], set[str]] = {}
+    for r in fetchall(
+        conn,
+        "SELECT p.ecosystem, p.name, s.status FROM mint.server_packages p"
+        " JOIN mint.servers s ON s.instance_id = p.instance_id AND s.server_id = p.server_id"
+        " WHERE p.instance_id = %s AND p.ecosystem <> 'executable' AND s.identity_kind = 'stdio'",
+        (instance_id,),
+    ):
+        package_status.setdefault(package_key(r["ecosystem"], r["name"]), set()).add(r["status"])
+    wanted = findings(
+        installs,
+        statuses,
+        silent_after,
+        package_status,
+        contracts=endpoint_kits.approved_contracts(conn, instance_id),
+    )
     open_keys = {
         r["dedup_key"]
         for r in fetchall(

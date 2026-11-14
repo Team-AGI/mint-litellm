@@ -23,7 +23,10 @@ class LiteLLMError(ControlError):
 
 
 def scrub(value: Any) -> Any:
-    """자격 열을 모든 깊이에서 제거한 사본. 비밀이 아닌 ``scopes``와 ``upstream_resource``만 남긴다."""
+    """자격 열을 모든 깊이에서 제거한 사본.
+
+    비밀이 아닌 ``scopes``와 ``upstream_resource``만 남긴다.
+    """
     if isinstance(value, dict):
         out = {}
         for k, v in value.items():

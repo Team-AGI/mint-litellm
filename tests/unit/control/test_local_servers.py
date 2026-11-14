@@ -327,3 +327,30 @@ def test_an_admin_exception_lifts_the_block_and_the_first_seen_time_cannot_be_re
     assert not blocked(conn, "pkg-5")
     with pytest.raises(psycopg.Error):
         conn.execute("UPDATE mint.package_vulns SET first_seen_at = now()")
+
+
+def test_a_transitive_critical_names_the_path_blocks_and_follows_the_stored_graph(ctx, conn):
+    register_local(ctx, "pkg-6", NPX)
+    now = datetime.now(UTC)
+    top = ("npm", "left-pad", "1.0.0")
+    vuln._store_deps(conn, INSTANCE, {top: [("leaf", "3.1.0", "left-pad → mid → leaf")]}, now)
+    at, graph = vuln._load_deps(conn, INSTANCE)
+    assert at == {top: now} and graph[top] == [("leaf", "3.1.0", "left-pad → mid → leaf")]
+    conn.execute(
+        "INSERT INTO mint.package_vulns (id, instance_id, ecosystem, name, version, vuln_id,"
+        " severity, cvss, exploited, first_seen_at) VALUES (gen_random_uuid(), %s, 'npm',"
+        " 'leaf', '3.1.0', 'T1', 'critical', 9.8, false, now() - interval '60 hours')",
+        (INSTANCE,),
+    )
+    vuln.evaluate(conn, INSTANCE, datetime.now(UTC))
+    assert blocked(conn, "pkg-6")
+    alert = fetchone(conn, "SELECT subject FROM mint.alerts WHERE kind = 'package_vuln_due'")
+    assert alert["subject"]["path"] == "left-pad → mid → leaf"
+    from mint_litellm.control.services import reads
+
+    shown = reads.server(conn, INSTANCE, "pkg-6")["vulns"]
+    assert [(v["name"], v["path"]) for v in shown] == [("leaf", "left-pad → mid → leaf")]
+    # 다시 조회해 의존이 사라지면(옛 행이 남아 있어도) 막힘이 풀린다
+    vuln._store_deps(conn, INSTANCE, {top: []}, now + timedelta(days=2))
+    vuln.evaluate(conn, INSTANCE, datetime.now(UTC))
+    assert not blocked(conn, "pkg-6")

@@ -1016,6 +1016,7 @@ class PluginDatabase:
         mcp_servers: Sequence[str],
         processes: Sequence[dict[str, Any]] | None = None,
         autostart: Sequence[dict[str, Any]] | None = None,
+        outside_processes: Sequence[dict[str, Any]] | None = None,
         removed: Sequence[dict[str, Any]] | None = None,
         local_mcp: Sequence[dict[str, Any]] | None = None,
     ) -> str:
@@ -1049,14 +1050,16 @@ class PluginDatabase:
                 await conn.execute(
                     "UPDATE mint.endpoint_installs SET install_mode = %s, kit_version = %s,"
                     " claude_version = %s, mcp_servers = %s, processes = %s, autostart = %s,"
-                    " local_mcp = %s,"
+                    " local_mcp = %s, outside_processes = %s,"
                     " reported_at = clock_timestamp(), expires_at = CASE WHEN %s"
                     " THEN clock_timestamp() + make_interval(days => ttl_days) ELSE expires_at END"
                     " WHERE instance_id = %s AND key_token = %s",
                     (mode, kit_version, claude_version, Jsonb(list(mcp_servers)),
                      None if processes is None else Jsonb(list(processes)),
                      None if autostart is None else Jsonb(list(autostart)),
-                     None if seen is None else Jsonb(list(seen)), row[1], instance_id, key_token),
+                     None if seen is None else Jsonb(list(seen)),
+                     None if outside_processes is None else Jsonb(list(outside_processes)),
+                     row[1], instance_id, key_token),
                 )
                 return ("renewed" if row[1] else "recorded", row[2], row[3])
 

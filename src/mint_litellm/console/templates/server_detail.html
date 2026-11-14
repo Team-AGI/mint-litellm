@@ -37,7 +37,7 @@
 {% if s.vulns %}
 <h2>알려진 취약점</h2>
 <table><thead><tr><th>패키지</th><th>취약점</th><th>심각도</th><th>확인 시각</th><th>조치 기한</th></tr></thead><tbody>
-{% for v in s.vulns %}<tr><td>{{ v.name }} {{ v.version }}</td><td>{{ v.vuln_id }}</td><td>{{ {'critical': '치명', 'high': '높음', 'medium': '중간', 'low': '낮음', 'unknown': '미확인'}[v.severity] }}{% if v.cvss is not none %} ({{ v.cvss }}){% endif %}{% if v.exploited %} · 악용 확인{% endif %}</td><td>{{ v.first_seen_at | when }}</td><td>{% if v.severity == 'critical' or v.exploited %}{{ v.deadline_at | when }}{% else %}—{% endif %}</td></tr>{% endfor %}
+{% for v in s.vulns %}<tr><td>{{ v.name }} {{ v.version }}{% if v.path %}<br>{{ v.path }}{% endif %}</td><td>{{ v.vuln_id }}</td><td>{{ {'critical': '치명', 'high': '높음', 'medium': '중간', 'low': '낮음', 'unknown': '미확인'}[v.severity] }}{% if v.cvss is not none %} ({{ v.cvss }}){% endif %}{% if v.exploited %} · 악용 확인{% endif %}</td><td>{{ v.first_seen_at | when }}</td><td>{% if v.severity == 'critical' or v.exploited %}{{ v.deadline_at | when }}{% else %}—{% endif %}</td></tr>{% endfor %}
 </tbody></table>
 {% endif %}
 <h2>도구</h2>
