@@ -15,6 +15,9 @@
   --danger: #c1202a;
   --danger-soft: #fff0f0;
   --off: #59636e;
+  --c6: #8250df;
+  --c7: #1b7c83;
+  --c8: #bc4c00;
   --on-accent: #ffffff;
   --s1: 4px;
   --s2: 8px;
@@ -30,6 +33,9 @@
 }
 @media (prefers-color-scheme: dark) {
   :root {
+    --c6: #ab7df8;
+    --c7: #39c5cf;
+    --c8: #f0883e;
     --bg: #0d1117;
     --bg-subtle: #151b23;
     --border: #3d444d;
@@ -107,7 +113,8 @@ th {
   position: sticky; top: 48px; background: var(--bg-subtle); font-weight: 600; z-index: 1;
   white-space: nowrap;
 }
-td { overflow-wrap: anywhere; }
+td { overflow-wrap: break-word; }
+td .nowrap, td button, td .badge { white-space: nowrap; }
 button > span[aria-hidden="true"] { margin-right: 4px; }
 td button, td .btn { white-space: nowrap; }
 td.num, th.num { text-align: right; }
@@ -242,13 +249,16 @@ dialog.confirm .actions { justify-content: flex-end; }
   table { display: block; max-width: 100%; overflow-x: auto; }
 }
 
-@media (max-width: 767px) {
+@media (max-width: 1000px) {
   body.shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: 48px auto 1fr; }
   .sidebar { grid-column: 1; grid-row: 2; border-right: 0; border-bottom: 1px solid var(--border); }
   .sidebar .menu { position: static; display: flex; flex-wrap: wrap; gap: var(--s2); }
   .sidebar .group { display: contents; }
   .sidebar .group-title { display: none; }
   main { grid-column: 1; grid-row: 3; padding: var(--s3); }
+}
+
+@media (max-width: 767px) {
   .topbar .who { display: none; }
   th { top: 0; }
   table { display: block; max-width: 100%; overflow-x: auto; }
