@@ -227,16 +227,136 @@ def scan_processes(windows: bool) -> list[dict]:
     return [{"server": n, "count": c} for n, c in sorted(counts.items())][:MAX_ITEMS]
 
 
+def win_process_rows() -> list[tuple[int, int, str, str]]:
+    """Windows 프로세스 표 (PID, 부모 PID, 이미지 이름, 명령줄)."""
+    out = capture(
+        ["powershell", "-NoProfile", "-Command",
+         "Get-CimInstance Win32_Process | ForEach-Object "
+         '{ "$($_.ProcessId)|$($_.ParentProcessId)|$($_.Name)|$($_.CommandLine)" }']
+    )  # fmt: skip
+    rows = []
+    for line in out.splitlines():
+        parts = line.split("|", 3)
+        if len(parts) == 4 and parts[0].isdigit() and parts[1].isdigit():
+            rows.append((int(parts[0]), int(parts[1]), parts[2], parts[3]))
+    return rows
+
+
+def win_container_name(server: str, launcher_pid: int) -> str:
+    """실행기가 서버마다 만드는 AppContainer 프로필 이름(mint_agent의 규칙과 같아야 한다)."""
+    return "mint." + re.sub(r"[^A-Za-z0-9_-]", "_", server)[:32] + f".{launcher_pid}"
+
+
+def win_sids():
+    """(프로세스 PID -> 토큰 AppContainer SID 글자, 프로필 이름 -> SID 글자) 조회 함수 둘.
+
+    첫째는 AppContainer가 아니면 빈 글자, 열지 못하면 None. 사용자 프로필은 건드리지 않고
+    프로세스 토큰만 읽는다(PROCESS_QUERY_LIMITED_INFORMATION·TOKEN_QUERY)."""
+    import ctypes
+    from ctypes import wintypes as w
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    adv = ctypes.WinDLL("advapi32", use_last_error=True)
+    userenv = ctypes.WinDLL("userenv")
+    vp = ctypes.c_void_p
+    k32.OpenProcess.restype, k32.OpenProcess.argtypes = vp, [w.DWORD, w.BOOL, w.DWORD]
+    k32.CloseHandle.argtypes = [vp]
+    k32.LocalFree.argtypes = [vp]
+    adv.OpenProcessToken.argtypes = [vp, w.DWORD, vp]
+    adv.GetTokenInformation.argtypes = [vp, ctypes.c_int, vp, w.DWORD, vp]
+    adv.ConvertSidToStringSidW.argtypes = [vp, vp]
+    adv.FreeSid.argtypes = [vp]
+    userenv.DeriveAppContainerSidFromAppContainerName.argtypes = [ctypes.c_wchar_p, vp]
+
+    def text(sid) -> str:
+        buf = vp()
+        if not adv.ConvertSidToStringSidW(sid, ctypes.byref(buf)):
+            return ""
+        try:
+            return ctypes.wstring_at(buf)
+        finally:
+            k32.LocalFree(buf)
+
+    def of_process(pid: int) -> str | None:
+        handle = k32.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return None
+        token = vp()
+        try:
+            if not adv.OpenProcessToken(handle, 0x8, ctypes.byref(token)):
+                return None
+            try:
+                flag, size = w.DWORD(), w.DWORD()
+                if not adv.GetTokenInformation(
+                    token, 29, ctypes.byref(flag), 4, ctypes.byref(size)
+                ):
+                    return None
+                if not flag.value:
+                    return ""
+                buf = ctypes.create_string_buffer(512)
+                if not adv.GetTokenInformation(token, 31, buf, 512, ctypes.byref(size)):
+                    return None
+                return text(vp.from_buffer(buf).value)
+            finally:
+                k32.CloseHandle(token)
+        finally:
+            k32.CloseHandle(handle)
+
+    def of_name(name: str) -> str:
+        sid = vp()
+        if userenv.DeriveAppContainerSidFromAppContainerName(name, ctypes.byref(sid)) != 0:
+            return ""
+        try:
+            return text(sid)
+        finally:
+            adv.FreeSid(sid)
+
+    return of_process, of_name
+
+
+def classify_windows(rows, token_sid, container_sid) -> dict[str, str]:
+    """서버별 실제 격리 상태. 실행기 프로세스의 직계 자식(서버)의 토큰이 그 실행기가 만든
+    AppContainer이면 ``appcontainer``, 아니면 ``none``(하나라도 격리 밖이면 ``none``).
+    토큰을 읽지 못한 서버는 항목이 없다."""
+    launchers = {pid: name for pid, _, _, cmd in rows if (name := server_of(cmd))}
+    found: dict[str, str] = {}
+    for pid, parent, image, _ in rows:
+        server = launchers.get(parent)
+        if not server or pid in launchers or image.lower() == "conhost.exe":
+            continue
+        sid = token_sid(pid)
+        if sid is None:
+            continue
+        inside = bool(sid) and sid == container_sid(win_container_name(server, parent))
+        status = "appcontainer" if inside else "none"
+        found[server] = "none" if "none" in (status, found.get(server)) else status
+    return found
+
+
+def windows_sandbox_status() -> dict[str, str]:
+    """운영체제가 보는 서버별 격리 상태(기록 파일을 믿지 않는다). 조회하지 못하면 빈 값."""
+    try:
+        return classify_windows(win_process_rows(), *win_sids())
+    except Exception:
+        return {}
+
+
 def with_sandbox(
-    processes: list[dict], home: Path, windows: bool, read_records: bool = True
+    processes: list[dict],
+    home: Path,
+    windows: bool,
+    read_records: bool = True,
+    observed: dict[str, str] | None = None,
 ) -> list[dict]:
     """프로세스 항목에 서버별 격리 상태를 더한다(실행기가 남긴 기록 중 아직 살아 있는 것만).
 
     ``bwrap``·``appcontainer``는 기록된 모든 프로세스가 격리 안, ``none``은 하나라도 격리 없이.
-    기록이 없는 서버는 Linux에서는 비워 두고(이전 실행기가 띄운 것) Windows에서는
-    ``unsupported``이다(관리자 계정 보고기는 사용자 프로필의 기록을 읽지 않는다: ``read_records``).
+    Windows에서는 운영체제가 보는 값(``observed``: 서버 프로세스 토큰)이 기록보다 앞선다.
+    기록이 없고 토큰도 읽지 못한 서버는 Linux에서는 비워 두고 Windows에서는 ``unsupported``이다
+    (관리자 계정 보고기는 사용자 프로필의 기록을 읽지 않는다: ``read_records``).
     호스트 허용 목록 서버는 실행기가 센 거절 수 ``egress_refused``도 더하고, Windows에서 그 목록을
-    거르지 못한 채 도는 서버는 ``egress_unfiltered``를 더한다.
+    거르지 못한 채 도는 서버는 ``egress_unfiltered``를 더한다(관리자 계정 보고기는 기록을 읽지
+    않으므로 이 값을 내지 못한다).
     """
     seen: dict[str, str] = {}
     refused: dict[str, int] = {}
@@ -257,7 +377,11 @@ def with_sandbox(
                 if record.get("egress_unfiltered") is True:
                     unfiltered.add(server)
     for item in processes:
-        status = seen.get(item["server"]) or ("unsupported" if windows else None)
+        status = (
+            (observed or {}).get(item["server"])
+            or seen.get(item["server"])
+            or ("unsupported" if windows else None)
+        )
         if status:
             item["sandbox"] = status
         if item["server"] in refused:  # 호스트 허용 목록 서버가 거절당한 접속 수
@@ -493,7 +617,7 @@ def scan_local_mcp(home: Path) -> list[dict]:
     found: dict[tuple, dict] = {}
 
     def add(harness: str, servers: object) -> None:
-        for name, entry in (servers.items() if isinstance(servers, dict) else ()):
+        for name, entry in servers.items() if isinstance(servers, dict) else ():
             item = local_mcp_item(harness, name, entry)
             if item:
                 found.setdefault(tuple(item.values()), item)
@@ -585,7 +709,8 @@ def save_retired(home: Path, names: list[str], now: float, folder: Path | None =
     try:
         write_atomic(
             (folder or home / STATE_REL) / RETIRED_FILE,
-            json.dumps({"servers": names, "at": now}).encode(), 0o644 if folder else 0o600,
+            json.dumps({"servers": names, "at": now}).encode(),
+            0o644 if folder else 0o600,
         )
     except OSError:
         return
@@ -952,7 +1077,10 @@ class Kit:
         """주기 보고에 쓸 이 파일의 사본과 설정(키 제외)을 두고 타이머·예약 작업을 등록한다."""
         tool = f"{self.logical_programs}/mint_kit.py"
         self.write_tracked(
-            state, self.programs / "mint_kit.py", tool, (self.folder / "mint_kit.py").read_bytes(),
+            state,
+            self.programs / "mint_kit.py",
+            tool,
+            (self.folder / "mint_kit.py").read_bytes(),
             0o644,
         )
         config = {k: v for k, v in self.config.items() if k not in ("key", "servers")}
@@ -1224,7 +1352,9 @@ class Kit:
                     settings_path.unlink()
                 else:
                     write_atomic(
-                        settings_path, backup.encode(), settings_path.stat().st_mode & 0o777,
+                        settings_path,
+                        backup.encode(),
+                        settings_path.stat().st_mode & 0o777,
                         self.owner,
                     )
             else:
@@ -1271,7 +1401,11 @@ class Kit:
     def read_inventory(self) -> dict:
         try:
             processes = with_sandbox(
-                scan_processes(self.windows), self.home, self.windows, not self.system_mode
+                scan_processes(self.windows),
+                self.home,
+                self.windows,
+                not self.system_mode,
+                windows_sandbox_status() if self.windows else None,
             )
             extra = {"profile": False} if self.system_mode else {}
             autostart = scan_autostart(self.home, self.windows, self.account.name, **extra)
@@ -1494,8 +1628,11 @@ class Kit:
             name = item.get("name") if isinstance(item, dict) else None
             contract = item.get("contract") if isinstance(item, dict) else None
             if (
-                isinstance(name, str) and SERVER_NAME.match(name) and name not in skip
-                and isinstance(contract, dict) and isinstance(contract.get("executable"), str)
+                isinstance(name, str)
+                and SERVER_NAME.match(name)
+                and name not in skip
+                and isinstance(contract, dict)
+                and isinstance(contract.get("executable"), str)
                 and item.get("version") == contract_version(contract)
             ):
                 items[name] = contract
@@ -1524,7 +1661,8 @@ class Kit:
             return []
         if not self.managed:
             print(
-                "MINT 승인 서버가 바뀌었습니다: " + ", ".join(sorted(todo))
+                "MINT 승인 서버가 바뀌었습니다: "
+                + ", ".join(sorted(todo))
                 + ". 설치 명령을 다시 실행하면 반영됩니다.",
                 file=sys.stderr,
             )
@@ -1560,9 +1698,7 @@ class Kit:
             def edit_json(text: str) -> tuple[str, list[str]]:
                 data = json.loads(text)
                 listed = data.setdefault("mcpServers", {})
-                put = [
-                    n for n in sorted(mcp) if n not in listed or is_ours_entry(listed.get(n), n)
-                ]
+                put = [n for n in sorted(mcp) if n not in listed or is_ours_entry(listed.get(n), n)]
                 listed.update({n: mcp[n] for n in put})
                 return json.dumps(data, indent=2), put
 
@@ -1748,8 +1884,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.action == "report":
         return report_installed(
-            Path(args.kit), if_due=args.if_due, jitter=args.jitter,
-            home=Path(args.home) if args.home else None, user=args.user,
+            Path(args.kit),
+            if_due=args.if_due,
+            jitter=args.jitter,
+            home=Path(args.home) if args.home else None,
+            user=args.user,
         )
     windows = sys.platform == "win32"
     if windows:
