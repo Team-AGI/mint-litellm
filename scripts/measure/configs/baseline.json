@@ -1,0 +1,29 @@
+{
+  "frozen": {
+    "mint_litellm": {"repo": "Team-AGI/mint-litellm", "commit": "f1c348a"},
+    "standalone": {
+      "repo": "mcp-gateway",
+      "commit": "9a666d7a73b6b07d3b2dd95ebdb5bc7acbcde9f8"
+    },
+    "litellm": {"measured": "1.106.6", "supported": ["1.106.6", "1.108.5"]},
+    "note": "비교 대상 커밋·판본이 바뀌면 기준선을 새로 고정하고 이전 결과와 섞지 않는다."
+  },
+  "parity": {
+    "cpu_per_stack": null,
+    "memory_per_stack": null,
+    "litellm_workers": null,
+    "litellm_replicas": null,
+    "db_pool": null,
+    "database": "same engine and size, same catalog state",
+    "upstream": "same MCP test server count and behavior",
+    "log_settings": "same level and spend-log setting",
+    "rule": "공통 값은 null이 아니게 채운 뒤에만 실행한다. runner는 null이 남아 있으면 거부한다. 동일 자원 비교와 제품 권장 구성 비교는 별도 실행으로 나눈다."
+  },
+  "configurations": [
+    "configs/litellm_plain.json",
+    "configs/mint_plugin.json",
+    "configs/standalone_a.json"
+  ],
+  "footnote_configurations": ["configs/standalone_b.json"],
+  "corpus_manifest_schema": "corpus/README.md"
+}

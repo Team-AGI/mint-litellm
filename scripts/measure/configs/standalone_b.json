@@ -1,0 +1,10 @@
+{
+  "id": "standalone_b",
+  "description": "기능 축소 변형(출력 검사·승인 재개 없음). 본 비교에 넣지 않고 각주로만 쓴다",
+  "kind": "verdict_call",
+  "base_url": "http://CONFIGURE_ME",
+  "endpoint": "/mcp/rest/tools/call",
+  "api_key_env": "MEASURE_KEY_STANDALONE_B",
+  "status_to_action": {"200": "allow", "403": "deny", "202": "hold", "409": "hold"},
+  "restart_command": null
+}
