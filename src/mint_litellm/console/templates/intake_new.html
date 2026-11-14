@@ -3,7 +3,7 @@
 {% block page_class %}narrow{% endblock %}
 {% block body %}
 <h1>신청 등록</h1>
-{% if actor.role != 'viewer' %}
+{% if can(actor, 'intake create') %}
 <ol class="steps" aria-label="단계">{% for name in steps %}<li class="{{ 'ok' if loop.index < step else ('wait' if loop.index == step else 'off') }}"><span class="icon" aria-hidden="true">{{ ICONS.ok if loop.index < step else (ICONS.wait if loop.index == step else ICONS.off) }}</span>{{ name }}</li>{% endfor %}</ol>
 <form method="post" action="/intakes" class="form cols">
   {{ m.csrf(actor) }}<input type="hidden" name="step" value="{{ step }}">
@@ -38,5 +38,5 @@
     <a class="button" href="/intakes">취소</a>
   </div>
 </form>
-{% else %}{{ m.empty('이 콘솔에서는 신청을 등록할 수 없습니다', '/intakes', '목록으로 돌아가기') }}{% endif %}
+{% else %}{{ m.empty('신청 등록은 관리자만 할 수 있습니다', '/intakes', '도입 신청 목록') }}{% endif %}
 {% endblock %}

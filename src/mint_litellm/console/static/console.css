@@ -242,7 +242,7 @@ button.copy { min-height: 24px; padding: 0 var(--s2); font-family: monospace; fo
 
 dialog.confirm { max-width: 480px; width: 100%; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); padding: var(--s3); }
 dialog.confirm::backdrop { background: rgb(0 0 0 / 0.35); }
-dialog.confirm form { display: grid; gap: var(--s3); }
+dialog.confirm form, dialog.confirm .stack { display: grid; gap: var(--s3); }
 dialog.confirm h3 { margin: 0; }
 dialog.confirm .actions { justify-content: flex-end; }
 

@@ -163,10 +163,31 @@ class Actor:
         if self.config.litellm_admin is None:
             raise AdminError(
                 AdminCode.FORBIDDEN,
-                "이 콘솔에는 제어 평면 키가 설정되어 있지 않아 LiteLLM을 읽는 변경은 "
+                "이 콘솔에는 게이트웨이 관리 키가 설정되어 있지 않아 이 변경은 "
                 "명령줄에서 하십시오.",
             )
         return self.config.litellm_admin
+
+
+def can(actor: Any, command: str) -> bool:
+    """서비스가 이 명령에 요구하는 역할(명령 표)을 행위자가 갖는가. 화면 단추도 같은 표를 따른다."""
+    from mint_litellm import cli_evidence
+    from mint_litellm.control.services.base import _COMMANDS
+    from mint_litellm.types.cli_commands import OperatorRole
+
+    entry = _COMMANDS.get(command) or next(
+        (c for c in cli_evidence.COMMANDS if c.name == command), None
+    )
+    return entry is not None and OperatorRole(actor.role) in entry.roles
+
+
+def can_attach(actor: Any, kind_key: str) -> bool:
+    """증빙 종류를 이 행위자가 붙일 수 있는가(일부 종류는 관리자만)."""
+    from mint_litellm.control.services import evidence
+
+    if not can(actor, "evidence attach"):
+        return False
+    return kind_key not in evidence.ADMIN_ONLY_KINDS or actor.role == "admin"
 
 
 def is_staff_path(request: Request) -> bool:

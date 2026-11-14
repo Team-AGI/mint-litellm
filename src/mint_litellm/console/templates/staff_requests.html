@@ -7,7 +7,7 @@
   {{ m.kpi('가장 이른 만료까지', (soonest | span) if soonest is not none else '—', level='wait' if soonest is not none and soonest < 300) }}
   {{ m.kpi('승인 대기', mine_waiting) }}
 </div>
-{{ m.tabs([('pending', '확인할 요청', pending_count), ('mine', '내 승인 요청', mine_waiting)], tab, '/staff/confirmations') }}
+{{ m.tabs([('pending', '본인 확인 대기', pending_count), ('mine', '내 승인 요청', mine_waiting)], tab, '/staff/confirmations') }}
 {% if tab == 'pending' %}
 {% if waiting %}
 <table><thead><tr><th>서버</th><th>도구</th><th>목적</th><th>표시 값</th><th>만료</th><th>상태</th><th></th></tr></thead><tbody>
@@ -16,13 +16,13 @@
 <td>{% if c.display %}<dl class="detail">{% for k, v in c.display.items() %}<dt>{{ k }}</dt><dd>{{ v | clip }}</dd>{% endfor %}</dl>{% else %}—{% endif %}</td>
 <td class="nowrap">{{ c.expires_at | when }}</td><td>{{ m.badge(L.SELF_CONFIRMATION, c.view) }}</td>
 <td>
-<form method="post" class="actions">
+<form method="post" class="actions" id="staff-{{ c.id }}">
   {{ m.csrf(actor) }}
   {% if c.view == 'pending' %}
   <button type="submit" class="primary" formaction="/staff/confirmations/{{ c.id }}/confirm"{% if c.same_key %} disabled title="호출에 사용한 키와 다른 키로 로그인해야 합니다"{% endif %}>확인</button>
   <button type="submit" formaction="/staff/confirmations/{{ c.id }}/reject">거절</button>
   {% endif %}
-  <button type="submit" formaction="/staff/confirmations/{{ c.id }}/cancel">취소</button>
+  {{ m.confirm_submit('cancel-' ~ c.id, '취소', '요청 취소', '이 요청을 거두고 호출은 승인되지 않은 채 끝납니다.', 'staff-' ~ c.id, '요청 취소', '/staff/confirmations/' ~ c.id ~ '/cancel') }}
 </form>
 </td>
 </tr>{% endfor %}

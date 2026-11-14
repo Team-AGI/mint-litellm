@@ -5,7 +5,7 @@
 <h1>승인 센터</h1>
 <div class="cards">
   {{ m.kpi('응답 대기 호출', pending | length, '/approvals?tab=calls', level='wait' if pending else none) }}
-  {{ m.kpi('SLA 초과', slow, '/approvals?tab=calls', note=sla ~ '분 넘게 대기', level='danger' if slow else none) }}
+  {{ m.kpi('처리 기한 초과', slow, '/approvals?tab=calls', note=sla ~ '분 넘게 대기', level='danger' if slow else none) }}
   {{ m.kpi('서버 도입 대기', queue | length, '/approvals?tab=servers') }}
   {{ m.kpi('만료 임박 승인', (renewal.unchanged | length) + (renewal.changed | length), '/approvals?tab=renewals') }}
   {{ m.kpi('오늘 처리', done_today) }}

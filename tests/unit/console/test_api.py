@@ -278,7 +278,7 @@ def grant(world, relation, **overrides):
 def test_granting_needs_the_control_key_the_console_normally_lacks(world):
     response = grant(world, relation_of(world, "srv-wait"))
     body = assert_error(response, 403, AdminCode.FORBIDDEN)
-    assert "제어 평면 키" in body["message"]
+    assert "게이트웨이 관리 키" in body["message"]
 
 
 def test_an_exception_approval_cannot_exceed_ninety_days(world):

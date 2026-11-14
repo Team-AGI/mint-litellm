@@ -870,7 +870,7 @@ def test_the_menu_has_three_staff_screens_and_a_badge_for_requests_to_confirm(sw
     assert page.count('class="active"') >= 1 and 'href="/staff/confirmations"' in page
     assert "내 서버" in page and "내 단말" in page and "내 요청" in page
     assert '내 요청 <span class="badge error">1</span>' in page
-    assert 'aria-current="page"' in page and "확인할 요청" in page and "내 승인 요청" in page
+    assert 'aria-current="page"' in page and "본인 확인 대기" in page and "내 승인 요청" in page
 
 
 def test_the_my_servers_screen_shows_consent_state_and_opens_the_consent_form(sworld):

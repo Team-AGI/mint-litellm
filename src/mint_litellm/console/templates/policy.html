@@ -15,7 +15,7 @@
 <div class="cards">{% for c in tiles %}{{ m.kpi(c.label, c.value, c.href, c.note, c.level, c.trend) }}{% endfor %}</div>
 <div class="filters"><span class="muted">판본 {{ shadow.version_id }} · {{ shadow.set_at | when }} · {{ shadow.set_by | who }}</span>
 {% if actor.role == 'admin' %}
-  <form method="post" action="/policy/shadow/apply">{{ m.csrf(actor) }}<input type="hidden" name="version" value="{{ shadow.version_id }}"><button type="submit" class="primary">적용</button></form>
+  {% call m.confirm_dialog('shadow-apply', '적용', '시험 판본 적용', '판본 ' ~ shadow.version_id ~ '이(가) 활성 정책이 되어 이후 모든 호출이 이 판본으로 판정됩니다.', '/policy/shadow/apply', actor, '적용', danger=false, trigger_class='primary') %}<input type="hidden" name="version" value="{{ shadow.version_id }}">{% endcall %}
   <form method="post" action="/policy/shadow/cancel">{{ m.csrf(actor) }}<button type="submit">취소</button></form>
 {% endif %}</div>
 {% if shadow.flips %}
@@ -30,11 +30,11 @@
 <h2>모드</h2>
 {% if s %}
 {% if actor.role == 'admin' %}
-<form method="post" action="/policy/mode" class="filters">
+<form method="post" action="/policy/mode" class="filters" id="mode-form">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ s.settings_version }}">
   <label>모드<select name="mode"><option value="enforce"{% if s.mode == 'enforce' %} selected{% endif %}>집행</option><option value="observe"{% if ceiling == 'enforce' %} disabled{% endif %}{% if s.mode == 'observe' %} selected{% endif %}>관측</option></select></label>
-  <button type="submit" class="primary">모드 변경</button>
 </form>
+{{ m.confirm_submit('mode-confirm', '모드 변경', '정책 모드 변경', '관측으로 바꾸면 차단될 호출이 기록만 남고 통과합니다. 집행으로 바꾸면 위반 호출이 다시 차단됩니다.', 'mode-form', '모드 변경', danger=false, trigger_class='primary') }}
 {% endif %}
 <dl class="detail">
   <dt>관측 허용 사유</dt><dd>{% for r in s.observable_reasons %}{{ L.pick(L.REASON, r) }}{{ ', ' if not loop.last }}{% endfor %}</dd>

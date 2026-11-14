@@ -6,9 +6,9 @@
   {% if actor.role != 'viewer' %}{{ m.kpi('운영자', operators | length, note='관리자 ' ~ (operators | selectattr('role', 'equalto', 'admin') | list | length) ~ ' · 승인자 ' ~ (operators | selectattr('role', 'equalto', 'approver') | list | length) ~ ' · 조회자 ' ~ (operators | selectattr('role', 'equalto', 'viewer') | list | length), href='/admin?tab=operators') }}{% endif %}
   {{ m.kpi('조직', orgs | length, href='/admin?tab=orgs') }}
   {{ m.kpi('조직 연결', bindings | length, href='/admin?tab=orgs') }}
-  {% if actor.role != 'viewer' %}{{ m.kpi('만료 임박(7일)', expiring, href='/admin?tab=operators', level='wait' if expiring) }}{% endif %}
+  {% if actor.role != 'viewer' %}{{ m.kpi('운영자 만료 임박(7일)', expiring, href='/admin?tab=operators', level='wait' if expiring) }}{% endif %}
 </div>
-{{ m.tabs([('operators', '운영자', operators | length), ('orgs', '조직', orgs | length), ('suggestions', '연결 제안', suggestions | length)] + ([('transfer', '백업·이전', transfers | length), ('siem', 'SIEM 전달', siem | length)] if actor.role == 'admin' else []), tab, '/admin') }}
+{{ m.tabs(([('operators', '운영자', operators | length)] if actor.role != 'viewer' else []) + [('orgs', '조직', orgs | length), ('suggestions', '연결 제안', suggestions | length)] + ([('transfer', '백업·전달', transfers | length + siem | length)] if actor.role == 'admin' else []), tab, '/admin') }}
 {% if tab == 'operators' %}
 {% if operators %}
 <table><thead><tr><th>이름</th><th>역할</th><th>사용자</th><th>Slack</th><th>만료</th><th></th></tr></thead><tbody>
@@ -28,8 +28,7 @@
 {% endcall %}</div>
 {% endif %}</td></tr>{% endfor %}
 </tbody></table>
-{% elif actor.role == 'viewer' %}<div class="empty"><h3>조회자는 운영자 목록을 볼 수 없습니다</h3></div>
-{% else %}<div class="empty"><h3>등록된 운영자가 없습니다</h3></div>{% endif %}
+{% else %}{{ m.empty('등록된 운영자가 없습니다', '/setup', '시작하기') }}{% endif %}
 {% elif tab == 'orgs' %}
 {% if orgs %}
 <table><thead><tr><th>식별자</th><th>이름</th><th>상태</th><th class="num">연결</th><th class="num">이용 관계</th><th></th></tr></thead><tbody>
@@ -40,7 +39,7 @@
 {% endcall %}
 {% endif %}</td></tr>{% endfor %}
 </tbody></table>
-{% else %}<div class="empty"><h3>조직이 없습니다</h3></div>{% endif %}
+{% else %}{{ m.empty('조직이 없습니다', '#org-form' if actor.role == 'admin' else '/', '조직 생성' if actor.role == 'admin' else '대시보드') }}{% endif %}
 {% if bindings %}
 <h2>조직 연결</h2>
 <table><thead><tr><th>조직</th><th>구분</th><th>대상</th><th>등록자</th></tr></thead><tbody>
@@ -48,7 +47,7 @@
 </tbody></table>
 {% endif %}
 {% if actor.role == 'admin' %}
-<form method="post" action="/orgs" class="filters">
+<form method="post" action="/orgs" class="filters" id="org-form">
   {{ m.csrf(actor) }}
   <label>식별자<input name="org_id" required></label><label>이름<input name="name" required></label>
   <button type="submit" class="primary">조직 생성</button>
@@ -65,7 +64,7 @@
 {% for t in transfers %}<tr><td class="nowrap">{{ t.inserted_at | when }}</td><td>{{ L.pick(L.EVENT_KIND, t.kind) }}</td><td>{{ t.actor | who }}</td><td>{{ t.file | blank }}</td><td>{{ t.mode | blank }}</td><td>{{ '예' if t.encrypted else '아니오' if t.encrypted is not none else '-' }}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}<div class="empty"><h3>백업·이전 기록이 없습니다</h3></div>{% endif %}
-{% elif tab == 'siem' and actor.role == 'admin' %}
+<h2>SIEM 전달</h2>
 {{ m.copy_cmd('mint-litellm siem add 이름 --kind syslog --endpoint tls://호스트:6514') }}
 {{ m.copy_cmd('mint-litellm siem add 이름 --kind hec --endpoint https://호스트:8088 --token-env 토큰변수') }}
 {% if siem %}
@@ -85,7 +84,7 @@
 <td>{% if actor.role == 'admin' %}<form method="post" action="/org-suggestions/{{ s.id }}/apply" class="filters">{{ m.csrf(actor) }}<button type="submit" class="primary">적용</button></form>
 <form method="post" action="/org-suggestions/{{ s.id }}/ignore" class="filters">{{ m.csrf(actor) }}<button type="submit">무시</button></form>{% endif %}</td></tr>{% endfor %}
 </tbody></table>
-{% if actor.role == 'admin' %}<form method="post" action="/org-suggestions/rule" class="filters">{{ m.csrf(actor) }}<input type="hidden" name="rule" value="{{ rule }}"><button type="submit">{{ L.ORG_RULE[rule] }} 제안 {{ group | length }}건 모두 적용</button></form>{% endif %}
+{% if actor.role == 'admin' %}{% call m.confirm_dialog('suggest-all-' ~ loop.index, L.ORG_RULE[rule] ~ ' 제안 ' ~ (group | length) ~ '건 모두 적용', '제안 모두 적용', L.ORG_RULE[rule] ~ ' 제안 ' ~ (group | length) ~ '건이 조직 연결로 등록됩니다.', '/org-suggestions/rule', actor, '모두 적용', danger=false, trigger_class='') %}<input type="hidden" name="rule" value="{{ rule }}">{% endcall %}{% endif %}
 {% endif %}{% endfor %}
 {% if not suggestions %}<div class="empty"><h3>조직 연결 제안이 없습니다</h3></div>{% endif %}
 {% endif %}

@@ -567,7 +567,7 @@ NOTICES = {
     "rechecked": "재검사를 등록했습니다.",
     "intake_approved": "신청을 승인했습니다.",
     "intake_rejected": "신청을 거절했습니다.",
-    "reapproval_planned": "재승인 계획을 등록했습니다. 반영은 작업 실행기가 진행합니다.",
+    "reapproval_planned": "재승인 계획을 등록했습니다.",
     "provisional_approved": "임시 계약을 승인된 도구 계약으로 바꿨습니다.",
     "operator_removed": "운영자를 삭제했습니다.",
     "operator_chat_bound": "채팅 결속을 저장했습니다.",
