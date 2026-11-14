@@ -317,9 +317,9 @@ def warn_plaintext_secrets(env: Mapping[str, str]) -> list[str]:
     try:
         with open(raw, encoding="utf-8") as handle:
             document = yaml.safe_load(handle)
-    except (OSError, yaml.YAMLError):
+        paths = plaintext_secret_paths(document if isinstance(document, Mapping) else None)
+    except Exception:  # 경고용 점검이 기동을 막지 않게 한다
         return []
-    paths = plaintext_secret_paths(document if isinstance(document, Mapping) else None)
     if paths:
         log.warning(
             "LiteLLM 설정에 비밀이 평문으로 적혀 있습니다(os.environ/ 참조로 바꾸십시오): %s",
