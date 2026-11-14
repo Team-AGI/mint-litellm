@@ -63,6 +63,18 @@ def when(context: Any, value: Any) -> str:
     return local_time(value, zone_name(context.get("request")))
 
 
+def countdown(value: Any) -> str:
+    """기한까지 남은 시간(지났으면 「기한 지남」)."""
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value)
+    if not isinstance(value, datetime):
+        return "—"
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    left = (value - datetime.now(UTC)).total_seconds()
+    return "기한 지남" if left <= 0 else f"{int(left // 3600)}시간 {int(left % 3600 // 60)}분 남음"
+
+
 def span(seconds: Any) -> str:
     """대기 시간을 한국어로(초·분·시간·일)."""
     if seconds is None:
@@ -98,7 +110,7 @@ def to_json(value: Any) -> str:
 
 templates.env.filters.update(
     span=span, when=when, blank=blank, join=join, to_json=to_json, clip=clip, yes_no=yes_no,
-    who=labels.actor,
+    who=labels.actor, countdown=countdown,
 )
 templates.env.globals.update(L=labels, ICONS=ICONS, MENU=MENU, STAFF_MENU=STAFF_MENU)
 
