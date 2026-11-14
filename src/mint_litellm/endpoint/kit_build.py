@@ -29,6 +29,7 @@ LAUNCHERS = {
 }
 FILES = tuple(item for launchers in LAUNCHERS.values() for item in launchers) + PROGRAMS
 HARNESSES = ("claude", "codex")
+GATEWAY_NAME = "litellm-gateway"  # 하네스 설정의 게이트웨이 서버 이름(승인 로컬 서버는 쓸 수 없다)
 
 
 def _text(path: Path) -> bytes:
@@ -62,6 +63,7 @@ def build_kit(
     platform: str = "linux",
     harnesses: Sequence[str] = ("claude",),
     allow_unsandboxed: bool = False,
+    gateway_key: str | None = None,
 ) -> bytes:
     if platform not in LAUNCHERS or not harnesses or not set(harnesses) <= set(HARNESSES):
         raise ValueError("unknown platform or harness")
@@ -75,6 +77,10 @@ def build_kit(
     }
     if allow_unsandboxed:
         config["allow_unsandboxed"] = True  # 관리형 단말이 격리 없이 서버를 시작해도 된다.
+    if gateway_key:
+        # 관리형 단말의 하네스가 LiteLLM 게이트웨이 MCP를 쓰게 하는 사용자 결속 MCP 전용 키.
+        config["gateway"] = {"name": GATEWAY_NAME, "url": decide_url.rstrip("/") + "/mcp"}
+        config["gateway_key"] = gateway_key
     members = [(name, _text(path), mode) for name, path, mode in (*LAUNCHERS[platform], *PROGRAMS)]
     members.append(("kit.json", json.dumps(config, indent=1).encode(), 0o600))
     raw = io.BytesIO()

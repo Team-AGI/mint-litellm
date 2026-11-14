@@ -39,6 +39,14 @@ def test_only_a_user_level_install_is_marked_unmanaged():
     assert wanted["endpoint_unmanaged:mint-kit-a"][:2] == ("endpoint_unmanaged", "medium")
 
 
+def test_an_untrusted_codex_hook_is_named_on_the_unmanaged_alert():
+    untrusted = endpoint_posture.findings([{**row("user"), "hook_trust": "untrusted"}], {})
+    assert untrusted["endpoint_unmanaged:mint-kit-a"][2]["hook_trust"] == "untrusted"
+    for trust in ("trusted", None):
+        found = endpoint_posture.findings([{**row("user"), "hook_trust": trust}], {})
+        assert "hook_trust" not in found["endpoint_unmanaged:mint-kit-a"][2]
+
+
 def test_servers_that_are_still_in_use_or_unknown_raise_nothing():
     wanted = endpoint_posture.findings(
         [row("managed", ["live", "suspended", "unknown"])],
@@ -90,6 +98,8 @@ def test_packages_run_outside_the_launcher_are_matched_against_the_servers_packa
     }
     wanted = endpoint_posture.findings(installs, {}, package_status=status)
     assert sorted(wanted) == [
+        "endpoint_outside_approved:mint-kit-a:npm:@a/mcp-live",  # 중지 상태도 실행기 밖이면 우회
+        "endpoint_outside_approved:mint-kit-a:pypi:Mcp_Both",  # 승인 서버도 같은 패키지를 쓴다
         "endpoint_outside_retired:mint-kit-a:npm:mcp-old",
         "endpoint_outside_unapproved:mint-kit-a:container:mcp/fetch",
         "endpoint_outside_unapproved:mint-kit-a:npm:mcp-new",
@@ -99,6 +109,9 @@ def test_packages_run_outside_the_launcher_are_matched_against_the_servers_packa
     assert (kind, severity) == ("endpoint_outside_retired", "high")
     assert subject["package"] == "mcp-old" and subject["ecosystem"] == "npm"
     assert wanted["endpoint_outside_unapproved:mint-kit-a:npm:mcp-new"][1] == "medium"
+    kind, severity, subject = wanted["endpoint_outside_approved:mint-kit-a:pypi:Mcp_Both"]
+    assert (kind, severity) == ("endpoint_outside_approved", "medium")
+    assert subject["package"] == "Mcp_Both" and subject["count"] == 2
     # 계약 쪽 이름은 구분 기호·대소문자·기본 저장소 접두어가 달라도 같은 패키지로 본다.
     assert endpoint_posture.package_key("pypi", "MCP.Server_X") == ("pypi", "mcp-server-x")
     assert endpoint_posture.package_key("container", "docker.io/library/mcp-a") == (
@@ -129,6 +142,7 @@ def test_the_catalog_names_the_policies_these_alerts_report():
     assert by_id["endpoint_stale_autostart"]["reference_policies"] == ["POL-D-04"]
     assert by_id["endpoint_outside_retired"]["reference_policies"] == ["POL-D-04"]
     assert by_id["endpoint_outside_unapproved"]["reference_policies"] == ["POL-D-04"]
+    assert by_id["endpoint_outside_approved"]["reference_policies"] == ["POL-D-04"]
     assert by_id["endpoint_unsandboxed"]["reference_policies"] == ["POL-O-13", "POL-I-08"]
     assert by_id["endpoint_egress_refused"]["reference_policies"] == ["POL-O-12", "POL-O-13"]
     assert "POL-D-04" in by_id["endpoint_silent"]["reference_policies"]
@@ -298,8 +312,11 @@ def test_the_scan_matches_outside_packages_with_registered_server_packages(ctx, 
         (json.dumps(outside),),
     )
     alias = _alias(conn)
-    assert endpoint_posture.scan(conn, INSTANCE) == 1
-    assert open_alerts(conn) == [f"endpoint_outside_unapproved:{alias}:npm:mcp-other"]
+    assert endpoint_posture.scan(conn, INSTANCE) == 2
+    assert open_alerts(conn) == [
+        f"endpoint_outside_approved:{alias}:npm:mcp-db",  # 승인 서버의 패키지를 실행기 밖에서 돌림
+        f"endpoint_outside_unapproved:{alias}:npm:mcp-other",
+    ]
     # 서버가 폐기되면 같은 패키지는 폐기 서버 패키지의 경보로 바뀐다.
     conn.execute("UPDATE mint.servers SET status = 'terminating' WHERE server_id = 'local-1'")
     endpoint_posture.scan(conn, INSTANCE)

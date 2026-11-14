@@ -5,7 +5,8 @@
 
 - 폐기(종료 중·종료됨)된 로컬 서버가 설치 항목에 남아 있으면 ``endpoint_stale_server``.
 - 사용자 수준 설치(관리형이 아님)면 ``endpoint_unmanaged``. 게이트웨이 밖 MCP를 막는 것은 관리형
-  설치뿐이라, 사용자 수준 설치는 이 통제가 적용되지 않는다는 표시이다.
+  설치뿐이라, 사용자 수준 설치는 이 통제가 적용되지 않는다는 표시이다. 단말이 Codex 훅이 아직
+  신뢰되지 않았다고 보고하면 대상에 「훅 미신뢰」를 싣는다(신뢰 전에는 훅이 실행되지 않는다).
 
 - 보고한 실행 중 프로세스나 자동 시작 항목이 가리키는 서버가 승인 상태가 아니거나(폐기·반려·승인
   대기) 레지스트리에 없으면 ``endpoint_stale_process``·``endpoint_stale_autostart``. 제거 보고도
@@ -31,7 +32,9 @@
 - 묶음 실행기 밖에서 직접 도는 MCP 서버 패키지(``outside_processes``, 패키지 식별자만)는 서버
   계약의 패키지와 이름으로 맞춰 본다. 폐기된 서버의 패키지만 해당하면 ``endpoint_outside_retired``
   (높음), 승인(또는 중지) 상태 서버가 쓰는 패키지가 아니면 ``endpoint_outside_unapproved``(중간,
-  단말과 패키지마다 하나). 경보만 남기고 프로세스는 끄지 않는다. 이름에 ``mcp``가 든 패키지만
+  단말과 패키지마다 하나). 승인된 서버의 패키지가 실행기 밖에서 돌면 격리·훅·네트워크 거름을
+  우회하므로 ``endpoint_outside_approved``(중간)를 연다. 경보만 남기고 프로세스는 끄지 않는다.
+  이름에 ``mcp``가 든 패키지만
   보고되므로 다른 이름의 패키지는 보지 못한다.
 
 조건이 사라지면(재설치·제거·키 해제·서버 되살림) 같은 스캔이 경보를 닫는다.
@@ -57,6 +60,7 @@ KINDS = (
     AlertKind.ENDPOINT_STALE_AUTOSTART.value,
     AlertKind.ENDPOINT_OUTSIDE_RETIRED.value,
     AlertKind.ENDPOINT_OUTSIDE_UNAPPROVED.value,
+    AlertKind.ENDPOINT_OUTSIDE_APPROVED.value,
     AlertKind.ENDPOINT_UNSANDBOXED.value,
     AlertKind.ENDPOINT_EGRESS_REFUSED.value,
     AlertKind.ENDPOINT_EGRESS_UNFILTERED.value,
@@ -110,7 +114,8 @@ def findings(
                 )
         if row["install_mode"] == "user":
             kind = AlertKind.ENDPOINT_UNMANAGED.value
-            wanted[f"{kind}:{row['key_alias']}"] = (kind, "medium", who)
+            untrusted = {"hook_trust": "untrusted"} if row.get("hook_trust") == "untrusted" else {}
+            wanted[f"{kind}:{row['key_alias']}"] = (kind, "medium", {**who, **untrusted})
         for name in row["mcp_servers"] or ():
             if statuses.get(name) in TERMINATED:
                 kind = AlertKind.ENDPOINT_STALE_SERVER.value
@@ -127,11 +132,12 @@ def findings(
         for item in row.get("outside_processes") or ():
             key = package_key(item["ecosystem"], item["package"])
             seen = set((package_status or {}).get(key, ()))
-            if seen & set(LIVE):
-                continue
-            retired = bool(seen & set(TERMINATED))
+            approved = bool(seen & set(LIVE))
+            retired = bool(seen & set(TERMINATED)) and not approved
             kind = (
-                AlertKind.ENDPOINT_OUTSIDE_RETIRED
+                AlertKind.ENDPOINT_OUTSIDE_APPROVED
+                if approved
+                else AlertKind.ENDPOINT_OUTSIDE_RETIRED
                 if retired
                 else AlertKind.ENDPOINT_OUTSIDE_UNAPPROVED
             ).value
@@ -181,7 +187,7 @@ def scan(
     installs = fetchall(
         conn,
         "SELECT user_id, key_alias, install_mode, mcp_servers, processes, autostart,"
-        " outside_processes, reported_at, expires_at, clock_timestamp() AS now"
+        " outside_processes, hook_trust, reported_at, expires_at, clock_timestamp() AS now"
         " FROM mint.endpoint_installs WHERE instance_id = %s AND revoked_at IS NULL"
         " AND install_mode IN ('managed', 'user', 'removed')",
         (instance_id,),

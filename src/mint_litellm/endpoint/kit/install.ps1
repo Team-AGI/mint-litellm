@@ -1,7 +1,7 @@
 ﻿# MINT 단말 설치 묶음: 이 파일을 실행하면 설치된다. 관리자 권한은 한 번만 쓴다.
-# 사용: install.cmd [install|uninstall|status] [-UserLevel] [-DryRun]
+# 사용: install.cmd [install|uninstall|status|check|sync] [-UserLevel] [-DryRun]
 param(
-    [ValidateSet('install', 'uninstall', 'status')][string]$Action = 'install',
+    [ValidateSet('install', 'uninstall', 'status', 'check', 'sync')][string]$Action = 'install',
     [switch]$UserLevel,
     [switch]$DryRun,
     # 아래 셋은 관리자 권한으로 다시 부를 때만 쓴다(부른 사람의 계정과 결과 파일).

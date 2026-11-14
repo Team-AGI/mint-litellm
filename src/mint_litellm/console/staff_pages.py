@@ -444,14 +444,24 @@ def endpoint_kit(
         return endpoint_page(request, actor, "설치 묶음의 종류가 올바르지 않습니다.", 400)
     if config.kit_issuer is None:
         return endpoint_page(request, actor, "단말 설치 묶음을 발급할 수 없습니다.", 503)
+    if not config.endpoint_routes:
+        return endpoint_page(
+            request, actor,
+            "단말 경로가 꺼져 있어 설치 묶음을 발급할 수 없습니다. 운영자가 "
+            "MINT_ENDPOINT_ROUTES=true로 켠 뒤 다시 시도하세요.", 503,
+        )
     contracts = endpoint_kits.approved_contracts(sctx.control, sctx.instance_id)
     if not contracts:
         return endpoint_page(request, actor, "승인된 로컬 서버가 없습니다.", 409)
+    team_id = sctx.team_ids[0] if sctx.team_ids else None
     try:
         key = endpoint_kits.issue_key(
             sctx.control, config.kit_issuer, sctx.instance_id, user_id=actor.user_id,
-            team_id=sctx.team_ids[0] if sctx.team_ids else None, issued_by=actor.user_id,
-            ttl_days=config.stage2.endpoint_key_days,
+            team_id=team_id, issued_by=actor.user_id, ttl_days=config.stage2.endpoint_key_days,
+        )
+        gateway_key = endpoint_kits.issue_gateway_key(
+            sctx.control, config.kit_issuer, sctx.instance_id, user_id=actor.user_id,
+            team_id=team_id, kit_key=key,
         )
     except LiteLLMError:
         log.exception("단말 설치 묶음 키 발급 실패")
@@ -460,7 +470,7 @@ def endpoint_kit(
         contracts, decide_url=config.endpoint_url or config.litellm_url, key=key,
         ca_pem=config.endpoint_ca_pem, platform=platform,
         harnesses=("claude", "codex") if harness == "all" else (harness,),
-        allow_unsandboxed=config.endpoint_allow_unsandboxed,
+        allow_unsandboxed=config.endpoint_allow_unsandboxed, gateway_key=gateway_key,
     )
     media, name = (
         ("application/zip", "mint-kit.zip") if platform == "windows"

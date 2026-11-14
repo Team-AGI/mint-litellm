@@ -105,6 +105,7 @@ def acl_by_folder(folders, owner="BUILTIN\\Administrators"):
     return run
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows drive path walk")
 def test_a_stock_drive_root_does_not_make_a_program_files_interpreter_untrusted():
     folders = {
         "C:\\Program Files\\Python312\\python.exe": SAFE_ACL,
@@ -252,6 +253,7 @@ def test_a_system_reporter_leaves_profile_files_and_processes_alone(
     state["autostart"] = [{"server": "srv-1", "file": str(mark)}]
     kit.system_mode = True
     monkeypatch.setattr(kit_module, "capture", lambda c: pytest.fail("no process work"))
+    monkeypatch.setattr(kit_module, "process_entries", lambda windows: [])  # 명령줄에 든 것이 없다
     kit.remediate(state, ["srv-1"])
     assert config.read_bytes() == before and record.exists() and mark.exists()
     assert state["autostart"] == [{"server": "srv-1", "file": str(mark)}]

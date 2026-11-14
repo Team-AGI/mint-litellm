@@ -95,6 +95,8 @@ class ConsoleConfig:
     endpoint_ca_pem: str | None = None
     # 관리형 단말이 격리할 수 없을 때 서버를 격리 없이 시작해도 되는가(기본 아니오)
     endpoint_allow_unsandboxed: bool = False
+    # 단말 경로(MINT_ENDPOINT_ROUTES)가 켜져 있는가. 꺼져 있으면 발급한 묶음의 보고·판정이 404이다.
+    endpoint_routes: bool = False
     # 정책 판본을 적용할 때 쓰는 번들 원본과 정책 엔진. 정책 엔진 주소가 없으면 적용하지 않는다.
     policy_source: PolicySource | None = None
     # 호출 기록 상세에서 LiteLLM 지출 기록의 가드레일 기록을 읽는다. 제어 평면 키에
@@ -127,6 +129,7 @@ class ConsoleConfig:
             endpoint_url=(env.get("MINT_ENDPOINT_PUBLIC_URL") or "").strip() or None,
             endpoint_ca_pem=ca_pem,
             endpoint_allow_unsandboxed=_truthy(env.get("MINT_ENDPOINT_ALLOW_UNSANDBOXED")),
+            endpoint_routes=_truthy(env.get("MINT_ENDPOINT_ROUTES")),
             policy_source=_policy_source(env),
             spend_lookup=_truthy(env.get("MINT_SPEND_LOG_LOOKUP")),
         )

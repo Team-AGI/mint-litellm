@@ -36,7 +36,7 @@ def test_a_managed_install_report_is_stored_for_the_calling_key(tmp_path, stored
                       "claude_version": "2.1.0 (Claude Code)", "mcp_servers": ["srv-1"],
                       "processes": None, "autostart": None, "outside_processes": None,
                       "removed": None,
-                      "local_mcp": None}
+                      "local_mcp": None, "tool_lists": None, "hook_trust": None}
 
 
 def test_the_process_and_autostart_inventory_is_stored_as_plain_rows(tmp_path, stored):
@@ -109,7 +109,7 @@ def test_the_report_route_needs_a_key_and_a_ready_store(tmp_path, monkeypatch):
 
     monkeypatch.setattr(FakeDatabase, "report_install", broken, raising=False)
     assert post(client, REPORT, report()).status_code == 503
-    big = " " * (96 * 1024 + 1)
+    big = " " * (192 * 1024 + 1)
     assert client.post(REPORT, content=big, headers=KEY_HEADER).status_code == 413
 
 

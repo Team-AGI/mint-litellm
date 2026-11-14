@@ -192,6 +192,8 @@ class ReportBody(BaseModel):
     local_mcp: list[LocalMcpItem] | None = Field(default=None, max_length=64)
     # 실행기가 서버의 ``tools/list`` 응답에서 본 도구 목록. 이전 묶음은 보내지 않는다.
     tool_lists: list[ToolListItem] | None = Field(default=None, max_length=8)
+    # 사용자 수준 Codex 훅을 Codex가 신뢰했는가(단말 설정에서 읽은 값). 이전 묶음은 보내지 않는다.
+    hook_trust: Literal["trusted", "untrusted"] | None = None
 
     @model_validator(mode="after")
     def _mode_matches_action(self) -> ReportBody:
@@ -382,8 +384,10 @@ def make_router(
                 removed=_dump(body.removed),
                 local_mcp=_dump(body.local_mcp),
                 tool_lists=_dump(body.tool_lists),
+                hook_trust=body.hook_trust,
             )
         except Exception as exc:
+            log.exception("install report could not be stored")
             raise HTTPException(status_code=503, detail="install store is not ready") from exc
         if outcome == "unknown":
             raise HTTPException(status_code=404, detail="no such kit key")

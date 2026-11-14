@@ -38,10 +38,12 @@ KEY = {
     "target_id": "대상", "preexisting": "기존 항목", "oauth2": "OAuth 토큰", "byok": "사용자 키",
     "verdict": "판정", "added": "추가", "removed": "제거", "scope_type": "범위 종류",
     "signal": "탐지 근거", "scope_id": "범위", "differences": "차이", "oauth2_flow": "인증 흐름",
+    "hook_trust": "Codex 훅",
 }
 AXIS = {"file": "파일 접근", "exec": "실행", "network": "네트워크"}
 # 값이 코드인 항목의 표시명
 VALUE = {
+    "hook_trust": {"untrusted": "훅 미신뢰(Codex가 훅을 신뢰하기 전에는 실행되지 않음)"},
     "state": {"due": "기한 임박", "overdue": "기한 초과", "missing": "없음", "expired": "만료",
               "expiring": "만료 임박"},
     "source": {"approvals": "승인", "call_approvals": "호출별 승인", "intakes": "신청",
@@ -121,6 +123,9 @@ SUMMARY = {
     "endpoint_stale_autostart": "단말 {key_alias}에 폐기된 서버 {server_id}의 자동 시작 있음",
     "endpoint_outside_retired": "단말 {key_alias}: 폐기 서버 패키지 {package}가 실행기 밖 실행 중",
     "endpoint_outside_unapproved": "단말 {key_alias}: 미승인 패키지 {package}가 실행기 밖 실행 중",
+    "endpoint_outside_approved": (
+        "단말 {key_alias}: 승인된 서버의 패키지 {package}가 실행기 밖 실행 중"
+    ),
     "endpoint_unsandboxed": "단말 {key_alias}에서 서버 {server_id}가 격리 없이 실행 중입니다.",
     "endpoint_egress_unfiltered": "단말 {key_alias}: 서버 {server_id}의 호스트 제한 미집행",
     "endpoint_egress_refused": "단말 {key_alias}: 서버 {server_id}의 허용 밖 접속 {count}건 거절",

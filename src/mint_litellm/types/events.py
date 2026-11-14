@@ -487,6 +487,7 @@ class AlertKind(StrEnum):
     ENDPOINT_STALE_AUTOSTART = "endpoint_stale_autostart"
     ENDPOINT_OUTSIDE_RETIRED = "endpoint_outside_retired"
     ENDPOINT_OUTSIDE_UNAPPROVED = "endpoint_outside_unapproved"
+    ENDPOINT_OUTSIDE_APPROVED = "endpoint_outside_approved"
     ENDPOINT_UNSANDBOXED = "endpoint_unsandboxed"
     ENDPOINT_EGRESS_REFUSED = "endpoint_egress_refused"
     ENDPOINT_EGRESS_UNFILTERED = "endpoint_egress_unfiltered"

@@ -146,7 +146,9 @@ def test_endpoint_list_shows_processes_running_outside_the_runner():
 
 
 def test_outside_alerts_have_label_and_summary():
-    for kind in ("endpoint_outside_retired", "endpoint_outside_unapproved"):
+    for kind in (
+        "endpoint_outside_retired", "endpoint_outside_unapproved", "endpoint_outside_approved"
+    ):
         assert re.search("[가-힣]", labels.ALERT_KIND[kind])
         text = alert_view.summary(kind, {"key_alias": "k", "package": "left-pad"})
         assert "left-pad" in text and "{" not in text

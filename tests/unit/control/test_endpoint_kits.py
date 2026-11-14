@@ -346,3 +346,53 @@ def test_a_report_stores_the_tool_list_once_per_server_and_key(fresh_db, plugin_
     with psycopg.connect(fresh_db) as admin:
         rows = admin.execute("SELECT tools FROM mint.endpoint_tool_lists").fetchall()
     assert len(rows) == 1 and [t["name"] for t in rows[0][0]] == ["a", "b"]
+
+
+def test_a_report_with_removed_items_is_stored_and_leaves_remediation_events(
+    fresh_db, plugin_dsn
+):
+    pytest.importorskip("psycopg_pool")
+    with psycopg.connect(fresh_db) as admin:
+        admin.execute(
+            "INSERT INTO mint.endpoint_installs (instance_id, key_token, user_id, key_alias,"
+            " issued_by) VALUES (%s, 'tok-r', 'u1', 'mint-kit-r', 'u1')", (INSTANCE,))
+    removed = [{"kind": "config", "server": "gone-1", "target": "claude"},
+               {"kind": "process", "server": "gone-1", "target": None}]
+
+    async def run():
+        database = PluginDatabase(plugin_dsn)
+        try:
+            return await database.report_install(
+                INSTANCE, "tok-r", mode="managed", kit_version="k", claude_version=None,
+                mcp_servers=[], removed=removed)
+        finally:
+            await database.close()
+
+    assert asyncio.run(run()) == "recorded"
+    with psycopg.connect(fresh_db) as admin:
+        kinds = admin.execute(
+            "SELECT count(*) FROM mint.events WHERE kind = 'endpoint_remediated'").fetchone()
+    assert kinds == (2,)
+
+
+def test_the_plugin_role_still_cannot_append_other_control_events(fresh_db, plugin_dsn):
+    with psycopg.connect(plugin_dsn) as plugin, pytest.raises(errors.InsufficientPrivilege):
+        plugin.execute(
+            "INSERT INTO mint.events (instance_id, kind, source_key, actor, subject, payload)"
+            " VALUES (%s, 'server_registered', 'x', 'a', '{}', '{}')", (INSTANCE,))
+
+
+def test_registering_an_unpinned_package_works_as_the_control_role(fresh_db, login_roles):
+    from ctl_fixtures import as_login, make_ctx
+
+    from mint_litellm.control.settings_store import ensure
+
+    unpinned = ExecContract(
+        executable="/usr/bin/npx", argv=["-y", "left-pad"], executable_sha256="cd" * 32)
+    with as_login(fresh_db, "mint_control") as control:
+        ensure(control, INSTANCE)
+        servers.register_local(make_ctx(control), "unpinned-1", unpinned)
+        opened = control.execute(
+            "SELECT count(*) FROM mint.alerts WHERE kind = 'package_unpinned'").fetchone()
+        control.rollback()
+    assert opened[0] == 1
