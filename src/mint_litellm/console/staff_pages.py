@@ -46,7 +46,7 @@ public = APIRouter()
 
 RECENT_RECORDS = 50
 EXPIRING = timedelta(days=7)
-REQUESTS = "/staff/requests"
+REQUESTS = "/staff/confirmations"
 log = logging.getLogger(__name__)
 
 
@@ -342,9 +342,9 @@ def requests(request: Request, actor: StaffActor = Depends(staff_actor)):
     return requests_page(request, actor)
 
 
-@router.get("/staff/confirmations", include_in_schema=False)
-def confirmations(request: Request):
-    return see_other(request, REQUESTS, tab="pending")
+@router.get("/staff/requests", include_in_schema=False)
+def legacy_requests(request: Request):
+    return see_other(request, REQUESTS, tab=request.query_params.get("tab", "mine"))
 
 
 @router.get("/staff/link/{token}")

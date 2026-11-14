@@ -14,7 +14,7 @@ from mint_litellm.control import dormant
 from mint_litellm.control.approvals import DEFAULT_CALL_WINDOW
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import allowlists as allowlist_service
-from mint_litellm.control.services import approval_metrics, reads
+from mint_litellm.control.services import approval_metrics, dashboard_reads, reads
 from mint_litellm.control.services import approvals as approval_service
 from mint_litellm.control.services import call_approval_rules as call_approval_rule_service
 from mint_litellm.control.services import call_approvals as call_approval_service
@@ -77,6 +77,10 @@ def approvals_page(request: Request, actor: Actor, error=None, status=200, tab=N
         "tab": tab, "focus": focus, "error": error, "page": page_number(request),
         "rows": calls, "pending": pending, "queue": queue, "renewal": renewal, "rules": rules,
         "slow": sum(1 for c in pending if (c["age_seconds"] or 0) >= SLOW_SECONDS),
+        "wait": dashboard_reads.pending_wait(actor.conn, actor.instance),
+        "done_today": dashboard_reads.decided_today(
+            actor.conn, actor.instance, actor.config.time_zone
+        ),
         "tabs": [
             ("calls", "호출", len(pending)), ("servers", "서버 도입", len(queue)),
             ("renewals", "갱신", len(renewal["unchanged"]) + len(renewal["changed"])),

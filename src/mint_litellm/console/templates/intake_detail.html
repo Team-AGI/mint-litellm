@@ -3,7 +3,7 @@
 {% block page_class %}wide{% endblock %}
 {% block body %}
 <h1>{{ i.server_id }} {{ m.badge(L.INTAKE, i.status) }}</h1>
-<div class="filters" aria-label="진행 단계">{% for level, text in progress %}{% if not loop.first %}<span class="muted" aria-hidden="true">→</span>{% endif %}<span class="badge {{ level }}"><span class="icon" aria-hidden="true">{{ ICONS[level] }}</span>{{ text }}</span>{% endfor %}</div>
+<ol class="steps" aria-label="진행 단계">{% for level, text in progress %}<li class="{{ level }}"><span class="icon" aria-hidden="true">{{ ICONS[level] }}</span>{{ text }}</li>{% endfor %}</ol>
 {% if stale and i.status in ('passed', 'indeterminate') %}<div class="banner error" role="alert">연결·도구 정의 증거가 24시간을 넘었습니다</div>{% endif %}
 {% if lacking and (i.status == 'indeterminate' or i.decision == 'exception') %}<div class="banner error" role="alert">증빙 누락: {{ lacking | join(', ') }}</div>{% endif %}
 {% if next_step %}<div class="effect">다음 행동: {% if next_step == '증빙 첨부' %}<a href="?tab=evidence">{{ next_step }}</a>{% else %}{{ next_step }}{% endif %}</div>{% endif %}

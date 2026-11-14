@@ -313,7 +313,7 @@ def test_a_key_scoped_approval_is_shown_only_to_that_key(sworld):
 def test_the_confirmation_screen_lists_only_own_pending_requests_in_korean(sworld):
     mine = add_confirmation(sworld, display='{"받는 사람": "a@example.com"}')
     theirs = add_confirmation(sworld, OTHER, requested_key=OTHER_KEY, tool="their_tool")
-    page = logged_in(sworld).get("/staff/requests")
+    page = logged_in(sworld).get("/staff/confirmations")
     assert page.status_code == 200
     assert mine in page.text and theirs not in page.text and "their_tool" not in page.text
     assert "확인 대기" in page.text and "결제" in page.text
@@ -334,14 +334,14 @@ def test_a_different_key_confirms_the_request(sworld):
     events = sworld.query("SELECT kind, actor, payload->>'kind' FROM mint.events"
                           " WHERE kind = 'call_approval_approved'")
     assert events == [("call_approval_approved", STAFFER, "confirmation")]
-    after = client.get("/staff/requests")
+    after = client.get("/staff/confirmations")
     assert "확인됨" in after.text and "a@example.com" in after.text
 
 
 def test_the_same_key_as_the_call_cannot_confirm_but_can_reject(sworld):
     cid = add_confirmation(sworld, requested_key=CONSOLE)
     client = logged_in(sworld, CONSOLE)
-    page = client.get("/staff/requests")
+    page = client.get("/staff/confirmations")
     assert "다른 키로 로그인해야 합니다" in page.text and "disabled" in page.text
     refused = decide(client, cid, "confirm")
     assert refused.status_code == 403 and "다른 키로 로그인하십시오" in refused.text
@@ -359,7 +359,7 @@ def test_reject_and_cancel_clear_the_display_and_leave_no_value_in_events(sworld
     assert decide(client, second, "cancel").status_code == 303
     assert sworld.query("SELECT display FROM mint.self_confirmations"
                         " WHERE id IN (%s, %s)", first, second) == [(None,), (None,)]
-    page = client.get("/staff/requests")
+    page = client.get("/staff/confirmations")
     assert "SECRET" not in page.text and "취소됨" in page.text and "거절됨" in page.text
     everything = sworld.query("SELECT string_agg(e::text, ' ') FROM mint.events e")[0][0]
     assert "SECRET" not in everything
@@ -376,7 +376,7 @@ def test_a_decided_confirmation_cannot_be_decided_again(sworld):
 def test_an_expired_confirmation_shows_as_expired_and_cannot_be_confirmed(sworld):
     cid = add_confirmation(sworld, minutes=-1)
     client = logged_in(sworld, CONSOLE)
-    page = client.get("/staff/requests")
+    page = client.get("/staff/confirmations")
     assert "만료" in page.text and "확인할 요청이 없습니다" in page.text
     response = decide(client, cid, "confirm")
     assert response.status_code == 409 and status_of(sworld, cid) == "pending"
@@ -416,13 +416,13 @@ def test_a_revoked_session_cannot_decide(sworld):
 
 def test_a_long_display_value_is_clipped_to_256_characters_on_screen(sworld):
     add_confirmation(sworld, display='{"본문": "' + "x" * 300 + '"}')
-    page = logged_in(sworld).get("/staff/requests")
+    page = logged_in(sworld).get("/staff/confirmations")
     assert "x" * 256 + "…" in page.text and "x" * 257 not in page.text
 
 
 def test_display_values_are_escaped(sworld):
     add_confirmation(sworld, display='{"<b>키</b>": "<script>alert(1)</script>"}')
-    page = logged_in(sworld).get("/staff/requests")
+    page = logged_in(sworld).get("/staff/confirmations")
     assert "<script>alert" not in page.text and "&lt;script&gt;" in page.text
 
 
@@ -603,7 +603,7 @@ def test_a_staff_session_starts_with_its_team_list_in_one_statement(sworld):
 def test_staff_pages_are_not_kept_in_the_browser_history_cache(sworld):
     add_confirmation(sworld, display='{"받는 사람": "a@example.com"}')
     client = logged_in(sworld)
-    for path in ("/staff", "/staff/requests", "/staff?tab=records"):
+    for path in ("/staff", "/staff/confirmations", "/staff?tab=records"):
         response = client.get(path)
         assert 'hx-history="false"' in response.text, path
         assert response.headers["cache-control"] == "no-store", path
@@ -819,14 +819,14 @@ def test_the_my_requests_screen_shows_only_own_requests_in_korean_with_the_outco
     denied = add_call_approval(sworld, STAFFER, "denied_tool", "rejected", "kim", reason="범위 밖")
     add_call_approval(sworld, OTHER, "their_tool")
     client = logged_in(sworld)
-    page = client.get("/staff/requests?tab=mine")
+    page = client.get("/staff/confirmations?tab=mine")
     assert page.status_code == 200
     assert "their_tool" not in page.text
     for text in ("waiting_tool", "대기", "승인", "남은", "50회 남음", "거부"):
         assert text in page.text
     assert "범위 밖" not in page.text  # 처리자·사유는 행을 열었을 때만
-    assert "자동 규칙" in client.get(f"/staff/requests?tab=mine&open={auto}").text
-    drawer = client.get(f"/staff/requests?tab=mine&open={denied}").text
+    assert "자동 규칙" in client.get(f"/staff/confirmations?tab=mine&open={auto}").text
+    drawer = client.get(f"/staff/confirmations?tab=mine&open={denied}").text
     for text in ("거부 사유", "범위 밖", "kim", "a@example.com"):
         assert text in drawer
     for html in (page.text, drawer):
@@ -849,7 +849,7 @@ def test_the_my_requests_api_is_scoped_to_the_signed_in_user(sworld):
 
 def test_a_pending_self_confirmation_can_be_confirmed_from_the_my_requests_screen(sworld):
     cid = add_confirmation(sworld, display='{"받는 사람": "a@example.com"}')
-    page = logged_in(sworld, CONSOLE).get("/staff/requests")
+    page = logged_in(sworld, CONSOLE).get("/staff/confirmations")
     assert f"/staff/confirmations/{cid}/confirm" in page.text
 
 
@@ -858,16 +858,16 @@ def test_a_pending_self_confirmation_can_be_confirmed_from_the_my_requests_scree
 
 def test_the_old_staff_paths_redirect_to_the_merged_screens(sworld):
     client = logged_in(sworld)
-    moved = client.get("/staff/confirmations")
-    assert moved.status_code == 303 and moved.headers["location"] == "/staff/requests?tab=pending"
+    moved = client.get("/staff/requests")
+    assert moved.status_code == 303 and moved.headers["location"] == "/staff/confirmations?tab=mine"
     moved = client.get("/staff/consents")
     assert moved.status_code == 303 and moved.headers["location"] == "/staff"
 
 
 def test_the_menu_has_three_staff_screens_and_a_badge_for_requests_to_confirm(sworld):
     add_confirmation(sworld)
-    page = logged_in(sworld).get("/staff/requests").text
-    assert page.count('class="active"') >= 1 and 'href="/staff/requests"' in page
+    page = logged_in(sworld).get("/staff/confirmations").text
+    assert page.count('class="active"') >= 1 and 'href="/staff/confirmations"' in page
     assert "내 서버" in page and "내 단말" in page and "내 요청" in page
     assert '내 요청 <span class="badge error">1</span>' in page
     assert 'aria-current="page"' in page and "확인할 요청" in page and "내 승인 요청" in page

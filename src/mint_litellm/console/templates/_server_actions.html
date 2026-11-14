@@ -1,27 +1,13 @@
 {# 서버 중지·재개 확인 창. 목록 행 메뉴와 상세 우측 상단이 함께 쓴다. #}
+{% import "macros.html" as m %}
 {% macro suspend(s, actor, id, count, back='', loud=false) %}
-<button type="button" class="{{ 'danger' if loud }}" data-dialog-open="{{ id }}">중지</button>
-<dialog id="{{ id }}" class="confirm" aria-labelledby="{{ id }}-title">
-  <form method="post" action="/servers/{{ s.server_id | urlencode }}/suspend" hx-boost="false">
-    <input type="hidden" name="csrf" value="{{ actor.csrf }}"><input type="hidden" name="state_version" value="{{ s.state_version }}">
-    {% if back %}<input type="hidden" name="next" value="{{ back }}">{% endif %}
-    <h3 id="{{ id }}-title">서버 중지</h3>
-    <div class="effect">영향받는 서버 1개, 유효 승인 {{ count }}건. 모든 호출이 차단되며 재개로 되돌릴 수 있습니다.</div>
-    <label>서버 이름 입력<input name="confirm_name" data-confirm="{{ s.server_id }}" autocomplete="off" placeholder="{{ s.server_id }}"></label>
-    <div class="actions"><button type="button" data-dialog-close>취소</button><button type="submit" class="danger" data-needs-confirm>서버 중지</button></div>
-  </form>
-</dialog>
+{% call m.confirm_dialog(id, '중지', '서버 중지', '영향받는 서버 1개, 유효 승인 ' ~ count ~ '건. 모든 호출이 차단되며 재개로 되돌릴 수 있습니다.', '/servers/' ~ (s.server_id | urlencode) ~ '/suspend', actor, '서버 중지', confirm_name=s.server_id, name_label='서버 이름 입력', trigger_class='danger' if loud else '') %}
+<input type="hidden" name="state_version" value="{{ s.state_version }}">{% if back %}<input type="hidden" name="next" value="{{ back }}">{% endif %}
+{% endcall %}
 {% endmacro %}
 
 {% macro resume(s, actor, id, back='') %}
-<button type="button" data-dialog-open="{{ id }}">재개</button>
-<dialog id="{{ id }}" class="confirm" aria-labelledby="{{ id }}-title">
-  <form method="post" action="/servers/{{ s.server_id | urlencode }}/resume" hx-boost="false">
-    <input type="hidden" name="csrf" value="{{ actor.csrf }}"><input type="hidden" name="state_version" value="{{ s.state_version }}">
-    {% if back %}<input type="hidden" name="next" value="{{ back }}">{% endif %}
-    <h3 id="{{ id }}-title">서버 재개</h3>
-    <div class="effect">이 서버로 가는 호출이 승인 범위 안에서 다시 허용됩니다.</div>
-    <div class="actions"><button type="button" data-dialog-close>취소</button><button type="submit" class="primary">서버 재개</button></div>
-  </form>
-</dialog>
+{% call m.confirm_dialog(id, '재개', '서버 재개', '이 서버로 가는 호출이 승인 범위 안에서 다시 허용됩니다.', '/servers/' ~ (s.server_id | urlencode) ~ '/resume', actor, '서버 재개', danger=false) %}
+<input type="hidden" name="state_version" value="{{ s.state_version }}">{% if back %}<input type="hidden" name="next" value="{{ back }}">{% endif %}
+{% endcall %}
 {% endmacro %}

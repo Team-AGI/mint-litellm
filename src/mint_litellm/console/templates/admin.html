@@ -19,11 +19,9 @@
   <label>역할<select name="role">{% for k in ['admin', 'approver', 'viewer'] %}<option value="{{ k }}"{% if o.role == k %} selected{% endif %}>{{ L.pick(L.ROLE, k) }}</option>{% endfor %}</select></label>
   <button type="submit">역할 변경</button>
 </form>
-<form method="post" action="/operators/{{ o.name | urlencode }}/remove" class="filters" title="토큰이 끝나고 이 사용자의 콘솔 세션이 폐기됩니다">
-  {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ o.state_version }}">
-  <label>삭제하려면 이름 입력<input name="confirm_name" data-confirm="{{ o.name }}" autocomplete="off"></label>
-  <button type="submit" class="danger" data-needs-confirm>운영자 삭제</button>
-</form>
+{% call m.confirm_dialog('remove-' ~ loop.index, '운영자 삭제', '운영자 삭제', '토큰이 끝나고 이 사용자의 콘솔 세션이 폐기됩니다.', '/operators/' ~ (o.name | urlencode) ~ '/remove', actor, '운영자 삭제', confirm_name=o.name) %}
+<input type="hidden" name="state_version" value="{{ o.state_version }}">
+{% endcall %}
 {% endif %}</td></tr>{% endfor %}
 </tbody></table>
 {% elif actor.role == 'viewer' %}<div class="empty"><h3>조회자는 운영자 목록을 볼 수 없습니다</h3></div>
@@ -33,11 +31,9 @@
 <table><thead><tr><th>식별자</th><th>이름</th><th>상태</th><th class="num">연결</th><th class="num">이용 관계</th><th></th></tr></thead><tbody>
 {% for o in orgs %}<tr><td>{{ o.org_id }}</td><td>{{ o.name }}</td><td>{{ m.badge(L.ORG, o.status) }}</td><td class="num">{{ o.bindings }}</td><td class="num">{{ o.relations }}</td>
 <td>{% if actor.role == 'admin' and o.status == 'active' %}
-<form method="post" action="/orgs/{{ o.org_id }}/close" class="filters" title="연결 {{ o.bindings }}개와 이용 관계 {{ o.relations }}개에 영향">
-  {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ o.state_version }}">
-  <label>조직 닫기: 식별자 입력<input name="confirm_name" data-confirm="{{ o.org_id }}" autocomplete="off"></label>
-  <button type="submit" class="danger" data-needs-confirm>조직 닫기</button>
-</form>
+{% call m.confirm_dialog('close-' ~ loop.index, '조직 닫기', '조직 닫기', '연결 ' ~ o.bindings ~ '개와 이용 관계 ' ~ o.relations ~ '개에 영향을 줍니다.', '/orgs/' ~ o.org_id ~ '/close', actor, '조직 닫기', confirm_name=o.org_id, name_label='식별자 입력') %}
+<input type="hidden" name="state_version" value="{{ o.state_version }}">
+{% endcall %}
 {% endif %}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}<div class="empty"><h3>조직이 없습니다</h3></div>{% endif %}

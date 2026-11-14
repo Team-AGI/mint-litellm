@@ -42,6 +42,7 @@ def test_slack_blocks_match_the_golden_message():
                 "fields": [
                     {"type": "mrkdwn", "text": "*심각도*\n보통"},
                     {"type": "mrkdwn", "text": "*서버*\nfiles"},
+                    {"type": "mrkdwn", "text": "*도구*\nread"},
                 ],
             },
             {"type": "section", "text": {"type": "mrkdwn", "text": f"*조치*\n{ACTION}"}},
@@ -87,6 +88,7 @@ def test_teams_adaptive_card_matches_the_golden_message():
                         {"type": "FactSet", "facts": [
                             {"title": "심각도", "value": "보통"},
                             {"title": "서버", "value": "files"},
+                            {"title": "도구", "value": "read"},
                         ]},
                         {"type": "TextBlock", "text": f"조치: {ACTION}", "wrap": True},
                     ],

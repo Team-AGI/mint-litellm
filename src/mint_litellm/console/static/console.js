@@ -1,4 +1,4 @@
-// 차트(ECharts), 드로어·확인 창, 이름 확인 입력만 다룬다. 외부 자산과 인라인 스크립트는 쓰지 않는다.
+// 차트(ECharts), 드로어·확인 창, 이름 확인 입력, 시간 범위 자동 조회, 값 복사만 다룬다. 외부 자산과 인라인 스크립트는 쓰지 않는다.
 // 차트는 data-chart="{...}" 한 속성으로 그리며 kind 가 stacked · donut · bars 중 하나다.
 //   stacked: {kind, labels:[], series:[{name, data:[], decision?}], previous?:[]}
 //   donut:   {kind, items:[{name, value, decision?, href?}]}
@@ -111,6 +111,10 @@ function initConsole(root) {
     input.addEventListener("input", sync);
     sync();
   });
+  // 시간 범위 칩: 고르면 바로 조회한다(인라인 핸들러 대신).
+  root.querySelectorAll("input[data-autosubmit]").forEach(function (input) {
+    input.addEventListener("change", function () { input.form.requestSubmit(); });
+  });
   // 행 전체 클릭: 첫 링크로 이동한다(행 안의 버튼·링크·입력을 누른 경우는 제외).
   root.querySelectorAll("table.clickable tbody tr").forEach(function (row) {
     row.addEventListener("click", function (event) {
@@ -123,6 +127,15 @@ function initConsole(root) {
 document.addEventListener("DOMContentLoaded", function () { initConsole(document); });
 document.addEventListener("htmx:afterSettle", function (event) { initConsole(event.target); });
 document.addEventListener("click", function (event) {
+  var copy = event.target.closest("[data-copy]");
+  if (copy && navigator.clipboard) {
+    navigator.clipboard.writeText(copy.getAttribute("data-copy")).then(function () {
+      var label = copy.textContent;
+      copy.textContent = "복사됨";
+      setTimeout(function () { copy.textContent = label; }, 1500);
+    });
+    return;
+  }
   var open = event.target.closest("[data-dialog-open]");
   if (open) {
     var dialog = document.getElementById(open.getAttribute("data-dialog-open"));

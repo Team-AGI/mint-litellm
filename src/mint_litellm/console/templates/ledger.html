@@ -13,8 +13,8 @@
 {% endif %}
 <form method="get" action="/ledger" class="filters">
   <input type="hidden" name="range" value="{{ range }}">
-  <label>시작<input type="text" name="since" value="{{ q.since }}" inputmode="numeric" pattern="[0-9]{4}-[0-9]{2}-[0-9]{2}" placeholder="{{ start_day }}" autocomplete="off"></label>
-  <label>끝<input type="text" name="until" value="{{ q.until }}" inputmode="numeric" pattern="[0-9]{4}-[0-9]{2}-[0-9]{2}" placeholder="연-월-일" autocomplete="off"></label>
+  <label>시작<input type="date" name="since" value="{{ q.since }}" min="2000-01-01"></label>
+  <label>끝<input type="date" name="until" value="{{ q.until }}" min="2000-01-01"></label>
   <label>종류<select name="kind"><option value="">전체</option>{% for k in filters.kinds %}<option value="{{ k }}"{% if q.kind == k %} selected{% endif %}>{{ L.pick(L.EVENT_KIND, k) }}</option>{% endfor %}</select></label>
   <label>주체<select name="actor"><option value="">전체</option>{% for a in filters.actors %}<option value="{{ a }}"{% if q.actor == a %} selected{% endif %}>{{ a | who }}</option>{% endfor %}</select></label>
   <label>서버<select name="server_id"><option value="">전체</option>{% for s in servers %}<option value="{{ s }}"{% if q.server_id == s %} selected{% endif %}>{{ s }}</option>{% endfor %}</select></label>

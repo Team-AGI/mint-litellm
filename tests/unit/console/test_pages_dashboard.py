@@ -44,9 +44,11 @@ def test_screens_redirect_to_the_login_page_without_a_session(world):
 def test_the_menu_lists_only_screens_that_exist(admin):
     html = admin.get("/").text
     labels = re.findall(r'<nav class="sidebar".*?</nav>', html, re.S)[0]
-    names = re.findall(r">([^<]+)</a>", labels)
+    badge = r'(?: <span class="badge error">\d+</span>)?'
+    names = [n.strip() for n in re.findall(r">([^<]+)" + badge + "</a>", labels)]
     assert names == ["대시보드", "승인 센터", "경보", "서버", "도입 신청", "접근 통제",
                      "엔드포인트", "호출 기록", "정책", "운영자·조직"]
+    assert re.search(r"승인 센터 <span class=\"badge error\">[1-9]\d*</span>", labels)
     for text in ("준비 중", "예정", "곧 제공", "TBD"):
         assert text not in html
 

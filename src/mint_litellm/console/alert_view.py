@@ -185,11 +185,11 @@ def link(kind: str, subject: dict[str, Any]) -> tuple[str, str] | None:
     subject = subject or {}
     server = subject.get("server_id")
     if kind in ("approval_recert_due", "approval_recert_held", "approval_expiring"):
-        return "/approvals", "승인 대기열"
+        return "/approvals?tab=renewals", "승인 센터"
     if kind in ("evidence_missing", "evidence_expiring") and subject.get("intake_id"):
         return f"/intakes/{quote(str(subject['intake_id']), safe='')}", "신청 상세"
     if kind == "contract_drift" and server:
-        return "/contracts", "계약 변경"
+        return f"/servers/{quote(str(server), safe='')}?tab=contract", "계약 변경"
     if kind.startswith("endpoint_") and not server:
         return "/endpoints", "단말 설치"
     if isinstance(server, str) and server:

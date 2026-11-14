@@ -20,8 +20,8 @@
 {% if c.sides.skipped %}
 <div class="banner" role="status">크기가 커서 줄 비교를 생략했습니다</div>
 <table><thead><tr><th>판본</th><th>지문</th><th class="num">크기(바이트)</th></tr></thead><tbody>
-<tr><td>승인본</td><td><span title="{{ c.sides.approved.sha256 }}">{{ c.sides.approved.sha256[-8:] }}</span></td><td class="num">{{ c.sides.approved.bytes }}</td></tr>
-<tr><td>현재본</td><td><span title="{{ c.sides.observed.sha256 }}">{{ c.sides.observed.sha256[-8:] }}</span></td><td class="num">{{ c.sides.observed.bytes }}</td></tr>
+<tr><td>승인본</td><td>{{ m.copy_hash(c.sides.approved.sha256) }}</td><td class="num">{{ c.sides.approved.bytes }}</td></tr>
+<tr><td>현재본</td><td>{{ m.copy_hash(c.sides.observed.sha256) }}</td><td class="num">{{ c.sides.observed.bytes }}</td></tr>
 </tbody></table>
 {% else %}
 <div class="grid">

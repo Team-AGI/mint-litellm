@@ -579,6 +579,21 @@ def urgent_alert_count(conn: psycopg.Connection, instance: str) -> int:
     return row["n"] if row else 0
 
 
+def menu_counts(conn: psycopg.Connection, instance: str) -> dict[str, int]:
+    """좌측 메뉴 표지: 승인 대기(호출 + 서버 도입), 결정 대기 신청 수."""
+    row = fetchone(
+        conn,
+        "SELECT (SELECT count(*) FROM mint.call_approvals WHERE instance_id = %(i)s"
+        " AND status = 'pending' AND expires_at > now())"
+        " + (SELECT count(*) FROM mint.servers WHERE instance_id = %(i)s"
+        " AND status = 'awaiting_approval') AS approvals,"
+        " (SELECT count(*) FROM mint.intakes WHERE instance_id = %(i)s"
+        " AND status IN ('received', 'checking', 'passed', 'indeterminate')) AS intakes",
+        {"i": instance},
+    )
+    return {"approvals": row["approvals"], "intakes": row["intakes"]} if row else {}
+
+
 # --- 개요 -----------------------------------------------------------------------------------
 
 
