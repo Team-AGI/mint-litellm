@@ -18,7 +18,6 @@ MAX_SCAN_CHARS = 4 * 1024 * 1024
 SCAN_LIMIT = "scan_limit"
 
 # 영문·숫자·밑줄·하이픈에 붙어 있지 않을 때만(UUID·해시 조각 제외). 한글 조사는 붙어 있어도 된다.
-_B = r"(?a)(?<![\w-])"
 _E = r"(?![\w-])"
 
 _PRIVATE_KEY = re.compile(
@@ -30,16 +29,21 @@ _GOOGLE_KEY = re.compile(r"(?a)\bAIza[0-9A-Za-z_-]{35}\b")
 _GITHUB_TOKEN = re.compile(r"(?a)\bgh[pousr]_[A-Za-z0-9]{36,255}\b")
 _BEARER = re.compile(r"(?a)\bBearer\s{1,3}([A-Za-z0-9._~+/=-]{20,2048})", re.IGNORECASE)
 _JWT = re.compile(r"(?a)\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{10,}")
-_RRN = re.compile(_B + r"(\d{6})(-?)([1-8]\d{6})" + _E)
+# 앞 경계 검사를 첫 숫자 뒤로 옮긴 형태다. 같은 일치를 내고 숫자가 아닌 글자는 건너뛴다.
+_RRN = re.compile(r"(?a)(\d(?<![\w-]\d)\d{5})(-?)([1-8]\d{6})" + _E)
+# 앞 경계 검사를 첫 글자(0) 뒤로 옮긴 형태다. 같은 일치를 내고 0이 아닌 글자는 건너뛴다.
 _PHONE = re.compile(
-    _B + r"(?:01[016789][-. ]?\d{3,4}[-. ]?\d{4}|(?:02|0[3-6][1-5]|070)[-. ]\d{3,4}[-. ]\d{4})" + _E
+    r"(?a)0(?<![\w-]0)(?:1[016789][-. ]?\d{3,4}[-. ]?\d{4}"
+    r"|(?:2|[3-6][1-5]|70)[-. ]\d{3,4}[-. ]\d{4})" + _E
 )
 _EMAIL = re.compile(
     r"(?a)(?<![\w.+%-])[A-Za-z0-9._%+-]{1,64}@([A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,4}"
     r"\.[A-Za-z]{2,24})" + _E
 )
+# 주민등록번호와 같이 앞 경계 검사를 첫 숫자 뒤로 옮겼다.
 _CARD = re.compile(
-    _B + r"(?:\d{4}[- ]\d{4}[- ]\d{4}[- ]\d{1,7}|\d{4}[- ]\d{6}[- ]\d{5}|\d{15,16})" + _E
+    r"(?a)\d(?<![\w-]\d)(?:\d{3}[- ]\d{4}[- ]\d{4}[- ]\d{1,7}|\d{3}[- ]\d{6}[- ]\d{5}|\d{14,15})"
+    + _E
 )
 
 # 비밀처럼 보이는 긴 문자열(고엔트로피). 이어진 32~256자일 때만 보고, 더 긴 덩어리(이미지·인코딩한
@@ -64,14 +68,13 @@ _RESERVED_MAIL = re.compile(
 _CARD_PREFIX = re.compile(r"4|5[1-5]|2(?:2[2-9]|[3-6]\d|7[01]|720)|3[47]|35|6011|65|9")
 
 
+# 두 배로 한 자리의 숫자 합(5→1, 6→3, …)
+_LUHN_DOUBLE = str.maketrans("0123456789", "0246813579")
+
+
 def _luhn(digits: str) -> bool:
-    total = 0
-    for i, ch in enumerate(reversed(digits)):
-        n = int(ch)
-        if i % 2:
-            n = n * 2 - 9 if n > 4 else n * 2
-        total += n
-    return total % 10 == 0
+    odd, even = digits[::-1][::2], digits[::-1][1::2]
+    return (sum(map(int, odd)) + sum(map(int, even.translate(_LUHN_DOUBLE)))) % 10 == 0
 
 
 def _rrn_ok(m: re.Match[str]) -> bool:
@@ -92,10 +95,10 @@ def _rrn_ok(m: re.Match[str]) -> bool:
 
 def _card_ok(m: re.Match[str]) -> bool:
     raw = m.group(0)
-    digits = re.sub(r"\D", "", raw)
-    if not 13 <= len(digits) <= 19 or not _luhn(digits):
-        return False
-    return raw != digits or bool(_CARD_PREFIX.match(digits))
+    if raw.isdigit():  # 붙여 쓴 번호는 발급사 식별 번호를 먼저 본다(검사 숫자보다 싸다)
+        return bool(_CARD_PREFIX.match(raw)) and 13 <= len(raw) <= 19 and _luhn(raw)
+    digits = raw.replace("-", "").replace(" ", "")
+    return 13 <= len(digits) <= 19 and _luhn(digits)
 
 
 def _bearer_ok(m: re.Match[str]) -> bool:
@@ -103,21 +106,42 @@ def _bearer_ok(m: re.Match[str]) -> bool:
     return any(c.isdigit() for c in m.group(1))
 
 
-def _entropy_ok(m: re.Match[str]) -> bool:
-    token = m.group(0)
-    if _HEX_ONLY.fullmatch(token) or token.startswith(_IMAGE_MAGIC):
-        return False
-    if m.string.endswith("base64,", 0, m.start()):
+_DIGITS_2 = re.compile(r"(?a)\d.*?\d")
+_ALPHA = re.compile(r"[A-Za-z]")
+_SPLIT = re.compile(r"[-_]")
+# n글자에서 서로 다른 글자가 d개일 때 엔트로피가 가장 낮은 분포는 한 글자 n-d+1번, 나머지 한 번씩.
+_CLOGC = [0.0] + [c * math.log2(c) for c in range(1, 258)]
+
+
+def _token_ok(token: str) -> bool:
+    if token.startswith(_IMAGE_MAGIC) or _HEX_ONLY.fullmatch(token):
         return False
     # ``-``·``_``로 이어 붙인 식별자(경로·배포 이름·접두사 붙은 키)는 가장 긴 조각만 본다.
-    part = max(re.split(r"[-_]", token.rstrip("=")), key=len)
-    if len(part) < _MIN_PART or _HEX_ONLY.fullmatch(part):
+    part = token.rstrip("=")
+    if "-" in part or "_" in part:
+        part = max(_SPLIT.split(part), key=len)
+    n = len(part)
+    if n < _MIN_PART or (n != len(token) and _HEX_ONLY.fullmatch(part)):
         return False
     # 낱말을 이어 붙인 식별자(CamelCase)와 숫자만의 값은 숫자가 거의 없거나 글자가 없다.
-    if sum(c.isdigit() for c in part) < 2 or not any(c.isalpha() for c in part):
+    if not _DIGITS_2.search(part) or not _ALPHA.search(part):
         return False
-    n = len(part)
-    return -sum(c / n * math.log2(c / n) for c in Counter(part).values()) >= _MIN_ENTROPY
+    distinct = len(set(part))
+    if distinct < 16:  # d개 글자의 엔트로피는 log2(d)를 넘지 못한다
+        return False
+    # H = log2(n) - sum(c*log2(c))/n. 경계 근처만 원래 식으로 다시 계산한다.
+    low = math.log2(n) - _CLOGC[n - distinct + 1] / n
+    if low >= _MIN_ENTROPY + 1e-9:
+        return True
+    counts = Counter(part).values()
+    entropy = math.log2(n) - sum(map(_CLOGC.__getitem__, counts)) / n
+    if abs(entropy - _MIN_ENTROPY) > 1e-9:
+        return entropy > _MIN_ENTROPY
+    return -sum(c / n * math.log2(c / n) for c in counts) >= _MIN_ENTROPY
+
+
+def _entropy_ok(m: re.Match[str]) -> bool:
+    return not m.string.endswith("base64,", 0, m.start()) and _token_ok(m.group(0))
 
 
 # (종류, 정규식, 추가 검증). 앞에 있는 종류가 겹침에서 이긴다.
@@ -136,14 +160,141 @@ _DETECTORS: tuple[tuple[str, re.Pattern[str], Callable[[re.Match[str]], bool] | 
 )
 
 
-def _spans(text: str, entropy: bool = False) -> list[tuple[int, int, str]]:
-    found = [
+# 긴 본문은 탐지기마다 전체를 훑지 않는다. 일치하려면 반드시 들어 있어야 하는 짧은 글자(키 접두사·
+# ``@``·숫자 덩어리)를 먼저 찾고, 없으면 그 탐지기를 건너뛰고, 몇 군데뿐이면 그 둘레만 본다.
+# 짧은 본문은 바로 정규식으로 본다.
+_FAST_MIN = 16 * 1024
+_MAX_HITS = 64
+_MAX_WINDOWS = 20000
+_MAX_STARTS = 4096
+
+
+def _mask_table(keep: str, sep: str = "") -> bytes:
+    return bytes.maketrans(
+        bytes(range(256)),
+        bytes(
+            ord("1") if chr(i) in keep else ord("s") if chr(i) in sep else ord("0")
+            for i in range(256)
+        ),
+    )
+
+
+# 글자마다 한 바이트가 되게 바꾼 뒤(자리가 그대로이다) 숫자는 1, 구분자는 s, 나머지는 0으로 둔다.
+_DIGIT_MASK = _mask_table("0123456789", "- ")
+_TOKEN_MASK = _mask_table("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_+/-")
+_TOKEN_RUN = re.compile(rb"1{32,}")
+# 일치 하나가 차지할 수 있는 길이(탐지기마다 덮는 범위: 앞, 뒤)
+_EMAIL_SPAN = (66, 420)
+_ID_SPAN = (26, 60)
+_Regions = bool | list[tuple[int, int]] | tuple[int, ...]
+
+
+def _merged(hits: list[int], before: int, after: int, end: int) -> list[tuple[int, int]]:
+    out: list[tuple[int, int]] = []
+    for hit in sorted(hits):
+        start, stop = max(0, hit - before), min(end, hit + after)
+        if out and start <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], stop))
+        else:
+            out.append((start, stop))
+    return out
+
+
+def _find_all(
+    hay: str | bytes,
+    needles: Iterable[str | bytes],
+    limit: int = _MAX_HITS,
+    *,
+    overlapping: bool = False,
+) -> list[int] | None:
+    """바늘이 나오는 자리. 너무 많으면 ``None``(전체를 훑는다).
+
+    ``overlapping``이 아니면 앞 자리와 겹치는 자리는 건너뛴다(둘레를 보는 쪽에서는 겹치는 자리가
+    같은 구간에 든다).
+    """
+    hits: list[int] = []
+    for needle in needles:
+        step = 1 if overlapping else len(needle)
+        at = hay.find(needle)
+        while at >= 0:
+            if len(hits) >= limit:
+                return None
+            hits.append(at)
+            at = hay.find(needle, at + step)
+    return sorted(hits)
+
+
+def _around(hay: str | bytes, needles: tuple[str | bytes, ...], span: tuple[int, int], end: int):
+    hits = _find_all(hay, needles, _MAX_WINDOWS)
+    return True if hits is None else _merged(hits, span[0], span[1], end)
+
+
+def _starting(hay: str | bytes, needles: tuple[str | bytes, ...]) -> _Regions:
+    """일치가 이 글자로 시작하는 탐지기: 시작 자리 목록(없으면 건너뜀, 너무 많으면 전체)."""
+    hits = _find_all(hay, needles, _MAX_STARTS, overlapping=True)
+    return True if hits is None else tuple(hits)
+
+
+def _token_regions(mask: bytes, end: int) -> _Regions:
+    """토큰 글자만 이어진 32자 이상 덩어리와 그 뒤 ``=`` 자리까지의 구간."""
+    needle, regions, at = b"1" * 32, [], 0
+    while (at := mask.find(needle, at)) >= 0:
+        if len(regions) >= _MAX_HITS:
+            return True
+        stop = _TOKEN_RUN.match(mask, at).end()
+        regions.append((at, min(end, stop + 4)))
+        at = stop
+    return regions
+
+
+def _plan(text: str, entropy: bool) -> dict[re.Pattern[str], _Regions]:
+    """탐지기마다 전체(``True``)·건너뜀(``False``나 빈 목록)·훑을 구간·시작 자리 목록."""
+    n = len(text)
+    raw = text.encode("latin-1", "replace")
+    digits = raw.translate(_DIGIT_MASK)
+    plan: dict[re.Pattern[str], _Regions] = {
+        _PRIVATE_KEY: _starting(text, ("-----BEGIN",)),
+        _AWS_KEY: _starting(text, ("AKIA", "ASIA")),
+        _GOOGLE_KEY: _starting(text, ("AIza",)),
+        _GITHUB_TOKEN: _starting(text, tuple(f"gh{c}_" for c in "pousr")),
+        _JWT: _starting(text, ("eyJ",)),
+        _BEARER: _starting(raw.lower(), (b"bearer",)),
+        _EMAIL: _around(text, ("@",), _EMAIL_SPAN, n),
+        _RRN: _around(digits, (b"1" * 13, b"111111s1111111"), _ID_SPAN, n),
+        _CARD: _around(digits, (b"1" * 15, b"1111s1111s1111s1", b"1111s111111s11111"), _ID_SPAN, n),
+    }
+    if entropy:
+        plan[_TOKEN] = _token_regions(raw.translate(_TOKEN_MASK), n)
+    return plan
+
+
+def _matches(pattern: re.Pattern[str], text: str, regions: _Regions) -> Iterable[re.Match[str]]:
+    if regions is True:
+        yield from pattern.finditer(text)
+    elif isinstance(regions, tuple):
+        end = 0
+        for start in regions:
+            if start >= end and (m := pattern.match(text, start)):
+                end = m.end()
+                yield m
+    elif regions:
+        for start, stop in regions:
+            yield from pattern.finditer(text, start, stop)
+
+
+def _detect(
+    text: str, plan: dict[re.Pattern[str], _Regions], entropy_only: bool
+) -> list[tuple[int, int, str]]:
+    return [
         (m.start(), m.end(), kind)
         for kind, pattern, check in _DETECTORS
-        if entropy or kind != HIGH_ENTROPY
-        for m in pattern.finditer(text)
+        if (kind == HIGH_ENTROPY) == entropy_only
+        for m in _matches(pattern, text, plan.get(pattern, True))
         if check is None or check(m)
     ]
+
+
+def _resolve(found: list[tuple[int, int, str]]) -> list[tuple[int, int, str]]:
     # 겹치면 먼저 시작하는 것, 같으면 긴 것을 남긴다(Bearer 뒤의 JWT를 두 번 세지 않는다).
     found.sort(key=lambda s: (s[0], -(s[1] - s[0])))
     kept: list[tuple[int, int, str]] = []
@@ -151,6 +302,34 @@ def _spans(text: str, entropy: bool = False) -> list[tuple[int, int, str]]:
         if not kept or span[0] >= kept[-1][1]:
             kept.append(span)
     return kept
+
+
+def _spans(text: str, entropy: bool = False) -> list[tuple[int, int, str]]:
+    plan = _plan(text, entropy) if len(text) >= _FAST_MIN else {}
+    found = _detect(text, plan, False)
+    if entropy:
+        found += _detect(text, plan, True)
+    return _resolve(found)
+
+
+def _kinds(text: str, entropy: bool) -> Counter[str]:
+    """``_spans``의 종류별 건수. 다른 탐지가 없으면 고엔트로피 후보의 위치를 모으지 않고 센다."""
+    if len(text) < _FAST_MIN:
+        return Counter(kind for _, _, kind in _spans(text, entropy))
+    plan = _plan(text, entropy)
+    found = _detect(text, plan, False)
+    # 다른 탐지와 겹치는 후보와 ``base64,`` 바로 뒤의 값은 위치를 알아야 가려낸다.
+    if not entropy or found or "base64," in text:
+        if entropy:
+            found += _detect(text, plan, True)
+        return Counter(kind for _, _, kind in _resolve(found))
+    regions = plan[_TOKEN]
+    if regions is True:
+        tokens = _TOKEN.findall(text)
+    else:
+        tokens = [t for start, stop in regions for t in _TOKEN.findall(text, start, stop)]
+    count = sum(map(_token_ok, tokens))
+    return Counter({HIGH_ENTROPY: count}) if count else Counter()
 
 
 def scan_sensitive(
@@ -164,7 +343,7 @@ def scan_sensitive(
             counts[SCAN_LIMIT] += 1
             break
         budget -= len(text)
-        counts.update(kind for _, _, kind in _spans(text, entropy))
+        counts.update(_kinds(text, entropy))
     return dict(sorted(counts.items()))
 
 
@@ -180,7 +359,7 @@ def locate_sensitive(items: Iterable[tuple[str, str]]) -> list[tuple[str, Counte
     found: list[tuple[str, Counter[str]]] = []
     for path, text in items:
         entropy = not _HASH_FIELD.search(path)
-        kinds = Counter(kind for _, _, kind in _spans(text, entropy))
+        kinds = _kinds(text, entropy)
         if kinds:
             found.append((path, kinds))
     return found

@@ -351,6 +351,10 @@ def token_forward_result(
     return StageResult.stop(Reason.TOKEN_FORWARD_FORBIDDEN, detail=resolved.auth_type)
 
 
+RESOLVE_OBSERVE_WAIT = 0.2  # 초
+RESOLVE_ENFORCE_WAIT = 1.0  # 초
+
+
 async def address_verdict(
     run: _Run, deps: PipelineDeps, resolved: ResolvedServer, selected: ApprovalRow | None
 ) -> StageResult | None:
@@ -367,7 +371,11 @@ async def address_verdict(
         return None
     verdict = guard.cached(resolved.host)
     if verdict is None:
-        verdict = await guard.check(resolved.host, run.deadline.remaining())
+        # 이름 조회가 판정 예산을 다 쓰면 승인 소비 등 뒤 단계가 시간 초과로 닫힌다. 관측은 짧게,
+        # 집행은 남은 예산의 절반까지만 기다린다(늦게 끝난 조회는 캐시에 남아 다음 호출이 쓴다).
+        enforce = mode == "enforce"
+        share, cap = (0.5, RESOLVE_ENFORCE_WAIT) if enforce else (0.25, RESOLVE_OBSERVE_WAIT)
+        verdict = await guard.check(resolved.host, min(run.deadline.remaining() * share, cap))
     if verdict.kind is None:
         return None
     if mode == "enforce":
