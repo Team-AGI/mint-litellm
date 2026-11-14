@@ -15,7 +15,7 @@ MISMATCH: Final = "mismatch"
 UNCHECKED: Final = "unchecked"
 
 
-def _claims(token: str) -> dict | None:
+def claims_of(token: str) -> dict | None:
     parts = token.split(".")
     if len(parts) != 3 or not all(parts):
         return None
@@ -29,7 +29,7 @@ def _claims(token: str) -> dict | None:
 
 def audience_verdict(token: str, accepted: Sequence[str]) -> str:
     """``ok``(aud가 인정 값을 포함), ``mismatch``(aud가 없거나 포함하지 않음), ``unchecked``."""
-    claims = _claims(token)
+    claims = claims_of(token)
     if claims is None:
         return UNCHECKED
     aud = claims.get("aud")

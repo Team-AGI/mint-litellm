@@ -75,6 +75,7 @@ class PluginConfig:
     # 계약 관리가 아닌 서버의 결과·인자 검사. observe는 기록·경보만, enforce는 막는다.
     scan_unmanaged: str = "observe"
     token_audience: str = "observe"
+    token_scope: str = "observe"
     # 결과 한 건에서 지시문 표지·비밀 검사가 훑는 글자 수의 상한. 넘으면 집행 모드는 결과를 막는다.
     scan_max_chars: int = DEFAULT_MAX_SCAN_CHARS
 
@@ -127,6 +128,7 @@ class PluginConfig:
             list_dedup_seconds=_integer(env, "MINT_LIST_DEDUP_SECONDS", 86400, 0),
             scan_unmanaged=_scan_unmanaged(env.get("MINT_SCAN_UNMANAGED")),
             token_audience=_token_audience(env.get("MINT_TOKEN_AUDIENCE")),
+            token_scope=_token_scope(env.get("MINT_TOKEN_SCOPE")),
             scan_max_chars=_integer(env, "MINT_SCAN_MAX_CHARS", DEFAULT_MAX_SCAN_CHARS, 1024),
             export_dir=Path(export_dir) if export_dir else None,
             export_hmac_key=_hmac_key(env, "MINT_EXPORT_HMAC_KEY"),
@@ -154,6 +156,13 @@ def _token_audience(raw: str | None) -> str:
     value = (raw or "observe").strip().lower()
     if value not in ("observe", "enforce"):
         raise RuntimeError("MINT_TOKEN_AUDIENCE must be observe or enforce")
+    return value
+
+
+def _token_scope(raw: str | None) -> str:
+    value = (raw or "observe").strip().lower()
+    if value not in ("off", "observe", "enforce"):
+        raise RuntimeError("MINT_TOKEN_SCOPE must be off, observe or enforce")
     return value
 
 

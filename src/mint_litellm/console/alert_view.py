@@ -69,6 +69,7 @@ SUMMARY = {
     "contract_drift": "승인된 계약과 달라졌습니다. 서버 {server_id}",
     "content_finding_unmanaged": "서버 {server_id}의 호출이 내용 검사에 걸렸습니다(계약 관리 전).",
     "token_audience_mismatch": "서버 {server_id}에 대상이 다른 토큰이 {calls}건 전달되었습니다.",
+    "token_scope_exceeded": "서버 {server_id}에 승인 범위를 넘는 토큰이 {calls}건 전달되었습니다.",
     "result_unenforced": (
         "최근 {window_seconds}초 동안 결과 {calls}건이 검사에 걸렸지만 막지 못했습니다."
     ),

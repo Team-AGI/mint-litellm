@@ -302,6 +302,7 @@ ALERT_KIND = {
     "content_finding_unmanaged": "미관리 서버 내용 검사",
     "result_unenforced": "결과를 막지 못함",
     "token_audience_mismatch": "토큰 대상 불일치",
+    "token_scope_exceeded": "토큰 범위 초과",
     "config_plaintext_secret": "설정의 평문 비밀",
     "approval_dormant": "미사용 승인",
     "endpoint_stale_server": "폐기 서버 항목 잔존",
