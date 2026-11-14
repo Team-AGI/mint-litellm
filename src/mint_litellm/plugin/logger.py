@@ -15,6 +15,7 @@ from fastapi import HTTPException
 from litellm.integrations.custom_logger import CustomLogger
 
 from mint_litellm.compat import litellm_1_106 as compat
+from mint_litellm.plugin import guardrail_log
 from mint_litellm.plugin.policy.result_scan import walk_structured
 from mint_litellm.plugin.policy.sensitive_scan import mask_text
 from mint_litellm.plugin.result import (
@@ -72,6 +73,7 @@ class MintLogger(CustomLogger):
         content = getattr(response_obj, "mcp_tool_call_response", None)
         if not isinstance(ctx, dict) or not isinstance(content, list):
             return None
+        began = guardrail_log.clock()
         if not self._runtime.result_enforced:
             # 결과 단계 가드레일이 없는 LiteLLM: 걸린 것을 기록만 하고 결과는 건드리지 않는다.
             policy = ctx.get("result_policy")
@@ -98,7 +100,16 @@ class MintLogger(CustomLogger):
         except Exception as exc:
             log.error("결과 검사 오류: %s", type(exc).__name__)
             self._block_on_scan_error(ctx, response_obj)
+        guardrail_log.record_output(self._runtime.guardrail, kwargs, ctx, began)
         return None
+
+    async def async_post_call_response_headers_hook(
+        self, data, user_api_key_dict, response, request_headers=None, litellm_call_info=None
+    ):
+        """같은 요청의 로깅 객체에 판정 참조가 있으면 ``x-mint-decision-ref`` 헤더로 돌려준다."""
+        ctx = (compat.logging_details(data.get("litellm_logging_obj")) or {}).get(MINT_CTX_KEY)
+        reference = ctx.get("decision_ref") if isinstance(ctx, dict) else None
+        return {"x-mint-decision-ref": reference} if isinstance(reference, str) else None
 
     @staticmethod
     def _block_on_scan_error(ctx: dict[str, Any], response_obj) -> None:
