@@ -4,7 +4,7 @@
 <h2>임시 계약</h2>
 <p class="muted">서버가 알린 도구 목록에서 추정한 값입니다. 승인한 계약이 아니며 보호 규칙에만 쓰입니다.</p>
 <table><thead><tr><th>도구</th><th>추정 동작</th><th>위험 등급</th><th>허용 인자 키</th><th>관측</th></tr></thead><tbody>
-{% for p in c.provisional %}<tr><td>{{ p.tool }}</td><td>{{ L.pick(L.ACTION, p.action_type) }}</td><td>{{ L.pick(L.RISK, p.risk_grade) }}</td><td>{{ p.input_keys | join(', ') | blank }}</td><td>{{ p.observed_at | when }}</td></tr>{% endfor %}
+{% for p in c.provisional %}<tr><td>{{ p.tool }}</td><td>{{ L.pick(L.ACTION, p.action_type) }}</td><td>{{ L.pick(L.RISK, p.risk_grade) }}</td><td>{{ p.input_keys | join }}</td><td>{{ p.observed_at | when }}</td></tr>{% endfor %}
 </tbody></table>
 {% if actor.role != 'viewer' %}
 <form method="post" action="/contracts/{{ s.server_id | urlencode }}/approve-provisional" class="form cols">

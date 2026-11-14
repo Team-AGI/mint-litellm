@@ -86,7 +86,7 @@ def approve_provisional(
         rows = fetchall(
             ctx.conn,
             "SELECT * FROM mint.provisional_contracts WHERE instance_id=%s AND server_id=%s"
-            " AND action_type <> 'exec' ORDER BY tool FOR UPDATE",
+            " AND action_type <> 'exec' ORDER BY tool",
             (ctx.instance_id, server_id),
         )
         if not rows:
