@@ -81,7 +81,7 @@ missing contains "settings.high_risk_tools" if not valid_strings(input.settings.
 
 # 계약이 있는 도구(키가 있을 때)는 등급이 네 값 중 하나여야 한다. 등급 없는 계약은 오류다.
 missing contains "tool.risk_grade" if {
-	managed
+	protective
 	"risk_grade" in object.keys(input.tool)
 	not input.tool.risk_grade in {"low", "medium", "high", "critical"}
 }
@@ -103,14 +103,14 @@ pattern_names := {"url_external", "private_host", "path_traversal", "secret_like
 # 계약 관리 서버는 패턴이 없거나 깨지면 오류다(패턴 규칙이 조용히 평가되지 않아 허용되지 않게).
 # 1단계 서버는 패턴 값이 없어도 전면 차단되지 않는다.
 missing contains "arguments.patterns" if {
-	managed
+	protective
 	not valid_patterns
 }
 
 # 패턴 규칙이 기대는 서버 종류. 빠지면 계약 관리 서버의 패턴 규칙이 건너뛰어지므로 오류다.
 missing contains "server.contract_status" if {
 	kind := object.get(input, ["server", "contract_status"], null)
-	not kind in {"none", "managed"}
+	not kind in {"none", "managed", "provisional"}
 }
 
 valid_patterns if {
@@ -274,18 +274,24 @@ pattern_rules := {
 	"POL-E-14": "private_host",
 }
 
-# 계약 관리 서버(`server.contract_status == "managed"`)에만 판정한다.
+# 계약 관리 서버(`server.contract_status == "managed"`)와 임시 계약 서버(`"provisional"`, 승인된
+# 계약이 없어 도구 이름·인자로 추정한 계약을 쓰는 서버)에 판정한다. 임시 계약은 보호 규칙에만
+# 쓰이며 승인 규칙·허용 판정을 넓히지 않는다.
 managed if input.server.contract_status == "managed"
 
+protective if managed
+
+protective if input.server.contract_status == "provisional"
+
 applied contains id if {
-	managed
+	protective
 	some id, name in pattern_rules
 	object.get(input.arguments, ["patterns", name], false) == true
 }
 
 # POL-E-08(전송 범위)·POL-E-15(정의되지 않은 항목): 승인 conditions.allowed_arg_keys 밖의 인자 키.
 applied contains id if {
-	managed
+	protective
 	some id in {"POL-E-08", "POL-E-15"}
 	keys := conditions.allowed_arg_keys
 	allowed := {key | some key in keys}

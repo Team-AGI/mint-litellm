@@ -1083,6 +1083,39 @@ class PluginDatabase:
         row = await self._run(read)
         return None if row is None else (row[0], row[1])
 
+    async def call_approval_outcomes(
+        self, instance_id: str, user_id: str, since: datetime | None
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """사용자 본인의 호출별 승인 중 ``since`` 뒤에 사람이 승인·거부한 것(최근 하루, 최대 20건).
+
+        돌려주는 값은 다음 조회에 쓸 커서(데이터베이스 시각)와 목록이다. ``since``가 없으면 목록은
+        비어 있다. 규칙이 자동으로 연 승인은 알릴 일이 아니므로 뺀다.
+        """
+
+        async def read(conn: Any) -> Any:
+            cursor = await conn.execute("SELECT clock_timestamp()")
+            now = (await cursor.fetchone())[0]
+            if since is None:
+                return now, []
+            cursor = await conn.execute(
+                "SELECT server_id, tool, CASE WHEN status = 'rejected' THEN 'rejected'"
+                " ELSE 'approved' END, decision_reason, decided_at FROM mint.call_approvals"
+                " WHERE instance_id = %s AND principal_type = 'user' AND principal_id = %s"
+                " AND status IN ('approved', 'consumed', 'rejected')"
+                " AND decided_at > %s AND decided_at > clock_timestamp() - interval '1 day'"
+                " AND coalesce(approved_by, '') NOT LIKE 'rule:%%'"
+                " ORDER BY decided_at LIMIT 20",
+                (instance_id, user_id, since),
+            )
+            return now, await cursor.fetchall()
+
+        now, rows = await self._run(read)
+        return now.isoformat(), [
+            {"server": r[0], "tool": r[1], "outcome": r[2], "reason": r[3],
+             "at": r[4].isoformat()}
+            for r in rows
+        ]
+
     async def read_decision(
         self, instance_id: str, invocation_id: UUID, attempt_id: int
     ) -> dict[str, Any] | None:

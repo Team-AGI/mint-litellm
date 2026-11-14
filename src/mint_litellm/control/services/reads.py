@@ -262,6 +262,23 @@ def call_approvals(
     )
 
 
+def my_call_approvals(
+    conn: psycopg.Connection, instance: str, user_id: str, *, limit: int = PAGE_SIZE
+) -> list[dict]:
+    """한 사용자 본인의 호출별 승인 요청(최근 순). 다른 사용자의 행은 조건에서 빠진다."""
+    return fetchall(
+        conn,
+        "SELECT c.id, c.server_id, c.tool, c.status, c.approved_by, c.expires_at,"
+        " c.window_minutes, c.valid_until, c.action, c.display, c.requested_at, c.decided_at,"
+        " c.decision_reason,"
+        " (SELECT count(*) FROM mint.call_approval_uses u WHERE u.call_approval_id = c.id) AS uses"
+        " FROM mint.call_approvals c WHERE c.instance_id = %s AND c.principal_type = 'user'"
+        " AND c.principal_id = %s"
+        " ORDER BY coalesce(c.requested_at, c.expires_at) DESC, c.id LIMIT %s",
+        (instance, user_id, limit),
+    )
+
+
 def call_approval_rules(conn: psycopg.Connection, instance: str) -> list[dict]:
     return fetchall(
         conn,

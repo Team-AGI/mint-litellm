@@ -303,7 +303,7 @@ class TestStateStage:
             "auth_type": "none",
             "provider_allowed": False,
             "auth_server_allowed": False,
-            "contract_status": "none",
+            "contract_status": "provisional",
             "identity_kind": "remote",
         }
 
@@ -1590,8 +1590,8 @@ class TestPolicyInput:
             "contract_status",
             "identity_kind",
         }
-        assert doc["server"]["contract_status"] == "none"
-        assert doc["tool"] == {"name": "search"}
+        assert doc["server"]["contract_status"] == "provisional"
+        assert doc["tool"] == {"name": "search", "risk_grade": "low", "action_type": "read"}
         assert doc["settings"] == {"high_risk_tools": ["a", "b"]}
         assert doc["mode"] == "enforce" and doc["operation"] == "tool_call"
 
@@ -1599,8 +1599,8 @@ class TestPolicyInput:
         doc = self.build(arguments={"q": "secret value", "n": 3, "nested": {"k": "v"}})
         assert doc["arguments"]["keys"] == ["n", "nested", "q"]
         assert doc["arguments"]["sizes"]["q"] == len("secret value")
-        assert "secret" not in json.dumps(doc)
-        assert set(doc["arguments"]) == {"keys", "sizes"}
+        assert "secret value" not in json.dumps(doc)
+        assert set(doc["arguments"]) == {"keys", "sizes", "patterns"}
 
     def test_approval_summary_and_expiry_days(self):
         doc = self.build(snap=snapshot(approvals=(approval(conditions={"a": 1}),)))

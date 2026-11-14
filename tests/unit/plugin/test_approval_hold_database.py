@@ -1,5 +1,6 @@
 """승인 대기 보류가 쓰는 DB 동작: 같은 대기 요청 재사용과 요청 상태 읽기를 실제 DB에서 확인한다."""
 
+from datetime import datetime
 from uuid import uuid4
 
 import ctl_fixtures
@@ -74,3 +75,28 @@ def test_the_request_state_is_read_through_its_life(world):
         return states
 
     assert with_database(dsn, body) == ["pending", "approved", None]
+
+
+def test_outcomes_list_only_the_users_own_decided_requests_after_the_cursor(world):
+    scene, dsn = world
+
+    async def body(live):
+        mine = await live.request_call_approval(params(scene))
+        theirs = await live.request_call_approval({**params(scene, "f" * 64), "principal_id": "u2"})
+        waiting = await live.request_call_approval(params(scene, "e" * 64))
+        cursor, nothing = await live.call_approval_outcomes(scene.iid, "u1", None)
+        approver = Context(scene.conn, scene.iid, Operator("carol", "approver", "carol"))
+        approvals.call_approve(approver, mine, None, None)
+        approvals.call_approve(approver, theirs, None, None)
+        later, found = await live.call_approval_outcomes(
+            scene.iid, "u1", datetime.fromisoformat(cursor)
+        )
+        _, again = await live.call_approval_outcomes(
+            scene.iid, "u1", datetime.fromisoformat(later)
+        )
+        return nothing, found, again, waiting
+
+    nothing, found, again, waiting = with_database(dsn, body)
+    assert nothing == [] and again == []
+    assert [(i["tool"], i["outcome"]) for i in found] == [("search", "approved")]
+    assert set(found[0]) == {"server", "tool", "outcome", "reason", "at"} and waiting

@@ -3,6 +3,7 @@
 DECIDE_PATH = "/mint/v1/decide"
 RESULT_PATH = "/mint/v1/result"
 REPORT_PATH = "/mint/v1/endpoint/report"
+OUTCOMES_PATH = "/mint/v1/endpoint/outcomes"
 
 # 설치 묶음의 사용자 키가 부를 수 있는 경로의 전부이다(LiteLLM 키의 ``allowed_routes``).
-KIT_KEY_ROUTES = (DECIDE_PATH, RESULT_PATH, REPORT_PATH)
+KIT_KEY_ROUTES = (DECIDE_PATH, RESULT_PATH, REPORT_PATH, OUTCOMES_PATH)
