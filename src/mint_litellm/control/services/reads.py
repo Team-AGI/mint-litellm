@@ -346,7 +346,10 @@ def transfers(conn: psycopg.Connection, instance: str, limit: int = 10) -> list[
 def operators(conn: psycopg.Connection, instance: str) -> list[dict]:
     return fetchall(
         conn,
-        "SELECT name, role, user_id, expires_at, state_version FROM mint.operators"
+        "SELECT name, role, user_id, expires_at, state_version,"
+        " (SELECT b.external_id FROM mint.operator_chat_bindings b WHERE b.instance_id ="
+        "  o.instance_id AND b.operator_name = o.name AND b.channel = 'slack') AS slack_user"
+        " FROM mint.operators o"
         " WHERE instance_id = %s AND (expires_at IS NULL OR expires_at > now()) ORDER BY name",
         (instance,),
     )

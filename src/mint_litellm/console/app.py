@@ -10,7 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from mint_litellm.console import api, login, pages, staff_pages
+from mint_litellm.console import api, chat, login, pages, staff_pages
 from mint_litellm.console.core import (
     COOKIE,
     ConsoleConfig,
@@ -114,6 +114,7 @@ def create_app(
     app.include_router(api.router, prefix="/api/v1")
     app.include_router(pages.reports.api_router, prefix="/api/v1")
     app.include_router(pages.router)
+    app.include_router(chat.router)
     app.include_router(staff_pages.public)
     app.include_router(staff_pages.router)
 

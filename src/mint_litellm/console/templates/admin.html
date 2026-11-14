@@ -11,14 +11,18 @@
 {{ m.tabs([('operators', '운영자', operators | length), ('orgs', '조직', orgs | length), ('suggestions', '연결 제안', suggestions | length)] + ([('transfer', '백업·이전', transfers | length)] if actor.role == 'admin' else []), tab, '/admin') }}
 {% if tab == 'operators' %}
 {% if operators %}
-<table><thead><tr><th>이름</th><th>역할</th><th>사용자</th><th>만료</th><th></th></tr></thead><tbody>
-{% for o in operators %}<tr><td>{{ o.name }}</td><td>{{ L.pick(L.ROLE, o.role) }}</td><td>{{ o.user_id | blank }}</td><td class="nowrap">{{ o.expires_at | when }}</td>
+<table><thead><tr><th>이름</th><th>역할</th><th>사용자</th><th>Slack</th><th>만료</th><th></th></tr></thead><tbody>
+{% for o in operators %}<tr><td>{{ o.name }}</td><td>{{ L.pick(L.ROLE, o.role) }}</td><td>{{ o.user_id | blank }}</td><td>{{ o.slack_user | blank }}</td><td class="nowrap">{{ o.expires_at | when }}</td>
 <td>{% if actor.role == 'admin' %}<div class="row-actions">
 <form method="post" action="/operators/{{ o.name | urlencode }}/role" class="row-actions">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ o.state_version }}">
   <select name="role" aria-label="{{ o.name }} 역할">{% for k in ['admin', 'approver', 'viewer'] %}<option value="{{ k }}"{% if o.role == k %} selected{% endif %}>{{ L.pick(L.ROLE, k) }}</option>{% endfor %}</select>
   <button type="submit">역할 변경</button>
 </form>
+{% if o.role != 'viewer' %}<form method="post" action="/operators/{{ o.name | urlencode }}/chat-bind" class="row-actions">
+  {{ m.csrf(actor) }}<input name="slack_user" value="{{ o.slack_user or '' }}" placeholder="Slack 사용자" pattern="[UW][A-Z0-9]{2,31}" aria-label="{{ o.name }} Slack 사용자">
+  <button type="submit">Slack 결속</button>
+</form>{% endif %}
 {% call m.confirm_dialog('remove-' ~ loop.index, '운영자 삭제', '운영자 삭제', '토큰이 끝나고 이 사용자의 콘솔 세션이 폐기됩니다.', '/operators/' ~ (o.name | urlencode) ~ '/remove', actor, '운영자 삭제', confirm_name=o.name) %}
 <input type="hidden" name="state_version" value="{{ o.state_version }}">
 {% endcall %}</div>

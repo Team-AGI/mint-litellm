@@ -882,6 +882,9 @@ HANDLERS: dict[str, Handler] = {
     "operator add": _operator_add,
     "operator bootstrap": _operator_bootstrap,
     "operator remove": _done(operator_service.remove, "name"),
+    "operator chat-bind": lambda r: operator_service.chat_bind(
+        r.context(), r.args.name, None if r.args.clear else r.args.slack_user
+    ),
     "operator set-role": lambda r: operator_service.set_role(
         r.context(), r.args.name, OperatorRole(r.args.role)
     ),
@@ -1029,6 +1032,11 @@ ARGUMENTS: dict[str, list[Any]] = {
         _a("--name", required=True), _a("--user-id", required=True), _SAVE_TOKEN,
     ],
     "operator remove": [_a("name")],
+    "operator chat-bind": [
+        _a("name"),
+        _a("--slack-user", help="Slack 사용자 식별자(U…)"),
+        _a("--clear", action="store_true", help="결속을 지운다"),
+    ],
     "operator set-role": [
         _a("name"), _a("--role", required=True, choices=[r.value for r in OperatorRole])
     ],
