@@ -70,6 +70,14 @@ CALL_APPROVAL_RULE = {
     "expired": Status("만료", "off"),
     "disabled": Status("해제됨", "off"),
 }
+MY_CALL_APPROVAL = {
+    "pending": Status("대기", "wait"),
+    "approved": Status("승인", "ok"),
+    "rejected": Status("거부", "block"),
+    "cancelled": Status("취소", "off"),
+    "expired": Status("만료", "off"),
+    "consumed": Status("사용됨", "off"),
+}
 SELF_CONFIRMATION = {
     "pending": Status("확인 대기", "wait"),
     "confirmed": Status("확인됨", "ok"),

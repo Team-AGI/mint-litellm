@@ -7,6 +7,10 @@
         끝낸다(하네스의 권한 흐름을 그대로 두며 이 훅이 권한을 대신 주지 않는다).
   post  호출 뒤 훅(성공)과 post-failure(실패). 판정 때 받은 참조를 MINT에 돌려 결과를 보고한다.
         보고하지 못해도 호출에는 영향이 없고, MINT는 보고 없는 호출을 결과 미확인으로 남긴다.
+  notify 호출이 승인 대기로 막힌 뒤 승인·거부 결과를 알리는 작은 조회 루프(내부용, 막힌 훅이
+        띄운다). 데스크톱 알림에는 서버·도구 이름과 거부 사유만 담고 인자 값은 담지 않는다.
+        환경 변수 ``MINT_NOTIFY=0`` 이나 상태 폴더의 ``notify.off`` 파일이 있으면 띄우지 않으며,
+        알림을 못 보내는 환경에서는 조용히 끝난다.
   serve 연결 중계(내부용). 훅은 호출마다 새 프로세스라 연결을 이어 쓸 수 없으므로, 사용자
         전용 소켓을 가진 작은 프로세스가 결정 서버와의 연결을 유지하고 훅이 이를 거쳐 보낸다.
         중계에 닿지 못하면 훅이 직접 보내며(느릴 뿐 판정은 같다), 요청이 한동안 없으면 끝난다.
@@ -57,6 +61,13 @@ from typing import Any, NamedTuple
 
 DECIDE_PATH = "/mint/v1/decide"
 RESULT_PATH = "/mint/v1/result"
+OUTCOMES_PATH = "/mint/v1/endpoint/outcomes"
+NOTIFY_LOCK = "notify.lock"
+NOTIFY_CURSOR = "notify.cursor"
+NOTIFY_OFF = "notify.off"
+NOTIFY_INTERVAL = 5.0
+NOTIFY_MAX_SECONDS = 900.0
+NOTIFY_FAILURES = 5
 MAX_RESPONSE = 64 * 1024
 HTTP_TIMEOUT = 2.0
 HOOK_DEADLINE = 2.5
@@ -460,8 +471,10 @@ def decide(
     state_dir: str,
     post: Post,
     http_timeout: float = HTTP_TIMEOUT,
+    on_pending: Callable[[], None] | None = None,
 ) -> None:
-    """허용이면 조용히 돌아오고, 그 밖에는 ``Refuse``를 던진다."""
+    """허용이면 조용히 돌아오고, 그 밖에는 ``Refuse``를 던진다. 승인 요청이 열려 막히면
+    ``on_pending``을 먼저 부른다."""
     name = event.get("tool_name")
     if not isinstance(name, str) or not name.startswith("mcp__"):
         return  # MCP 호출이 아니면 이 훅의 대상이 아니다.
@@ -486,6 +499,8 @@ def decide(
         message = f"blocked by MINT: {code} reference={answer.get('reference')}"
         if error.get("approval_requested") is True:
             message += " approval_requested=true"
+            if on_pending is not None:
+                on_pending()
         if isinstance(error.get("guidance"), str):
             message += " " + " ".join(error["guidance"].split())[:300]
         raise Refuse(message)
@@ -535,6 +550,154 @@ def report_result(
     except OSError:
         pass
     return True
+
+
+def _plain(value: object, limit: int) -> str:
+    """알림 글에 넣을 값: 제어 문자를 빼고 한 줄로, 길이를 자른다."""
+    text = "".join(c for c in " ".join(str(value).split()) if c.isprintable())
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def notify_text(item: Mapping[str, Any]) -> str | None:
+    """승인 결과 한 건의 알림 글. 알 수 없는 결과는 None. 인자 값은 받지도 싣지도 않는다."""
+    name = f"{_plain(item.get('server', ''), 64)}.{_plain(item.get('tool', ''), 64)}"
+    if item.get("outcome") == "approved":
+        return f"승인됨: {name} — 같은 작업을 다시 요청하세요"
+    if item.get("outcome") == "rejected":
+        reason = _plain(item.get("reason") or "", 120)
+        return f"거부됨: {name}" + (f" — 사유: {reason}" if reason else "")
+    return None
+
+
+_TOAST = (
+    "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications,"
+    " ContentType = WindowsRuntime] | Out-Null;"
+    "$x = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent("
+    "[Windows.UI.Notifications.ToastTemplateType]::ToastText02);"
+    "$n = $x.GetElementsByTagName('text');"
+    "$n.Item(0).AppendChild($x.CreateTextNode($env:MINT_TITLE)) | Out-Null;"
+    "$n.Item(1).AppendChild($x.CreateTextNode($env:MINT_TEXT)) | Out-Null;"
+    "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('MINT')"
+    ".Show([Windows.UI.Notifications.ToastNotification]::new($x))"
+)
+
+
+def notify_command(
+    system: str, text: str, which: Callable[[str], str | None] = shutil.which
+) -> tuple[list[str], dict[str, str]] | None:
+    """운영체제별 알림 명령과 추가 환경. 글은 명령줄이 아니라 환경 변수로 넘겨 인용 문제를 피한다.
+
+    쓸 수 있는 방법이 없으면 None(조용히 건너뛴다).
+    """
+    env = {"MINT_TITLE": "MINT", "MINT_TEXT": text}
+    if system == "Windows":
+        shell = which("powershell") or which("powershell.exe")
+        if shell:
+            return [shell, "-NoProfile", "-NonInteractive", "-Command", _TOAST], env
+    elif system == "Darwin":
+        tool = which("osascript")
+        if tool:
+            script = (
+                'display notification (system attribute "MINT_TEXT")'
+                ' with title (system attribute "MINT_TITLE")'
+            )
+            return [tool, "-e", script], env
+    else:
+        tool = which("notify-send")
+        if tool:
+            return [tool, "MINT", text], env
+    return None
+
+
+def show_notification(text: str) -> bool:
+    import platform
+
+    command = notify_command(platform.system(), text)
+    if command is None:
+        return False
+    argv, extra = command
+    try:
+        subprocess.run(
+            argv, env={**os.environ, **extra}, timeout=20, check=False,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )  # fmt: skip
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return True
+
+
+def notify_enabled(state_dir: str, env: Mapping[str, str] = os.environ) -> bool:
+    return env.get("MINT_NOTIFY", "1") != "0" and not os.path.exists(
+        os.path.join(state_dir, NOTIFY_OFF)
+    )
+
+
+def poll_outcomes(
+    *, url: str, key: str, state_dir: str, post: Post, show: Callable[[str], bool],
+    http_timeout: float = HTTP_TIMEOUT,
+) -> int:
+    """승인 결과를 한 번 묻고 새 결과마다 알린다. 알린 건수. 닿지 못하면 ``Refuse``."""
+    path = os.path.join(state_dir, NOTIFY_CURSOR)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            since = handle.read(64).strip() or None
+    except OSError:
+        since = None
+    answer = _call(post, url, OUTCOMES_PATH, key, {"since": since}, http_timeout)
+    items = answer.get("items") if isinstance(answer.get("items"), list) else []
+    shown = 0
+    for item in items[:20]:
+        text = notify_text(item) if isinstance(item, dict) else None
+        if text is not None:
+            shown += 1 if show(text) else 0
+    cursor = answer.get("cursor")
+    if isinstance(cursor, str) and len(cursor) <= 64:
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(cursor)
+    return shown
+
+
+def notify_loop(
+    *, url: str, key: str, state_dir: str, post: Post, show: Callable[[str], bool],
+    sleep: Callable[[float], None] = time.sleep, now: Callable[[], float] = time.time,
+    interval: float = NOTIFY_INTERVAL, max_seconds: float = NOTIFY_MAX_SECONDS,
+) -> None:
+    """한 번 알리거나 시간이 다 될 때까지 조회한다. 이미 도는 루프가 있으면 바로 끝난다."""
+    lock = os.path.join(state_dir, NOTIFY_LOCK)
+    os.makedirs(state_dir, mode=0o700, exist_ok=True)
+    try:
+        if now() - os.path.getmtime(lock) < 3 * interval + 30:
+            return
+    except OSError:
+        pass
+    end, failures = now() + max_seconds, 0
+    while now() < end and failures < NOTIFY_FAILURES:
+        try:
+            with open(lock, "w", encoding="utf-8") as handle:
+                handle.write(str(os.getpid()))  # 쓸 때마다 수정 시각이 갱신되어 살아 있음을 알린다.
+            if poll_outcomes(url=url, key=key, state_dir=state_dir, post=post, show=show):
+                break
+            failures = 0
+        except (Refuse, OSError):
+            failures += 1
+        sleep(interval)
+    try:
+        os.unlink(lock)
+    except OSError:
+        pass
+
+
+def kick_notify(args: Sequence[str]) -> None:
+    """승인 대기로 막힌 호출 뒤에 알림 루프를 백그라운드로 띄운다(실패해도 훅에는 영향 없음)."""
+    null = subprocess.DEVNULL
+    detach = {"creationflags": 0x08000008} if os.name == "nt" else {"start_new_session": True}
+    try:
+        subprocess.Popen(
+            [sys.executable, "-I", "-B", os.path.abspath(__file__), "notify", *args],
+            stdin=null, stdout=null, stderr=null, **detach,
+        )
+    except OSError:
+        pass
 
 
 def launch_env(approved: Mapping[str, Any], inherited: Mapping[str, str]) -> dict[str, str]:
@@ -1599,7 +1762,8 @@ def _give_up(code: int, message: str) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["pre", "post", "post-failure", "run", "serve"])
+    commands = ["pre", "post", "post-failure", "run", "serve", "notify"]
+    parser.add_argument("command", choices=commands)
     parser.add_argument("--url")
     parser.add_argument("--key-file")
     parser.add_argument("--contracts", required=True)
@@ -1616,6 +1780,24 @@ def main(argv: list[str] | None = None) -> None:
         serve_broker(
             os.path.join(os.path.expanduser(args.state_dir), BROKER_SOCKET), args.ca_file, args.idle
         )
+        return
+    if args.command == "notify":
+        try:
+            state_dir = os.path.expanduser(args.state_dir)
+            with open(os.path.expanduser(args.key_file), encoding="utf-8") as handle:
+                key = handle.read().strip()
+            ca = args.ca_file
+
+            def direct(url: str, headers: dict, body: bytes, timeout: float) -> tuple[int, bytes]:
+                return http_post(url, headers, body, timeout, ca)
+
+            if notify_enabled(state_dir):
+                notify_loop(
+                    url=args.url, key=key, state_dir=state_dir, post=direct,
+                    show=show_notification,
+                )
+        except BaseException:  # 알림은 어떤 경우에도 조용히 끝난다.
+            pass
         return
     if args.command == "run":
         kick_report(os.path.dirname(os.path.abspath(__file__)))
@@ -1655,10 +1837,15 @@ def main(argv: list[str] | None = None) -> None:
                     start_broker(state_dir, args.contracts, args.ca_file)
             return http_post(url, headers, body, timeout, args.ca_file)
 
+        notify_args = ["--contracts", args.contracts, "--url", args.url,
+                       "--key-file", args.key_file, "--state-dir", args.state_dir]
+        if args.ca_file:
+            notify_args += ["--ca-file", args.ca_file]
         if blocking:
             decide(
                 event, url=args.url, key=key, contracts=os.path.expanduser(args.contracts),
                 state_dir=state_dir, post=post, http_timeout=args.http_timeout,
+                on_pending=lambda: notify_enabled(state_dir) and kick_notify(notify_args),
             )
         else:
             report_result(

@@ -64,6 +64,14 @@ class FakeDatabase:
     async def retired_servers(self, instance_id, reported):
         return []
 
+    outcome_calls: list = []
+
+    async def call_approval_outcomes(self, instance_id, user_id, since):
+        self.outcome_calls.append((user_id, since))
+        return "2026-01-01T00:00:00+00:00", [
+            {"server": "srv-1", "tool": "t", "outcome": "approved", "reason": None, "at": "x"}
+        ]
+
 
 def build(tmp_path, snap=None, **kwargs):
     h = harness(tmp_path, snap or snapshot(server=local_row()), **kwargs)
@@ -266,3 +274,15 @@ def test_the_routes_fail_closed_when_the_runtime_is_not_ready(tmp_path):
     install(app, router)
     for path in ("/mint/v1/decide", "/mint/v1/result"):
         assert TestClient(app).post(path, json=body()).status_code == 503
+
+
+def test_outcomes_are_asked_for_the_user_of_the_key_only(tmp_path):
+    client, h = build(tmp_path)
+    answer = post(client, "/mint/v1/endpoint/outcomes", {"since": None})
+    assert answer.status_code == 200 and answer.json()["items"][0]["tool"] == "t"
+    assert post(client, "/mint/v1/endpoint/outcomes", {"since": None},
+                headers={"Authorization": "Bearer sk-other"}).status_code == 200
+    # 본문에 사용자를 적어도 받지 않고, 인증 없이는 열리지 않는다.
+    assert post(client, "/mint/v1/endpoint/outcomes", {"user_id": "u2"}).status_code == 422
+    assert post(client, "/mint/v1/endpoint/outcomes", {}, headers={}).status_code == 401
+    assert [u for u, _ in FakeDatabase.outcome_calls[-2:]] == ["u1", "u2"]

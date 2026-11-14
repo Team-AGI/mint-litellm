@@ -1,0 +1,33 @@
+{% extends "staff_base.html" %}{% import "macros.html" as m %}
+{% block title %}내 승인 요청 · MINT{% endblock %}
+{% block body %}
+<h1>내 승인 요청</h1>
+{% if pending %}
+<h2>확인할 요청</h2>
+<table><thead><tr><th>서버</th><th>도구</th><th>표시 값</th><th>만료</th><th></th></tr></thead><tbody>
+{% for c in pending %}<tr>
+<td>{{ c.server_id }}</td><td>{{ c.tool }}</td>
+<td>{% if c.display %}<dl class="detail">{% for k, v in c.display.items() %}<dt>{{ k }}</dt><dd>{{ v | masked }}</dd>{% endfor %}</dl>{% else %}—{% endif %}</td>
+<td class="nowrap">{{ c.expires_at | when }}</td>
+<td><form method="post" class="actions">{{ m.csrf(actor) }}
+<button type="submit" class="primary" formaction="/staff/confirmations/{{ c.id }}/confirm"{% if c.same_key %} disabled{% endif %}>확인</button>
+</form></td>
+</tr>{% endfor %}
+</tbody></table>
+{% endif %}
+{% if rows %}
+<table><thead><tr><th>서버</th><th>도구</th><th>요청 내용</th><th>요청</th><th>상태</th><th>남은 시간</th><th>처리</th></tr></thead><tbody>
+{% for c in rows %}<tr>
+<td>{{ c.server_id }}</td><td>{{ c.tool }}</td>
+<td>{% if c.action or c.display %}<dl class="detail">
+{% if c.action %}<dt>동작</dt><dd>{{ c.action | masked }}</dd>{% endif %}
+{% for k, v in (c.display or {}).items() %}<dt>{{ k | masked(64) }}</dt><dd>{{ v | masked }}</dd>{% endfor %}
+</dl>{% else %}—{% endif %}</td>
+<td class="nowrap">{{ c.requested_at | when if c.requested_at else '—' }}</td>
+<td>{{ m.badge(L.MY_CALL_APPROVAL, c.view) }}</td>
+<td class="nowrap">{% if c.remaining_seconds is not none %}{{ c.remaining_seconds | span }} · {{ c.uses_left }}회 남음{% else %}—{% endif %}</td>
+<td>{% if c.view == 'rejected' %}{{ c.decider | masked(64) if c.decider else '—' }}{% if c.decision_reason %}<br>{{ c.decision_reason | masked }}{% endif %}{% elif c.decider %}{{ c.decider | masked(64) }}{% else %}—{% endif %}</td>
+</tr>{% endfor %}
+</tbody></table>
+{% else %}{{ m.empty('승인 요청이 없습니다', '/staff', '사용 가능한 서버·도구') }}{% endif %}
+{% endblock %}

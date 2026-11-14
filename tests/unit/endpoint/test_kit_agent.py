@@ -322,3 +322,95 @@ def test_without_exec_the_server_is_started_as_a_child_with_the_same_exit_code()
     with pytest.raises(SystemExit) as exit_:
         agent.spawn_and_exit(sys.executable, ["tool", "-c", "import sys; sys.exit(3)"], os.environ)
     assert exit_.value.code == 3
+
+
+# --- 승인 결과 알림 ----------------------------------------------------------------------------
+
+
+def test_the_notification_text_names_the_tool_and_never_carries_argument_values():
+    ok = agent.notify_text({"server": "srv-1", "tool": "search", "outcome": "approved",
+                            "arguments": {"q": "비밀"}, "display": {"q": "비밀"}})
+    assert ok == "승인됨: srv-1.search — 같은 작업을 다시 요청하세요"
+    no = agent.notify_text({"server": "srv-1", "tool": "search", "outcome": "rejected",
+                            "reason": "범위\n밖 " + "x" * 300})
+    assert no.startswith("거부됨: srv-1.search — 사유: 범위 밖 x") and len(no) < 200
+    assert "\n" not in no and "비밀" not in ok + no
+    assert agent.notify_text({"server": "s", "tool": "t", "outcome": "expired"}) is None
+    assert agent.notify_text({"server": "s", "tool": "t", "outcome": "rejected"}) == "거부됨: s.t"
+
+
+@pytest.mark.parametrize(
+    ("system", "found", "first"),
+    [("Windows", "powershell", "powershell"), ("Darwin", "osascript", "osascript"),
+     ("Linux", "notify-send", "notify-send")],
+)
+def test_the_notification_command_follows_the_platform_and_passes_text_by_environment(
+    system, found, first
+):
+    argv, env = agent.notify_command(system, "승인됨: a.b", which=lambda name: name)
+    assert argv[0] == first and env["MINT_TEXT"] == "승인됨: a.b"
+    if system != "Linux":
+        assert "승인됨" not in " ".join(argv)  # 글은 명령줄에 들어가지 않는다
+    assert agent.notify_command(system, "x", which=lambda name: None) is None
+
+
+def test_polling_shows_each_new_outcome_and_keeps_the_cursor(world):
+    wire = Wire({"cursor": "2026-01-01T00:00:00+00:00", "items": [
+        {"server": "srv-1", "tool": "a", "outcome": "approved", "at": "x"},
+        {"server": "srv-1", "tool": "b", "outcome": "rejected", "reason": "no", "at": "x"},
+        {"server": "srv-1", "tool": "c", "outcome": "weird"},
+    ]})
+    shown = []
+    kwargs = dict(url="https://mint.test", key="sk-k", state_dir=world.state, post=wire,
+                  show=lambda text: shown.append(text) or True)
+    os.makedirs(world.state)
+    assert agent.poll_outcomes(**kwargs) == 2
+    assert shown == ["승인됨: srv-1.a — 같은 작업을 다시 요청하세요", "거부됨: srv-1.b — 사유: no"]
+    ((url, headers, body),) = wire.requests
+    assert url == "https://mint.test/mint/v1/endpoint/outcomes" and body == {"since": None}
+    agent.poll_outcomes(**kwargs)
+    assert wire.requests[1][2] == {"since": "2026-01-01T00:00:00+00:00"}
+
+
+def test_the_notify_loop_stops_after_a_notification_and_gives_up_when_unreachable(world):
+    os.makedirs(world.state)
+    clock = [0.0]
+
+    def sleep(seconds):
+        clock[0] += seconds
+
+    items = [{"server": "s", "tool": "t", "outcome": "approved"}]
+    wire = Wire({"cursor": "c", "items": []})
+    answers = iter([[], [], items])
+
+    def post(url, headers, body, timeout):
+        wire.answer = {"cursor": "c", "items": next(answers)}
+        return wire(url, headers, body, timeout)
+
+    shown = []
+    agent.notify_loop(url="https://mint.test", key="k", state_dir=world.state, post=post,
+                      show=lambda t: shown.append(t) or True, sleep=sleep,
+                      now=lambda: clock[0])
+    assert len(shown) == 1 and len(wire.requests) == 3
+    assert not os.path.exists(os.path.join(world.state, "notify.lock"))
+    down = Wire(status=503)
+    agent.notify_loop(url="https://mint.test", key="k", state_dir=world.state, post=down,
+                      show=lambda t: True, sleep=sleep, now=lambda: clock[0])
+    assert len(down.requests) == agent.NOTIFY_FAILURES
+
+
+def test_a_blocked_call_with_an_open_request_starts_the_notifier_and_opt_out_is_honoured(
+    world, monkeypatch
+):
+    started = []
+    deny = {"decision": "deny", "reference": "r",
+            "error": {"code": "MINT-CALL-APPROVAL-PENDING", "approval_requested": True}}
+    with pytest.raises(agent.Refuse, match="approval_requested"):
+        agent.decide(event(), url="https://mint.test", key="k", contracts=world.listing,
+                     state_dir=world.state, post=Wire(deny), on_pending=lambda: started.append(1))
+    assert started == [1]
+    assert agent.notify_enabled(world.state, {}) and not agent.notify_enabled(
+        world.state, {"MINT_NOTIFY": "0"})
+    os.makedirs(world.state)
+    open(os.path.join(world.state, agent.NOTIFY_OFF), "w").close()
+    assert not agent.notify_enabled(world.state, {})

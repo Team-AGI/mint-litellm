@@ -35,6 +35,7 @@ MENU = (
 )
 STAFF_MENU = (
     ("/staff", "사용 가능한 서버·도구"),
+    ("/staff/requests", "내 승인 요청"),
     ("/staff/confirmations", "본인 확인 요청"),
     ("/staff/endpoint", "단말 설치"),
     ("/staff/consents", "동의 관리·내 기록"),
