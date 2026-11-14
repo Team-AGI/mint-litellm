@@ -259,6 +259,7 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 | `--allowed-arg-key 이름` (반복) | `allowed_arg_keys` | 호출이 쓸 수 있는 인자 이름. 이 밖의 이름이 있으면 차단한다. 계약 관리 서버에만 적용한다. 지정하지 않으면 승인된 도구 계약의 입력 정의에 있는 이름만 허용한다. 계약의 입력 정의를 알 수 없고 이 옵션도 없으면 호출을 `MINT-CONTRACT-DRIFT-input-keys-unknown`으로 막는다. |
 | `--allow-input-secret 종류` (반복) | `allow_input_secrets` | 인자에서 비밀을 찾으면 도구로 보내기 전에 `MINT-POLICY-DETECT-POL-E-05`로 막는다(개인 키, 클라우드 접근 키, 접근 토큰, JWT, Bearer 토큰, 주민등록번호, 카드 번호). 종류 이름(`private_key`, `cloud_access_key`, `access_token`, `jwt`, `bearer_token`, `resident_registration_number`, `card_number`, `custom_marker`)을 적으면 이 승인의 도구에 한해 그 종류를 허용한다. 사건에는 종류와 건수만 남긴다. 계약 관리 서버에만 적용한다. |
 | `--allow-token-forward` | `allow_token_forward` | 호출자 토큰을 업스트림에 그대로 전달하는 서버(`true_passthrough`·`oauth_delegate`)의 도구 호출을 이 승인에서 허용한다. 없으면 `MINT-TOKEN-FORWARD-FORBIDDEN`으로 막는다(관측 모드로 풀리지 않음). |
+| `--allow-internal-address` | `allow_internal_address` | 서버 주소의 이름 조회 결과가 내부 주소(사설·루프백·링크 로컬 등)여도 이 승인에서 허용한다. 사내에서 운영하는 서버용이다. 없으면 `MINT_RESOLVE_CHECK`가 `enforce`일 때 `MINT-RESOLVED-ADDRESS-FORBIDDEN`으로 막고 `observe`(기본)일 때는 경보만 연다. |
 | `--max-result-bytes 수` | `max_result_bytes` | 도구 결과 한 건의 크기 상한(바이트). 넘으면 결과 대신 `MINT-OUTPUT-BLOCKED`를 돌려주고 응답 사건의 `output_findings`에 `POL-E-16`을 남긴다. |
 | `--max-result-items 수` | `max_result_items` | 도구 결과 한 건의 내용 블록 수 상한. 넘으면 위와 같이 막는다. |
 | `--no-result-scan` | `scan_result` | 결과 본문의 지시문 표지 검사를 끈다. 계약 관리 서버는 이 옵션이 없으면 검사하며, 표지가 있으면 결과를 `MINT-OUTPUT-BLOCKED`로 막고 `output_findings`에 `POL-E-04`를 남긴다. 관측 모드에서는 막지 않고 응답 사건에만 남긴다. |

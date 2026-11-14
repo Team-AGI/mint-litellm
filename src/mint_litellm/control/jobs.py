@@ -53,6 +53,7 @@ KINDS: dict[str, JobKind] = {
     "call_spike_scan": JobKind(),
     "bulk_extraction_scan": JobKind(),
     "content_finding_scan": JobKind(),
+    "server_address_scan": JobKind(),
     "result_unenforced_scan": JobKind(),
     "token_audience_scan": JobKind(),
     "package_vuln_scan": JobKind(),
@@ -244,6 +245,12 @@ def _result_unenforced_scan(job: JobContext) -> None:
     result_unenforced.run(job)
 
 
+def _server_address_scan(job: JobContext) -> None:
+    from mint_litellm.control import server_address
+
+    server_address.run(job)
+
+
 def _token_audience_scan(job: JobContext) -> None:
     from mint_litellm.control import token_audience
 
@@ -356,6 +363,7 @@ HANDLERS: dict[str, Callable[[JobContext], None]] = {
     "call_spike_scan": _call_spike_scan,
     "bulk_extraction_scan": _bulk_extraction_scan,
     "content_finding_scan": _content_finding_scan,
+    "server_address_scan": _server_address_scan,
     "result_unenforced_scan": _result_unenforced_scan,
     "token_audience_scan": _token_audience_scan,
     "package_vuln_scan": _package_vuln_scan,
@@ -381,6 +389,7 @@ SCHEDULES: dict[str, Callable[[Any], int]] = {
     "call_spike_scan": lambda s: 60,
     "bulk_extraction_scan": lambda s: 60,
     "content_finding_scan": lambda s: 60,
+    "server_address_scan": lambda s: 60,
     "result_unenforced_scan": lambda s: 60,
     "token_audience_scan": lambda s: 60,
     "package_vuln_scan": lambda s: s.vuln_scan_seconds,

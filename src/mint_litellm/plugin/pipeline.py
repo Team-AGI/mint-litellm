@@ -37,6 +37,7 @@ from mint_litellm.plugin.policy.input import policy_input as make_policy_input
 from mint_litellm.plugin.policy.opa_client import Evaluation
 from mint_litellm.plugin.policy.patterns import compute_patterns
 from mint_litellm.plugin.policy.sensitive_scan import INPUT_SECRET_KINDS, scan_arguments
+from mint_litellm.plugin.resolve_guard import ResolveGuard
 from mint_litellm.plugin.snapshot import (
     WINDOW_MAX_USES,
     ApprovalRow,
@@ -47,6 +48,7 @@ from mint_litellm.plugin.snapshot import (
 )
 from mint_litellm.plugin.timing import OFF, StageClock
 from mint_litellm.plugin.token_audience import MISMATCH, UNCHECKED, audience_verdict
+from mint_litellm.plugin.token_scope import exceeded_scopes
 from mint_litellm.types.canonical import credential_scope
 from mint_litellm.types.contracts import ONE_SHOT_ACTIONS
 from mint_litellm.types.decision import (
@@ -81,7 +83,11 @@ from mint_litellm.types.ids import new_uuid7
 from mint_litellm.types.outcome import Outcome as DecisionOutcome
 from mint_litellm.types.outcome import decision_outcome
 from mint_litellm.types.reason_codes import ContractDriftKind, Reason
-from mint_litellm.types.reuse_policy import ALLOW_TOKEN_FORWARD, FORWARDING_AUTH
+from mint_litellm.types.reuse_policy import (
+    ALLOW_INTERNAL_ADDRESS,
+    ALLOW_TOKEN_FORWARD,
+    FORWARDING_AUTH,
+)
 from mint_litellm.types.settings import Mode, ObservationSettings, effective_mode
 from mint_litellm.types.target import (
     READ,
@@ -138,6 +144,8 @@ class PipelineDeps:
     shadow: Callable[..., None] | None = None
     # 도구 목록의 「보임·통과」 반복을 거르는 기억. 없으면 걸러 내지 않는다.
     list_seen: ListSeen | None = None
+    # 원격 서버 주소의 이름 조회 결과 재확인. 없으면 하지 않는다.
+    resolve_guard: ResolveGuard | None = None
 
 
 @dataclass(frozen=True)
@@ -345,6 +353,38 @@ def token_forward_result(
     return StageResult.stop(Reason.TOKEN_FORWARD_FORBIDDEN, detail=resolved.auth_type)
 
 
+RESOLVE_OBSERVE_WAIT = 0.2  # 초
+RESOLVE_ENFORCE_WAIT = 1.0  # 초
+
+
+async def address_verdict(
+    run: _Run, deps: PipelineDeps, resolved: ResolvedServer, selected: ApprovalRow | None
+) -> StageResult | None:
+    """원격 서버 URL의 호스트가 내부 주소로 풀리는지 호출 직전에 다시 본다(POL-R-12).
+
+    승인 조건 ``allow_internal_address``를 true로 적은 서버는 보지 않는다. ``enforce``는 막고
+    (관측 모드로 풀리지 않음), ``observe``는 호출을 통과시키되 걸린 종류를 ``resolve_findings``에
+    남긴다. 조회 실패는 ``observe``에서 통과(기록만), ``enforce``에서 차단이다.
+    """
+    guard, mode = deps.resolve_guard, deps.config.resolve_check
+    if guard is None or mode == "off" or not resolved.host:
+        return None
+    if selected is not None and selected.conditions.get(ALLOW_INTERNAL_ADDRESS) is True:
+        return None
+    verdict = guard.cached(resolved.host)
+    if verdict is None:
+        # 이름 조회가 판정 예산을 다 쓰면 승인 소비 등 뒤 단계가 시간 초과로 닫힌다. 관측은 짧게,
+        # 집행은 남은 예산의 절반까지만 기다린다(늦게 끝난 조회는 캐시에 남아 다음 호출이 쓴다).
+        enforce = mode == "enforce"
+        share, cap = (0.5, RESOLVE_ENFORCE_WAIT) if enforce else (0.25, RESOLVE_OBSERVE_WAIT)
+        verdict = await guard.check(resolved.host, min(run.deadline.remaining() * share, cap))
+    if verdict.kind is None:
+        return None
+    if mode == "enforce":
+        return StageResult.stop(Reason.RESOLVED_ADDRESS_FORBIDDEN, detail=verdict.detail())
+    run.resolve_findings.append(verdict.kind)
+
+
 def audience_result(
     bearer: str | None, resolved: ResolvedServer, mode: str, run: _Run
 ) -> StageResult | None:
@@ -363,6 +403,34 @@ def audience_result(
     run.aud_mismatch = verdict == MISMATCH
     if run.aud_mismatch and mode == "enforce":
         return StageResult.stop(Reason.TOKEN_AUDIENCE_MISMATCH, detail=resolved.auth_type)
+    return None
+
+
+def scope_result(
+    bearer: str | None, resolved: ResolvedServer, snapshot: Snapshot, mode: str, run: _Run
+) -> StageResult | None:
+    """업스트림에 전달되는 호출자 토큰(POL-O-15)의 범위가 승인된 범위를 넘으면 ``enforce``에서
+    닫는다. ``observe``는 호출을 보내고 사건에만 남긴다. 승인된 범위를 모르거나(없음·빈 목록) 토큰을
+    읽을 수 없으면 확인하지 않았다고 이유와 함께 남긴다."""
+    if resolved.auth_type not in FORWARDING_AUTH:
+        return None
+    if mode == "off":
+        run.scope_unchecked_reason = "not_forwarded"
+        return None
+    if not bearer:
+        return None
+    server = snapshot.server
+    approved = server.approved_oauth_scopes if server is not None else None
+    if not approved:
+        run.scope_unchecked_reason = "no_approved_scopes"
+        return None
+    extra = exceeded_scopes(bearer, approved)
+    if extra is None:
+        run.scope_unchecked_reason = "opaque"
+        return None
+    run.scope_exceeded = list(extra)
+    if extra and mode == "enforce":
+        return StageResult.stop(Reason.TOKEN_SCOPE_EXCEEDED, detail=resolved.auth_type)
     return None
 
 
@@ -1062,10 +1130,15 @@ class _Run:
     # 계약 관리가 아닌 서버에서 관측만 한 검사 결과의 정책 식별자(입력 쪽)와 검사 설정
     unmanaged_findings: list[str] = field(default_factory=list)
     scan_unmanaged: str = "observe"
+    # 서버 주소 재확인(observe)에서 걸린 종류(private·rebind·unresolved). 막지 않고 기록만 한다.
+    resolve_findings: list[str] = field(default_factory=list)
     # 전달되는 호출자 토큰의 aud 확인 결과(대상 불일치, 읽을 수 없어 확인하지 않음)
     aud_mismatch: bool = False
     aud_unchecked: bool = False
     aud_unchecked_reason: str | None = None
+    # 전달되는 호출자 토큰이 승인된 범위를 넘은 범위 이름, 확인하지 않은 이유
+    scope_exceeded: list[str] = field(default_factory=list)
+    scope_unchecked_reason: str | None = None
 
 
 def _decision_snapshot(
@@ -1293,9 +1366,16 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         if forward is not None:
             stages.add(Stage.DENIAL_APPROVAL, forward)
             return
+        address = await address_verdict(run, deps, resolved, run.selected)
+        if address is not None:
+            stages.add(Stage.DENIAL_APPROVAL, address)
         audience = audience_result(req.hook.bearer, resolved, config.token_audience, run)
         if audience is not None:
             stages.add(Stage.DENIAL_APPROVAL, audience)
+            return
+        scope = scope_result(req.hook.bearer, resolved, snapshot, config.token_scope, run)
+        if scope is not None:
+            stages.add(Stage.DENIAL_APPROVAL, scope)
             return
 
     if req.operation is OperationType.RUNTIME_DISCOVERY and (
@@ -1748,9 +1828,12 @@ def _context_document(
         "org_id": principal.org_id,
         "result_policy": _result_policy(run),
         "unmanaged_findings": list(dict.fromkeys(run.unmanaged_findings)),
+        "resolve_findings": list(dict.fromkeys(run.resolve_findings)),
         "aud_mismatch": run.aud_mismatch,
         "aud_unchecked": run.aud_unchecked,
         "aud_unchecked_reason": run.aud_unchecked_reason,
+        "scope_exceeded": list(run.scope_exceeded),
+        "scope_unchecked_reason": run.scope_unchecked_reason,
     }
 
 

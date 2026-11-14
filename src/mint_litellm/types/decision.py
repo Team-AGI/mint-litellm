@@ -426,6 +426,8 @@ class ResolvedServer(BaseModel):
     audiences: tuple[str, ...] = Field(default=(), exclude=True, repr=False)
     # 서버 정의에 관리자가 설정한 OAuth 범위. 승인된 범위와 비교하는 데만 쓴다.
     oauth_scopes: tuple[str, ...] = ()
+    # 서버 URL의 호스트. 이름 조회 결과 재확인에만 쓰며 사건에는 남기지 않는다.
+    host: str | None = Field(default=None, exclude=True)
 
     @model_validator(mode="after")
     def _identity_shape(self) -> Self:
