@@ -20,6 +20,7 @@ from mint_litellm.control.approvals import DEFAULT_CALL_WINDOW
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import alerts as alert_service
 from mint_litellm.control.services import allowlists as allowlist_service
+from mint_litellm.control.services import approval_metrics, reads
 from mint_litellm.control.services import approvals as approval_service
 from mint_litellm.control.services import call_approval_rules as call_approval_rule_service
 from mint_litellm.control.services import call_approvals as call_approval_service
@@ -30,7 +31,6 @@ from mint_litellm.control.services import intakes as intake_service
 from mint_litellm.control.services import operators as operator_service
 from mint_litellm.control.services import orgs as org_service
 from mint_litellm.control.services import policy as policy_service
-from mint_litellm.control.services import reads
 from mint_litellm.control.services import recert as recert_service
 from mint_litellm.control.services import renewals as renewal_service
 from mint_litellm.control.services import servers as server_service
@@ -466,8 +466,17 @@ def calls_page(request: Request, actor: Actor, error=None, status=200):
         actor.conn, actor.instance, page=page_number(request), only_id=focus
     )
     rules = reads.call_approval_rules(actor.conn, actor.instance) if not focus else []
+    chosen = request.query_params.get("range", "")
+    stats = None if focus else approval_metrics.collect(
+        actor.conn, actor.instance,
+        chosen if chosen in approval_metrics.RANGES else approval_metrics.DEFAULT_RANGE,
+        actor.config.time_zone,
+    )
+    prefill = {k: request.query_params.get(f"rule_{k}", "")
+               for k in ("org", "server", "tool", "class")}
     return render(request, "call_approvals.html",
                   {"rows": rows, "rules": rules, "orgs": reads.orgs(actor.conn, actor.instance),
+                   "stats": stats, "ranges": list(approval_metrics.RANGES), "prefill": prefill,
                    "error": error, "focus": focus, "one_shot": ONE_SHOT_ACTIONS},
                   actor=actor, status=status)
 
