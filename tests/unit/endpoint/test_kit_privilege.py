@@ -105,6 +105,7 @@ def acl_by_folder(folders, owner="BUILTIN\\Administrators"):
     return run
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows drive path walk")
 def test_a_stock_drive_root_does_not_make_a_program_files_interpreter_untrusted():
     folders = {
         "C:\\Program Files\\Python312\\python.exe": SAFE_ACL,
