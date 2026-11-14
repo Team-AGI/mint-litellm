@@ -17,7 +17,7 @@ from mint_litellm.control.errors import ControlError
 from mint_litellm.control.services import expiry
 from mint_litellm.plugin.buffer import ConsumptionLost
 from mint_litellm.plugin.pipeline import match_call_approval
-from mint_litellm.plugin.snapshot import PluginDatabase
+from mint_litellm.plugin.snapshot import WINDOW_MAX_USES, PluginDatabase
 from mint_litellm.types.identity import OrgSource
 
 fresh_db = ctl_fixtures.fresh_db
@@ -156,15 +156,48 @@ def test_a_window_outlives_the_request_deadline_and_stops_at_its_own_end(world, 
     assert row(scene, call_id)[0] == "expired"
 
 
-def test_different_arguments_do_not_match_a_window(world, tmp_path):
+def test_a_window_matches_other_arguments_but_a_single_use_does_not(world, tmp_path):
     scene, dsn = world
-    granted(scene, 10)
+    window_id = granted(scene, 10)
+
+    async def body(live):
+        failure, consume = await match(scene, live, tmp_path, {"q": "other"})
+        assert failure is None and consume.windowed is True
+        await live.insert_event(scene.event(), consume)
+
+    with_database(dsn, body)
+    assert uses(scene, window_id) == 1
+
+
+def test_a_single_use_approval_needs_the_same_arguments(world, tmp_path):
+    scene, dsn = world
+    granted(scene)
 
     async def body(live):
         failure, consume = await match(scene, live, tmp_path, {"q": "other"})
         assert consume is None and failure is not None
 
     with_database(dsn, body)
+
+
+def test_a_window_stops_at_the_use_limit(world, tmp_path):
+    scene, dsn = world
+    call_id = granted(scene, 30)
+
+    async def body(live):
+        for number in range(WINDOW_MAX_USES):
+            failure, consume = await match(scene, live, tmp_path, {"q": f"v{number}"})
+            assert failure is None
+            await live.insert_event(scene.event(), consume)
+        failure, none = await match(scene, live, tmp_path)
+        assert none is None and failure is not None
+        # 오래된 스냅숏으로 소비해도 데이터베이스 문장이 상한에서 막는다.
+        with pytest.raises(ConsumptionLost):
+            await live.insert_event(
+                scene.event(), dataclasses.replace(consume, invocation_id=uuid4()))
+
+    with_database(dsn, body)
+    assert uses(scene, call_id) == WINDOW_MAX_USES
 
 
 def test_a_mismatching_binding_is_not_recorded_as_a_use(world, tmp_path):

@@ -483,7 +483,12 @@ def decide(
     if answer["decision"] == "deny":
         error = answer.get("error") if isinstance(answer.get("error"), dict) else {}
         code = error.get("code", "denied")
-        raise Refuse(f"blocked by MINT: {code} reference={answer.get('reference')}")
+        message = f"blocked by MINT: {code} reference={answer.get('reference')}"
+        if error.get("approval_requested") is True:
+            message += " approval_requested=true"
+        if isinstance(error.get("guidance"), str):
+            message += " " + " ".join(error["guidance"].split())[:300]
+        raise Refuse(message)
     # 호출 뒤 훅이 결과를 보고할 수 있게 판정 참조를 호출 식별자로 남긴다.
     if isinstance(tool_use_id, str) and SAFE_ID.match(tool_use_id) and answer.get("reference"):
         pending = os.path.join(state_dir, "pending")
