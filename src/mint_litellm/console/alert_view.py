@@ -37,7 +37,7 @@ KEY = {
     "credential_scope": "자격 범위", "missing_count": "삭제 횟수", "target_type": "대상 종류",
     "target_id": "대상", "preexisting": "기존 항목", "oauth2": "OAuth 토큰", "byok": "사용자 키",
     "verdict": "판정", "added": "추가", "removed": "제거", "scope_type": "범위 종류",
-    "scope_id": "범위", "differences": "차이", "oauth2_flow": "인증 흐름",
+    "signal": "탐지 근거", "scope_id": "범위", "differences": "차이", "oauth2_flow": "인증 흐름",
 }
 AXIS = {"file": "파일 접근", "exec": "실행", "network": "네트워크"}
 # 값이 코드인 항목의 표시명
@@ -46,6 +46,7 @@ VALUE = {
               "expiring": "만료 임박"},
     "source": {"approvals": "승인", "call_approvals": "호출별 승인", "intakes": "신청",
                "approval": "승인", "call_approval": "호출별 승인", "intake": "신청"},
+    "signal": labels.KEY_BLOCK_SIGNAL,
     "verdict": {"widened": "확대", "narrowed": "축소", "unchanged": "변화 없음"},
     "kind": {"exec": "실행 계약", "deployment": "배포 계약", "instance_mismatch": "인스턴스 불일치",
              "negative_state": "부정 상태 파일", "checkpoint": "체크포인트 파일",
@@ -76,6 +77,7 @@ SUMMARY = {
     "result_unenforced": (
         "최근 {window_seconds}초 동안 결과 {calls}건이 검사에 걸렸지만 막지 못했습니다."
     ),
+    "key_block_proposed": "키 {key_alias}의 LiteLLM 차단 제안이 승인을 기다립니다.",
     "siem_forward_failing": "SIEM 대상 {target}에 {minutes}분 넘게 전달하지 못했습니다.",
     "config_plaintext_secret": "LiteLLM 설정 {count}곳에 비밀이 평문으로 적혀 있습니다.",
     "call_spike": "서버 {server_id}의 {tool} 호출이 최근 {calls}건입니다(평소 {baseline_calls}건).",
@@ -187,6 +189,9 @@ def link(kind: str, subject: dict[str, Any]) -> tuple[str, str] | None:
     """관련 화면 (주소, 이름). 분명한 경우만 돌려준다."""
     subject = subject or {}
     server = subject.get("server_id")
+    if kind == "key_block_proposed" and subject.get("proposal_id"):
+        focus = quote(str(subject["proposal_id"]), safe="")
+        return f"/approvals?tab=blocks&focus={focus}", "차단 제안"
     if kind in ("approval_recert_due", "approval_recert_held", "approval_expiring"):
         return "/approvals?tab=renewals", "승인 센터"
     if kind in ("evidence_missing", "evidence_expiring") and subject.get("intake_id"):

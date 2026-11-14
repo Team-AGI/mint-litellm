@@ -29,6 +29,10 @@ CONTROL_PLANE_ALLOWED_ROUTES: tuple[str, ...] = (
     "/guardrails/list",
     "/key/update",
     "/team/update",
+    "/key/block",
+    "/key/unblock",
+    "/team/block",
+    "/team/unblock",
 )
 
 # 관리 API 응답에서 수신 즉시 버리고 저장·기록·표시하지 않는 자격 열.

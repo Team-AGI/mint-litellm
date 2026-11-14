@@ -1,0 +1,48 @@
+{% import "macros.html" as m %}
+{% if blocks %}
+<table class="clickable"><thead><tr><th>키</th><th>탐지 근거</th><th>사용자·팀</th><th>만료</th><th>상태</th></tr></thead><tbody>
+{% for b in blocks %}<tr{% if focus == b.id | string %} class="selected"{% endif %}>
+<td><a href="/approvals?tab=blocks&amp;focus={{ b.id }}">{{ b.key_alias or '—' }}</a></td>
+<td>{{ L.pick(L.KEY_BLOCK_SIGNAL, b.signal) }}</td>
+<td>{{ b.user_id or '—' }}{% if b.team_id %} · {{ b.team_id }}{% endif %}</td>
+<td class="nowrap">{{ b.expires_at | when }}</td>
+<td>{{ m.badge(L.KEY_BLOCK, b.status) }}</td>
+</tr>{% endfor %}
+</tbody></table>
+{% else %}{{ m.empty('차단 제안이 없습니다', '/alerts', '경보 보기') }}{% endif %}
+{% if focus %}{% for x in blocks if x.id | string == focus %}{% set b = x %}
+{% set v = block_view(b) %}
+{% call m.drawer('키 차단 제안', '/approvals?tab=blocks', true) %}
+<dl class="detail">
+  <dt>키</dt><dd>{{ b.key_alias or '—' }}</dd>
+  <dt>탐지 근거</dt><dd>{{ L.pick(L.KEY_BLOCK_SIGNAL, b.signal) }}{% for line in v.lines %}<div>{{ line }}</div>{% endfor %}</dd>
+  <dt>사건</dt><dd>{{ v.events }}건 <a href="/ledger?kind=decision_evaluated">기록 보기</a></dd>
+  <dt>사용자</dt><dd>{{ b.user_id or '—' }}</dd>
+  {% if b.team_id %}<dt>팀</dt><dd>{{ b.team_id }} · 키 {{ b.team_key_count if b.team_key_count is not none else '—' }}개 · 구성원 {{ b.team_member_count if b.team_member_count is not none else '—' }}명</dd>{% endif %}
+  <dt>상태</dt><dd>{{ m.badge(L.KEY_BLOCK, b.status) }}{% if v.error %} {{ v.error }}{% endif %}</dd>
+  <dt>만료</dt><dd>{{ b.expires_at | when }}</dd>
+  {% if b.decided_by %}<dt>처리</dt><dd>{{ b.decided_by | masked(64) }} · {{ b.decided_at | when }}{% if b.decision_reason %} · {{ b.decision_reason | masked }}{% endif %}</dd>{% endif %}
+  {% if b.mint_blocked %}<dt>출처</dt><dd>MINT가 제안해 차단함 · {{ b.applied_at | when }}</dd>{% endif %}
+  {% if b.unblocked_by %}<dt>해제</dt><dd>{{ b.unblocked_by | masked(64) }}{% if b.unblock_reason %} · {{ b.unblock_reason | masked }}{% endif %}</dd>{% endif %}
+</dl>
+{% if actor.role in ('admin', 'approver') and b.status == 'proposed' %}
+<form method="post" class="form">
+  {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ b.state_version }}">
+  <label>사유<input name="reason" maxlength="500"></label>
+  <div class="actions">
+    <button type="submit" formaction="/key-blocks/{{ b.id }}/approve" name="scope" value="key" class="primary" autofocus>키 차단 승인</button>
+    {% if b.team_id %}<button type="submit" formaction="/key-blocks/{{ b.id }}/approve" name="scope" value="team" class="danger">팀 전체 차단 승인</button>{% endif %}
+    <button type="submit" formaction="/key-blocks/{{ b.id }}/reject">거절</button>
+  </div>
+</form>
+{% endif %}
+{% if actor.role == 'admin' and b.status == 'applied' and b.mint_blocked %}
+<form method="post" action="/key-blocks/{{ b.id }}/unblock" class="form">
+  {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ b.state_version }}">
+  <label>해제 사유<input name="reason" required maxlength="500"></label>
+  <label><input type="checkbox" name="acknowledge" value="1"> 차단 뒤 바뀐 내용을 확인했습니다</label>
+  <div class="actions"><button type="submit">차단 해제</button></div>
+</form>
+{% endif %}
+{% endcall %}
+{% endfor %}{% endif %}
