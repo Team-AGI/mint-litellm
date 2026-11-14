@@ -1,0 +1,33 @@
+{% extends "base.html" %}{% import "macros.html" as m %}{% import "audit_macros.html" as a %}
+{% block title %}대시보드 · MINT{% endblock %}
+{% block page_class %}wide{% endblock %}
+{% block body %}
+<h1>대시보드</h1>
+<div class="filterbar">{{ a.choices('시간 범위', ranges) }}<a class="button" href="/?range={{ range }}">새로고침</a></div>
+<div class="cards">
+{% for c in cards %}{{ m.kpi(c.label, c.value, c.href, c.note, c.level, c.trend) }}{% endfor %}
+</div>
+<div class="grid">
+{{ a.panel('결정 추이', trend, trend.labels | length and trend_has_data) }}
+{{ a.panel('차단 사유', reasons, reasons['items'] | length) }}
+</div>
+<div class="grid">
+{{ a.panel('호출이 많은 서버', servers, servers.labels | length) }}
+{{ a.panel('열린 경보', alert_bars, alert_total) }}
+</div>
+<div class="grid">
+<section id="approvals">
+  <h2>승인</h2>
+  <div class="cards">
+  {% for c in approval_cards %}{{ m.kpi(c.label, c.value, c.href, c.note, c.level, c.trend) }}{% endfor %}
+  </div>
+</section>
+<section>
+  <h2>상태</h2>
+  <table><tbody>
+  {% for d in dots %}<tr><td>{{ d.name }}</td><td title="{{ d.title }}">{{ m.status_badge(d.status) }}</td></tr>{% endfor %}
+  </tbody></table>
+  {% if not dots %}{{ m.empty('보고된 상태가 없습니다', '/ledger', '호출 기록 보기') }}{% endif %}
+</section>
+</div>
+{% endblock %}

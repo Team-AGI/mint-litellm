@@ -81,8 +81,9 @@ def test_the_overview_shows_counts_and_the_decision_chart(world, admin):
         uuid.uuid4(), INSTANCE, "call:" + str(uuid.uuid4()) + ":1:decision_evaluated",
         uuid.uuid4())
     html = admin.get("/").text
-    assert "승인 대기 서버" in html and "열린 경보" in html and "운영 상태" in html
-    assert 'data-chart="' in html and "&#34;blocked&#34;: [1]" in html
+    assert "승인 대기" in html and "열린 경보(치명·높음)" in html and "차단률" in html
+    assert 'data-chart="' in html and "&#34;decision&#34;: &#34;block&#34;" in html
+    assert "&#34;data&#34;: [0, 0, 0, 0, 0, 0, 1]" in html
 
 
 def test_an_empty_list_shows_a_title_and_one_next_action(world, admin):
@@ -135,7 +136,7 @@ def test_the_overview_shows_jobs_nobody_can_handle_and_the_longest_wait(world, a
         " VALUES (gen_random_uuid(), %s, 'sync_server', 'x', NULL, now() - interval '2 hours')",
         INSTANCE)
     html = admin.get("/").text
-    assert "처리기 없는 대기 작업" in html and "최장 대기 2시간" in html
+    assert "지연 1" in html and 'title="최장 대기 2시간"' in html
 
 
 def test_ledger_csv_neutralizes_spreadsheet_formulas(world):
@@ -266,7 +267,7 @@ def test_the_overview_shows_the_litellm_grade_each_replica_reported(world, admin
     html = admin.get("/").text
     assert "LiteLLM 1.106.6 · 보장 등급 A" in html
     assert "LiteLLM 1.107.0 · 보장 등급 A · 검증되지 않은 판본" in html
-    assert "LiteLLM 1.99.0 · 보장 등급 B" in html and "없는 능력: 도구 목록 훅" in html
+    assert "LiteLLM 1.99.0 · 보장 등급 B" in html and 'title="도구 목록 훅"' in html
     assert "list_hook" not in html
 
 
@@ -279,7 +280,7 @@ def test_the_ledger_defaults_to_seven_days_and_shows_the_organisation_time_zone(
     assert "조직 생성" in html and "조회 범위" not in html
     now = datetime.now(ZoneInfo("Asia/Seoul"))
     shown = {f"{moment:%Y-%m-%d %H:%M}" for moment in (now, now - timedelta(minutes=1))}
-    assert any(f'<td class="nowrap">{text}</td>' in html for text in shown)
+    assert any(f">{text}</a></td>" in html for text in shown)
     assert "UTC" not in html and 'type="date"' not in html
     assert "/api/v1/ledger/export?format=csv" in html
 

@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from mint_litellm.console import alert_view, labels
 from mint_litellm.types.events import AlertKind
 
-from .test_screen_polish import ledger_html, render
+from .test_screen_polish import endpoints_html, ledger_html, render
 
 
 def shown(html: str) -> str:
@@ -95,7 +95,7 @@ def test_endpoint_list_shows_sandbox_and_egress_state():
         "state": "managed",
         "claude_version": "1",
         "mcp_servers": ["a"],
-        "issued_at": None,
+        "issued_at": datetime(2026, 11, 3, tzinfo=UTC),
         "reported_at": None,
         "processes": [
             {"server": "a", "sandbox": "appcontainer", "egress_unfiltered": True},
@@ -104,7 +104,7 @@ def test_endpoint_list_shows_sandbox_and_egress_state():
             {"server": "d", "sandbox": "unsupported"},
         ],
     }
-    text = shown(render("endpoints.html", rows=[row]))
+    text = shown(endpoints_html([row]))
     for want in (
         "격리됨 · 호스트 제한 미집행",
         "격리됨 · 허용 밖 접속 3건 거절",
@@ -125,14 +125,15 @@ def test_every_alert_kind_has_a_label_and_a_summary():
 def test_endpoint_list_shows_processes_running_outside_the_runner():
     row = {
         "user_id": "u", "team_id": "t", "state": "managed", "claude_version": "1",
-        "mcp_servers": [], "issued_at": None, "reported_at": None, "processes": [],
+        "mcp_servers": [], "issued_at": datetime(2026, 11, 3, tzinfo=UTC), "reported_at": None,
+        "processes": [],
         "outside_processes": [
             {"package": "left-pad", "ecosystem": "npm", "count": 2},
             {"package": "mcp-x", "ecosystem": "pypi", "count": 1},
             {"package": "img/app", "ecosystem": "container", "count": 3},
         ],
     }  # fmt: skip
-    text = shown(render("endpoints.html", rows=[row]))
+    text = shown(endpoints_html([row]))
     for want in ("left-pad (npm) 2개", "mcp-x (PyPI) 1개", "img/app (컨테이너 이미지) 3개"):
         assert want in text
     assert "pypi" not in text and "container" not in text
