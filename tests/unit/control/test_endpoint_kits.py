@@ -32,7 +32,7 @@ class Issuer:
     def __init__(self):
         self.made, self.deleted = [], []
 
-    def generate_kit_key(self, *, user_id, team_id, alias):
+    def generate_kit_key(self, *, user_id, team_id, alias, permission=None):
         self.made.append((user_id, team_id, alias))
         return f"sk-{alias}"
 

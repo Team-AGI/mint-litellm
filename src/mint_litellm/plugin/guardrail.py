@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import time
@@ -207,6 +208,15 @@ class MintGuardrail(CustomGuardrail):
                     ),
                     lambda held: runtime.judge_call(data, user_api_key_dict, timing, hold=held),
                 )
+                if (
+                    not outcome.allowed and outcome.approval_request_id
+                    and outcome.snapshot.approval_hold == "timed_out"
+                ):
+                    # 요청은 대기로 남는다. 승인자가 보는 화면에 호출자가 이미 응답받았음을 남긴다.
+                    with contextlib.suppress(Exception):
+                        await runtime.database.mark_call_hold_timeout(
+                            runtime.config.instance_id, outcome.approval_request_id
+                        )
                 # 본인 확인이 필요해 막힌 호출은 사용자가 확인할 때까지 같은 방식으로 기다린다.
                 outcome = await hold_if_confirmation_pending(
                     outcome,

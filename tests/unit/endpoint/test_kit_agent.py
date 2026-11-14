@@ -308,13 +308,16 @@ def test_a_call_without_a_server_field_is_matched_to_the_approved_server(world):
 
 def test_a_call_to_the_gateway_server_passes_the_hook_and_is_decided_inside_litellm(world):
     doc = json.loads(open(world.listing).read())
-    doc["gateways"] = ["litellm-gateway"]
+    doc["gateways"] = ["litellm_gateway"]
     open(world.listing, "w").write(json.dumps(doc))
     wire = Wire()
     for override in (
-        {"tool_name": "mcp__litellm-gateway__mslearn_search",
+        {"tool_name": "mcp__litellm_gateway__mslearn_search",
+         "mcp_server": {"name": "litellm_gateway"}},
+        {"tool_name": "mcp__litellm_gateway__mslearn_search", "mcp_server": None},  # Codex
+        {"tool_name": "mcp__litellm_gateway__mslearn_search",
          "mcp_server": {"name": "litellm-gateway"}},
-        {"tool_name": "mcp__litellm-gateway__mslearn_search", "mcp_server": None},  # Codex
+        {"tool_name": "mcp__litellm-gateway__mslearn_search", "mcp_server": None},
     ):
         decide(world, wire, **override)
     assert wire.requests == []  # 로컬 판정 요청이 없다(서버 쪽 가드레일이 판정한다)
@@ -323,21 +326,21 @@ def test_a_call_to_the_gateway_server_passes_the_hook_and_is_decided_inside_lite
     decide(world, wire)
     assert [r[2]["server"] for r in wire.requests] == ["srv-1"]
     with pytest.raises(agent.Refuse, match="no MCP server"):
-        decide(world, wire, mcp_server=None, tool_name="mcp__litellm_gateway__x")
+        decide(world, wire, mcp_server=None, tool_name="mcp__litellm_gatewayx__x")
     doc["gateways"] = []
     open(world.listing, "w").write(json.dumps(doc))
     with pytest.raises(agent.Refuse, match="no MCP server"):
-        decide(world, wire, mcp_server=None, tool_name="mcp__litellm-gateway__x")
+        decide(world, wire, mcp_server=None, tool_name="mcp__litellm_gateway__x")
 
 
 def test_a_local_server_named_like_the_gateway_is_still_decided_locally(world):
     doc = json.loads(open(world.listing).read())
-    doc["servers"]["litellm-gateway__evil"] = doc["servers"].pop("srv-1")
-    doc["gateways"] = ["litellm-gateway"]
+    doc["servers"]["litellm_gateway__evil"] = doc["servers"].pop("srv-1")
+    doc["gateways"] = ["litellm_gateway"]
     open(world.listing, "w").write(json.dumps(doc))
     wire = Wire()
-    decide(world, wire, mcp_server=None, tool_name="mcp__litellm-gateway__evil__search")
-    assert [r[2]["server"] for r in wire.requests] == ["litellm-gateway__evil"]
+    decide(world, wire, mcp_server=None, tool_name="mcp__litellm_gateway__evil__search")
+    assert [r[2]["server"] for r in wire.requests] == ["litellm_gateway__evil"]
 
 
 def test_the_hook_reads_utf8_input_whatever_the_console_encoding(world):

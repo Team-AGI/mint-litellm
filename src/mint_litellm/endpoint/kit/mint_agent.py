@@ -217,7 +217,16 @@ def update_launch(path: str | None, **fields: Any) -> None:
 
 
 def server_prefix(server: str) -> str:
-    return "mcp__" + re.sub(r"[^a-zA-Z0-9_-]", "_", server) + "__"
+    """도구 이름 접두. Codex는 서버 이름의 하이픈을 밑줄로 바꾸므로 둘을 같게 본다."""
+    return "mcp__" + re.sub(r"[^a-zA-Z0-9_]", "_", server).lower() + "__"
+
+
+def has_prefix(tool: str, server: str) -> bool:
+    return tool.replace("-", "_").lower().startswith(server_prefix(server))
+
+
+def same_server(a: str, b: str) -> bool:
+    return server_prefix(a) == server_prefix(b)
 
 
 def known_servers(path: str) -> list[str]:
@@ -249,10 +258,12 @@ def is_gateway_call(
         return False
     server = (event.get("mcp_server") or {}).get("name")
     if isinstance(server, str):
-        return server in gateways and server not in known
-    if any(name.startswith(server_prefix(s)) for s in known):
+        return any(same_server(server, g) for g in gateways) and not any(
+            same_server(server, k) for k in known
+        )
+    if any(has_prefix(name, s) for s in known):
         return False
-    return any(name.startswith(server_prefix(g)) for g in gateways)
+    return any(has_prefix(name, g) for g in gateways)
 
 
 def server_and_tool(event: Mapping[str, Any], known: Sequence[str] = ()) -> tuple[str, str]:
@@ -260,11 +271,11 @@ def server_and_tool(event: Mapping[str, Any], known: Sequence[str] = ()) -> tupl
     server = (event.get("mcp_server") or {}).get("name")
     if server is None and isinstance(name, str):
         # Codex는 서버 이름을 따로 주지 않는다. 승인된 서버 중 도구 이름의 접두와 맞는 것을 쓴다.
-        server = next((s for s in known if name.startswith(server_prefix(s))), None)
+        server = next((s for s in known if has_prefix(name, s)), None)
     if not isinstance(server, str) or not isinstance(name, str):
         raise Refuse("hook input has no MCP server or tool name")
     prefix = server_prefix(server)
-    if not name.startswith(prefix) or len(name) == len(prefix):
+    if not has_prefix(name, server) or len(name) == len(prefix):
         raise Refuse("tool name does not match the MCP server")
     return server, name[len(prefix) :]
 

@@ -100,3 +100,22 @@ def test_outcomes_list_only_the_users_own_decided_requests_after_the_cursor(worl
     assert nothing == [] and again == []
     assert [(i["tool"], i["outcome"]) for i in found] == [("search", "approved")]
     assert set(found[0]) == {"server", "tool", "outcome", "reason", "at"} and waiting
+
+
+def test_a_timed_out_hold_is_noted_on_the_pending_request_and_nothing_else_changes(world):
+    scene, dsn = world
+
+    async def body(live):
+        call_id = await live.request_call_approval(params(scene))
+        await live.mark_call_hold_timeout(scene.iid, call_id)
+        return call_id
+
+    call_id = with_database(dsn, body)
+    status, noted = scene.conn.execute(
+        "SELECT status, hold_timed_out_at FROM mint.call_approvals WHERE id = %s", (call_id,)
+    ).fetchone()
+    assert status == "pending" and noted is not None
+    from mint_litellm.control.services import reads
+
+    row = reads.call_approvals(scene.conn, scene.iid, only_id=call_id)[0]
+    assert row["hold_timed_out_at"] is not None

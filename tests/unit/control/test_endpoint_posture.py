@@ -199,7 +199,7 @@ CONTRACT = ExecContract(
 
 
 class Issuer:
-    def generate_kit_key(self, *, user_id, team_id, alias):
+    def generate_kit_key(self, *, user_id, team_id, alias, permission=None):
         return f"sk-{alias}"
 
     def delete_kit_keys(self, aliases):
