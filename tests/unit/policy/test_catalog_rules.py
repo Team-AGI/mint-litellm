@@ -79,16 +79,20 @@ def _defined_names(path: Path) -> set[str]:
 
 
 def test_enforcing_locations_point_inside_files_that_exist():
-    """경로:줄 또는 경로::이름(함수·클래스·대입 이름) 형식. 이름 형식은 줄이 밀려도 유지된다."""
+    """파이썬 파일은 경로::이름(함수·클래스·대입 이름)만 쓴다. 줄 번호는 편집에 밀려 어긋난다.
+    파이썬이 아닌 파일(rego·sql 등)만 경로:줄을 쓸 수 있고, 그 줄은 비어 있지 않아야 한다."""
     for policy in _policies():
         for ref in policy["enforced_by"]:
             if "::" in ref:
                 path, _, symbol = ref.partition("::")
+                assert path.endswith(".py"), (policy["id"], ref)
                 assert symbol in _defined_names(ROOT / path), (policy["id"], ref)
                 continue
             path, _, line = ref.rpartition(":")
+            assert not path.endswith(".py"), (policy["id"], ref, "파이썬은 경로::이름으로 쓴다")
             lines = (ROOT / path).read_text(encoding="utf-8").splitlines()
             assert 1 <= int(line) <= len(lines), (policy["id"], ref)
+            assert lines[int(line) - 1].strip(), (policy["id"], ref)
 
 
 def test_the_five_class_count_is_pinned():
