@@ -146,7 +146,8 @@ def test_a_viewer_cannot_list_operators_and_the_list_has_no_secrets(world):
                  403, AdminCode.FORBIDDEN)
     rows = world.client.get("/api/v1/operators", headers=bearer("approver")).json()["items"]
     assert {r["name"] for r in rows} == {"admin", "approver", "viewer"}
-    assert all(set(r) == {"name", "role", "user_id", "expires_at", "state_version"} for r in rows)
+    keys = {"name", "role", "user_id", "expires_at", "state_version", "slack_user"}
+    assert all(set(r) == keys for r in rows)
 
 
 def test_a_session_carries_the_operators_role_into_the_services(world):
