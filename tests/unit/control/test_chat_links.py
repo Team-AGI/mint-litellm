@@ -166,3 +166,14 @@ def test_dormant_approvals_are_counted_per_server():
     rows = [{"server_id": "a"}, {"server_id": "b"}, {"server_id": "a"}]
     assert dormant.by_server(rows) == {"a": 2, "b": 1}
     assert dormant.key_for("a") == "approval_dormant:a"
+
+
+def test_chat_messages_carry_the_tool_action_and_preview_of_an_approval_request():
+    row = {**ROW, "subject": {**ROW["subject"], "action": "write", "preview": "path=/tmp/a"}}
+    slack = json.loads(webhook.build_body(row, None, "slack", LINK))
+    texts = [f["text"] for f in slack["blocks"][2]["fields"]]
+    assert "*도구*\nread" in texts and "*동작*\nwrite" in texts and "*인자*\npath=/tmp/a" in texts
+    teams = json.loads(webhook.build_body(row, None, "teams", LINK))
+    facts = teams["attachments"][0]["content"]["body"][2]["facts"]
+    assert {"title": "인자", "value": "path=/tmp/a"} in facts
+    assert {"title": "도구", "value": "read"} in facts

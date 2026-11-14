@@ -4,8 +4,17 @@
 <h1>호출별 승인 요청</h1>
 {% if focus %}<p><a class="button" href="/call-approvals">전체 보기</a></p>{% endif %}
 {% if rows %}
-<table><thead><tr><th>서버</th><th>도구</th><th>요청 내용</th><th>주체</th><th>요청 시각</th><th>만료</th><th>사용 기간</th><th>상태</th><th></th></tr></thead><tbody>
+{% if actor.role != 'viewer' and rows | selectattr('status', 'equalto', 'pending') | list | length > 1 %}
+<form method="post" id="bulk" class="actions">{{ m.csrf(actor) }}
+  <select name="window_minutes" aria-label="선택 항목 사용 기간"><option value="0">1회</option><option value="10">10분</option><option value="30" selected>30분</option></select>
+  <button type="submit" class="primary" formaction="/call-approvals/bulk/approve">선택 승인</button>
+  <input type="text" name="reason" maxlength="500" aria-label="선택 항목 거부 사유">
+  <button type="submit" formaction="/call-approvals/bulk/reject">선택 거부</button>
+</form>
+{% endif %}
+<table><thead><tr><th></th><th>서버</th><th>도구</th><th>요청 내용</th><th>주체</th><th>요청 시각</th><th>만료</th><th>사용 기간</th><th>상태</th><th></th></tr></thead><tbody>
 {% for c in rows %}<tr{% if focus %} class="selected"{% endif %}>
+<td>{% if c.status == 'pending' and actor.role != 'viewer' %}<input type="checkbox" name="ids" form="bulk" value="{{ c.id }}:{{ c.state_version }}" aria-label="선택">{% endif %}</td>
 <td><a href="/servers/{{ c.server_id | urlencode }}">{{ c.server_id }}</a></td><td>{{ c.tool }}</td>
 <td>{% if c.target or c.action or c.display %}<dl class="detail">
 {% if c.target %}<dt>대상</dt><dd>{{ c.target | masked }}</dd>{% endif %}
@@ -13,18 +22,20 @@
 {% for k, v in (c.display or {}).items() %}<dt>{{ k | masked(64) }}</dt><dd>{{ v | masked }}</dd>{% endfor %}
 </dl>{% else %}—{% endif %}{% if c.decision_reason %}<p>거부 사유: {{ c.decision_reason | masked }}</p>{% endif %}</td>
 <td>{{ L.pick(L.PRINCIPAL, c.principal_type) }} {{ c.principal_id }}</td>
-<td class="nowrap">{{ c.requested_at | when if c.requested_at else '—' }}</td>
+<td class="nowrap">{{ c.requested_at | when if c.requested_at else '—' }}{% if c.status == 'pending' and c.age_seconds is not none %}<br>{{ c.age_seconds | span }} 경과{% endif %}</td>
 <td class="nowrap">{{ (c.valid_until or c.expires_at) | when }}</td>
-<td class="nowrap">{% if c.window_minutes %}{{ c.window_minutes }}분{% if c.status == 'approved' %} · 남은 {{ c.remaining_seconds | span }}{% endif %} · {{ c.uses }}회 사용{% else %}1회{% endif %}</td><td>{{ m.badge(L.CALL_APPROVAL, c.status) }}{% if c.approved_by and c.approved_by.startswith('rule:') %} · 규칙 {{ c.approved_by[5:13] }}{% endif %}</td>
+<td class="nowrap">{% if c.window_minutes %}{{ c.window_minutes }}분{% if c.status == 'approved' %} · 남은 {{ c.remaining_seconds | span }}{% endif %} · {{ c.uses }}회 사용{% if c.approved_by and c.approved_by.startswith('rule:') %} · 규칙 {{ c.approved_by[5:13] }}{% endif %}{% if c.extended_at %} · 연장됨({{ c.extended_by | masked(64) }}){% endif %}{% else %}1회{% endif %}</td><td>{{ m.badge(L.CALL_APPROVAL, c.status) }}</td>
 <td>{% if actor.role != 'viewer' and c.status in ('pending', 'approved') %}
 <form method="post" class="actions">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ c.state_version }}">
   {% if c.status == 'pending' %}
-  <select name="window_minutes" aria-label="사용 기간"><option value="0">1회</option><option value="10">10분</option><option value="30">30분</option></select>
-  <button type="submit" class="primary" formaction="/call-approvals/{{ c.id }}/approve">승인</button>
+  {% if c.action_type in one_shot %}<select name="window_minutes" aria-label="사용 기간"><option value="0" selected>1회(이 동작은 1회만)</option></select>
+  {% else %}<select name="window_minutes" aria-label="사용 기간"><option value="0">1회</option><option value="10">10분</option><option value="30" selected>30분</option></select>{% endif %}
+  <button type="submit" class="primary" formaction="/call-approvals/{{ c.id }}/approve"{% if focus %} autofocus{% endif %}>승인</button>
   <input type="text" name="reason" maxlength="500" aria-label="거부 사유">
   <button type="submit" formaction="/call-approvals/{{ c.id }}/reject">거부</button>
   {% endif %}
+  {% if c.can_extend %}<button type="submit" formaction="/call-approvals/{{ c.id }}/extend">{{ c.window_minutes }}분 연장</button>{% endif %}
   <button type="submit" formaction="/call-approvals/{{ c.id }}/cancel">취소</button>
 </form>{% endif %}</td>
 </tr>{% endfor %}

@@ -16,6 +16,7 @@ from mint_litellm.console.core import STATUS, Actor, page_actor, require_csrf
 from mint_litellm.console.templating import render
 from mint_litellm.control import dormant, endpoint_kits, jobs, links, org_suggest
 from mint_litellm.control import status as control_status
+from mint_litellm.control.approvals import DEFAULT_CALL_WINDOW
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import alerts as alert_service
 from mint_litellm.control.services import allowlists as allowlist_service
@@ -35,6 +36,7 @@ from mint_litellm.control.services import renewals as renewal_service
 from mint_litellm.control.services import servers as server_service
 from mint_litellm.control.services import settings as settings_service
 from mint_litellm.types.cli_commands import OperatorRole
+from mint_litellm.types.contracts import ONE_SHOT_ACTIONS
 from mint_litellm.types.settings import Mode
 
 router = APIRouter(dependencies=[Depends(require_csrf)])
@@ -466,7 +468,7 @@ def calls_page(request: Request, actor: Actor, error=None, status=200):
     rules = reads.call_approval_rules(actor.conn, actor.instance) if not focus else []
     return render(request, "call_approvals.html",
                   {"rows": rows, "rules": rules, "orgs": reads.orgs(actor.conn, actor.instance),
-                   "error": error, "focus": focus},
+                   "error": error, "focus": focus, "one_shot": ONE_SHOT_ACTIONS},
                   actor=actor, status=status)
 
 
@@ -516,6 +518,54 @@ def disable_call_approval_rule(
     )
 
 
+@router.post("/call-approvals/bulk/{decision}")
+def decide_calls(
+    decision: str,
+    request: Request,
+    ids: list[str] = Form(default=[]),
+    window_minutes: int = Form(DEFAULT_CALL_WINDOW),
+    reason: str = Form(""),
+    actor: Actor = Depends(page_actor),
+):
+    """선택한 대기 요청을 한 번에 승인·거부한다. 항목 값은 ``<식별자>:<상태 버전>``이다.
+
+    승인은 선택한 기간을 쓰되 1회만 되는 동작(쓰기 등)의 요청은 1회로 승인한다.
+    """
+
+    def action():
+        if decision not in ("approve", "reject"):
+            raise AdminError(AdminCode.NOT_FOUND, "알 수 없는 동작입니다.")
+        if not ids:
+            raise ControlError("선택한 요청이 없습니다.")
+        one_shot = {
+            str(r["id"]) for r in reads.call_approvals(actor.conn, actor.instance, status="pending")
+            if r["action_type"] in ONE_SHOT_ACTIONS
+        }
+        failed = []
+        for item in ids:
+            call_id, _, version = item.rpartition(":")
+            try:
+                if decision == "approve":
+                    call_approval_service.approve(
+                        actor.ctx, call_id, None, expected_version=int(version),
+                        window_minutes=None if call_id in one_shot else window_minutes or None,
+                    )
+                else:
+                    call_approval_service.reject(
+                        actor.ctx, call_id, expected_version=int(version), reason=reason
+                    )
+            except (ControlError, ValueError) as error:
+                failed.append(str(error))
+        if failed:
+            actor.conn.commit()  # 처리된 항목은 남기고 실패한 항목만 알린다
+            done = len(ids) - len(failed)
+            raise ControlError(f"{done}건 처리, {len(failed)}건 실패: {failed[0]}")
+
+    ok = {"approve": "call_approved", "reject": "call_rejected"}
+    return act(actor, action, ok.get(decision, "call_approved"), "/call-approvals",
+               lambda **kw: calls_page(request, actor, **kw))
+
+
 @router.post("/call-approvals/{call_id}/{decision}")
 def decide_call(
     call_id: str,
@@ -523,7 +573,7 @@ def decide_call(
     request: Request,
     state_version: int = Form(...),
     second_approver_token: str = Form(""),
-    window_minutes: int = Form(0),
+    window_minutes: int = Form(DEFAULT_CALL_WINDOW),
     reason: str = Form(""),
     actor: Actor = Depends(page_actor),
 ):
@@ -540,10 +590,13 @@ def decide_call(
             )
         elif decision == "cancel":
             call_approval_service.cancel(actor.ctx, call_id, expected_version=state_version)
+        elif decision == "extend":
+            call_approval_service.extend(actor.ctx, call_id, expected_version=state_version)
         else:
             raise AdminError(AdminCode.NOT_FOUND, "알 수 없는 동작입니다.")
 
-    ok = {"approve": "call_approved", "reject": "call_rejected", "cancel": "call_cancelled"}
+    ok = {"approve": "call_approved", "reject": "call_rejected", "cancel": "call_cancelled",
+          "extend": "call_extended"}
     return act(actor, action, ok.get(decision, "call_approved"), "/call-approvals",
                lambda **kw: calls_page(request, actor, **kw))
 

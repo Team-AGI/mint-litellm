@@ -20,6 +20,10 @@ APPROVAL_GUIDANCE = (
     "관리자 승인이 필요합니다. 승인된 뒤 같은 작업을 다시 요청하십시오. "
     "승인 범위·기간 안에서 정책을 다시 검사합니다."
 )
+# 사용자 본인 확인이 필요한 호출. 확인 링크를 연 사람이 본인일 때만 확인된다.
+CONFIRMATION_GUIDANCE = (
+    "본인 확인이 필요합니다. 링크에서 확인한 뒤 같은 작업을 다시 요청하십시오."
+)
 # 관리자가 거부한 호출의 재시도. 실행되지 않았고, 되풀이하지 말고 사용자에게 알려야 한다.
 DENIAL_GUIDANCE = (
     "관리자가 이 호출을 거부해 실행되지 않았습니다. 같은 작업을 되풀이하지 말고 사용자에게 "
@@ -55,6 +59,8 @@ class MintError(BaseModel):
     previous_expired: bool = False
     # 호출자(에이전트)가 취할 다음 행동 안내. 승인 대기 오류에만 있다.
     guidance: str | None = None
+    # 본인 확인 화면으로 가는 서명된 단기 링크. 본인 확인 요청을 열었을 때만 있다.
+    confirm_link: str | None = None
 
     @model_validator(mode="after")
     def _retry_only_before_dispatch(self) -> Self:
@@ -80,6 +86,8 @@ class MintError(BaseModel):
             body["previous_expired"] = True
         if self.guidance is not None:
             body["guidance"] = self.guidance
+        if self.confirm_link is not None:
+            body["confirm_link"] = self.confirm_link
         return json.dumps(
             body,
             ensure_ascii=False,
@@ -135,12 +143,17 @@ def error_for_reason(
             reference=reference,
             guidance=APPROVAL_GUIDANCE,
         )
+    guidance = {
+        Reason.CALL_APPROVAL_DENIED: DENIAL_GUIDANCE,
+        Reason.CONFIRMATION_REQUIRED: CONFIRMATION_GUIDANCE,
+        Reason.CONFIRMATION_STALE: CONFIRMATION_GUIDANCE,
+    }.get(family)
     return MintError(
         code=error_code(reason_code),
         dispatch_state=DispatchState.NOT_DISPATCHED,
         retry_safe=False,
         reference=reference,
-        guidance=DENIAL_GUIDANCE if family is Reason.CALL_APPROVAL_DENIED else None,
+        guidance=guidance,
     )
 
 

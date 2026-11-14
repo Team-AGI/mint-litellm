@@ -474,6 +474,7 @@ NOTICES = {
     "call_cancelled": "승인 요청을 취소했습니다.",
     "rule_added": "상시 승인 규칙을 만들었습니다.",
     "rule_disabled": "상시 승인 규칙을 해제했습니다.",
+    "call_extended": "승인 기간을 한 번 연장했습니다.",
     "org_added": "조직을 생성했습니다.",
     "org_closed": "조직을 닫았습니다.",
     "org_suggestion_applied": "조직 연결 제안을 적용했습니다.",

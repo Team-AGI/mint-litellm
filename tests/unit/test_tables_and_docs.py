@@ -130,6 +130,7 @@ def test_command_roles_follow_the_operator_role_model():
         "call-approval approve",
         "call-approval reject",
         "call-approval cancel",
+        "call-approval extend",
         "contract reapprove",
         "intake approve",
         "intake reject",

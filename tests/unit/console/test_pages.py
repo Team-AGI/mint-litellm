@@ -560,3 +560,64 @@ def test_org_suggestions_are_listed_and_applied_or_ignored_by_an_admin(world, ad
     assert world.query(status, third)[0][0] == "applied"
     assert world.query(status, second)[0][0] == "ignored"
     assert "조직 연결 제안" not in admin.get("/admin").text
+
+
+def _pending_calls(world, count=2):
+    world.query(
+        "INSERT INTO mint.policy_versions (instance_id, id, catalog_sha256, bundle_sha256)"
+        " VALUES (%s, 'v1', %s, %s) ON CONFLICT DO NOTHING", INSTANCE, "ab" * 32, "ab" * 32)
+    ids = []
+    for n in range(count):
+        call_id = str(uuid.uuid4())
+        ids.append(call_id)
+        world.query(
+            "INSERT INTO mint.call_approvals (id, instance_id, org_id, principal_type,"
+            " principal_id, server_id, tool, args_fp, fp_key_version, policy_version_id, status,"
+            " requested_by, expires_at) VALUES (%s, %s, 'acme', 'user', 'human-7', 'srv-ok',"
+            " 'echo', %s, 1, 'v1', 'pending', 'someone', now() + interval '1 hour')",
+            call_id, INSTANCE, f"{n:02x}" * 32)
+    return ids
+
+
+def test_the_pending_queue_defaults_to_thirty_minutes_and_shows_the_age(world, admin):
+    ids = _pending_calls(world)
+    html = admin.get("/call-approvals").text
+    assert html.count('<option value="30" selected>') == 3  # 행 2개와 일괄 처리
+    assert "선택 승인" in html and "경과" in html
+    assert "autofocus" in admin.get("/call-approvals?focus=" + ids[0]).text
+
+
+def test_bulk_approval_uses_the_default_window_for_every_selected_row(world, admin):
+    ids = _pending_calls(world)
+    rows = world.query("SELECT id, state_version FROM mint.call_approvals")
+    response = form_post(world, admin, "/call-approvals/bulk/approve",
+                         ids=[f"{r[0]}:{r[1]}" for r in rows], window_minutes="30")
+    assert response.status_code == 303
+    result = world.query("SELECT status, window_minutes FROM mint.call_approvals")
+    assert sorted(result) == [("approved", 30)] * len(ids)
+
+
+def test_bulk_rejection_keeps_the_reason_and_reports_a_failed_row(world, admin):
+    ids = _pending_calls(world)
+    rows = world.query("SELECT id, state_version FROM mint.call_approvals ORDER BY id")
+    items = [f"{r[0]}:{r[1]}" for r in rows] + [f"{uuid.uuid4()}:1"]
+    response = form_post(world, admin, "/call-approvals/bulk/reject", ids=items, reason="범위 밖")
+    assert response.status_code == 404 or "1건 실패" in response.text
+    result = world.query("SELECT status, decision_reason FROM mint.call_approvals")
+    assert sorted(result) == [("rejected", "범위 밖")] * len(ids)
+
+
+def test_an_active_window_near_its_end_shows_an_extend_button_that_works_once(world, admin):
+    (call_id,) = _pending_calls(world, 1)
+    version = world.query("SELECT state_version FROM mint.call_approvals")[0][0]
+    form_post(world, admin, f"/call-approvals/{call_id}/approve",
+              state_version=version, window_minutes="10")
+    assert "10분 연장" in admin.get("/call-approvals").text
+    version = world.query("SELECT state_version FROM mint.call_approvals")[0][0]
+    ok = form_post(world, admin, f"/call-approvals/{call_id}/extend", state_version=version)
+    assert ok.status_code == 303
+    assert world.query("SELECT extended_by FROM mint.call_approvals")[0][0] is not None
+    assert "10분 연장" not in admin.get("/call-approvals").text
+    version = world.query("SELECT state_version FROM mint.call_approvals")[0][0]
+    again = form_post(world, admin, f"/call-approvals/{call_id}/extend", state_version=version)
+    assert again.status_code >= 400

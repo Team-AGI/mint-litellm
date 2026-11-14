@@ -21,7 +21,7 @@ log = logging.getLogger("mint_litellm.approval_hold")
 
 FIRST_POLL_SECONDS = 0.25
 MAX_POLL_SECONDS = 2.0
-_APPROVED = frozenset({"approved", "consumed"})
+_APPROVED = frozenset({"approved", "consumed", "confirmed"})
 
 
 async def hold_for_decision(
@@ -73,4 +73,26 @@ async def hold_if_pending(
     if outcome.allowed or outcome.approval_request_id is None or seconds <= 0:
         return outcome
     held = await hold_for_decision(outcome.approval_request_id, seconds, status, **clock)
+    return await rejudge(held)
+
+
+async def hold_if_confirmation_pending(
+    outcome: Outcome,
+    seconds: float,
+    status: Callable[[tuple[str, str, str, str]], Awaitable[str | None]],
+    rejudge: Callable[[tuple[str, int]], Awaitable[Outcome]],
+    **clock: Any,
+) -> Outcome:
+    """본인 확인을 기다리는 거절이면 사용자가 확인할 때까지 붙잡은 뒤 판정을 다시 돌린다.
+
+    확인은 평소처럼 소비되고 모든 검사를 다시 거친다. 기다림만 승인 대기와 같은 방식이다.
+    """
+    wait = outcome.confirmation_wait
+    if outcome.allowed or wait is None or seconds <= 0:
+        return outcome
+
+    async def read(_: str) -> str | None:
+        return await status(wait)
+
+    held = await hold_for_decision("confirmation", seconds, read, **clock)
     return await rejudge(held)

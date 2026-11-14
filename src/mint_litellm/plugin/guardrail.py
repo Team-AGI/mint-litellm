@@ -30,7 +30,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 
 from mint_litellm.compat import litellm_1_106 as compat
 from mint_litellm.endpoint.decide import install_from_env
-from mint_litellm.plugin.approval_hold import hold_if_pending
+from mint_litellm.plugin.approval_hold import hold_if_confirmation_pending, hold_if_pending
 from mint_litellm.plugin.code_exec import code_execution
 from mint_litellm.plugin.logger import MintLogger, internal_block
 from mint_litellm.plugin.provider_mcp import external_mcp, is_realtime
@@ -173,6 +173,15 @@ class MintGuardrail(CustomGuardrail):
                     runtime.config.approval_hold_seconds,
                     lambda call_id: runtime.database.call_approval_status(
                         runtime.config.instance_id, call_id
+                    ),
+                    lambda held: runtime.judge_call(data, user_api_key_dict, timing, hold=held),
+                )
+                # 본인 확인이 필요해 막힌 호출은 사용자가 확인할 때까지 같은 방식으로 기다린다.
+                outcome = await hold_if_confirmation_pending(
+                    outcome,
+                    runtime.config.approval_hold_seconds,
+                    lambda wait: runtime.database.confirmation_status(
+                        runtime.config.instance_id, wait
                     ),
                     lambda held: runtime.judge_call(data, user_api_key_dict, timing, hold=held),
                 )
