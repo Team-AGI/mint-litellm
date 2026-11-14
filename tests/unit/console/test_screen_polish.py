@@ -31,6 +31,17 @@ def render(name: str, **context) -> str:
     return templates.get_template(name).render({**base, **context})
 
 
+def endpoints_html(rows, **context) -> str:
+    """엔드포인트 화면. 첫 줄의 드로어를 연 상태로 그린다."""
+    from mint_litellm.console.pages.endpoints_admin import STATES, VIOLATIONS, endpoint_view
+
+    view = endpoint_view(rows, [], datetime(2026, 11, 4, tzinfo=UTC))
+    return render(
+        "endpoints.html", **view, tab="installs", state="", STATES=STATES, VIOLATIONS=VIOLATIONS,
+        selected=view["rows"][0] if rows else None, **context,
+    )
+
+
 def ledger_html(rows=(), **context) -> str:
     return render(
         "ledger.html", rows=list(rows), filters={"kinds": ["decision_evaluated"], "actors": [
@@ -214,16 +225,19 @@ def test_the_endpoint_install_screens_show_korean_states_only():
          "reported_at": None}
         for state in ("managed", "user", "pending", "removed", "revoked")
     ]  # fmt: skip
-    for name in ("endpoints.html", "staff_endpoint.html"):
-        html = render(name, rows=rows, active=True)
+    pages = {
+        "endpoints.html": endpoints_html(rows),
+        "staff_endpoint.html": render("staff_endpoint.html", rows=rows, active=True),
+    }
+    for name, html in pages.items():
         for text in ("관리형", "관리되지 않음", "보고 전", "제거됨", "연결 해제"):
             assert text in html, (name, text)
         for enum in ("managed", "pending", "removed", "revoked"):
             assert enum not in html, (name, enum)
-    assert "team-a" in render("endpoints.html", rows=rows)
-    assert "team-a" in render("staff_endpoint.html", rows=rows, active=True)
-    assert "설치 묶음 내려받기" in render("staff_endpoint.html", rows=[], active=False)
-    assert "다시 내려받기" in render("staff_endpoint.html", rows=rows, active=True)
+        assert "team-a" in html
+    assert "설치 묶음 받기" in render("staff_endpoint.html", rows=[], active=False)
+    assert "설치 묶음 다시 받기" in pages["staff_endpoint.html"]
+    assert "./install.sh" not in pages["staff_endpoint.html"]
 
 
 # --- 경보 화면 --------------------------------------------------------------------------------
@@ -342,11 +356,8 @@ SENTENCE = re.compile(r"<(p|small)\b[^>]*>(.*?)</\1>", re.S)
 LONG_SENTENCE_ALLOWED = {
     "call_approvals.html": 1,
     "contract_detail.html": 1,
-    "endpoint_mcp.html": 1,
     "intake_detail.html": 1,
     "server_detail.html": 3,
-    "staff_confirmations.html": 1,
-    "staff_endpoint.html": 1,
 }
 
 

@@ -1,5 +1,6 @@
-"""단말 설치·운영자·조직 화면."""
+"""엔드포인트·운영자·조직 화면."""
 
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Form, Request
 
@@ -16,31 +17,104 @@ from mint_litellm.types.cli_commands import OperatorRole
 router = APIRouter(dependencies=[Depends(require_csrf)])
 
 
-# --- 단말 설치 -------------------------------------------------------------------------------
+# --- 엔드포인트 -------------------------------------------------------------------------------
+
+STALE = timedelta(hours=24)
+STATES = {"applied": "적용", "unapplied": "미적용", "stale": "보고 끊김", "violation": "격리 위반"}
+DECISION = {"applied": "allow", "unapplied": "block", "stale": "approve"}
+VIOLATIONS = (
+    ("sandbox", "격리 없음"), ("egress", "호스트 제한 미집행"), ("outside", "실행기 밖 실행"),
+)
+
+
+def violations(row: dict) -> set[str]:
+    """단말이 보고한 격리 위반의 종류."""
+    found = set()
+    for p in row.get("processes") or []:
+        if p.get("sandbox") in ("none", "unsupported"):
+            found.add("sandbox")
+        if p.get("egress_unfiltered"):
+            found.add("egress")
+    if row.get("outside_processes"):
+        found.add("outside")
+    return found
+
+
+def classify(row: dict, now: datetime) -> str | None:
+    """적용·미적용·보고 끊김. 해제·제거된 단말은 집계에서 뺀다."""
+    if row["state"] in ("revoked", "removed"):
+        return None
+    if row["state"] == "user":
+        return "unapplied"
+    reported = row["reported_at"]
+    return "stale" if reported is None or now - reported > STALE else "applied"
+
+
+def endpoint_view(rows: list[dict], mcp: list[dict], now: datetime) -> dict:
+    live = []
+    for r in rows:
+        r["group"] = classify(r, now)
+        r["violations"] = violations(r) if r["group"] else set()
+        r["ref"] = f"{r['user_id']}|{r['issued_at']}"
+        if r["group"]:
+            live.append(r)
+    count = {k: sum(r["group"] == k for r in live) for k in DECISION}
+    count["violation"] = sum(bool(r["violations"]) for r in live)
+    link = "/endpoints?tab=installs&state="
+    donut = {"items": [
+        {"name": STATES[k], "value": count[k], "decision": DECISION[k], "href": link + k}
+        for k in DECISION
+    ]}
+    kinds = {k: sum(k in r["violations"] for r in live) for k, _ in VIOLATIONS}
+    bars = {
+        "labels": [label for _, label in VIOLATIONS], "values": list(kinds.values()),
+        "horizontal": True, "links": [link + "violation"] * len(VIOLATIONS),
+    }
+    return {"rows": rows, "count": count, "mcp": mcp, "donut": donut, "bars": bars}
 
 
 @router.get("/endpoints")
 def endpoints(request: Request, actor: Actor = Depends(page_actor)):
-    if request.query_params.get("tab") == "local-mcp":
-        rows = endpoint_kits.local_mcp_inventory(actor.conn, actor.instance)
-        return render(request, "endpoint_mcp.html", {"rows": rows}, actor=actor)
-    rows = endpoint_kits.installs(actor.conn, actor.instance)
-    return render(request, "endpoints.html", {"rows": rows}, actor=actor)
+    view = endpoint_view(
+        endpoint_kits.installs(actor.conn, actor.instance),
+        endpoint_kits.local_mcp_inventory(actor.conn, actor.instance),
+        datetime.now(UTC),
+    )
+    tab = "local-mcp" if request.query_params.get("tab") == "local-mcp" else "installs"
+    state = request.query_params.get("state", "")
+    if state in STATES:
+        view["rows"] = [
+            r for r in view["rows"]
+            if (bool(r["violations"]) if state == "violation" else r["group"] == state)
+        ]
+    opened = request.query_params.get("open")
+    selected = next((r for r in view["rows"] if r["ref"] == opened), None) if opened else None
+    ctx = {**view, "tab": tab, "state": state if state in STATES else "", "STATES": STATES,
+           "VIOLATIONS": VIOLATIONS, "selected": selected}
+    return render(request, "endpoints.html", ctx, actor=actor)
 
 
-# --- 운영자·조직·허용 목록 ---------------------------------------------------------------------
+# --- 운영자·조직 -------------------------------------------------------------------------------
 
 
-def admin_page(request: Request, actor: Actor, error=None, status=200):
+def admin_page(request: Request, actor: Actor, error=None, status=200, tab=None):
+    tab = tab or request.query_params.get("tab")
+    operators = [] if actor.role == "viewer" else reads.operators(actor.conn, actor.instance)
+    soon = datetime.now(UTC) + timedelta(days=7)
     ctx = {
-        "operators": [] if actor.role == "viewer" else reads.operators(actor.conn, actor.instance),
+        "operators": operators,
+        "expiring": sum(1 for o in operators if o["expires_at"] and o["expires_at"] < soon),
         "orgs": reads.orgs(actor.conn, actor.instance),
         "bindings": reads.bindings(actor.conn, actor.instance),
         "suggestions": org_service.list_suggestions(actor.ctx),
-        "allowlists": reads.allowlists(actor.conn, actor.instance),
+        "tab": tab if tab in ("orgs", "suggestions") else "operators",
         "error": error,
     }
     return render(request, "admin.html", ctx, actor=actor, status=status)
+
+
+def tabbed(request: Request, actor: Actor, tab: str):
+    return lambda **kw: admin_page(request, actor, tab=tab, **kw)
 
 
 @router.get("/admin")
@@ -61,7 +135,8 @@ def set_operator_role(
         lambda: operator_service.set_role(
             actor.ctx, name, OperatorRole(role), expected_version=state_version
         ),
-        "operator_role", "/admin", lambda **kw: admin_page(request, actor, **kw),
+        "operator_role", "/admin?tab=operators",
+        tabbed(request, actor, "operators"),
     )
 
 
@@ -77,8 +152,8 @@ def remove_operator(
         api.confirm(name, confirm_name, "운영자")
         operator_service.remove(actor.ctx, name, expected_version=state_version)
 
-    return act(actor, action, "operator_removed", "/admin",
-               lambda **kw: admin_page(request, actor, **kw))
+    return act(actor, action, "operator_removed", "/admin?tab=operators",
+               tabbed(request, actor, "operators"))
 
 
 @router.post("/orgs")
@@ -88,8 +163,8 @@ def add_org(
     name: str = Form(...),
     actor: Actor = Depends(page_actor),
 ):
-    return act(actor, lambda: org_service.add(actor.ctx, org_id, name), "org_added", "/admin",
-               lambda **kw: admin_page(request, actor, **kw))
+    return act(actor, lambda: org_service.add(actor.ctx, org_id, name), "org_added",
+               "/admin?tab=orgs", tabbed(request, actor, "orgs"))
 
 
 @router.post("/org-suggestions/rule")
@@ -101,8 +176,8 @@ def apply_org_suggestion_rule(
             raise ValueError(rule)
         org_service.apply_rule(actor.ctx, rule)
 
-    return act(actor, action, "org_suggestions_applied", "/admin",
-               lambda **kw: admin_page(request, actor, **kw))
+    return act(actor, action, "org_suggestions_applied", "/admin?tab=suggestions",
+               tabbed(request, actor, "suggestions"))
 
 
 @router.post("/org-suggestions/{suggestion_id}/apply")
@@ -110,7 +185,8 @@ def apply_org_suggestion(
     suggestion_id: str, request: Request, actor: Actor = Depends(page_actor)
 ):
     return act(actor, lambda: org_service.apply_suggestion(actor.ctx, suggestion_id),
-               "org_suggestion_applied", "/admin", lambda **kw: admin_page(request, actor, **kw))
+               "org_suggestion_applied", "/admin?tab=suggestions",
+               tabbed(request, actor, "suggestions"))
 
 
 @router.post("/org-suggestions/{suggestion_id}/ignore")
@@ -118,7 +194,8 @@ def ignore_org_suggestion(
     suggestion_id: str, request: Request, actor: Actor = Depends(page_actor)
 ):
     return act(actor, lambda: org_service.ignore_suggestion(actor.ctx, suggestion_id),
-               "org_suggestion_ignored", "/admin", lambda **kw: admin_page(request, actor, **kw))
+               "org_suggestion_ignored", "/admin?tab=suggestions",
+               tabbed(request, actor, "suggestions"))
 
 
 @router.post("/orgs/{org_id}/close")
@@ -133,4 +210,5 @@ def close_org(
         api.confirm(org_id, confirm_name, "조직")
         org_service.close(actor.ctx, org_id, expected_version=state_version)
 
-    return act(actor, action, "org_closed", "/admin", lambda **kw: admin_page(request, actor, **kw))
+    return act(actor, action, "org_closed", "/admin?tab=orgs",
+               tabbed(request, actor, "orgs"))

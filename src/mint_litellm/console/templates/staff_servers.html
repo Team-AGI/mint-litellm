@@ -1,14 +1,57 @@
 {% extends "staff_base.html" %}{% import "macros.html" as m %}
-{% block title %}사용 가능한 서버·도구 · MINT{% endblock %}
+{% block title %}내 서버 · MINT{% endblock %}
 {% block body %}
-<h1>사용 가능한 서버·도구</h1>
-{% if rows %}
-<table><thead><tr><th>서버</th><th>조직</th><th>전송</th><th>인증</th><th>도구</th><th>승인 만료</th></tr></thead><tbody>
+<h1>내 서버</h1>
+<div class="cards">
+  {{ m.kpi('사용 가능', rows | selectattr('tools') | list | length) }}
+  {{ m.kpi('동의 필요', need, level='wait' if need) }}
+  {{ m.kpi('만료 임박(7일)', expiring, level='wait' if expiring) }}
+</div>
+{{ m.tabs([('servers', '서버', none), ('records', '내 기록', none)], tab, '/staff') }}
+{% if tab == 'records' %}
+{% if records %}
+<table><thead><tr><th>시각</th><th>종류</th></tr></thead><tbody>
+{% for r in records %}<tr><td class="nowrap">{{ r.at | when }}</td><td>{{ r.label }}</td></tr>{% endfor %}
+</tbody></table>
+{% else %}<div class="empty"><h3>기록이 없습니다</h3></div>{% endif %}
+{% elif rows %}
+<table class="clickable"><thead><tr><th>서버</th><th>조직</th><th>전송</th><th>인증</th><th>도구</th><th>승인 만료</th><th>동의</th></tr></thead><tbody>
 {% for r in rows %}<tr>
-<td>{{ r.server_id }}</td><td>{{ r.org_name }}</td>
-<td>{{ L.pick(L.TRANSPORT, r.transport) }}</td><td>{{ L.pick(L.AUTH_TYPE, r.auth_type) }}</td>
-<td>{{ r.tools | join }}</td><td class="nowrap">{{ r.valid_until | when }}</td>
+<td><a href="/staff?open={{ r.ref | urlencode }}">{{ r.server_id }}</a></td><td>{{ r.org_name }}</td>
+<td>{{ L.pick(L.TRANSPORT, r.transport) if r.transport else '—' }}</td><td>{{ L.pick(L.AUTH_TYPE, r.auth_type) if r.auth_type else '—' }}</td>
+<td>{{ (r.tools | join) or '—' }}</td><td class="nowrap">{{ r.valid_until | when if r.valid_until else '—' }}</td>
+<td>{{ m.badge(L.CONSENT_STATE, r.state) }}{% if r.expiring %} · <span class="nowrap">{{ r.consent_until | when }}</span>{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
-{% else %}{{ m.empty('쓸 수 있는 서버가 없습니다', '/staff/consents', '동의 관리') }}{% endif %}
+{% else %}<div class="empty"><h3>쓸 수 있는 서버가 없습니다</h3></div>{% endif %}
+{% if selected %}{% call m.drawer(selected.server_id, '/staff', has_input=selected.can_consent) %}
+<dl class="detail">
+  <dt>조직</dt><dd>{{ selected.org_name }}</dd>
+  <dt>전송</dt><dd>{{ L.pick(L.TRANSPORT, selected.transport) if selected.transport else '—' }}</dd>
+  <dt>인증</dt><dd>{{ L.pick(L.AUTH_TYPE, selected.auth_type) if selected.auth_type else '—' }}</dd>
+  <dt>도구</dt><dd>{{ (selected.tools | join) or '—' }}</dd>
+  <dt>승인 만료</dt><dd>{{ selected.valid_until | when if selected.valid_until else '—' }}</dd>
+</dl>
+{% if selected.consents %}
+<h3>동의 내역</h3>
+<table><thead><tr><th>목적</th><th>범위</th><th>유효 기간</th><th>상태</th><th></th></tr></thead><tbody>
+{% for c in selected.consents %}<tr>
+<td>{{ c.purpose }}</td><td>{{ c.data_scope }}</td><td class="nowrap">{{ c.valid_until | when }}</td>
+<td>{{ m.badge(L.CONSENT, c.view) }}</td>
+<td>{% if c.view == 'active' %}<form method="post" action="/staff/consents/{{ c.id }}/revoke">{{ m.csrf(actor) }}<button type="submit">철회</button></form>{% endif %}</td>
+</tr>{% endfor %}
+</tbody></table>
+{% endif %}
+{% if selected.can_consent %}
+<h3>동의 등록</h3>
+<form method="post" action="/staff/consents" class="form">
+  {{ m.csrf(actor) }}<input type="hidden" name="text_version" value="{{ text_version }}"><input type="hidden" name="target" value="{{ selected.ref }}">
+  <label>목적<input name="purpose" maxlength="128" value="{{ form.purpose }}" required></label>
+  <label>데이터 범위<input name="data_scope" value="{{ form.data_scope }}" required></label>
+  <label>유효 기간(일)<input type="number" name="valid_days" min="1" max="{{ max_days }}" value="{{ form.days or max_days }}" required></label>
+  <p>{{ text }}</p>
+  <div class="actions"><button type="submit" class="primary">동의</button></div>
+</form>
+{% endif %}
+{% endcall %}{% endif %}
 {% endblock %}
