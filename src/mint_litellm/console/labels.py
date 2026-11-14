@@ -92,6 +92,10 @@ CONSENT = {
     "revoked": Status("철회됨", "block"),
     "expired": Status("만료", "off"),
 }
+CONSENT_STATE = {
+    "active": Status("동의함", "ok"),
+    "none": Status("동의 필요", "wait"),
+}
 RELATION = {
     "active": Status("이용 중", "ok"),
     "terminating": Status("종료 중", "wait"),

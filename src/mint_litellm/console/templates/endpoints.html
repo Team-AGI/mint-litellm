@@ -1,21 +1,63 @@
 {% extends "base.html" %}{% import "macros.html" as m %}
-{% block title %}단말 설치 · MINT{% endblock %}
+{% block title %}엔드포인트 · MINT{% endblock %}
+{% block page_class %}wide{% endblock %}
 {% block body %}
-<h1>단말 설치</h1>
-<p><a class="button" href="/endpoints/mcp">단말 MCP 목록</a></p>
+{% set total = count.applied + count.unapplied + count.stale %}
+<h1>엔드포인트</h1>
+<div class="cards">
+  {{ m.kpi('적용률', ((count.applied * 100 / total) | round | int) ~ '%' if total >= 5 else count.applied ~ '/' ~ total, href='/endpoints?tab=installs&state=applied') }}
+  {{ m.kpi('격리 위반', count.violation, href='/endpoints?tab=installs&state=violation', level='danger' if count.violation) }}
+  {{ m.kpi('보고 끊김', count.stale, href='/endpoints?tab=installs&state=stale', level='wait' if count.stale) }}
+  {{ m.kpi('관리 밖 MCP', mcp | length, href='/endpoints?tab=local-mcp') }}
+</div>
+{{ m.tabs([('installs', '단말 현황', total), ('local-mcp', '관리 밖 MCP', mcp | length)], tab, '/endpoints') }}
+{% if tab == 'installs' %}
+{% if total %}
+<div class="grid">
+  {{ m.chart('donut', donut, 200) }}
+  {{ m.chart('bars', bars, 200) }}
+</div>
+{% endif %}
+{% if state %}<p><a class="button" href="/endpoints?tab=installs">{{ STATES[state] }} ×</a></p>{% endif %}
 {% if rows %}
-<table><thead><tr><th>사용자</th><th>팀</th><th>설치 상태</th><th>도구 판본</th><th>MCP 서버</th><th>서버 격리</th><th>실행기 밖 실행</th><th>발급</th><th>마지막 보고</th></tr></thead><tbody>
+<table class="clickable"><thead><tr><th>사용자</th><th>팀</th><th>설치 상태</th><th>도구 판본</th><th>격리</th><th>마지막 보고</th></tr></thead><tbody>
 {% for r in rows %}<tr>
-<td>{{ r.user_id }}</td>
+<td><a href="/endpoints?tab=installs{% if state %}&state={{ state }}{% endif %}&open={{ r.ref | urlencode }}">{{ r.user_id }}</a></td>
 <td>{{ r.team_id | blank }}</td>
 <td>{{ m.badge(L.INSTALL, r.state) }}</td>
 <td>{{ r.claude_version | blank }}</td>
-<td>{{ (r.mcp_servers or []) | join }}</td>
-<td>{% for p in r.processes or [] %}{{ p.server }} {{ L.SANDBOX.get(p.sandbox, '확인 안 됨') }}{% if p.egress_unfiltered %} · 호스트 제한 미집행{% endif %}{% if p.egress_refused %} · 허용 밖 접속 {{ p.egress_refused }}건 거절{% endif %}{% if not loop.last %}<br>{% endif %}{% endfor %}</td>
-<td>{% for o in r.outside_processes or [] %}{{ o.package }} ({{ L.pick(L.PACKAGE_ECOSYSTEM, o.ecosystem) }}) {{ o.count }}개{% if not loop.last %}<br>{% endif %}{% else %}—{% endfor %}</td>
-<td class="nowrap">{{ r.issued_at | when }}</td>
+<td>{% if r.violations %}<span class="badge error"><span class="icon" aria-hidden="true">{{ ICONS.error }}</span>위반 {{ r.violations | length }}</span>{% else %}—{% endif %}</td>
 <td class="nowrap">{{ r.reported_at | when }}</td>
 </tr>{% endfor %}
 </tbody></table>
-{% else %}<div class="empty"><h3>발급한 설치 묶음이 없습니다</h3></div>{% endif %}
+{% else %}<div class="empty"><h3>{{ '조건에 맞는 단말이 없습니다' if state else '발급한 설치 묶음이 없습니다' }}</h3></div>{% endif %}
+{% if selected %}{% call m.drawer(selected.user_id, '/endpoints?tab=installs' ~ ('&state=' ~ state if state)) %}
+<dl class="detail">
+  <dt>팀</dt><dd>{{ selected.team_id | blank }}</dd>
+  <dt>설치 상태</dt><dd>{{ m.badge(L.INSTALL, selected.state) }}</dd>
+  <dt>도구 판본</dt><dd>{{ selected.claude_version | blank }}</dd>
+  <dt>MCP 서버</dt><dd>{{ (selected.mcp_servers or []) | join }}</dd>
+  <dt>서버 격리</dt><dd>{% for p in selected.processes or [] %}{{ p.server }} {{ L.SANDBOX.get(p.sandbox, '확인 안 됨') }}{% if p.egress_unfiltered %} · 호스트 제한 미집행{% endif %}{% if p.egress_refused %} · 허용 밖 접속 {{ p.egress_refused }}건 거절{% endif %}{% if not loop.last %}<br>{% endif %}{% else %}—{% endfor %}</dd>
+  <dt>실행기 밖 실행</dt><dd>{% for o in selected.outside_processes or [] %}{{ o.package }} ({{ L.pick(L.PACKAGE_ECOSYSTEM, o.ecosystem) }}) {{ o.count }}개{% if not loop.last %}<br>{% endif %}{% else %}—{% endfor %}</dd>
+  <dt>발급</dt><dd>{{ selected.issued_at | when }}</dd>
+  <dt>마지막 보고</dt><dd>{{ selected.reported_at | when }}</dd>
+</dl>
+{% endcall %}{% endif %}
+{% else %}
+{% if mcp %}
+<table><thead><tr><th>사용자</th><th>설치 상태</th><th>서버 이름</th><th>도구</th><th>방식</th><th>실행 파일·호스트</th><th>마지막 확인</th><th class="num">단말</th><th></th></tr></thead><tbody>
+{% for r in mcp %}<tr>
+<td>{{ r.user_id }}</td>
+<td>{{ m.badge(L.INSTALL, r.state) }}</td>
+<td>{{ r.name }}</td>
+<td>{{ L.pick(L.KIT_HARNESS, r.harness) }}</td>
+<td>{{ L.pick(L.LOCAL_TRANSPORT, r.kind) }}</td>
+<td>{{ r.target }}{% if r.package %} {{ r.package }}{% endif %}</td>
+<td class="nowrap">{{ r.last_seen | when }}</td>
+<td class="num">{{ r.endpoints }}대</td>
+<td><a class="button" href="/intakes/new?{{ {'server_id': r.name, 'provider': r.target, 'owner_user_id': r.user_id, 'purpose': L.pick(L.KIT_HARNESS, r.harness) ~ ' 설정에서 발견한 ' ~ r.name ~ ' 서버를 관리 대상으로 등록'} | urlencode }}">도입 신청</a></td>
+</tr>{% endfor %}
+</tbody></table>
+{% else %}<div class="empty"><h3>보고된 관리 대상 밖의 MCP 서버가 없습니다</h3></div>{% endif %}
+{% endif %}
 {% endblock %}
