@@ -1,0 +1,1 @@
+- MINT 판정과 결과의 차단·가림을 LiteLLM 표준 가드레일 기록(`guardrail_provider: mint`)으로 남기고, 콘솔 호출 기록 상세에 LiteLLM 호출 ID·판정 참조를 보이며 `x-mint-decision-ref` 응답 헤더를 더한다.

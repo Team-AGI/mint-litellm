@@ -41,7 +41,7 @@ COOKIE_OPTIONS = {"httponly": True, "secure": True, "samesite": "strict", "path"
 
 
 class ReadOnlyLiteLLM:
-    """제어 평면 키의 읽기 경로 전용 클라이언트. 쓰기 메서드가 없고 확인 읽기 다섯 가지만 낸다."""
+    """제어 평면 키의 읽기 경로 전용 클라이언트. 쓰기 메서드가 없고 확인 읽기만 낸다."""
 
     def __init__(self, admin: LiteLLMAdmin) -> None:
         self.get_key = admin.get_key
@@ -49,6 +49,7 @@ class ReadOnlyLiteLLM:
         self.get_user = admin.get_user
         self.get_server = admin.get_server
         self.list_servers = admin.list_servers
+        self.spend_guardrail = admin.spend_guardrail
 
 
 class Unauthenticated(AdminError):
@@ -96,6 +97,9 @@ class ConsoleConfig:
     endpoint_allow_unsandboxed: bool = False
     # 정책 판본을 적용할 때 쓰는 번들 원본과 정책 엔진. 정책 엔진 주소가 없으면 적용하지 않는다.
     policy_source: PolicySource | None = None
+    # 호출 기록 상세에서 LiteLLM 지출 기록의 가드레일 기록을 읽는다. 제어 평면 키에
+    # ``/spend/logs``를 열어 둔 배포만 켠다(MINT_SPEND_LOG_LOOKUP).
+    spend_lookup: bool = False
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "ConsoleConfig":
@@ -124,6 +128,7 @@ class ConsoleConfig:
             endpoint_ca_pem=ca_pem,
             endpoint_allow_unsandboxed=_truthy(env.get("MINT_ENDPOINT_ALLOW_UNSANDBOXED")),
             policy_source=_policy_source(env),
+            spend_lookup=_truthy(env.get("MINT_SPEND_LOG_LOOKUP")),
         )
 
     @property
