@@ -2,7 +2,7 @@
 {% block title %}정책 · MINT{% endblock %}
 {% block body %}
 <h1>정책</h1>
-<div class="filterbar">{{ au.choices('시간 범위', ranges) }}</div>
+<div class="filterbar">{{ au.choices('시간 범위', ranges) }}<a class="button" href="/reports/audit" hx-boost="false">감사 보고서</a></div>
 <div class="cards">{% for c in cards %}{{ m.kpi(c.label, c.value, c.href, c.note, c.level, c.trend) }}{% endfor %}</div>
 <h2>정책별 효과</h2>
 {% if effect %}

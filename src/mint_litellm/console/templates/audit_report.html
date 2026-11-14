@@ -1,0 +1,42 @@
+{% extends "base.html" %}{% import "audit_macros.html" as a %}
+{% block title %}감사 보고서 · MINT{% endblock %}
+{% block body %}
+<link rel="stylesheet" href="/static/report.css">
+<div class="report" hx-boost="false">
+<div class="filterbar noprint">
+  {{ a.choices('기간', choices) }}
+  <form method="get" action="/reports/audit" class="filters">
+    <label>시작일<input type="date" name="since" value="{{ since }}" required></label>
+    <label>끝일<input type="date" name="until" value="{{ until }}" required></label>
+    <button type="submit">조회</button>
+  </form>
+  <a class="button" href="{{ zip_href }}">CSV 내려받기</a>
+  <button type="button" class="primary" data-print>인쇄</button>
+</div>
+<header class="doc-head">
+  <h1>감사 보고서</h1>
+  <dl>
+    <dt>서버</dt><dd>{{ report.meta.instance }}</dd>
+    <dt>조직</dt><dd>{{ report.meta.orgs }}</dd>
+    <dt>기간</dt><dd>{{ report.meta.from }} ~ {{ report.meta.to }}</dd>
+    <dt>생성</dt><dd>{{ report.meta.generated_at }} ({{ report.meta.time_zone }})</dd>
+  </dl>
+</header>
+<div class="running">{{ report.meta.instance }} · {{ report.meta.from }} ~ {{ report.meta.to }} · {{ report.meta.generated_at }}</div>
+{% for s in report.sections %}
+<section class="sec{{ ' page-start' if loop.index in (3, 6) }}">
+  <h2>{{ loop.index }}. {{ s.title }}</h2>
+  <div class="cards">{% for i in s.summary %}<div class="card"><div class="label">{{ i.label }}</div><div class="value">{{ i.value }}</div></div>{% endfor %}</div>
+  {% for t in s.tables %}
+  <h3>{{ t.title }}</h3>
+  {% if t.rows %}
+  <table class="compact"><thead><tr>{% for c in t.columns %}<th>{{ c }}</th>{% endfor %}</tr></thead><tbody>
+  {% for r in t.rows %}<tr>{% for c in r %}<td{% if c is number %} class="num"{% endif %}>{{ c }}</td>{% endfor %}</tr>{% endfor %}
+  </tbody></table>
+  {% else %}<p class="muted">해당 없음</p>{% endif %}
+  {% endfor %}
+</section>
+{% endfor %}
+<script src="/static/report.js"></script>
+</div>
+{% endblock %}
