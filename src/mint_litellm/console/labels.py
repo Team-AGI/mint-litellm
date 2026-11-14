@@ -28,6 +28,14 @@ SERVER = {
 SANDBOX = {
     "bwrap": "격리됨", "appcontainer": "격리됨", "none": "격리 없음", "unsupported": "격리 미지원",
 }  # fmt: skip
+# 결과 검사에서 찾은 항목의 종류
+SENSITIVE_KIND = {
+    "private_key": "개인 키", "cloud_access_key": "클라우드 접근 키", "access_token": "접근 토큰",
+    "jwt": "JWT 토큰", "bearer_token": "Bearer 토큰",
+    "resident_registration_number": "주민등록번호", "card_number": "카드 번호",
+    "phone_number": "전화번호", "email": "이메일 주소",
+    "high_entropy_token": "비밀로 보이는 긴 문자열",
+}  # fmt: skip
 INSTALL = {
     "managed": Status("관리형", "ok"),
     "user": Status("관리되지 않음", "error"),
@@ -528,3 +536,16 @@ def worst(levels: list[str]) -> str:
         if level in levels:
             return level
     return "off"
+
+
+def response_notes(payload: dict | None) -> list[str]:
+    """호출 응답 사건의 결과 검사 내용을 줄 단위 한국어로 돌려준다(값은 담지 않는다)."""
+    payload = payload or {}
+    found = payload.get("sensitive_findings") or {}
+    out = [f"{SENSITIVE_KIND.get(k, '기타')} {n}건" for k, n in sorted(found.items())]
+    if payload.get("scan_truncated"):
+        out.append("검사 상한을 넘어 끝까지 보지 못함")
+    paths = payload.get("finding_paths") or []
+    if paths:
+        out.append("발견 위치: " + ", ".join(paths))
+    return out

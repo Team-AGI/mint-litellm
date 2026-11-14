@@ -36,8 +36,8 @@
 {% if s.instance_mismatch_at %}<p class="muted">같은 서버를 쓰는 다른 인스턴스와 승인 계약 또는 보안 설정(가드레일 모드·활성 정책 묶음)이 달라 이 서버의 호출을 막고 있습니다. 차이는 알림에서 확인하고, 계약·설정을 맞추거나 관리자가 아래 「인스턴스 간 불일치 예외」 증빙을 붙이면 다음 점검 주기에 풀립니다.</p>{% endif %}
 {% if s.vulns %}
 <h2>알려진 취약점</h2>
-<table><thead><tr><th>패키지</th><th>취약점</th><th>심각도</th><th>확인 시각</th><th>조치 기한</th></tr></thead><tbody>
-{% for v in s.vulns %}<tr><td>{{ v.name }} {{ v.version }}{% if v.path %}<br>{{ v.path }}{% endif %}</td><td>{{ v.vuln_id }}</td><td>{{ {'critical': '치명', 'high': '높음', 'medium': '중간', 'low': '낮음', 'unknown': '미확인'}[v.severity] }}{% if v.cvss is not none %} ({{ v.cvss }}){% endif %}{% if v.exploited %} · 악용 확인{% endif %}</td><td>{{ v.first_seen_at | when }}</td><td>{% if v.severity == 'critical' or v.exploited %}{{ v.deadline_at | when }}{% else %}—{% endif %}</td></tr>{% endfor %}
+<table><thead><tr><th>패키지</th><th>구분</th><th>취약점</th><th>심각도</th><th>확인 시각</th><th>조치 기한</th></tr></thead><tbody>
+{% for v in s.vulns %}<tr><td>{{ v.name }} {{ v.version }}{% if v.path %}<br>{{ v.path }}{% endif %}</td><td>{{ '의존 패키지' if v.path else '직접 사용' }}</td><td>{{ v.vuln_id }}</td><td>{{ {'critical': '치명', 'high': '높음', 'medium': '중간', 'low': '낮음', 'unknown': '미확인'}[v.severity] }}{% if v.cvss is not none %} ({{ v.cvss }}){% endif %}{% if v.exploited %} · 악용 확인{% endif %}</td><td>{{ v.first_seen_at | when }}</td><td>{% if v.severity == 'critical' or v.exploited %}{{ v.deadline_at | when }}<br>{{ v.deadline_at | countdown }}{% else %}—{% endif %}</td></tr>{% endfor %}
 </tbody></table>
 {% endif %}
 <h2>도구</h2>
