@@ -45,6 +45,7 @@ from mint_litellm.plugin.snapshot import (
     ToolContractRow,
 )
 from mint_litellm.plugin.timing import OFF, StageClock
+from mint_litellm.plugin.token_audience import MISMATCH, UNCHECKED, audience_verdict
 from mint_litellm.types.canonical import credential_scope
 from mint_litellm.types.decision import (
     UNSUPPORTED_STAGE,
@@ -340,6 +341,27 @@ def token_forward_result(
     if selected is not None and selected.conditions.get(ALLOW_TOKEN_FORWARD) is True:
         return None
     return StageResult.stop(Reason.TOKEN_FORWARD_FORBIDDEN, detail=resolved.auth_type)
+
+
+def audience_result(
+    bearer: str | None, resolved: ResolvedServer, mode: str, run: _Run
+) -> StageResult | None:
+    """업스트림에 전달되는 호출자 토큰(POL-R-05)의 aud가 서버 대상과 다르면 ``enforce``에서 닫는다.
+    ``observe``는 호출을 보내고 사건에만 남긴다. 읽을 수 없는 토큰은 확인하지 않았다고 남긴다."""
+    if resolved.auth_type not in FORWARDING_AUTH:
+        return None
+    if mode == "off":
+        run.aud_unchecked, run.aud_unchecked_reason = True, "not_forwarded"
+        return None
+    if not bearer:
+        return None
+    verdict = audience_verdict(bearer, resolved.audiences)
+    run.aud_unchecked = verdict == UNCHECKED
+    run.aud_unchecked_reason = "opaque" if run.aud_unchecked else None
+    run.aud_mismatch = verdict == MISMATCH
+    if run.aud_mismatch and mode == "enforce":
+        return StageResult.stop(Reason.TOKEN_AUDIENCE_MISMATCH, detail=resolved.auth_type)
+    return None
 
 
 def control_listing_negative(
@@ -1030,6 +1052,10 @@ class _Run:
     # 계약 관리가 아닌 서버에서 관측만 한 검사 결과의 정책 식별자(입력 쪽)와 검사 설정
     unmanaged_findings: list[str] = field(default_factory=list)
     scan_unmanaged: str = "observe"
+    # 전달되는 호출자 토큰의 aud 확인 결과(대상 불일치, 읽을 수 없어 확인하지 않음)
+    aud_mismatch: bool = False
+    aud_unchecked: bool = False
+    aud_unchecked_reason: str | None = None
 
 
 def _decision_snapshot(
@@ -1256,6 +1282,10 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         forward = token_forward_result(resolved, run.selected)
         if forward is not None:
             stages.add(Stage.DENIAL_APPROVAL, forward)
+            return
+        audience = audience_result(req.hook.bearer, resolved, config.token_audience, run)
+        if audience is not None:
+            stages.add(Stage.DENIAL_APPROVAL, audience)
             return
 
     if req.operation is OperationType.RUNTIME_DISCOVERY and (
@@ -1708,6 +1738,9 @@ def _context_document(
         "org_id": principal.org_id,
         "result_policy": _result_policy(run),
         "unmanaged_findings": list(dict.fromkeys(run.unmanaged_findings)),
+        "aud_mismatch": run.aud_mismatch,
+        "aud_unchecked": run.aud_unchecked,
+        "aud_unchecked_reason": run.aud_unchecked_reason,
     }
 
 

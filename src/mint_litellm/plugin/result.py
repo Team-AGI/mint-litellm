@@ -262,6 +262,9 @@ async def observe_response(
         output_blocked=bool(ctx.get("output_blocked")),
         output_masked=bool(ctx.get("output_masked")),
         result_unenforced=bool(ctx.get("result_unenforced")),
+        aud_mismatch=bool(ctx.get("aud_mismatch")),
+        aud_unchecked=bool(ctx.get("aud_unchecked")),
+        aud_unchecked_reason=ctx.get("aud_unchecked_reason"),
         sensitive_findings=dict(ctx.get("sensitive_findings") or {}),
         unmanaged_findings=tuple(ctx.get("unmanaged_findings") or ()),
         scan_truncated=bool(ctx.get("scan_truncated")),
@@ -298,6 +301,9 @@ async def observe_unknown_outcome(
     }
     if ctx.get("unmanaged_findings"):
         payload["unmanaged_findings"] = list(ctx["unmanaged_findings"])
+        payload["server_id"] = ctx.get("server_id")
+    if ctx.get("aud_mismatch"):
+        payload["aud_mismatch"] = True
         payload["server_id"] = ctx.get("server_id")
     consumed = ctx.get("consumed_call_approval")
     if isinstance(consumed, Mapping):

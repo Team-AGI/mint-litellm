@@ -30,6 +30,7 @@ from mint_litellm.types.reuse_policy import (
     KEY_ISSUER,
     KEY_REDIRECT,
     KEY_RESOURCE,
+    KEY_RESOURCE_DB,
     KEY_RPM,
     KEY_SSL,
     KEY_TIMEOUT,
@@ -392,6 +393,19 @@ def _check_registry_rows(
             owners.setdefault(str(label).replace(" ", "_"), set()).add(owner)
     duplicated = sorted(name for name, ids in owners.items() if len(ids) > 1)
     judge("서버 이름·별칭 유일성", not duplicated, "중복된 이름·별칭: " + ", ".join(duplicated))
+    no_resource = [
+        str(e.get("alias") or e.get("server_name") or e.get("server_id"))
+        for e in listing
+        if normalize_auth_type(e.get("auth_type")) == "oauth2"
+        and not _truthy(e.get("delegate_auth_to_upstream"))
+        and not (e.get("credentials") or {}).get("upstream_resource")
+    ]
+    # 설정 파일 점검은 DB 등록 서버를 보지 못하므로 관리 API 목록으로 따로 점검한다.
+    if no_resource:
+        report.add(KEY_RESOURCE_DB, Level.FAIL,
+                   "upstream_resource가 없는 OAuth 서버: " + ", ".join(no_resource[:5]))
+    else:
+        report.add(KEY_RESOURCE_DB, Level.OK)
     by_id = {e["server_id"]: e for e in listing}
     problems: list[str] = []
     unverified: list[str] = []

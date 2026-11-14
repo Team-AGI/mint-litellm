@@ -326,8 +326,9 @@ def test_upstream_resource_puts_the_target_on_the_authorization_request(reuse):
 
 
 def test_audience_limit_litellm_forwards_a_token_issued_for_another_audience(reuse, proxy_log):
-    # LiteLLM은 받은 토큰의 aud를 읽지 않는다. 다른 대상용 토큰도 그대로 업스트림에 닿으며, 대상
-    # 확인은 업스트림과 인가 서버의 몫이다. 판본이 바뀌어 달라지면 이 시험이 알린다.
+    # LiteLLM 단독은 받은 토큰의 aud를 읽지 않는다. 다른 대상용 토큰도 그대로 업스트림에 닿는다.
+    # 전달 서버로 가는 호출자 토큰의 aud 대조는 MINT 가드레일이 하며(단위 시험), 저장된 사용자별
+    # 토큰은 훅이 보지 못한다. 판본이 바뀌어 달라지면 이 시험이 알린다.
     token = "it-aud-other-service"
     mark = support.marker()
     reply = httpx.post(
