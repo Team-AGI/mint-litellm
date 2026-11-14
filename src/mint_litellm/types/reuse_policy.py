@@ -22,6 +22,7 @@ DEFAULT_SERVER_CONCURRENCY = 8
 FORWARDING_AUTH = frozenset({"true_passthrough", "oauth_delegate"})
 # 승인 조건: 이 서버가 호출자 토큰을 업스트림에 전달하도록 승인에서 명시적으로 허용한다.
 ALLOW_TOKEN_FORWARD = "allow_token_forward"
+ALLOW_INTERNAL_ADDRESS = "allow_internal_address"
 
 # 인증 서버를 발견해 쓰는 인증 방식
 DISCOVERY_AUTH = frozenset({"oauth2", "true_passthrough", "oauth_delegate"})

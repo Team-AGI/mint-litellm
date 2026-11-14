@@ -67,6 +67,7 @@ VALUE = {
 # 요약 문장. 없는 값은 줄표로 채운다.
 SUMMARY = {
     "contract_drift": "승인된 계약과 달라졌습니다. 서버 {server_id}",
+    "server_address_internal": "서버 {server_id}의 주소가 내부 주소로 풀리거나 바뀌었습니다.",
     "content_finding_unmanaged": "서버 {server_id}의 호출이 내용 검사에 걸렸습니다(계약 관리 전).",
     "token_audience_mismatch": "서버 {server_id}에 대상이 다른 토큰이 {calls}건 전달되었습니다.",
     "result_unenforced": (

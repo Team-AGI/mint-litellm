@@ -1,0 +1,1 @@
+- 원격 MCP 서버의 호출 직전 이름 조회 결과가 내부 주소(루프백·사설·링크 로컬·CGNAT·메타데이터 등)이거나 공개에서 내부로 바뀌면(rebind) `MINT_RESOLVE_CHECK=enforce`에서 `MINT-RESOLVED-ADDRESS-FORBIDDEN`으로 막고, 기본 `observe`에서는 사건에 `resolve_findings`를 남기며 서버마다 경보 `server_address_internal`을 한 번 연다. 사내 서버는 승인 조건 `allow_internal_address`(`--allow-internal-address`)로 제외한다. 자가 점검·기동 검사는 바뀌지 않았다.
