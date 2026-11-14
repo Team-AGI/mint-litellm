@@ -160,6 +160,10 @@ class ApprovalBody(Versioned):
     model_config = {"populate_by_name": True}
 
 
+class RejectCallBody(Versioned):
+    reason: str | None = None
+
+
 class ApproveCallBody(Versioned):
     second_approver_token: str | None = None
     window_minutes: int | None = None
@@ -568,8 +572,10 @@ def approve_call(call_id: str, body: ApproveCallBody, actor: Actor = Depends(api
 
 
 @router.post("/call-approvals/{call_id}/reject")
-def reject_call(call_id: str, body: Versioned, actor: Actor = Depends(api_actor)):
-    call_approval_service.reject(actor.ctx, call_id, expected_version=body.state_version)
+def reject_call(call_id: str, body: RejectCallBody, actor: Actor = Depends(api_actor)):
+    call_approval_service.reject(
+        actor.ctx, call_id, expected_version=body.state_version, reason=body.reason
+    )
     return done(actor, id=call_id)
 
 

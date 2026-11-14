@@ -53,9 +53,11 @@ def approve(
 
 
 @service("call-approval reject")
-def reject(ctx: Context, call_id: str, *, expected_version: int | None = None) -> None:
+def reject(
+    ctx: Context, call_id: str, *, expected_version: int | None = None, reason: str | None = None
+) -> None:
     lock_version(ctx, "call_approvals", call_id, expected_version)
-    domain.call_reject(ctx, call_id)
+    domain.call_reject(ctx, call_id, reason)
 
 
 @service("call-approval cancel")

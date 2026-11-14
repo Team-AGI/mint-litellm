@@ -77,6 +77,9 @@ class PluginConfig:
     token_audience: str = "observe"
     # 결과 한 건에서 지시문 표지·비밀 검사가 훑는 글자 수의 상한. 넘으면 집행 모드는 결과를 막는다.
     scan_max_chars: int = DEFAULT_MAX_SCAN_CHARS
+    # 거부된 호출별 승인 요청과 같은 호출을 다시 보내면 새 요청 없이 이 시간(분) 동안 바로 거절한다.
+    # 0이면 거부를 기억하지 않는다.
+    call_denial_minutes: int = 30
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> PluginConfig:
@@ -128,6 +131,7 @@ class PluginConfig:
             scan_unmanaged=_scan_unmanaged(env.get("MINT_SCAN_UNMANAGED")),
             token_audience=_token_audience(env.get("MINT_TOKEN_AUDIENCE")),
             scan_max_chars=_integer(env, "MINT_SCAN_MAX_CHARS", DEFAULT_MAX_SCAN_CHARS, 1024),
+            call_denial_minutes=_integer(env, "MINT_CALL_DENIAL_MINUTES", 30, 0, 1440),
             export_dir=Path(export_dir) if export_dir else None,
             export_hmac_key=_hmac_key(env, "MINT_EXPORT_HMAC_KEY"),
             export_hmac_key_previous=_hmac_key(env, "MINT_EXPORT_HMAC_KEY_PREVIOUS"),

@@ -38,6 +38,10 @@ class MintError(BaseModel):
     reference: str
     # 막힌 호출의 호출별 승인 요청을 열었음(참조로 승인자가 찾는다)
     approval_requested: bool = False
+    # 같은 호출의 직전 요청이 거부된 사유(거부 기억 시간 안의 재시도)와, 직전 승인이 쓰이지 않고
+    # 만료됐다는 사실. 요청자(에이전트)가 같은 시도를 되풀이하지 않도록 돌려준다.
+    denial_reason: str | None = None
+    previous_expired: bool = False
 
     @model_validator(mode="after")
     def _retry_only_before_dispatch(self) -> Self:
@@ -57,6 +61,10 @@ class MintError(BaseModel):
         }
         if self.approval_requested:
             body["approval_requested"] = True
+        if self.denial_reason is not None:
+            body["denial_reason"] = self.denial_reason
+        if self.previous_expired:
+            body["previous_expired"] = True
         return json.dumps(
             body,
             ensure_ascii=False,

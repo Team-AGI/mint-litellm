@@ -892,7 +892,9 @@ HANDLERS: dict[str, Handler] = {
         r.context(), r.args.call_approval_id, _second(r),
         window_minutes=_window_minutes(r.args.for_),
     ),
-    "call-approval reject": _done(call_approval_service.reject, "call_approval_id"),
+    "call-approval reject": lambda r: call_approval_service.reject(
+        r.context(), r.args.call_approval_id, reason=r.args.reason
+    ),
     "call-approval cancel": _done(call_approval_service.cancel, "call_approval_id"),
     "consent add": _consent_add,
     "consent revoke": _done(consent_service.revoke, "consent_id"),
@@ -1108,7 +1110,9 @@ ARGUMENTS: dict[str, list[Any]] = {
         _a("--for", dest="for_", choices=["10m", "30m"],
            help="같은 호출을 이 시간 동안 되풀이해 승인한다(기본: 1회)"),
     ],
-    "call-approval reject": [_a("call_approval_id")],
+    "call-approval reject": [
+        _a("call_approval_id"), _a("--reason", help="요청자에게 전달할 거부 사유"),
+    ],
     "call-approval cancel": [_a("call_approval_id")],
     "consent add": [
         _a("--org", required=True),

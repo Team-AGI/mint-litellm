@@ -638,6 +638,7 @@ def _call_update(
     approver: str | None = None,
     window_minutes: int | None = None,
     extra: dict | None = None,
+    reason: str | None = None,
 ) -> dict:
     set_approver = ", approved_by = %s" if approver else ""
     set_window = (
@@ -647,11 +648,12 @@ def _call_update(
     params = (
         target, *([approver] if approver else []),
         *([window_minutes, window_minutes] if window_minutes else []),
-        ctx.instance_id, call_id, list(sources),
+        reason, ctx.instance_id, call_id, list(sources),
     )
     row = fetchone(
         ctx.conn,
-        f"UPDATE mint.call_approvals SET status = %s{set_approver}{set_window}"
+        f"UPDATE mint.call_approvals SET status = %s{set_approver}{set_window},"
+        " decided_at = clock_timestamp(), decision_reason = %s"
         " WHERE instance_id = %s AND id = %s AND status = ANY(%s)"
         " AND coalesce(valid_until, expires_at) > clock_timestamp()"
         " RETURNING state_version, principal_type, principal_id, server_id, tool",
@@ -706,8 +708,11 @@ def call_approve(
                  approver=ctx.operator.name, window_minutes=window_minutes, extra=extra)
 
 
-def call_reject(ctx: Context, call_id: str) -> None:
-    _call_update(ctx, call_id, "rejected", ("pending",), EventKind.CALL_APPROVAL_REJECTED)
+def call_reject(ctx: Context, call_id: str, reason: str | None = None) -> None:
+    """거부는 그 요청 1건에 한정된다. 사유는 같은 호출을 다시 보낸 요청자에게 전달된다."""
+    reason = (reason or "").strip()[:500] or None
+    _call_update(ctx, call_id, "rejected", ("pending",), EventKind.CALL_APPROVAL_REJECTED,
+                 extra={"reason": reason} if reason else None, reason=reason)
 
 
 def call_cancel(ctx: Context, call_id: str) -> None:

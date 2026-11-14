@@ -240,6 +240,7 @@ def call_approvals(
         conn,
         "SELECT id, org_id, principal_type, principal_id, server_id, tool, status, requested_by,"
         " approved_by, expires_at, window_minutes, valid_until, state_version,"
+        " target, action, display, requested_at, decided_at, decision_reason,"
         " CASE WHEN c.valid_until IS NOT NULL AND c.status = 'approved'"
         "  THEN greatest(extract(epoch FROM c.valid_until - now()), 0)::int END"
         "  AS remaining_seconds,"
