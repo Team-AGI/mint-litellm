@@ -3,7 +3,7 @@
 {% block page_class %}wide{% endblock %}
 {% block body %}
 <h1>도입 신청</h1>
-{% if actor.role != 'viewer' %}<div class="actions"><a class="button primary" href="/intakes/new">신청 등록</a></div>{% endif %}
+{% if can(actor, 'intake create') %}<div class="actions"><a class="button primary" href="/intakes/new">신청 등록</a></div>{% endif %}
 {% if total %}
 <div class="grid">
   <div class="chart" data-chart="{{ dict(funnel, kind='bars') | to_json }}"></div>

@@ -102,13 +102,12 @@ def servers(request: Request, actor: Actor = Depends(page_actor)):
 
 SERVER_TABS = (
     ("overview", "개요"),
-    ("contract", "계약 변경"),
-    ("tools", "도구"),
-    ("packages", "패키지"),
-    ("vulns", "취약점"),
+    ("contract", "계약"),
+    ("security", "보안"),
     ("usage", "이용"),
-    ("evidence", "증빙"),
 )
+# 이전 주소의 탭 이름은 묶은 탭으로 열린다.
+TAB_ALIAS = {"tools": "contract", "packages": "security", "vulns": "security", "evidence": "usage"}
 
 
 def contract_context(request: Request, actor: Actor, server_id: str) -> dict:
@@ -133,16 +132,14 @@ def server_page(
     if row is None:
         raise AdminError(AdminCode.NOT_FOUND, f"서버 {server_id}을(를) 찾을 수 없습니다.")
     tab = tab or request.query_params.get("tab", "")
+    tab = TAB_ALIAS.get(tab, tab)
     tab = tab if tab in dict(SERVER_TABS) else "overview"
     evidence = evidence_service.show(actor.ctx, "server", server_id)
     changed_tools = sum(1 for t in row["tools"] if t["drift"] != "none")
     counts = {
         "contract": changed_tools + bool(row["deployment_drift"]),
-        "tools": len(row["tools"]),
-        "packages": len(row["packages"]),
-        "vulns": len(row["vulns"]),
-        "usage": len(row["approvals"]),
-        "evidence": sum(
+        "security": len(row["vulns"]),
+        "usage": sum(
             1 for e in evidence if e["gate"] == "approve" and e["state"] in ("missing", "expired")
         ),
     }
@@ -209,8 +206,8 @@ def attach_server_evidence(
         actor,
         evidence_form(actor, server_id, kind, summary, ref, valid_days, not_applicable, sha256),
         "evidence_attached",
-        f"/servers/{server_id}?tab=evidence",
-        lambda **kw: server_page(request, actor, server_id, tab="evidence", **kw),
+        f"/servers/{server_id}?tab=usage",
+        lambda **kw: server_page(request, actor, server_id, tab="usage", **kw),
     )
 
 

@@ -30,6 +30,7 @@ class FakeLiteLLM:
         self.requests: list[tuple[str, str, object]] = []
         self.before_write = None  # 쓰기를 처리하기 전에 부르는 함수(동시 수정 흉내)
         self.after_write = None  # 쓰기를 처리한 뒤 부르는 함수(응답 직후 덮어쓰는 흉내)
+        self.ignore_block = False  # 차단·해제 호출이 성공해도 상태를 바꾸지 않는 흉내
         self.ignore_allow_all_keys = False  # 서버 수정이 allow_all_keys 끄기를 무시하는 흉내
         self.generated: list[dict] = []  # /key/generate 본문
         self.fail_writes: dict[str, int] = {}  # 경로 -> 강제로 낼 상태 코드
@@ -114,6 +115,9 @@ class FakeLiteLLM:
         if method == "GET" and path == "/key/info":
             key = self.keys.get(params.get("key", ""))
             return (200, {"key": key["key"], "info": copy.deepcopy(key)}) if key else (404, {})
+        if method == "GET" and path == "/key/list":
+            return 200, {"keys": [copy.deepcopy(k) for k in self.keys.values()],
+                         "total_pages": 1}
         if method == "GET" and path == "/team/info":
             team = self.teams.get(params.get("team_id", ""))
             return (200, {"team_id": team["team_id"], "team_info": copy.deepcopy(team)}) \
@@ -168,6 +172,18 @@ class FakeLiteLLM:
                          "key_alias": body["key_alias"]}
         if method == "POST" and path == "/key/delete":
             return 200, {"deleted_keys": body["key_aliases"]}
+        if method == "POST" and path in (
+            "/key/block", "/key/unblock", "/team/block", "/team/unblock"
+        ):
+            kind, _, verb = path[1:].partition("/")
+            records = self.keys if kind == "key" else self.teams
+            record = records.get(body["key" if kind == "key" else "team_id"])
+            if record is None:
+                return 404, {"error": "not found"}
+            if not self.ignore_block:
+                record["blocked"] = verb == "block"
+                record["updated_at"] = f"t{len(self.writes())}"
+            return 200, copy.deepcopy(record)
         if method == "POST" and path in ("/key/update", "/team/update"):
             result = self._update(path, body)
             if self.after_write is not None:

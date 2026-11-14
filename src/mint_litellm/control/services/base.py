@@ -36,6 +36,7 @@ _VERSIONED = {
     "orgs": ("org_id", "state_version"),
     "settings": ("instance_id", "settings_version"),
     "operators": ("name", "state_version"),
+    "key_block_proposals": ("id", "state_version"),
 }
 
 

@@ -241,7 +241,8 @@ def test_a_kit_key_is_limited_to_the_hook_routes_and_the_workers_client_cannot_m
     assert key == "sk-generated-1"
     assert fake.generated == [KIT_KEY]
     assert fake.generated[0]["allowed_routes"] == [
-        "/mint/v1/decide", "/mint/v1/result", "/mint/v1/endpoint/report"]
+        "/mint/v1/decide", "/mint/v1/result", "/mint/v1/endpoint/report",
+        "/mint/v1/endpoint/outcomes"]
     kit.generate_kit_key(user_id="u2", team_id=None, alias="mint-kit-cd34")
     assert "team_id" not in fake.generated[1]
     with pytest.raises(WriteRefused):
@@ -322,3 +323,41 @@ def test_credential_deletes_remove_only_the_named_user_and_type(fake):
 def test_a_missing_credential_list_route_reads_as_none(fake, client):
     fake.credentials_api = False
     assert client.list_server_credentials(SRV) is None
+
+
+# --- 차단·해제 ---------------------------------------------------------------------------------
+
+
+def test_block_routes_carry_only_the_target_id(fake, client):
+    fake.add_team("t1")
+    fake.add_key("k1")
+    client.set_blocked("key", "k1", True)
+    client.set_blocked("team", "t1", True)
+    client.set_blocked("key", "k1", False)
+    assert [w[1:] for w in fake.writes()] == [
+        ("/key/block", {"key": "k1"}), ("/team/block", {"team_id": "t1"}),
+        ("/key/unblock", {"key": "k1"}),
+    ]
+    assert fake.keys["k1"]["blocked"] is False and fake.teams["t1"]["blocked"] is True
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/key/block", {"key": "k1", "blocked": False}),
+        ("/key/block", {"team_id": "t1"}),
+        ("/team/unblock", {"key": "k1"}),
+        ("/key/block", {"key": ""}),
+        ("/key/unblock", None),
+    ],
+)
+def test_block_with_any_other_body_is_refused(path, body):
+    with pytest.raises(WriteRefused):
+        check_write("POST", path, body)
+
+
+def test_block_is_post_only_and_the_kit_client_cannot_use_it():
+    with pytest.raises(WriteRefused):
+        check_write("PUT", "/key/block", {"key": "k1"})
+    with pytest.raises(WriteRefused):
+        check_kit_write("POST", "/key/block", {"key": "k1"})

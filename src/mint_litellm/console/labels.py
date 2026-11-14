@@ -68,6 +68,28 @@ CALL_APPROVAL = {
     "expired": Status("만료", "off"),
     "consumed": Status("사용됨", "off"),
 }
+KEY_BLOCK = {
+    "proposed": Status("승인 대기", "wait"),
+    "approved": Status("차단 중", "wait"),
+    "applied": Status("차단됨", "block"),
+    "failed": Status("차단 실패", "error"),
+    "rejected": Status("거절됨", "off"),
+    "expired": Status("만료", "off"),
+    "unblocking": Status("해제 중", "wait"),
+    "unblocked": Status("해제됨", "ok"),
+}
+KEY_BLOCK_SIGNAL = {
+    "secret_exposure": "비밀·자격 노출",
+    "repeated_denials": "정책 거부 반복",
+    "bulk_extraction": "대량 추출",
+    "endpoint_compromise": "단말 침해 징후",
+}
+KEY_BLOCK_ERROR = {
+    "already_blocked": "다른 곳에서 이미 차단됨",
+    "target_missing": "대상을 찾을 수 없음",
+    "not_confirmed": "차단을 확인하지 못함",
+    "route_forbidden": "제어 키에 차단 경로 권한 없음",
+}
 CALL_APPROVAL_RULE = {
     "active": Status("사용 중", "ok"),
     "expired": Status("만료", "off"),
@@ -330,6 +352,7 @@ SYSTEM_ACTOR = {
     "session_verify": "세션 재확인",
     "worker": "작업 실행기",
     "mint-worker": "작업 실행기",
+    "key-block-scan": "키 차단 탐지",
     "init": "초기 설정",
     "bootstrap": "최초 등록",
 }
@@ -373,6 +396,7 @@ ALERT_KIND = {
     "content_finding_unmanaged": "미관리 서버 내용 검사",
     "server_address_internal": "서버 주소 내부 대역",
     "result_unenforced": "결과를 막지 못함",
+    "key_block_proposed": "키 차단 제안",
     "token_audience_mismatch": "토큰 대상 불일치",
     "token_scope_exceeded": "토큰 범위 초과",
     "config_plaintext_secret": "설정의 평문 비밀",
@@ -501,6 +525,14 @@ EVENT_KIND = {
     "config_imported": "설정 가져오기",
     "siem_target_added": "SIEM 대상 추가",
     "siem_target_removed": "SIEM 대상 제거",
+    "key_block_proposed": "키 차단 제안",
+    "key_block_approved": "키 차단 승인",
+    "key_block_rejected": "키 차단 거절",
+    "key_block_expired": "키 차단 제안 만료",
+    "key_block_applied": "LiteLLM 차단 확인",
+    "key_block_failed": "LiteLLM 차단 실패",
+    "key_block_unblock_requested": "키 차단 해제 요청",
+    "key_block_unblocked": "키 차단 해제",
     "event_partition_exported": "원장 월 구간 내보냄",
     "event_partition_dropped": "원장 월 구간 삭제",
 }
@@ -545,6 +577,9 @@ NOTICES = {
     "revoked_denied": "승인을 철회하고 거부를 등록했습니다.",
     "denied": "거부를 등록했습니다.",
     "lifted": "해제했습니다.",
+    "key_block_approved": "키 차단을 승인했습니다. LiteLLM 반영 결과는 목록에서 확인하십시오.",
+    "key_block_rejected": "키 차단 제안을 거절했습니다.",
+    "key_block_unblock": "키 차단 해제를 요청했습니다.",
     "call_approved": "호출을 승인했습니다.",
     "call_rejected": "호출을 거부했습니다.",
     "call_cancelled": "승인 요청을 취소했습니다.",
@@ -567,7 +602,7 @@ NOTICES = {
     "rechecked": "재검사를 등록했습니다.",
     "intake_approved": "신청을 승인했습니다.",
     "intake_rejected": "신청을 거절했습니다.",
-    "reapproval_planned": "재승인 계획을 등록했습니다. 반영은 작업 실행기가 진행합니다.",
+    "reapproval_planned": "재승인 계획을 등록했습니다.",
     "provisional_approved": "임시 계약을 승인된 도구 계약으로 바꿨습니다.",
     "operator_removed": "운영자를 삭제했습니다.",
     "operator_chat_bound": "채팅 결속을 저장했습니다.",

@@ -13,7 +13,7 @@
 <table><thead><tr><th>시각</th><th>종류</th></tr></thead><tbody>
 {% for r in records %}<tr><td class="nowrap">{{ r.at | when }}</td><td>{{ r.label }}</td></tr>{% endfor %}
 </tbody></table>
-{% else %}<div class="empty"><h3>기록이 없습니다</h3></div>{% endif %}
+{% else %}{{ m.empty('기록이 없습니다', '/staff', '내 서버') }}{% endif %}
 {% elif rows %}
 <table class="clickable"><thead><tr><th>서버</th><th>조직</th><th>전송</th><th>인증</th><th>도구</th><th>승인 만료</th><th>동의</th></tr></thead><tbody>
 {% for r in rows %}<tr>
@@ -23,7 +23,7 @@
 <td>{{ m.badge(L.CONSENT_STATE, r.state) }}{% if r.expiring %} · <span class="nowrap">{{ r.consent_until | when }}</span>{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
-{% else %}<div class="empty"><h3>쓸 수 있는 서버가 없습니다</h3></div>{% endif %}
+{% else %}{{ m.empty('쓸 수 있는 서버가 없습니다', '/staff/confirmations', '내 요청') }}{% endif %}
 {% if selected %}{% call m.drawer(selected.server_id, '/staff', has_input=selected.can_consent) %}
 <dl class="detail">
   <dt>조직</dt><dd>{{ selected.org_name }}</dd>
@@ -38,7 +38,7 @@
 {% for c in selected.consents %}<tr>
 <td>{{ c.purpose }}</td><td>{{ c.data_scope }}</td><td class="nowrap">{{ c.valid_until | when }}</td>
 <td>{{ m.badge(L.CONSENT, c.view) }}</td>
-<td>{% if c.view == 'active' %}<form method="post" action="/staff/consents/{{ c.id }}/revoke">{{ m.csrf(actor) }}<button type="submit">철회</button></form>{% endif %}</td>
+<td>{% if c.view == 'active' %}{{ m.confirm_dialog('revoke-consent-' ~ c.id, '철회', '동의 철회', '이 동의가 끝나고 해당 서버 호출에 다시 동의가 필요합니다.', '/staff/consents/' ~ c.id ~ '/revoke', actor, '동의 철회', trigger_class='') }}{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
 {% endif %}

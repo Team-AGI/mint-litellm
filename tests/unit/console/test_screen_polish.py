@@ -74,7 +74,7 @@ def test_the_result_filter_has_one_option_per_name():
 
 def test_the_menu_is_grouped_and_never_says_drift():
     items = [item for _, group in MENU + STAFF_MENU for item in group]
-    assert len(MENU) == 6 and len(items) == 14
+    assert len(MENU) == 6 and len(items) == 15
     for _, text, _ in items:
         assert "드리프트" not in text
 

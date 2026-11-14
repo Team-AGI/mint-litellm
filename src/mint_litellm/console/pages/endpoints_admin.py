@@ -69,7 +69,7 @@ def endpoint_view(rows: list[dict], mcp: list[dict], now: datetime) -> dict:
     kinds = {k: sum(k in r["violations"] for r in live) for k, _ in VIOLATIONS}
     bars = {
         "labels": [label for _, label in VIOLATIONS], "values": list(kinds.values()),
-        "horizontal": True, "links": [link + "violation"] * len(VIOLATIONS),
+        "horizontal": True, "links": [f"{link}violation&kind={k}" for k, _ in VIOLATIONS],
     }
     return {"rows": rows, "count": count, "mcp": mcp, "donut": donut, "bars": bars}
 
@@ -88,14 +88,29 @@ def endpoints(request: Request, actor: Actor = Depends(page_actor)):
             r for r in view["rows"]
             if (bool(r["violations"]) if state == "violation" else r["group"] == state)
         ]
+    kind = request.query_params.get("kind", "")
+    if state == "violation" and kind in dict(VIOLATIONS):
+        view["rows"] = [r for r in view["rows"] if kind in r["violations"]]
+    else:
+        kind = ""
     opened = request.query_params.get("open")
     selected = next((r for r in view["rows"] if r["ref"] == opened), None) if opened else None
     ctx = {**view, "tab": tab, "state": state if state in STATES else "", "STATES": STATES,
-           "VIOLATIONS": VIOLATIONS, "selected": selected}
+           "VIOLATIONS": VIOLATIONS, "selected": selected, "kind": kind}
     return render(request, "endpoints.html", ctx, actor=actor)
 
 
 # --- 운영자·조직 -------------------------------------------------------------------------------
+
+
+def admin_tab(tab: str | None, role: str) -> str:
+    """운영자·조직 화면의 탭. 전달 대상은 백업·이전과 한 탭이고, 조회자는 운영자 탭이 없다."""
+    tab = "transfer" if tab == "siem" else tab
+    if tab == "transfer" and role != "admin":
+        tab = None
+    if tab in ("orgs", "suggestions", "transfer") or (tab == "operators" and role != "viewer"):
+        return tab
+    return "orgs" if role == "viewer" else "operators"
 
 
 def admin_page(request: Request, actor: Actor, error=None, status=200, tab=None):
@@ -110,7 +125,7 @@ def admin_page(request: Request, actor: Actor, error=None, status=200, tab=None)
         "suggestions": org_service.list_suggestions(actor.ctx),
         "transfers": reads.transfers(actor.conn, actor.instance) if actor.role == "admin" else [],
         "siem": siem.listing(actor.conn, actor.instance) if actor.role == "admin" else [],
-        "tab": tab if tab in ("orgs", "suggestions", "transfer", "siem") else "operators",
+        "tab": admin_tab(tab, actor.role),
         "error": error,
     }
     return render(request, "admin.html", ctx, actor=actor, status=status)

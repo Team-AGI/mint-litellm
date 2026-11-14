@@ -20,7 +20,7 @@
 <td><a href="/servers/{{ s.server_id | urlencode }}">{{ s.server_id }}</a></td>
 <td>{{ m.badge(L.SERVER, s.status) }}</td>
 <td>{% if s.contract %}<a href="/servers/{{ s.server_id | urlencode }}?tab=contract">{% if s.contract == 'pending' and s.plan_status %}{{ m.badge(L.PLAN, s.plan_status) }}{% else %}{{ m.badge(L.CONTRACT_STATE, s.contract) }}{% endif %}</a>{% else %}—{% endif %}</td>
-<td>{% if s.vulns %}<a href="/servers/{{ s.server_id | urlencode }}?tab=vulns"><span class="badge error"><span class="icon" aria-hidden="true">▲</span>치명 {{ s.vulns }}</span></a>{% else %}—{% endif %}</td>
+<td>{% if s.vulns %}<a href="/servers/{{ s.server_id | urlencode }}?tab=security"><span class="badge error"><span class="icon" aria-hidden="true">▲</span>치명 {{ s.vulns }}</span></a>{% else %}—{% endif %}</td>
 <td class="num">{{ s.approvals }}</td><td class="num">{{ s.tools }}</td>
 <td class="actions">{% if actor.role == 'admin' %}{% if s.status == 'approved' %}{{ a.suspend(s, actor, 'stop-' ~ loop.index, s.approvals, '/servers') }}{% elif s.status == 'suspended' %}{{ a.resume(s, actor, 'resume-' ~ loop.index, '/servers') }}{% endif %}{% endif %}</td>
 </tr>{% endfor %}

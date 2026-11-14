@@ -136,11 +136,11 @@ def test_assigning_a_requester_needs_the_control_key(world):
     object.__setattr__(world.config, "litellm_admin", None)
     intake = add_intake(world, requested_by=None, status="received")
     admin = world.session_client("admin")
-    assert "제어 평면 키가 없어" in admin.get(f"/intakes/{intake}").text
+    assert "/requester" not in admin.get(f"/intakes/{intake}").text
     response = world.client.post(
         f"/api/v1/intakes/{intake}/requester", headers=bearer("admin"),
         json={"user_id": "human-9", "state_version": version(world, intake)})
-    assert response.status_code == 403 and "제어 평면 키" in response.json()["message"]
+    assert response.status_code == 403 and "게이트웨이 관리 키" in response.json()["message"]
 
 
 def test_assigning_a_requester_from_the_screen_and_the_assigner_cannot_decide(world):
@@ -311,11 +311,11 @@ def test_a_deployment_change_is_listed(world):
     assert "(배포)" in world.session_client("viewer").get("/servers/srv-ok?tab=contract").text
 
 
-def test_the_reapproval_form_lists_candidates_and_states_that_only_a_plan_is_registered(world):
+def test_the_reapproval_form_lists_the_candidates(world):
     seed_drift(world)
     intake = add_intake(world, server="srv-ok")
     html = world.session_client("admin").get("/servers/srv-ok?tab=contract").text
-    assert "후보 도구 계약" in html and "계획만 등록합니다" in html and "재승인 계획 등록" in html
+    assert "후보 도구 계약" in html and "재승인 계획 등록" in html
     assert intake in html
     viewer = world.session_client("viewer")
     assert "재승인 계획 등록" not in viewer.get("/servers/srv-ok?tab=contract").text

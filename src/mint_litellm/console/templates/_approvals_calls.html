@@ -9,24 +9,26 @@
 <p><a class="button" href="/approvals?tab=rules&amp;new=1&amp;rule_org={{ sg.org_id | urlencode }}&amp;rule_server={{ sg.server_id | urlencode }}&amp;rule_tool={{ sg.tool | urlencode }}&amp;rule_class={{ sg.action_type | urlencode }}">반복 승인 {{ sg.server_id }} · {{ sg.tool }} · {{ sg.n }}건 → 상시 승인 규칙 만들기</a></p>
 {% endif %}
 {% if rows %}
-{% if actor.role != 'viewer' and pending | length > 1 %}
+{% if can(actor, 'call-approval approve') and pending | length > 1 %}
 <form method="post" id="bulk" class="actions">{{ m.csrf(actor) }}
   <select name="window_minutes" aria-label="선택 항목 사용 기간"><option value="0">1회</option><option value="10">10분</option><option value="30" selected>30분</option></select>
-  <button type="submit" formaction="/call-approvals/bulk/approve"><span aria-hidden="true">✓</span> 선택 승인</button>
   <input type="text" name="reason" maxlength="500" placeholder="거부 사유" aria-label="선택 항목 거부 사유">
-  <button type="submit" formaction="/call-approvals/bulk/reject">선택 거부</button>
 </form>
+<div class="actions">
+  {{ m.confirm_submit('bulk-approve', '선택 승인', '선택한 요청 승인', '고른 대기 요청을 모두 승인합니다. 사용 기간은 위에서 고른 값이고, 1회만 되는 동작은 1회로 승인됩니다.', 'bulk', '승인', '/call-approvals/bulk/approve', danger=false) }}
+  {{ m.confirm_submit('bulk-reject', '선택 거부', '선택한 요청 거부', '고른 대기 요청을 모두 거부합니다. 입력한 사유가 모든 요청에 남습니다.', 'bulk', '거부', '/call-approvals/bulk/reject') }}
+</div>
 {% endif %}
 <table class="clickable"><thead><tr><th></th><th>도구</th><th>요청 내용</th><th>주체</th><th>요청 시각</th><th>사용 기간</th><th>상태</th><th></th></tr></thead><tbody>
 {% for c in rows %}<tr{% if selected and selected.id == c.id %} class="selected"{% endif %}>
-<td>{% if c.status == 'pending' and actor.role != 'viewer' %}<input type="checkbox" name="ids" form="bulk" value="{{ c.id }}:{{ c.state_version }}" aria-label="선택">{% endif %}</td>
+<td>{% if c.status == 'pending' and can(actor, 'call-approval approve') %}<input type="checkbox" name="ids" form="bulk" value="{{ c.id }}:{{ c.state_version }}" aria-label="선택">{% endif %}</td>
 <td><a href="/approvals?tab=calls&amp;range={{ stats.range }}&amp;focus={{ c.id }}">{{ c.tool }}</a><br><span class="muted">{{ c.server_id }}</span></td>
 <td>{% if c.target or c.action %}{% if c.target %}{{ c.target | masked(64) }}{% endif %}{% if c.action %} · {{ c.action | masked(64) }}{% endif %}{% elif c.display %}{% for k, v in c.display.items() %}{% if loop.index <= 3 %}<div><span class="muted">{{ k | masked(24) }}</span> {{ v | masked(48) }}</div>{% endif %}{% endfor %}{% else %}—{% endif %}</td>
 <td>{{ L.pick(L.PRINCIPAL, c.principal_type) }} {{ c.principal_id }}</td>
 <td class="nowrap">{{ c.requested_at | when if c.requested_at else '—' }}{% if c.status == 'pending' and c.age_seconds is not none %}<br>{{ c.age_seconds | span }} 경과{% endif %}</td>
 <td class="nowrap">{% if c.window_minutes %}{{ c.window_minutes }}분{% if c.status == 'approved' %} · 남은 {{ c.remaining_seconds | span }}{% endif %}{% else %}1회{% endif %}</td>
 <td>{{ m.badge(L.CALL_APPROVAL, c.status) }}</td>
-<td>{% if c.status == 'pending' and actor.role != 'viewer' %}<form method="post" action="/call-approvals/{{ c.id }}/approve">{{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ c.state_version }}"><input type="hidden" name="window_minutes" value="{{ 0 if c.action_type in one_shot else 30 }}"><button type="submit"><span aria-hidden="true">✓</span> 승인</button></form>{% endif %}</td>
+<td>{% if c.status == 'pending' and can(actor, 'call-approval approve') %}<form method="post" action="/call-approvals/{{ c.id }}/approve">{{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ c.state_version }}"><input type="hidden" name="window_minutes" value="{{ 0 if c.action_type in one_shot else 30 }}"><button type="submit">{{ '1회 승인' if c.action_type in one_shot else '30분 승인' }}</button></form>{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
 {{ m.pager('/approvals?tab=calls', page, rows | length) }}
@@ -49,8 +51,8 @@
   {% if c.window_minutes %}<dt>사용 현황</dt><dd>{{ c.window_minutes }}분 · {{ c.uses }}회 사용{% if c.approved_by and c.approved_by.startswith('rule:') %} · 규칙 {{ c.approved_by[5:13] }}{% endif %}{% if c.extended_at %} · 연장됨({{ c.extended_by | masked(64) }}){% endif %}</dd>{% endif %}
   {% if c.decision_reason %}<dt>거부 사유</dt><dd>{{ c.decision_reason | masked }}</dd>{% endif %}
 </dl>
-{% if actor.role != 'viewer' and c.status in ('pending', 'approved') %}
-<form method="post" class="form">
+{% if can(actor, 'call-approval approve') and c.status in ('pending', 'approved') %}
+<form method="post" class="form" id="decide">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ c.state_version }}">
   {% if c.status == 'pending' %}
   <span class="segments" role="group" aria-label="사용 기간">
@@ -58,18 +60,19 @@
     {% if c.action_type not in one_shot %}<label class="segment"><input type="radio" name="window_minutes" value="10">10분</label>
     <label class="segment"><input type="radio" name="window_minutes" value="30" checked>30분</label>{% endif %}
   </span>
+  {% if c.requested_by and c.requested_by == actor.session.user_id %}<label>두 번째 승인자 토큰<input type="password" name="second_approver_token" autocomplete="off"></label>{% endif %}
   <label>거부 사유<input type="text" name="reason" maxlength="500"></label>
   <div class="actions">
-    <button type="submit" formaction="/call-approvals/{{ c.id }}/approve" autofocus><span aria-hidden="true">✓</span> 승인</button>
-    <button type="submit" formaction="/call-approvals/{{ c.id }}/reject">거부</button>
+    <button type="submit" formaction="/call-approvals/{{ c.id }}/approve">승인</button>
+    {{ m.confirm_submit('decide-reject', '거부', '요청 거부', '이 요청을 거부합니다. 입력한 사유가 요청자에게 보입니다.', 'decide', '거부', '/call-approvals/' ~ c.id ~ '/reject') }}
   </div>
   {% endif %}
   <div class="actions">
     {% if c.can_extend %}<button type="submit" formaction="/call-approvals/{{ c.id }}/extend">{{ c.window_minutes }}분 연장</button>{% endif %}
-    <button type="submit" formaction="/call-approvals/{{ c.id }}/cancel">요청 취소</button>
+    {{ m.confirm_submit('decide-cancel', '요청 취소', '요청 취소', '결정 없이 요청을 거둡니다. 거부 기록은 남지 않습니다.', 'decide', '요청 취소', '/call-approvals/' ~ c.id ~ '/cancel') }}
   </div>
 </form>
-{% if actor.role == 'admin' and c.action_type in ('read', 'write') %}<p><a class="button" href="/approvals?tab=rules&amp;new=1&amp;rule_org={{ c.org_id | urlencode }}&amp;rule_server={{ c.server_id | urlencode }}&amp;rule_tool={{ c.tool | urlencode }}&amp;rule_class={{ c.action_type }}">이 조건으로 규칙 만들기</a></p>{% endif %}
+{% if can(actor, 'call-approval-rule add') and c.action_type in ('read', 'write') %}<p><a class="button" href="/approvals?tab=rules&amp;new=1&amp;rule_org={{ c.org_id | urlencode }}&amp;rule_server={{ c.server_id | urlencode }}&amp;rule_tool={{ c.tool | urlencode }}&amp;rule_class={{ c.action_type }}">이 조건으로 규칙 만들기</a></p>{% endif %}
 {% endif %}
 {% if history %}
 <h3>최근 이력</h3>

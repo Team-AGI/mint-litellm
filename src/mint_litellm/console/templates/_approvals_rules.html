@@ -1,5 +1,5 @@
 {% import "macros.html" as m %}
-{% if actor.role == 'admin' %}<p class="actions"><a class="button primary" href="/approvals?tab=rules&amp;new=1">규칙 만들기</a></p>{% endif %}
+{% if can(actor, 'call-approval-rule add') %}<p class="actions"><a class="button primary" href="/approvals?tab=rules&amp;new=1">규칙 만들기</a></p>{% endif %}
 {% if rules %}
 <table><thead><tr><th>범위</th><th>서버</th><th>행위·기간</th><th>도구</th><th>만료</th><th class="num">자동 승인</th><th>상태</th><th></th></tr></thead><tbody>
 {% for r in rules %}<tr>
@@ -7,11 +7,11 @@
 <td>{{ r.server_id or '전체' }}</td><td class="nowrap">{{ L.pick(L.ACTION, r.action_class) }} · {{ r.window_minutes }}분</td><td>{{ r.tool_pattern or '전체' }}</td>
 <td class="nowrap">{{ r.valid_until | when if r.valid_until else '—' }}</td>
 <td class="num">{{ r.opened }}</td><td>{{ m.badge(L.CALL_APPROVAL_RULE, r.status) }}</td>
-<td>{% if r.status == 'active' and actor.role == 'admin' %}<form method="post" action="/call-approval-rules/{{ r.id }}/disable">{{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ r.state_version }}"><button type="submit">해제</button></form>{% endif %}</td>
+<td>{% if r.status == 'active' and can(actor, 'call-approval-rule disable') %}{% call m.confirm_dialog('disable-rule-' ~ r.id, '해제', '규칙 해제', '이 규칙의 자동 승인이 끝나고 이후 요청은 사람이 승인해야 합니다.', '/call-approval-rules/' ~ r.id ~ '/disable', actor, '규칙 해제', danger=false, trigger_class='') %}<input type="hidden" name="state_version" value="{{ r.state_version }}">{% endcall %}{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
 {% else %}{{ m.empty('상시 승인 규칙이 없습니다', '/approvals?tab=calls', '호출 보기') }}{% endif %}
-{% if new and actor.role == 'admin' %}
+{% if new and can(actor, 'call-approval-rule add') %}
 {% call m.drawer('규칙 만들기', '/approvals?tab=rules', true) %}
 <form method="get" action="/approvals" class="form">
   <input type="hidden" name="tab" value="rules"><input type="hidden" name="new" value="1"><input type="hidden" name="preview" value="1">

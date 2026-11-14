@@ -1502,6 +1502,13 @@ class Kit:
 
     # -- 제거 -------------------------------------------------------------------------------------
 
+    def user_timer(self, state: dict) -> bool:
+        """사용자 수준 설치가 등록한 사용자 systemd 타이머가 있는가."""
+        return bool(
+            state.get("links") and self.root is None and not self.owner
+            and not state.get("timer") and not state.get("task")
+        )
+
     def uninstall(self) -> dict:
         state = self.load_state()
         if not state:
@@ -1509,6 +1516,9 @@ class Kit:
         left = []
         if state.get("timer") == "system" and self.root is None:
             capture(["systemctl", "disable", "--now", f"{UNIT}.timer"])
+        elif self.user_timer(state):
+            # 유닛 파일을 지우기 전에 끈다. 지운 뒤에는 이미 떠 있는 타이머가 남는다.
+            capture(["systemctl", "--user", "disable", "--now", f"{UNIT}.timer"])
         for logical, digest in state.get("files", {}).items():
             path = self.physical(logical)
             if not path.exists():
@@ -1524,8 +1534,6 @@ class Kit:
             Path(link).unlink(missing_ok=True)
         if state.get("task") and self.root is None:
             capture(["schtasks", "/Delete", "/TN", state["task"], "/F"])
-        elif state.get("links") and self.root is None and not self.owner and not state.get("timer"):
-            capture(["systemctl", "--user", "disable", "--now", f"{UNIT}.timer"])
         if state.get("mode") == "user":
             self.uninstall_user(state)
         if "codex_config_sha" in state:
