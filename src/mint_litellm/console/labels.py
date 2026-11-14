@@ -231,6 +231,25 @@ CHANGE = {
     "changed": Status("변경", "error"),
 }
 
+CONTRACT_STATE = {
+    "changed": Status("변경됨", "error"),
+    "pending": Status("재승인 대기", "wait"),
+    "ok": Status("일치", "ok"),
+    "provisional": Status("임시 계약", "off"),
+}
+INTAKE_STAGE = {
+    "received": "접수", "passed": "검사 통과", "indeterminate": "판별 불가", "decided": "결정",
+    "failed": "검사 실패",
+}
+VULN_SEVERITY = {
+    "critical": "치명", "high": "높음", "medium": "중간", "low": "낮음", "unknown": "미확인",
+}
+PACKAGE_KIND = {
+    "npm": "npm", "pypi": "PyPI", "container": "컨테이너 이미지", "executable": "실행 파일",
+}
+AXIS = {"file": "파일 접근", "exec": "실행", "network": "네트워크"}
+AXIS_VERDICT = {"widened": "확대", "narrowed": "축소", "unchanged": "변화 없음"}
+
 ROLE = {"admin": "관리자", "approver": "승인자", "viewer": "조회자", "staff": "직원"}
 MODE = {"enforce": "집행", "observe": "관측"}
 SCOPE = {"key": "키", "user": "사용자", "team": "팀", "org": "조직", "server": "서버"}

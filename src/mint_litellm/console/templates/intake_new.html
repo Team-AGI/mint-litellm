@@ -1,25 +1,42 @@
 {% extends "base.html" %}{% import "macros.html" as m %}
-{% block title %}신청 시작 · MINT{% endblock %}
+{% block title %}신청 등록 · MINT{% endblock %}
+{% block page_class %}narrow{% endblock %}
 {% block body %}
-<h1>신청 시작</h1>
+<h1>신청 등록</h1>
 {% if actor.role != 'viewer' %}
-<form method="post" action="/intakes" class="form">
-  {{ m.csrf(actor) }}
-  <div class="row">
-    <label>서버 이름<input name="server_id" value="{{ f.server_id }}" required></label>
-    <label>제공자<input name="provider" value="{{ f.provider }}" required></label>
-    <label>책임자(사용자 식별자)<input name="owner_user_id" value="{{ f.owner_user_id }}" required></label>
-  </div>
-  <label>목적<textarea name="purpose" maxlength="256" required>{{ f.purpose }}</textarea></label>
-  <div class="row">
-    <label>자료 등급<select name="data_grade">{% for g in grades %}<option value="{{ g }}"{% if f.data_grade == g %} selected{% endif %}>{{ g }}</option>{% endfor %}</select></label>
-    <label>감사 열람 기간(일)<input type="number" name="audit_access_days" min="1" value="{{ f.audit_access_days or 90 }}" required></label>
-  </div>
-  <label>허용 자원(JSON 배열)<textarea name="allowed_resources">{{ f.allowed_resources or '[]' }}</textarea></label>
+<div class="filters" aria-label="단계">{% for name in steps %}{% if not loop.first %}<span class="muted" aria-hidden="true">→</span>{% endif %}<span class="badge {{ 'ok' if loop.index < step else ('wait' if loop.index == step else 'off') }}"><span class="icon" aria-hidden="true">{{ ICONS.ok if loop.index < step else (ICONS.wait if loop.index == step else ICONS.off) }}</span>{{ name }}</span>{% endfor %}</div>
+<form method="post" action="/intakes" class="form cols">
+  {{ m.csrf(actor) }}<input type="hidden" name="step" value="{{ step }}">
+  {% if step == 1 %}
+  <label>서버 이름<input name="server_id" value="{{ f.server_id }}" required></label>
+  <label>제공자<input name="provider" value="{{ f.provider }}" required></label>
+  <label>책임자(사용자 식별자)<input name="owner_user_id" value="{{ f.owner_user_id }}" required></label>
+  <label class="full">목적<textarea name="purpose" maxlength="256" required>{{ f.purpose }}</textarea></label>
+  {% else %}
+  <input type="hidden" name="server_id" value="{{ f.server_id }}"><input type="hidden" name="provider" value="{{ f.provider }}"><input type="hidden" name="owner_user_id" value="{{ f.owner_user_id }}"><input type="hidden" name="purpose" value="{{ f.purpose }}">
+  {% endif %}
+  {% if step == 2 %}
+  <label>자료 등급<select name="data_grade">{% for g in grades %}<option value="{{ g }}"{% if f.data_grade == g %} selected{% endif %}>{{ L.pick(L.DATA_GRADE, g) }}</option>{% endfor %}</select></label>
+  <fieldset class="form full"><legend>허용 자원</legend>
+  {% for r in rows %}<input name="resource" value="{{ r }}" aria-label="허용 자원 {{ loop.index }}">{% endfor %}
+  <div class="actions"><button type="submit" name="go" value="add" formaction="/intakes/new" formnovalidate>행 추가</button></div>
+  </fieldset>
+  {% else %}
+  <input type="hidden" name="data_grade" value="{{ f.data_grade }}">{% for r in rows if r %}<input type="hidden" name="resource" value="{{ r }}">{% endfor %}
+  {% endif %}
+  {% if step == 3 %}
+  <label>감사 열람 기간(일)<input type="number" name="audit_access_days" min="1" value="{{ f.audit_access_days }}" required></label>
   <label>자격 증명 변경 안내<input name="credential_notice" value="{{ f.credential_notice }}" required></label>
   <label>철회 기록 방법<input name="revocation_record" value="{{ f.revocation_record }}" required></label>
-  <label>자료 삭제·반환 조건<textarea name="data_return_terms" required>{{ f.data_return_terms }}</textarea></label>
-  <div class="actions"><button class="primary" type="submit">신청 등록</button><a class="button" href="/endpoints/mcp">취소</a></div>
+  <label class="full">자료 삭제·반환 조건<textarea name="data_return_terms" required>{{ f.data_return_terms }}</textarea></label>
+  {% else %}
+  <input type="hidden" name="audit_access_days" value="{{ f.audit_access_days }}"><input type="hidden" name="credential_notice" value="{{ f.credential_notice }}"><input type="hidden" name="revocation_record" value="{{ f.revocation_record }}"><input type="hidden" name="data_return_terms" value="{{ f.data_return_terms }}">
+  {% endif %}
+  <div class="actions full">
+    {% if step < steps | length %}<button class="primary" type="submit" name="go" value="next" formaction="/intakes/new">다음</button>{% else %}<button class="primary" type="submit">신청 등록</button>{% endif %}
+    {% if step > 1 %}<button type="submit" name="go" value="prev" formaction="/intakes/new" formnovalidate>이전</button>{% endif %}
+    <a class="button" href="/intakes">취소</a>
+  </div>
 </form>
-{% else %}{{ m.empty('이 콘솔에서는 신청을 등록할 수 없습니다', '/endpoints/mcp', '목록으로 돌아가기') }}{% endif %}
+{% else %}{{ m.empty('이 콘솔에서는 신청을 등록할 수 없습니다', '/intakes', '목록으로 돌아가기') }}{% endif %}
 {% endblock %}

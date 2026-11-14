@@ -51,12 +51,18 @@ def test_server_detail_marks_direct_and_dependency_and_counts_down():
         "server_detail.html",
         s=server([vuln(None, soon), vuln("A → B → lib", soon, "high")]),
         evidence=[],
+        tab="vulns",
     )
     text = shown(html)
     assert "직접 사용" in text and "의존 패키지" in text and "A → B → lib" in text
     assert "29시간" in text and "남음" in text
     late = shown(
-        render("server_detail.html", s=server([vuln(None, soon - timedelta(days=3))]), evidence=[])
+        render(
+            "server_detail.html",
+            s=server([vuln(None, soon - timedelta(days=3))]),
+            evidence=[],
+            tab="vulns",
+        )
     )
     assert "기한 지남" in late
 

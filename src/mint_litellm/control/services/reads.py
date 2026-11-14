@@ -54,6 +54,22 @@ def servers(conn: psycopg.Connection, instance: str) -> list[dict]:
     )
 
 
+def server_vuln_counts(conn: psycopg.Connection, instance: str) -> dict[str, int]:
+    """서버별로 지금 실행 패키지에 남아 있는 치명·악용 확인 취약점 수(조치할 것이 있는 서버만)."""
+    rows = fetchall(
+        conn,
+        "SELECT s.server_id, count(*) AS n FROM mint.servers s JOIN mint.server_packages p"
+        " ON p.instance_id = s.instance_id AND p.server_id = s.server_id"
+        " AND p.exec_contract_sha256 = s.exec_contract_sha256 JOIN mint.package_vulns v"
+        " ON v.instance_id = p.instance_id AND v.ecosystem = p.ecosystem AND v.name = p.name"
+        " AND v.version = p.version AND v.cleared_at IS NULL"
+        " AND (v.severity = 'critical' OR v.exploited)"
+        " WHERE s.instance_id = %s GROUP BY s.server_id",
+        (instance,),
+    )
+    return {r["server_id"]: r["n"] for r in rows}
+
+
 def server(conn: psycopg.Connection, instance: str, server_id: str) -> dict | None:
     row = fetchone(
         conn,

@@ -1,81 +1,25 @@
-{% extends "base.html" %}{% import "macros.html" as m %}
+{% extends "base.html" %}{% import "macros.html" as m %}{% import "_server_actions.html" as a %}
 {% block title %}{{ s.server_id }} · MINT{% endblock %}
+{% block page_class %}wide{% endblock %}
 {% block body %}
-<h1>{{ s.server_id }} {{ m.badge(L.SERVER, s.status) }}</h1>
-<dl class="detail">
-  <dt>전송</dt><dd>{{ L.pick(L.TRANSPORT, s.transport) }}</dd>
-  <dt>인증</dt><dd>{{ L.pick(L.AUTH_TYPE, s.auth_type) }}</dd>
-  <dt>등록자</dt><dd>{{ s.registered_by | who }}</dd>
-  <dt>마지막 관측</dt><dd>{{ s.last_observed_at | when }}</dd>
-  {% if s.identity_kind == 'stdio' %}<dt>실행 계약 지문</dt><dd><code>{{ s.exec_contract_sha256 }}</code></dd>
-  {% else %}<dt>주소 지문</dt><dd><code>{{ s.url_sha256 }}</code></dd>{% endif %}
-</dl>
-{% if s.identity_kind == 'stdio' %}
-<h2>파일 접근</h2>
-{% if s.file_access %}
-<table><thead><tr><th>경로</th><th>권한</th></tr></thead><tbody>
-{% for f in s.file_access %}<tr><td><code>{{ f.path }}</code></td><td>{{ '읽기·쓰기' if f.mode == 'rw' else '읽기' }}</td></tr>{% endfor %}
-</tbody></table>
-{% else %}<p class="muted">선언된 경로가 없습니다.</p>{% endif %}
-<h2>네트워크</h2>
-<p>{% if s.network == 'none' %}차단(단말 격리가 네트워크를 막습니다){% elif s.network == 'hosts' %}허용 호스트만: {{ s.allowed_hosts | join(', ') }}{% else %}네트워크 미제한{% endif %}</p>
-{% endif %}
-{% if s.exec_drift %}
-<h2>실행 계약 변경</h2>
-<table><thead><tr><th>구분</th><th>판정</th><th>더해진 항목</th><th>빠진 항목</th></tr></thead><tbody>
-{% for axis, label in [('file', '파일 접근'), ('exec', '실행'), ('network', '네트워크')] %}{% set r = s.exec_drift.axes[axis] %}<tr><td>{{ label }}</td><td>{{ {'widened': '확대', 'narrowed': '축소', 'unchanged': '변화 없음'}[r.verdict] }}</td><td>{{ r.added | join(', ') | blank }}</td><td>{{ r.removed | join(', ') | blank }}</td></tr>{% endfor %}
-</tbody></table>
-{% endif %}
-{% if s.packages %}
-<h2>실행 패키지</h2>
-<table><thead><tr><th>구분</th><th>이름</th><th>버전</th><th>제공처</th></tr></thead><tbody>
-{% for p in s.packages %}<tr><td>{{ {'npm': 'npm', 'pypi': 'PyPI', 'container': '컨테이너 이미지', 'executable': '실행 파일'}[p.ecosystem] }}</td><td>{{ p.name }}</td><td>{{ p.version | blank if p.ecosystem != 'executable' else ('내용 지문 ' ~ p.version[:12]) }}{% if not p.pinned %} <span class="badge wait"><span class="icon" aria-hidden="true">{{ ICONS.wait }}</span>버전 미고정</span>{% endif %}</td><td>{{ '로컬' if p.registry == 'local' else p.registry }}</td></tr>{% endfor %}
-</tbody></table>
-{% endif %}
-{% if s.vuln_blocked_at %}<p class="muted">치명 취약점의 조치 기한(48시간)이 지나 이 서버의 호출을 막고 있습니다. 패키지를 올려 다시 등록하거나, 관리자가 「취약점 조치 예외」 증빙을 붙여야 풀립니다.</p>{% endif %}
-{% if s.instance_mismatch_at %}<p class="muted">같은 서버를 쓰는 다른 인스턴스와 승인 계약 또는 보안 설정(가드레일 모드·활성 정책 묶음)이 달라 이 서버의 호출을 막고 있습니다. 차이는 알림에서 확인하고, 계약·설정을 맞추거나 관리자가 아래 「인스턴스 간 불일치 예외」 증빙을 붙이면 다음 점검 주기에 풀립니다.</p>{% endif %}
-{% if s.vulns %}
-<h2>알려진 취약점</h2>
-<table><thead><tr><th>패키지</th><th>구분</th><th>취약점</th><th>심각도</th><th>확인 시각</th><th>조치 기한</th></tr></thead><tbody>
-{% for v in s.vulns %}<tr><td>{{ v.name }} {{ v.version }}{% if v.path %}<br>{{ v.path }}{% endif %}</td><td>{{ '의존 패키지' if v.path else '직접 사용' }}</td><td>{{ v.vuln_id }}</td><td>{{ {'critical': '치명', 'high': '높음', 'medium': '중간', 'low': '낮음', 'unknown': '미확인'}[v.severity] }}{% if v.cvss is not none %} ({{ v.cvss }}){% endif %}{% if v.exploited %} · 악용 확인{% endif %}</td><td>{{ v.first_seen_at | when }}</td><td>{% if v.severity == 'critical' or v.exploited %}{{ v.deadline_at | when }}<br>{{ v.deadline_at | countdown }}{% else %}—{% endif %}</td></tr>{% endfor %}
-</tbody></table>
-{% endif %}
-<h2>도구</h2>
-{% if s.tools %}
-<table><thead><tr><th>도구</th><th>위험 등급</th><th>동작 유형</th><th>변경</th></tr></thead><tbody>
-{% for t in s.tools %}<tr><td>{{ t.tool }}</td><td>{{ L.pick(L.RISK, t.risk_grade) }}</td><td>{{ L.pick(L.ACTION, t.action_type) }}</td><td>{{ '변경됨' if t.drift != 'none' else '—' }}</td></tr>{% endfor %}
-</tbody></table>
-{% else %}<p class="muted">승인된 도구 계약이 없습니다.</p>{% endif %}
-<h2>이용 관계</h2>
-{% if s.relations %}
-<table><thead><tr><th>조직</th><th>팀</th><th>목적</th><th>상태</th></tr></thead><tbody>
-{% for r in s.relations %}<tr><td>{{ r.org_name }}</td><td>{{ r.team_id | blank }}</td><td>{{ r.purpose }}</td><td>{{ m.badge(L.RELATION, r.status) }}</td></tr>{% endfor %}
-</tbody></table>
-{% else %}<p class="muted">이용 관계가 없습니다.</p>{% endif %}
-<h2>승인</h2>
-{% if s.approvals %}
-<table><thead><tr><th>대상</th><th>도구</th><th>구분</th><th>유효 기간</th><th>상태</th></tr></thead><tbody>
-{% for a in s.approvals %}<tr><td>{{ L.pick(L.SCOPE, a.scope_type) }} {{ a.scope_id }}</td><td>{{ a.tools | join }}</td><td>{{ L.pick(L.APPROVAL_CLASS, a.class) }}</td><td>{{ a.valid_from | when }} ~ {{ a.valid_until | when }}</td><td>{{ m.badge(L.APPROVAL, a.status) }}</td></tr>{% endfor %}
-</tbody></table>
-{% else %}<p class="muted">승인이 없습니다.</p>{% endif %}
-{{ m.evidence_panel(evidence, '/servers/' ~ (s.server_id | urlencode) ~ '/evidence', actor) }}
+<h1>{{ s.server_id }} {{ m.badge(L.SERVER, s.status) }}{% if provisional and s.status not in ('rejected', 'terminated') %} <span title="승인된 계약이 없어 호출마다 추정한 계약으로 검사합니다">{{ m.badge(L.CONTRACT_STATE, 'provisional') }}</span>{% endif %}</h1>
 {% if actor.role == 'admin' and s.status in ('approved', 'suspended') %}
-<div class="danger-zone">
-  {% if s.status == 'approved' %}
-  <h3>서버 중지</h3>
-  <p class="effect">이 서버로 가는 모든 호출이 차단됩니다. 영향받는 서버 1개, 유효 승인 {{ s.approvals | selectattr('status', 'equalto', 'active') | list | length }}건.</p>
-  <form method="post" action="/servers/{{ s.server_id | urlencode }}/suspend" class="form">
-    {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ s.state_version }}">
-    <label>확인을 위해 서버 이름 입력<input name="confirm_name" data-confirm="{{ s.server_id }}" autocomplete="off"></label>
-    <div class="actions"><button type="submit" class="danger" data-needs-confirm>서버 중지</button></div>
-  </form>
-  {% else %}
-  <h3>서버 재개</h3>
-  <form method="post" action="/servers/{{ s.server_id | urlencode }}/resume" class="form">
-    {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ s.state_version }}">
-    <div class="actions"><button type="submit" class="primary">서버 재개</button></div>
-  </form>
-  {% endif %}
-</div>
+<div class="actions">{% if s.status == 'approved' %}{{ a.suspend(s, actor, 'stop-server', active_approvals, '', true) }}{% else %}{{ a.resume(s, actor, 'resume-server') }}{% endif %}</div>
 {% endif %}
+{% if s.vuln_blocked_at %}<div class="banner error" role="alert">치명 취약점 조치 기한이 지나 호출이 차단되었습니다</div>{% endif %}
+{% if s.instance_mismatch_at %}<div class="banner error" role="alert">다른 인스턴스와 계약·보안 설정이 달라 호출이 차단되었습니다</div>{% endif %}
+<div class="cards">
+  {{ m.kpi('유효 승인', active_approvals, '?tab=usage') }}
+  {{ m.kpi('변경된 도구', (changed_tools or 0) + (1 if s.deployment_drift else 0), '?tab=contract', level='danger' if (changed_tools or 0) or s.deployment_drift) }}
+  {{ m.kpi('치명 취약점', critical, '?tab=vulns', level='danger' if critical) }}
+  {{ m.kpi('마지막 관측', s.last_observed_at | when) }}
+</div>
+{{ m.tabs(tabs, tab, '/servers/' ~ (s.server_id | urlencode)) }}
+{% if tab == 'contract' %}{% include "_server_contract.html" %}
+{% elif tab == 'tools' %}{% include "_server_tools.html" %}
+{% elif tab == 'packages' %}{% include "_server_packages.html" %}
+{% elif tab == 'vulns' %}{% include "_server_vulns.html" %}
+{% elif tab == 'usage' %}{% include "_server_usage.html" %}
+{% elif tab == 'evidence' %}{% set evidence_action = '/servers/' ~ (s.server_id | urlencode) ~ '/evidence' %}{% include "_evidence.html" %}
+{% else %}{% include "_server_overview.html" %}{% endif %}
 {% endblock %}
