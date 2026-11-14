@@ -5,7 +5,7 @@
 //   bars:    {kind, labels:[], values:[], horizontal?:bool, links?:[]}
 // 결정 값(allow·approve·block·observe)은 결정색 토큰으로, 조각을 누르면 links/href 로 이동한다.
 var DECISION_TOKEN = { allow: "--ok", approve: "--wait", block: "--danger", observe: "--off" };
-var PALETTE = ["--accent", "--ok", "--wait", "--danger", "--off"];
+var PALETTE = ["--accent", "--ok", "--wait", "--danger", "--off", "--c6", "--c7", "--c8"];
 
 function token(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
