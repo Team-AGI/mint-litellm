@@ -6,6 +6,8 @@
 <div class="cards">
   {{ m.kpi('응답 대기 호출', pending | length, '/approvals?tab=calls', level='wait' if pending else none) }}
   {{ m.kpi('5분 넘게 대기', slow, '/approvals?tab=calls', level='danger' if slow else none) }}
+  {{ m.kpi('평균 대기', wait.average_seconds | span, '/approvals?tab=calls') }}
+  {{ m.kpi('오늘 처리', done_today) }}
   {{ m.kpi('서버 도입 대기', queue | length, '/approvals?tab=servers') }}
   {{ m.kpi('만료 임박 승인', (renewal.unchanged | length) + (renewal.changed | length), '/approvals?tab=renewals') }}
 </div>

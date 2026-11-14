@@ -32,7 +32,7 @@ MENU = (
 STAFF_MENU = (
     (None, (
         ("/staff", "내 서버", None),
-        ("/staff/requests", "내 요청", "staff_requests"),
+        ("/staff/confirmations", "내 요청", "staff_requests"),
         ("/staff/endpoint", "내 단말", None),
     )),
 )
@@ -128,6 +128,16 @@ def nav_active(path: str, href: str) -> bool:
 templates.env.globals["nav_active"] = nav_active
 
 
+def _endpoint_problems(actor: Any) -> int:
+    """보고가 끊겼거나 격리 위반이 있는 단말 수."""
+    from mint_litellm.console.pages.endpoints_admin import endpoint_view
+    from mint_litellm.control import endpoint_kits
+
+    rows = endpoint_kits.installs(actor.conn, actor.instance)
+    view = endpoint_view(rows, [], datetime.now(UTC))
+    return sum(1 for r in view["rows"] if r["group"] and (r["group"] == "stale" or r["violations"]))
+
+
 def render(
     request: Request,
     name: str,
@@ -143,7 +153,11 @@ def render(
         "zone_label": labels.pick(labels.TIME_ZONE, zone),
     }
     if actor is not None and not name.startswith("staff"):
-        base["badges"] = {"alerts": reads.urgent_alert_count(actor.conn, actor.instance)}
+        base["badges"] = {
+            "alerts": reads.urgent_alert_count(actor.conn, actor.instance),
+            **reads.menu_counts(actor.conn, actor.instance),
+            "endpoints": _endpoint_problems(actor),
+        }
     return templates.TemplateResponse(
         request, name, {**base, **(context or {})}, status_code=status
     )

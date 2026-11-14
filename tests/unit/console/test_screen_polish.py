@@ -135,8 +135,8 @@ def test_the_blocked_result_is_one_filter_option():
 
 def test_the_ledger_filters_are_plain_controls_in_the_natural_tab_order():
     html = ledger_html()
-    assert 'type="date"' not in html  # 날짜 칸이 구획마다 초점을 잡아 Tab이 갇히지 않게 한다
-    assert 'name="since"' in html and f'placeholder="{Y}11-03"' in html
+    assert re.search(r'<input type="date" name="since"', html)
+    assert re.search(r'<input type="date" name="until"', html)
     assert "tabindex" not in html
     form = re.search(r"<form method=\"get\".*?</form>", html, re.S).group(0)
     names = re.findall(r"<(?:input|select|button|a)\b[^>]*", form)
@@ -157,12 +157,12 @@ def test_time_and_kind_cells_do_not_wrap():
 # --- 모든 화면 공통 ---------------------------------------------------------------------------
 
 
-def test_no_template_has_positive_tab_order_or_date_inputs_or_raw_code_cells():
+def test_no_template_has_positive_tab_order_or_raw_code_cells_or_inline_style_and_handlers():
     allowed_code: set[str] = set()
     for path in (CONSOLE / "templates").glob("*.html"):
         text = path.read_text(encoding="utf-8")
         assert not re.search(r'tabindex="[1-9]', text), path.name
-        assert 'type="date"' not in text, path.name
+        assert not re.search(r'\sstyle="|\son[a-z]+="', text), path.name
         if path.name not in allowed_code:
             assert "<code>" not in text, path.name
 

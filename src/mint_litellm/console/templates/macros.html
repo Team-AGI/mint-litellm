@@ -5,27 +5,6 @@
 {% macro pager(base, page, count) %}
 <div class="pager">{% if page > 1 %}<a class="button" href="{{ base }}{{ '&' if '?' in base else '?' }}page={{ page - 1 }}">이전</a>{% endif %}{% if count >= 50 %}<a class="button" href="{{ base }}{{ '&' if '?' in base else '?' }}page={{ page + 1 }}">다음</a>{% endif %}</div>
 {% endmacro %}
-{% macro evidence_panel(items, action, actor) %}
-<h2>필수 증빙</h2>
-<table><thead><tr><th>증빙</th><th>필요한 때</th><th>상태</th><th>유효 기한</th><th>확인한 사람</th></tr></thead><tbody>
-{% for e in items %}<tr><td>{{ e.label }}</td><td>{{ L.pick(L.EVIDENCE_GATE, e.gate) }}</td><td>{{ badge(L.EVIDENCE, e.state) }}</td><td class="nowrap">{{ e.row.valid_until | when if e.row and e.row.valid_until else '—' }}</td><td>{{ (e.row.attached_by | who) if e.row else '—' }}</td></tr>{% endfor %}
-</tbody></table>
-{% if actor.role != 'viewer' and items %}
-<form method="post" action="{{ action }}" class="form">
-  {{ csrf(actor) }}
-  <div class="row">
-    <label>증빙 종류<select name="kind">{% for e in items %}<option value="{{ e.key }}">{{ e.label }}</option>{% endfor %}</select></label>
-    <label>문서 위치(선택)<input name="ref"></label>
-    <label>문서 해시값(필요한 증빙만)<input name="sha256" maxlength="64"></label>
-    <label>유효 기간(일, 비우면 기본 기간)<input type="number" name="valid_days" min="1"></label>
-  </div>
-  <label>확인한 내용<textarea name="summary" required></textarea></label>
-  <label><input type="checkbox" name="not_applicable" value="1"> 해당 없음으로 확인(해당 없음 가능한 증빙만, 확인한 내용에 사유를 적습니다)</label>
-  <div class="actions"><button type="submit" class="primary">증빙 첨부</button></div>
-</form>
-{% endif %}
-{% endmacro %}
-
 {# --- 화면 뼈대 부품 ---------------------------------------------------------------------------- #}
 {% macro kpi(label, value, href=none, note=none, level=none, trend=none) %}
 <{{ 'a' if href else 'div' }} class="card kpi{{ ' ' ~ level if level }}"{% if href %} href="{{ href }}"{% endif %}>
@@ -46,7 +25,7 @@
 {% endmacro %}
 
 {# kind: stacked(결정별 누적 막대) · donut · bars. data는 console.js의 data-chart 형식을 따른다. #}
-{% macro chart(kind, data, height=240) %}<div class="chart" style="height: {{ height }}px" data-chart="{{ dict(data, kind=kind) | to_json }}"></div>{% endmacro %}
+{% macro chart(kind, data, height=240) %}<div class="chart" data-height="{{ height }}" data-chart="{{ dict(data, kind=kind) | to_json }}"></div>{% endmacro %}
 
 {% macro tabs(items, current, base) %}
 <nav class="tabs" aria-label="탭">{% for key, label, count in items %}<a href="{{ base }}?tab={{ key }}"{% if key == current %} aria-current="page" class="active"{% endif %}>{{ label }}{% if count %} <span class="count">{{ count }}</span>{% endif %}</a>{% endfor %}</nav>
@@ -55,7 +34,7 @@
 {# 시간 범위·새로고침 막대. 추가 필터는 호출 블록에 넣는다. #}
 {% macro filter_bar(action, current_range=none, ranges=RANGES) %}
 <form class="filterbar" method="get" action="{{ action }}">
-  {% if current_range is not none %}<span class="segments" role="group" aria-label="시간 범위">{% for key, label in ranges %}<label class="segment"><input type="radio" name="range" value="{{ key }}"{% if key == current_range %} checked{% endif %} onchange="this.form.requestSubmit()">{{ label }}</label>{% endfor %}</span>{% endif %}
+  {% if current_range is not none %}<span class="segments" role="group" aria-label="시간 범위">{% for key, label in ranges %}<label class="segment"><input type="radio" name="range" value="{{ key }}" data-autosubmit{% if key == current_range %} checked{% endif %}>{{ label }}</label>{% endfor %}</span>{% endif %}
   {% if caller is defined %}{{ caller() }}{% endif %}
   <a class="button" href="{{ action }}" aria-label="새로고침">새로고침</a>
 </form>
@@ -71,19 +50,22 @@
 {% endmacro %}
 
 {# 위험 작업 확인 창. effect는 「무엇을·몇 건·되돌릴 수 있는지」 한 줄. confirm_name이 있으면 이름을 입력해야 한다. #}
-{% macro confirm_dialog(id, trigger, title, effect, action, actor, verb, confirm_name=none, danger=true) %}
-<button type="button" class="{{ 'danger' if danger }}" data-dialog-open="{{ id }}">{{ trigger }}</button>
+{% macro confirm_dialog(id, trigger, title, effect, action, actor, verb, confirm_name=none, danger=true, name_label='이름 입력', trigger_class=none) %}
+<button type="button" class="{{ trigger_class if trigger_class is not none else ('danger' if danger else '') }}" data-dialog-open="{{ id }}">{{ trigger }}</button>
 <dialog id="{{ id }}" class="confirm" aria-labelledby="{{ id }}-title">
   <form method="post" action="{{ action }}" hx-boost="false">
     {{ csrf(actor) }}
     <h3 id="{{ id }}-title">{{ title }}</h3>
     <div class="effect">{{ effect }}</div>
     {% if caller is defined %}{{ caller() }}{% endif %}
-    {% if confirm_name %}<label>이름 입력<input data-confirm="{{ confirm_name }}" autocomplete="off" placeholder="{{ confirm_name }}"></label>{% endif %}
+    {% if confirm_name %}<label>{{ name_label }}<input name="confirm_name" data-confirm="{{ confirm_name }}" autocomplete="off" placeholder="{{ confirm_name }}"></label>{% endif %}
     <div class="actions"><button type="button" data-dialog-close>취소</button><button type="submit" class="{{ 'danger' if danger else 'primary' }}"{% if confirm_name %} data-needs-confirm{% endif %}>{{ verb }}</button></div>
   </form>
 </dialog>
 {% endmacro %}
+
+{# 해시값 복사 버튼. 값은 data-copy 속성, 복사는 console.js. #}
+{% macro copy_hash(value) %}<button type="button" class="copy" data-copy="{{ value }}" title="{{ value }}">{{ value[-8:] }} 복사</button>{% endmacro %}
 
 {% macro nav(groups, path, badges) %}
 {% for group, items in groups %}<div class="group">{% if group %}<div class="group-title">{{ group }}</div>{% endif %}

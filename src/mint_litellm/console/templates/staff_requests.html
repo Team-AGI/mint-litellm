@@ -7,7 +7,7 @@
   {{ m.kpi('가장 이른 만료까지', (soonest | span) if soonest is not none else '—', level='wait' if soonest is not none and soonest < 300) }}
   {{ m.kpi('승인 대기', mine_waiting) }}
 </div>
-{{ m.tabs([('pending', '확인할 요청', pending_count), ('mine', '내 승인 요청', mine_waiting)], tab, '/staff/requests') }}
+{{ m.tabs([('pending', '확인할 요청', pending_count), ('mine', '내 승인 요청', mine_waiting)], tab, '/staff/confirmations') }}
 {% if tab == 'pending' %}
 {% if waiting %}
 <table><thead><tr><th>서버</th><th>도구</th><th>목적</th><th>표시 값</th><th>만료</th><th>상태</th><th></th></tr></thead><tbody>
@@ -41,14 +41,14 @@
 {% if mine %}
 <table class="clickable"><thead><tr><th>서버</th><th>도구</th><th>요청</th><th>상태</th><th>남은 시간</th></tr></thead><tbody>
 {% for c in mine %}<tr>
-<td><a href="/staff/requests?tab=mine&open={{ c.id }}">{{ c.server_id }}</a></td><td>{{ c.tool }}</td>
+<td><a href="/staff/confirmations?tab=mine&open={{ c.id }}">{{ c.server_id }}</a></td><td>{{ c.tool }}</td>
 <td class="nowrap">{{ c.requested_at | when if c.requested_at else '—' }}</td>
 <td>{{ m.badge(L.MY_CALL_APPROVAL, c.view) }}</td>
 <td class="nowrap">{% if c.remaining_seconds is not none %}{{ c.remaining_seconds | span }} · {{ c.uses_left }}회 남음{% else %}—{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
 {% else %}{{ m.empty('승인 요청이 없습니다', '/staff', '내 서버') }}{% endif %}
-{% if selected %}{% call m.drawer(selected.server_id ~ ' · ' ~ selected.tool, '/staff/requests?tab=mine') %}
+{% if selected %}{% call m.drawer(selected.server_id ~ ' · ' ~ selected.tool, '/staff/confirmations?tab=mine') %}
 <dl class="detail">
   <dt>상태</dt><dd>{{ m.badge(L.MY_CALL_APPROVAL, selected.view) }}</dd>
   <dt>요청</dt><dd>{{ selected.requested_at | when if selected.requested_at else '—' }}</dd>
