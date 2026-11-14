@@ -14,6 +14,7 @@ import json
 import logging
 import re
 from collections.abc import Callable, Mapping
+from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
@@ -21,7 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from mint_litellm.compat.litellm_1_106 import HookData
-from mint_litellm.endpoint.routes import DECIDE_PATH, REPORT_PATH, RESULT_PATH
+from mint_litellm.endpoint.routes import DECIDE_PATH, OUTCOMES_PATH, REPORT_PATH, RESULT_PATH
 from mint_litellm.plugin.pipeline import CallRequest, build_request, evaluate_request
 from mint_litellm.plugin.result import observe_response, observe_unknown_outcome
 from mint_litellm.types.decision import OperationType
@@ -32,7 +33,8 @@ log = logging.getLogger("mint_litellm.endpoint")
 
 MAX_BODY_BYTES = 64 * 1024
 # 경로마다 정상 본문이 이보다 작다(결과 보고는 참조와 결과 종류, 설치 보고는 서버 이름 목록).
-BODY_LIMITS = {DECIDE_PATH: MAX_BODY_BYTES, RESULT_PATH: 4 * 1024, REPORT_PATH: 96 * 1024}
+BODY_LIMITS = {DECIDE_PATH: MAX_BODY_BYTES, RESULT_PATH: 4 * 1024, REPORT_PATH: 96 * 1024,
+    OUTCOMES_PATH: 1024}
 NOT_READY_CODE = "MINT-ENDPOINT-NOT-READY"
 _REFERENCE = re.compile(r"^([0-9a-f-]{36}):([1-9][0-9]{0,8})$")
 
@@ -58,6 +60,14 @@ class ResultBody(BaseModel):
     # unknown: 훅이 도구가 실행됐는지 모른다고 보고(중단·시간 초과 등)
     outcome: Literal["success", "error", "unknown"]
     size_bytes: int | None = Field(default=None, ge=0, le=2**40)
+
+
+class OutcomesBody(BaseModel):
+    """승인 결과 조회. ``since``는 앞서 받은 ``cursor``이고, 처음에는 비워 커서만 받는다."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    since: datetime | None = None
 
 
 class ProcessItem(BaseModel):
@@ -356,6 +366,22 @@ def make_router(
         if desired is not None:
             answer["desired"] = desired
         return answer
+
+    @router.post(OUTCOMES_PATH)
+    async def outcomes(request: Request, auth: Any = Depends(auth_dependency)) -> dict[str, Any]:
+        """키에 묶인 사용자 본인의 호출별 승인 결과(승인·거부)만 돌려준다. 인자 값은 싣지 않는다."""
+        runtime = ready()
+        body = await _body(request, OutcomesBody)
+        who = principal_factory(auth, instance_id=runtime.config.instance_id)
+        if who.principal_type != "user" or not who.principal_id:
+            raise HTTPException(status_code=404, detail="no such kit key")
+        try:
+            cursor, items = await runtime.database.call_approval_outcomes(
+                runtime.config.instance_id, who.principal_id, body.since
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="approval store is not ready") from exc
+        return {"cursor": cursor, "items": items}
 
     return router
 

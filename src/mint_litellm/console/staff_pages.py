@@ -35,8 +35,9 @@ from mint_litellm.control import endpoint_kits, links
 from mint_litellm.control.db.connection import connect
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.litellm_admin import LiteLLMError
-from mint_litellm.control.services import console_sessions, staff
+from mint_litellm.control.services import console_sessions, reads, staff
 from mint_litellm.endpoint.kit_build import build_kit
+from mint_litellm.plugin.snapshot import WINDOW_MAX_USES
 
 router = APIRouter(dependencies=[Depends(require_csrf)])
 # 로그인은 세션이 없을 때(또는 만료된 쿠키가 남았을 때)도 받으므로 CSRF 토큰 대신 출처만 본다.
@@ -238,6 +239,53 @@ def decide(
         actor, lambda: function(actor.sctx, actor.id_hash, confirmation_id), ok,
         "/staff/confirmations", lambda **kw: confirmations_page(request, actor, **kw),
     )
+
+
+# --- 승인 요청 현황 -----------------------------------------------------------------------------
+
+
+def my_approvals(actor: StaffActor) -> list[dict]:
+    """본인의 호출별 승인 요청과 기간 승인. 화면 상태(``view``)는 만료·사용 횟수를 반영한다."""
+    rows = reads.my_call_approvals(actor.sctx.control, actor.sctx.instance_id, actor.user_id)
+    now = datetime.now(UTC)
+    for row in rows:
+        windowed = row["valid_until"] is not None
+        end = row["valid_until"] or row["expires_at"]
+        view = row["status"]
+        if view in ("pending", "approved") and end <= now:
+            view = "expired"
+        elif view == "approved" and windowed and row["uses"] >= WINDOW_MAX_USES:
+            view = "consumed"
+        row["view"] = view
+        row["remaining_seconds"] = (
+            int((end - now).total_seconds()) if view == "approved" and windowed else None
+        )
+        row["uses_left"] = max(WINDOW_MAX_USES - row["uses"], 0) if windowed else None
+        by = row["approved_by"]
+        row["decider"] = "자동 규칙" if by and by.startswith("rule:") else by
+    return rows
+
+
+@router.get("/staff/requests")
+def requests_page(request: Request, actor: StaffActor = Depends(staff_actor)):
+    pending = [
+        c for c in staff.list_confirmations(actor.sctx)
+        if c["status"] == "pending" and c["expires_at"] > datetime.now(UTC)
+    ]
+    separate = staff.requires_separate_key(actor.sctx)
+    for c in pending:
+        c["same_key"] = separate and c["requested_by_key_token"] == actor.sctx.key_token
+    return render(
+        request, "staff_requests.html", {"rows": my_approvals(actor), "pending": pending},
+        actor=actor,
+    )
+
+
+@router.get("/api/v1/me/call-approvals")
+def my_approvals_api(actor: StaffActor = Depends(staff_actor)):
+    keep = ("id", "server_id", "tool", "action", "display", "view", "decider", "decision_reason",
+            "requested_at", "decided_at", "remaining_seconds", "uses_left")
+    return {"items": reads.jsonable([{k: r[k] for k in keep} for r in my_approvals(actor)])}
 
 
 # --- 13 동의 관리와 내 기록 -------------------------------------------------------------------

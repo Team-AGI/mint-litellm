@@ -781,3 +781,63 @@ def test_the_download_follows_the_chosen_system_and_tool(kits):
         refused = client.post("/staff/endpoint/kit", data={"csrf": csrf(client), **bad})
         assert refused.status_code == 400
     assert len(kits.issuer.made) == 1  # 잘못된 요청은 키를 발급하지 않는다.
+
+
+# --- 내 승인 요청 ------------------------------------------------------------------------------
+
+
+def add_call_approval(world, user, tool, status="pending", approved_by=None, window=None,
+                      reason=None, display='{"받는 사람": "a@example.com"}'):
+    cid = str(uuid.uuid4())
+    world.query(
+        "INSERT INTO mint.call_approvals (id, instance_id, org_id, principal_type, principal_id,"
+        " server_id, tool, args_fp, fp_key_version, policy_version_id, status, requested_by,"
+        " expires_at, display) VALUES (%s, %s, 'acme', 'user', %s, 'srv-ok', %s, %s, 1, 'v1',"
+        " 'pending', 'mint-auto', now() + interval '1 hour', %s::jsonb)",
+        cid, INSTANCE, user, tool, HEX, display)
+    if status == "approved":
+        world.query(
+            "UPDATE mint.call_approvals SET status = 'approved', approved_by = %s,"
+            " window_minutes = %s, valid_until = CASE WHEN %s::int IS NULL THEN NULL"
+            " ELSE now() + interval '20 minutes' END, decided_at = now() WHERE id = %s",
+            approved_by, window, window, cid)
+    elif status == "rejected":
+        world.query(
+            "UPDATE mint.call_approvals SET status = 'rejected', approved_by = %s,"
+            " decision_reason = %s, decided_at = now() WHERE id = %s", approved_by, reason, cid)
+    return cid
+
+
+def test_the_my_requests_screen_shows_only_own_requests_in_korean_with_the_outcome(sworld):
+    add_call_approval(sworld, STAFFER, "waiting_tool")
+    add_call_approval(sworld, STAFFER, "window_tool", "approved", "kim", window=30)
+    add_call_approval(sworld, STAFFER, "auto_tool", "approved", f"rule:{uuid.uuid4()}", window=10)
+    add_call_approval(sworld, STAFFER, "denied_tool", "rejected", "kim", reason="범위 밖")
+    add_call_approval(sworld, OTHER, "their_tool")
+    page = logged_in(sworld).get("/staff/requests")
+    assert page.status_code == 200
+    assert "their_tool" not in page.text
+    for text in ("waiting_tool", "대기", "승인", "남은", "50회 남음", "자동 규칙",
+                 "거부", "범위 밖", "kim", "a@example.com"):
+        assert text in page.text
+    for english in ("pending", "approved", "rejected", "rule:"):
+        assert english not in page.text
+
+
+def test_the_my_requests_api_is_scoped_to_the_signed_in_user(sworld):
+    add_call_approval(sworld, STAFFER, "mine")
+    add_call_approval(sworld, OTHER, "theirs")
+    client = logged_in(sworld)
+    items = client.get("/api/v1/me/call-approvals").json()["items"]
+    assert [i["tool"] for i in items] == ["mine"] and items[0]["view"] == "pending"
+    assert "args_fp" not in items[0] and "principal_id" not in items[0]
+    other = logged_in(sworld, OTHER_KEY).get("/api/v1/me/call-approvals").json()["items"]
+    assert [i["tool"] for i in other] == ["theirs"]
+    anonymous = sworld.client.__class__(sworld.app, base_url="https://testserver")
+    assert anonymous.get("/api/v1/me/call-approvals").status_code == 401
+
+
+def test_a_pending_self_confirmation_can_be_confirmed_from_the_my_requests_screen(sworld):
+    cid = add_confirmation(sworld, display='{"받는 사람": "a@example.com"}')
+    page = logged_in(sworld, CONSOLE).get("/staff/requests")
+    assert f"/staff/confirmations/{cid}/confirm" in page.text
