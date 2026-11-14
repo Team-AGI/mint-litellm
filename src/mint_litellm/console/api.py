@@ -166,7 +166,7 @@ class RejectCallBody(Versioned):
 
 class ApproveCallBody(Versioned):
     second_approver_token: str | None = None
-    window_minutes: int | None = None
+    window_minutes: int | None = None  # 없으면 30분(1회만 되는 동작은 1회), 0이면 1회
 
 
 class DenialBody(BaseModel):
@@ -566,7 +566,8 @@ def lift_denial(denial_id: str, body: Versioned, actor: Actor = Depends(api_acto
 def approve_call(call_id: str, body: ApproveCallBody, actor: Actor = Depends(api_actor)):
     call_approval_service.approve(
         actor.ctx, call_id, second_approver(actor, body.second_approver_token),
-        expected_version=body.state_version, window_minutes=body.window_minutes,
+        expected_version=body.state_version, window_minutes=body.window_minutes or None,
+        default_window=body.window_minutes is None,
     )
     return done(actor, id=call_id)
 
@@ -576,6 +577,12 @@ def reject_call(call_id: str, body: RejectCallBody, actor: Actor = Depends(api_a
     call_approval_service.reject(
         actor.ctx, call_id, expected_version=body.state_version, reason=body.reason
     )
+    return done(actor, id=call_id)
+
+
+@router.post("/call-approvals/{call_id}/extend")
+def extend_call(call_id: str, body: Versioned, actor: Actor = Depends(api_actor)):
+    call_approval_service.extend(actor.ctx, call_id, expected_version=body.state_version)
     return done(actor, id=call_id)
 
 

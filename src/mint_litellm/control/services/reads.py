@@ -6,6 +6,7 @@ from uuid import UUID
 
 import psycopg
 
+from mint_litellm.control.approvals import CALL_EXTEND_WITHIN_MINUTES
 from mint_litellm.control.db.connection import fetchall, fetchone
 
 PAGE_SIZE = 50
@@ -244,13 +245,20 @@ def call_approvals(
         " CASE WHEN c.valid_until IS NOT NULL AND c.status = 'approved'"
         "  THEN greatest(extract(epoch FROM c.valid_until - now()), 0)::int END"
         "  AS remaining_seconds,"
+        " greatest(extract(epoch FROM now() - c.requested_at), 0)::int AS age_seconds,"
+        " extended_by, extended_at,"
+        " (c.status = 'approved' AND c.window_minutes IS NOT NULL AND c.extended_at IS NULL"
+        "  AND c.valid_until > now() AND c.valid_until <= now() + make_interval(mins => %s))"
+        "  AS can_extend,"
+        " (SELECT t.action_type FROM mint.tool_contracts t"
+        "  WHERE t.instance_id = c.instance_id AND t.id = c.contract_id) AS action_type,"
         " (SELECT count(*) FROM mint.call_approval_uses u WHERE u.call_approval_id = c.id) AS uses"
         " FROM mint.call_approvals c WHERE c.instance_id = %s"
         " AND (%s::text IS NULL OR c.status = %s)"
         " AND (%s::uuid IS NULL OR c.id = %s::uuid)"
         " ORDER BY (c.status = 'pending') DESC, coalesce(c.valid_until, c.expires_at) ASC, c.id"
         " LIMIT %s OFFSET %s",
-        (instance, status, status, only_id, only_id, limit, offset),
+        (CALL_EXTEND_WITHIN_MINUTES, instance, status, status, only_id, only_id, limit, offset),
     )
 
 

@@ -225,6 +225,12 @@ COMMANDS: tuple[CliCommand, ...] = (
         events=(EventKind.CALL_APPROVAL_CANCELLED,),
     ),
     CliCommand(
+        path=("call-approval", "extend"),
+        summary="만료가 가까운 기간 승인을 같은 기간만큼 한 번 연장한다.",
+        roles=APPROVER_UP,
+        events=(EventKind.CALL_APPROVAL_APPROVED,),
+    ),
+    CliCommand(
         path=("consent", "add"),
         summary="사용자 동의를 등록한다. 운영자 증명은 증거 참조와 증거 해시가 필수이다.",
         roles=ADMIN_ONLY,

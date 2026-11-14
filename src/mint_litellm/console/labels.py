@@ -465,6 +465,7 @@ NOTICES = {
     "call_approved": "호출을 승인했습니다.",
     "call_rejected": "호출을 거부했습니다.",
     "call_cancelled": "승인 요청을 취소했습니다.",
+    "call_extended": "승인 기간을 한 번 연장했습니다.",
     "org_added": "조직을 생성했습니다.",
     "org_closed": "조직을 닫았습니다.",
     "org_suggestion_applied": "조직 연결 제안을 적용했습니다.",

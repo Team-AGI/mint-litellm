@@ -372,7 +372,7 @@ def _operator_bootstrap(run: Run) -> None:
 
 
 def _window_minutes(value: str | None) -> int | None:
-    return None if value is None else int(value.removesuffix("m"))
+    return None if value in (None, "once") else int(value.removesuffix("m"))
 
 
 def _second(run: Run) -> Operator | None:
@@ -891,12 +891,13 @@ HANDLERS: dict[str, Handler] = {
     "call-approval request": _call_request,
     "call-approval approve": lambda r: call_approval_service.approve(
         r.context(), r.args.call_approval_id, _second(r),
-        window_minutes=_window_minutes(r.args.for_),
+        window_minutes=_window_minutes(r.args.for_), default_window=r.args.for_ is None,
     ),
     "call-approval reject": lambda r: call_approval_service.reject(
         r.context(), r.args.call_approval_id, reason=r.args.reason
     ),
     "call-approval cancel": _done(call_approval_service.cancel, "call_approval_id"),
+    "call-approval extend": _done(call_approval_service.extend, "call_approval_id"),
     "consent add": _consent_add,
     "consent revoke": _done(consent_service.revoke, "consent_id"),
     "allowlist add": _allowlist_add,
@@ -1111,13 +1112,14 @@ ARGUMENTS: dict[str, list[Any]] = {
     ],
     "call-approval approve": [
         _a("call_approval_id"), _SECOND,
-        _a("--for", dest="for_", choices=["10m", "30m"],
-           help="같은 호출을 이 시간 동안 되풀이해 승인한다(기본: 1회)"),
+        _a("--for", dest="for_", choices=["once", "10m", "30m"],
+           help="같은 호출을 이 시간 동안 되풀이해 승인한다(기본: 30m, 1회만 되는 동작은 once)"),
     ],
     "call-approval reject": [
         _a("call_approval_id"), _a("--reason", help="요청자에게 전달할 거부 사유"),
     ],
     "call-approval cancel": [_a("call_approval_id")],
+    "call-approval extend": [_a("call_approval_id")],
     "consent add": [
         _a("--org", required=True),
         _a("--user", required=True, help="동의한 사람의 LiteLLM 사용자 식별자"),
