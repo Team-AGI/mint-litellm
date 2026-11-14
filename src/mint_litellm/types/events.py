@@ -413,6 +413,10 @@ class ResponseObservation(BaseModel):
     unmanaged_findings: tuple[str, ...] = ()
     # 서버 주소 재확인이 observe에서 막지 않고 관측만 한 종류(private·rebind·unresolved)
     resolve_findings: tuple[str, ...] = ()
+    # 업스트림에 전달된 호출자 토큰의 aud가 서버 대상과 다름(관측 모드) / 읽을 수 없어 확인하지 않음
+    aud_mismatch: bool = False
+    aud_unchecked: bool = False
+    aud_unchecked_reason: str | None = None  # opaque(불투명 토큰), not_forwarded(훅에 전달 안 됨)
     # 결과가 검사 상한을 넘어 끝까지 보지 못했는지, 구조화된 결과에서 비밀·개인정보가 걸린 JSON 경로
     # (값은 남기지 않는다).
     scan_truncated: bool = False
@@ -455,3 +459,4 @@ class AlertKind(StrEnum):
     CONTENT_FINDING_UNMANAGED = "content_finding_unmanaged"
     SERVER_ADDRESS_INTERNAL = "server_address_internal"
     RESULT_UNENFORCED = "result_unenforced"
+    CONFIG_PLAINTEXT_SECRET = "config_plaintext_secret"

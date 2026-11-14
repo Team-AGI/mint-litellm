@@ -55,7 +55,9 @@ KINDS: dict[str, JobKind] = {
     "content_finding_scan": JobKind(),
     "server_address_scan": JobKind(),
     "result_unenforced_scan": JobKind(),
+    "token_audience_scan": JobKind(),
     "package_vuln_scan": JobKind(),
+    "config_secret_scan": JobKind(),
     # 사건 분할을 미리 만들고 닫힌 달을 내보낸다 / 보관 기간이 지난 달을 지운다.
     "event_partition_maintain": JobKind(external_write=True),
     "event_retention": JobKind(external_write=True),
@@ -249,6 +251,12 @@ def _server_address_scan(job: JobContext) -> None:
     server_address.run(job)
 
 
+def _token_audience_scan(job: JobContext) -> None:
+    from mint_litellm.control import token_audience
+
+    token_audience.run(job)
+
+
 def _approval_dormant_scan(job: JobContext) -> None:
     from mint_litellm.control import dormant
 
@@ -263,6 +271,12 @@ def _org_suggest_scan(job: JobContext) -> None:
     from mint_litellm.control import org_suggest
 
     org_suggest.run(job)
+
+
+def _config_secret_scan(job: JobContext) -> None:
+    from mint_litellm.control import config_secrets
+
+    config_secrets.run(job)
 
 
 def _package_vuln_scan(job: JobContext) -> None:
@@ -351,7 +365,9 @@ HANDLERS: dict[str, Callable[[JobContext], None]] = {
     "content_finding_scan": _content_finding_scan,
     "server_address_scan": _server_address_scan,
     "result_unenforced_scan": _result_unenforced_scan,
+    "token_audience_scan": _token_audience_scan,
     "package_vuln_scan": _package_vuln_scan,
+    "config_secret_scan": _config_secret_scan,
     "event_partition_maintain": _event_partition_maintain,
     "event_retention": _event_retention,
     "approval_dormant_scan": _approval_dormant_scan,
@@ -375,7 +391,9 @@ SCHEDULES: dict[str, Callable[[Any], int]] = {
     "content_finding_scan": lambda s: 60,
     "server_address_scan": lambda s: 60,
     "result_unenforced_scan": lambda s: 60,
+    "token_audience_scan": lambda s: 60,
     "package_vuln_scan": lambda s: s.vuln_scan_seconds,
+    "config_secret_scan": lambda s: 3600,  # 1시간(고정)
     "event_partition_maintain": lambda s: 3600,  # 1시간(고정)
     "event_retention": lambda s: 3600,  # 1시간(고정). 보관 일수가 없으면 아무것도 하지 않는다.
     "approval_dormant_scan": lambda s: 3600,  # 1시간(고정)

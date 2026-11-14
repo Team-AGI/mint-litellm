@@ -28,6 +28,15 @@ SERVER = {
 SANDBOX = {
     "bwrap": "격리됨", "appcontainer": "격리됨", "none": "격리 없음", "unsupported": "격리 미지원",
 }  # fmt: skip
+# 결과 검사에서 찾은 항목의 종류
+SENSITIVE_KIND = {
+    "private_key": "개인 키", "cloud_access_key": "클라우드 접근 키", "access_token": "접근 토큰",
+    "jwt": "JWT 토큰", "bearer_token": "Bearer 토큰",
+    "resident_registration_number": "주민등록번호", "card_number": "카드 번호",
+    "phone_number": "전화번호", "email": "이메일 주소",
+    "high_entropy_token": "비밀로 보이는 긴 문자열",
+}  # fmt: skip
+PACKAGE_ECOSYSTEM = {"npm": "npm", "pypi": "PyPI", "container": "컨테이너 이미지"}
 INSTALL = {
     "managed": Status("관리형", "ok"),
     "user": Status("관리되지 않음", "error"),
@@ -293,6 +302,8 @@ ALERT_KIND = {
     "content_finding_unmanaged": "미관리 서버 내용 검사",
     "server_address_internal": "서버 주소 내부 대역",
     "result_unenforced": "결과를 막지 못함",
+    "token_audience_mismatch": "토큰 대상 불일치",
+    "config_plaintext_secret": "설정의 평문 비밀",
     "approval_dormant": "미사용 승인",
     "endpoint_stale_server": "폐기 서버 항목 잔존",
     "endpoint_unmanaged": "관리되지 않는 설치",
@@ -531,3 +542,16 @@ def worst(levels: list[str]) -> str:
         if level in levels:
             return level
     return "off"
+
+
+def response_notes(payload: dict | None) -> list[str]:
+    """호출 응답 사건의 결과 검사 내용을 줄 단위 한국어로 돌려준다(값은 담지 않는다)."""
+    payload = payload or {}
+    found = payload.get("sensitive_findings") or {}
+    out = [f"{SENSITIVE_KIND.get(k, '기타')} {n}건" for k, n in sorted(found.items())]
+    if payload.get("scan_truncated"):
+        out.append("검사 상한을 넘어 끝까지 보지 못함")
+    paths = payload.get("finding_paths") or []
+    if paths:
+        out.append("발견 위치: " + ", ".join(paths))
+    return out

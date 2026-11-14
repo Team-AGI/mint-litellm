@@ -20,9 +20,11 @@ import socket
 import time
 import urllib.request
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
+
+import yaml
 
 from mint_litellm.compat import capabilities
 from mint_litellm.compat import litellm_1_106 as compat
@@ -49,6 +51,7 @@ from mint_litellm.plugin.timing import OFF, StageClock
 from mint_litellm.types.canonical import sha256
 from mint_litellm.types.decision import OperationType, StageResult
 from mint_litellm.types.events import Event, EventKind
+from mint_litellm.types.plaintext_secrets import plaintext_secret_paths
 from mint_litellm.types.reason_codes import Reason
 from mint_litellm.types.reuse_policy import DEFAULT_TOOL_TIMEOUT_SECONDS, reuse_violations
 from mint_litellm.types.settings import SELF_CHECK_DESCRIPTIONS, SelfCheckItem, policies_of
@@ -304,6 +307,28 @@ def check_items(
     return results
 
 
+def warn_plaintext_secrets(env: Mapping[str, str]) -> list[str]:
+    """LiteLLM 설정 파일에 평문으로 적힌 비밀의 항목 경로. 경고만 하고 기동은 막지 않는다.
+
+    값은 로그에 남기지 않는다. 파일이 없거나 읽을 수 없으면 확인하지 못한 것이므로 비어 있다.
+    """
+    raw = env.get("MINT_LITELLM_CONFIG") or env.get("CONFIG_FILE_PATH")
+    if not raw:
+        return []
+    try:
+        with open(raw, encoding="utf-8") as handle:
+            document = yaml.safe_load(handle)
+        paths = plaintext_secret_paths(document if isinstance(document, Mapping) else None)
+    except Exception:  # 경고용 점검이 기동을 막지 않게 한다
+        return []
+    if paths:
+        log.warning(
+            "LiteLLM 설정에 비밀이 평문으로 적혀 있습니다(os.environ/ 참조로 바꾸십시오): %s",
+            ", ".join(paths),
+        )
+    return paths
+
+
 def registry_backed(servers: Sequence[RegisteredServer]) -> list[RegisteredServer]:
     """LiteLLM 레지스트리와 대조하는 서버. 로컬 실행(stdio) 서버는 MINT 표만으로 다룬다."""
     return [s for s in servers if s.identity_kind == "remote"]
@@ -424,6 +449,7 @@ class PluginRuntime:
     _list_seen: ListSeen | None = field(default=None, repr=False)
     _resolve_guard: ResolveGuard = field(default_factory=ResolveGuard, repr=False)
     _grade: str | None = field(default=None, repr=False)
+    _secrets_checked: bool = field(default=False, repr=False)
     _task: asyncio.Task[None] | None = field(default=None, repr=False)
     _observe_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _restore_task: asyncio.Task[None] | None = field(default=None, repr=False)
@@ -538,6 +564,9 @@ class PluginRuntime:
         except Exception:
             controlled = None
         view = self.view_collector()
+        if not self._secrets_checked:
+            self._secrets_checked = True
+            warn_plaintext_secrets(view.env or os.environ)
         await self._register_contract_tools(view)
         results = check_items(
             view,
@@ -848,12 +877,25 @@ class PolicyEngine:
 _runtime: PluginRuntime | None = None
 
 
+def _audience_capability(config: PluginConfig, probe) -> PluginConfig:
+    """호출자 토큰이 훅에 오지 않는 LiteLLM이면 aud 대조를 끈다(``off``). 이 능력은 선택이라
+    기동은 막지 않지만, 집행(``enforce``)을 요청했는데 확인할 수 없으면 조용히 풀지 않고 멈춘다."""
+    problem = probe()
+    if problem is None:
+        return config
+    if config.token_audience == "enforce":
+        raise RuntimeError(f"MINT_TOKEN_AUDIENCE=enforce cannot be honored: {problem}")
+    log.warning("호출자 토큰이 훅에 전달되지 않아 토큰 대상(aud) 확인을 끕니다: %s", problem)
+    return replace(config, token_audience="off")
+
+
 def get_runtime(env: Mapping[str, str] | None = None) -> PluginRuntime:
     """프로세스 전역 실행 상태. 처음 부를 때 환경 변수에서 설정을 읽는다."""
     global _runtime
     if _runtime is None:
         config = PluginConfig.from_env(os.environ if env is None else env)
         configure_logging(config.log_level)
+        config = _audience_capability(config, compat.bearer_passthrough_problem)
         database = PluginDatabase(
             config.database_url,
             max_size=config.db_pool_size,

@@ -14,7 +14,7 @@ import importlib
 import importlib.metadata
 import time
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
@@ -69,6 +69,8 @@ class HookData:
     logging_obj: Any
     arguments_ok: bool = True
     arguments_confirmed: bool = True
+    # 호출자가 보낸 Bearer 토큰 원문. 로그·표시에 싣지 않는다.
+    bearer: str | None = field(default=None, repr=False, compare=False)
 
 
 _ARGUMENTS_MARK = "\nArguments: "
@@ -108,6 +110,25 @@ def arguments_witness_problem() -> str | None:
     return None if same and not other else "arguments witness: unexpected message shape"
 
 
+def bearer_passthrough_problem() -> str | None:
+    """사전 훅 데이터가 호출자 Bearer 토큰(``incoming_bearer_token``)을 싣는지. 아니면 이유.
+
+    토큰 대상(aud) 대조만 쓰는 선택 능력이라 인자 증인과 따로 본다. 실패해도 기동은 막지 않는다.
+    """
+    try:
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy = ProxyLogging.__new__(ProxyLogging)
+        kwargs = {"name": "probe", "arguments": {}, "server_name": "probe",
+                  "incoming_bearer_token": "probe-token"}
+        request = proxy.create_mcp_request_object_from_kwargs(kwargs)
+        data = proxy.convert_mcp_to_llm_format(request, kwargs)
+        carried = data.get("incoming_bearer_token") == "probe-token"
+    except Exception as exc:
+        return f"bearer passthrough: {type(exc).__name__}"
+    return None if carried else "bearer passthrough: token not carried"
+
+
 def effective_arguments(data: Mapping[str, Any]) -> Mapping[str, Any] | None:
     """업스트림에 전달될 인자. 객체가 아니면 None이다.
 
@@ -126,6 +147,7 @@ def parse_hook_data(data: Mapping[str, Any]) -> HookData:
         data, data.get("mcp_arguments", {})
     )
     logging_obj = data.get("litellm_logging_obj")
+    bearer = data.get("incoming_bearer_token")
     call_id = getattr(logging_obj, "litellm_call_id", None) or data.get("litellm_call_id")
     return HookData(
         server_name=data.get("mcp_server_name"),
@@ -135,6 +157,7 @@ def parse_hook_data(data: Mapping[str, Any]) -> HookData:
         logging_obj=logging_obj,
         arguments_ok=arguments is not None,
         arguments_confirmed=confirmed,
+        bearer=bearer if isinstance(bearer, str) and bearer else None,
     )
 
 
@@ -224,6 +247,13 @@ def _credential_ref(server: Any) -> str | None:
     return None
 
 
+def _audiences(server: Any) -> tuple[str, ...]:
+    """호출자 토큰의 ``aud``로 인정하는 값: 명시한 ``upstream_resource``와 서버 주소."""
+    configured = (getattr(server, "upstream_resource", None) or "").strip()
+    found = [configured] if configured and configured.lower() != "auto" else []
+    return (*found, server.url) if server.url else tuple(found)
+
+
 def _to_resolved(server: Any, candidates: int) -> ResolvedServer:
     if not getattr(server, "url", None):
         # 레지스트리의 로컬 실행(stdio)·OpenAPI 서버는 URL 해시도 실행 계약도 만들 수 없어 막는다.
@@ -237,6 +267,7 @@ def _to_resolved(server: Any, candidates: int) -> ResolvedServer:
         auth_type=normalize_auth_type(server.auth_type),
         candidates_with_same_name=max(candidates, 1),
         credential_ref=_credential_ref(server),
+        audiences=_audiences(server),
         oauth_scopes=tuple(sorted({
             part for s in (getattr(server, "configured_scopes", None) or ())
             if isinstance(s, str) for part in s.split()

@@ -491,7 +491,10 @@ OBSERVATION_ITEMS: tuple[str, ...] = (
 # `mint check`가 정책마다 충족 여부 한 줄을 보인다.
 REUSE_POLICIES: dict[str, tuple[str, ...]] = {
     "POL-R-04": ("서버 이름·별칭 유일성",),
-    "POL-R-05": ("mcp_servers.<이름>.upstream_resource",),
+    "POL-R-05": (
+        "mcp_servers.<이름>.upstream_resource",
+        "mcp_servers.<이름>.upstream_resource (DB 등록 서버)",
+    ),
     "POL-R-06": ("mcp_servers.<이름>.auth_type",),
     "POL-R-07": ("mcp_servers.<이름>.issuer", "mcp_servers.<이름>.oauth_identity_binding.mode"),
     "POL-R-09": ("OAuth 리다이렉트 출처",),

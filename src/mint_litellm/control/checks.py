@@ -18,6 +18,7 @@ from mint_litellm.control.litellm_config import GUARDRAIL_MODES, LOGGER_SUFFIXES
 from mint_litellm.control.policy_check import PolicyState
 from mint_litellm.types import fingerprint
 from mint_litellm.types.decision import normalize_auth_type, url_sha256
+from mint_litellm.types.plaintext_secrets import plaintext_secret_paths
 from mint_litellm.types.reuse_policy import (
     DEFAULT_TOOL_TIMEOUT_SECONDS,
     DISCOVERY_AUTH,
@@ -29,6 +30,7 @@ from mint_litellm.types.reuse_policy import (
     KEY_ISSUER,
     KEY_REDIRECT,
     KEY_RESOURCE,
+    KEY_RESOURCE_DB,
     KEY_RPM,
     KEY_SSL,
     KEY_TIMEOUT,
@@ -58,6 +60,7 @@ _OPTOUT_KEYS = ("opted_out_global_guardrails", "disable_global_guardrails")
 # 설정 표에는 없지만 필수로 취급하는 점검 항목
 POLICY_ITEM = "정책 번들 내용"
 FINGERPRINT_ITEM = "MINT_FINGERPRINT_KEY"
+PLAINTEXT_SECRET_ITEM = "설정 평문 비밀"  # 경고만 한다(기존 배포를 멈추지 않는다)
 KEY_NAME_IN_FILE = "MINT_FINGERPRINT_KEY"
 EXTRA_REQUIRED = frozenset({POLICY_ITEM, FINGERPRINT_ITEM})
 
@@ -203,6 +206,7 @@ def run_checks(
     if not file_missing:
         _check_file_rows(judge, config, general, lsettings, servers_cfg, env, replicas)
         _check_env_rows(judge, general, env)
+        _check_plaintext_secrets(report, config)
 
     # 관리 API 기반 행
     if litellm is not None:
@@ -235,6 +239,18 @@ def run_checks(
         _truthy(lsettings.get("enable_redis_auth_cache"))
     ).lower()
     return report
+
+
+def _check_plaintext_secrets(report: Report, config: Mapping[str, Any]) -> None:
+    paths = plaintext_secret_paths(config)
+    if paths:
+        report.add(
+            PLAINTEXT_SECRET_ITEM, Level.WARN,
+            "설정에 비밀이 평문으로 적혀 있습니다. os.environ/<이름> 참조로 바꾸십시오: "
+            + ", ".join(paths),
+        )
+    else:
+        report.add(PLAINTEXT_SECRET_ITEM, Level.OK)
 
 
 def _check_file_rows(judge, config, general, lsettings, servers_cfg, env, replicas) -> None:
@@ -377,6 +393,19 @@ def _check_registry_rows(
             owners.setdefault(str(label).replace(" ", "_"), set()).add(owner)
     duplicated = sorted(name for name, ids in owners.items() if len(ids) > 1)
     judge("서버 이름·별칭 유일성", not duplicated, "중복된 이름·별칭: " + ", ".join(duplicated))
+    no_resource = [
+        str(e.get("alias") or e.get("server_name") or e.get("server_id"))
+        for e in listing
+        if normalize_auth_type(e.get("auth_type")) == "oauth2"
+        and not _truthy(e.get("delegate_auth_to_upstream"))
+        and not (e.get("credentials") or {}).get("upstream_resource")
+    ]
+    # 설정 파일 점검은 DB 등록 서버를 보지 못하므로 관리 API 목록으로 따로 점검한다.
+    if no_resource:
+        report.add(KEY_RESOURCE_DB, Level.FAIL,
+                   "upstream_resource가 없는 OAuth 서버: " + ", ".join(no_resource[:5]))
+    else:
+        report.add(KEY_RESOURCE_DB, Level.OK)
     by_id = {e["server_id"]: e for e in listing}
     problems: list[str] = []
     unverified: list[str] = []

@@ -69,9 +69,11 @@ SUMMARY = {
     "contract_drift": "승인된 계약과 달라졌습니다. 서버 {server_id}",
     "server_address_internal": "서버 {server_id}의 주소가 내부 주소로 풀리거나 바뀌었습니다.",
     "content_finding_unmanaged": "서버 {server_id}의 호출이 내용 검사에 걸렸습니다(계약 관리 전).",
+    "token_audience_mismatch": "서버 {server_id}에 대상이 다른 토큰이 {calls}건 전달되었습니다.",
     "result_unenforced": (
         "최근 {window_seconds}초 동안 결과 {calls}건이 검사에 걸렸지만 막지 못했습니다."
     ),
+    "config_plaintext_secret": "LiteLLM 설정 {count}곳에 비밀이 평문으로 적혀 있습니다.",
     "call_spike": "서버 {server_id}의 {tool} 호출이 최근 {calls}건입니다(평소 {baseline_calls}건).",
     "bulk_extraction": (
         "서버 {server_id}에서 최근 {items}항목({bytes}바이트)을 받아 갔습니다"
@@ -102,6 +104,11 @@ SUMMARY = {
     "package_vuln_due": "서버 {server_id}의 취약점 조치 기한이 다가오거나 지났습니다.",
     "vuln_feed_unreachable": "취약점 조회처에 연결하지 못했습니다.",
     "dep_graph_unreachable": "의존 패키지 조회처에 연결하지 못했습니다.",
+    "approval_dormant": "서버 {server_id}의 승인이 오랫동안 쓰이지 않았습니다.",
+    "call_approval_requested": "서버 {server_id}의 {tool} 호출에 승인이 필요합니다.",
+    "intake_pending": "서버 {server_id}의 도입 신청이 검토를 기다립니다.",
+    "endpoint_silent": "단말 {key_alias}의 보고가 끊겼습니다.",
+    "endpoint_key_expiring": "단말 {key_alias}의 키가 곧 만료됩니다.",
     "endpoint_stale_server": "단말 {key_alias}에 폐기된 서버 {server_id}가 남아 있습니다.",
     "endpoint_unmanaged": "단말 {key_alias}에 관리되지 않는 설치가 있습니다.",
     "endpoint_stale_process": "단말 {key_alias}에서 폐기된 서버 {server_id}가 실행 중입니다.",
