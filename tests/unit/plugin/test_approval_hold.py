@@ -195,3 +195,14 @@ def test_the_config_bounds_the_hold(tmp_path):
     for bad in ("-1", "301", "x"):
         with pytest.raises(RuntimeError):
             PluginConfig.from_env({**env, "MINT_APPROVAL_HOLD_SECONDS": bad})
+
+
+def test_a_call_the_policy_blocks_opens_no_approval_request(tmp_path):
+    h = setup(tmp_path)
+    h.deps = replace(h.deps, evaluate=evaluator(
+        "Block", policy_ids=("POL-E-07",), obligations=({"type": "require_call_approval"},)
+    ))
+    outcome = asyncio.run(evaluate_request(request(), h.deps))
+    assert not outcome.allowed
+    assert outcome.snapshot.findings[0].reason_code == "POLICY_DETECT_POL-E-07"
+    assert h.snapshots.requests == [] and outcome.approval_request_id is None

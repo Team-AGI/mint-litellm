@@ -304,7 +304,9 @@ class LiteLLMSync(LiteLLMAdmin):
 KIT_ALIAS_PREFIX = "mint-kit-"
 # 게이트웨이 MCP 전용 키의 별칭(삭제 허용 접두를 따른다)
 MCP_ALIAS_PREFIX = KIT_ALIAS_PREFIX + "mcp-"
-_KIT_KEY_FIELDS = frozenset({"user_id", "team_id", "key_alias", "allowed_routes"})
+_KIT_KEY_FIELDS = frozenset(
+    {"user_id", "team_id", "key_alias", "allowed_routes", "object_permission"}
+)
 
 
 def check_kit_write(method: str, path: str, body: Any) -> None:
@@ -317,7 +319,15 @@ def check_kit_write(method: str, path: str, body: Any) -> None:
         if (
             not isinstance(body, dict)
             or not {"user_id", "key_alias", "allowed_routes"} <= set(body) <= _KIT_KEY_FIELDS
-            or not all(isinstance(body[k], str) and body[k] for k in set(body) - {"allowed_routes"})
+            or not all(
+                isinstance(body[k], str) and body[k]
+                for k in set(body) - {"allowed_routes", "object_permission"}
+            )
+            or ("object_permission" in body and not (
+                body["key_alias"].startswith(MCP_ALIAS_PREFIX)
+                and isinstance(body["object_permission"], dict)
+                and set(body["object_permission"]) == _PERMISSION_FIELDS
+            ))
             or not body["key_alias"].startswith(KIT_ALIAS_PREFIX)
             or body["allowed_routes"] != list(
                 MCP_KEY_ROUTES if body["key_alias"].startswith(MCP_ALIAS_PREFIX) else KIT_KEY_ROUTES
@@ -345,10 +355,13 @@ class LiteLLMKitKeys(LiteLLMSync):
 
     _check = staticmethod(check_kit_write)
 
-    def generate_kit_key(self, *, user_id: str, team_id: str | None, alias: str) -> str:
+    def generate_kit_key(
+        self, *, user_id: str, team_id: str | None, alias: str, permission: dict | None = None
+    ) -> str:
         """사용자 한 명의 설치 묶음 키를 만든다. 이 키는 결정·결과·보고 경로만 부를 수 있다.
 
-        별칭이 ``MCP_ALIAS_PREFIX``이면 게이트웨이 MCP 경로만 부를 수 있는 키이다.
+        별칭이 ``MCP_ALIAS_PREFIX``이면 게이트웨이 MCP 경로만 부를 수 있는 키이고, 그 키의 서버
+        권한(``permission``: mcp_servers·mcp_tool_permissions 전체)을 함께 쓴다.
         """
         routes = MCP_KEY_ROUTES if alias.startswith(MCP_ALIAS_PREFIX) else KIT_KEY_ROUTES
         body: dict[str, Any] = {
@@ -358,6 +371,8 @@ class LiteLLMKitKeys(LiteLLMSync):
         }
         if team_id:
             body["team_id"] = team_id
+        if permission is not None and alias.startswith(MCP_ALIAS_PREFIX):
+            body["object_permission"] = permission
         reply = self._write("POST", "/key/generate", body)
         key = reply.get("key") if isinstance(reply, dict) else None
         if not isinstance(key, str) or not key:

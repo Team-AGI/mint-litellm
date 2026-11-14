@@ -11,6 +11,7 @@ from typing import Any
 
 import psycopg
 
+from mint_litellm.control import kit_key_sync
 from mint_litellm.control.db.connection import fetchall
 from mint_litellm.control.errors import ControlError
 from mint_litellm.control.litellm_write import (
@@ -111,11 +112,18 @@ def issue_gateway_key(
     해제 때 설치 묶음 키와 함께 지워진다.
     """
     alias = MCP_ALIAS_PREFIX + secrets.token_hex(8)
-    key = issuer.generate_kit_key(user_id=user_id, team_id=team_id, alias=alias)
+    # 키가 LiteLLM에서 받는 서버 권한은 그 사용자에게 적용되는 MINT 승인뿐이다(승인이 바뀌면 작업이
+    # 다시 맞춘다). 키 값을 아는 순간부터 같은 권한이어야 하므로 만들 때 함께 쓴다.
+    servers, tools = kit_key_sync.desired_permission(conn, instance_id, user_id, team_id, "")
+    key = issuer.generate_kit_key(
+        user_id=user_id, team_id=team_id, alias=alias,
+        permission={"mcp_servers": servers, "mcp_tool_permissions": tools},
+    )
     conn.execute(
-        "UPDATE mint.endpoint_installs SET mcp_key_alias = %s"
+        "UPDATE mint.endpoint_installs SET mcp_key_alias = %s, mcp_key_token = %s"
         " WHERE instance_id = %s AND key_token = %s",
-        (alias, instance_id, hashlib.sha256(kit_key.encode()).hexdigest()),
+        (alias, hashlib.sha256(key.encode()).hexdigest(), instance_id,
+         hashlib.sha256(kit_key.encode()).hexdigest()),
     )
     return key
 

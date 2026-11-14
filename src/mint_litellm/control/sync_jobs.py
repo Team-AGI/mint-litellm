@@ -21,6 +21,7 @@ from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import AdminError, ControlError
 from mint_litellm.control.jobs import JobContext, PermanentFailure, WaitForOperator
+from mint_litellm.control.kit_key_sync import sync_kit_keys
 from mint_litellm.control.litellm_config import SERVER_LIMITS
 from mint_litellm.control.litellm_write import (
     LiteLLMForbidden,
@@ -447,6 +448,7 @@ def server_finalize(ctx: JobContext) -> None:
             payload={"server_id": server_id, "status": "terminated", "deleted": deleted,
                      "remaining": 0, "not_covered": list(CREDENTIAL_UNCOVERED)},
         )
+        request_kit_key_sync(_actor_context(ctx))
 
 
 def _finalize_terminating(ctx: JobContext) -> None:
@@ -871,6 +873,7 @@ def activation_finalize(ctx: JobContext) -> None:
         )
         if activated is None:
             return
+        request_kit_key_sync(_actor_context(ctx))
         first = fetchone(
             conn,
             "SELECT id, status FROM mint.servers WHERE instance_id = %s AND server_id = %s"
@@ -1115,6 +1118,17 @@ def _overdue_activations(ctx: JobContext) -> None:
 
 
 @_reachable
+def kit_key_sync(ctx: JobContext) -> None:
+    """단말 게이트웨이 키의 LiteLLM 서버 권한을 지금의 승인에 맞춘다(승인·철회·서버 폐기 뒤)."""
+    sync_kit_keys(ctx.conn, ctx.instance_id, _client(ctx))
+
+
+def request_kit_key_sync(ctx: Context) -> None:
+    """승인이 바뀌었으니 단말 게이트웨이 키의 권한도 다시 맞추도록 등록한다."""
+    enqueue_job(ctx, "kit_key_sync", "all")
+
+
+@_reachable
 def sync_reconcile(ctx: JobContext) -> None:
     """대상마다 LiteLLM 값과 원하는 상태를 비교해 차이가 있으면 그 대상의 동기화를 등록한다."""
     conn, inst = ctx.conn, ctx.instance_id
@@ -1142,3 +1156,4 @@ def sync_reconcile(ctx: JobContext) -> None:
         _reconcile_server(ctx, client, server["server_id"])
     _overdue_activations(ctx)
     _finalize_terminating(ctx)
+    request_kit_key_sync(_actor_context(ctx))

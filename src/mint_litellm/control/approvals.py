@@ -253,6 +253,19 @@ def _require_scope_in_relation(
             raise ControlError(f"사용자의 조직 유도 결과가 이용 관계의 조직 {org}과 다릅니다.")
 
 
+def _is_kit_gateway_scope(ctx: Context, scope_type: str, scope_id: str) -> bool:
+    """사용자나 키가 활성 단말 게이트웨이 키를 가진 쪽인가(LiteLLM 쪽 권한을 따로 안 본다)."""
+    column = {"user": "user_id", "key": "mcp_key_token"}.get(scope_type)
+    return column is not None and bool(
+        fetchone(
+            ctx.conn,
+            "SELECT 1 AS x FROM mint.endpoint_installs WHERE instance_id = %s AND "
+            f"{column} = %s AND revoked_at IS NULL AND mcp_key_token IS NOT NULL",
+            (ctx.instance_id, scope_id),
+        )
+    )
+
+
 def check_scope_and_permission(
     ctx: Context, litellm: LiteLLMAdmin, relation: dict, scope_type: str, scope_id: str
 ) -> None:
@@ -282,6 +295,9 @@ def check_scope_and_permission(
     if local:
         # 로컬 실행 서버는 LiteLLM 레지스트리에 없고 LiteLLM이 키·팀에 서버 권한을 주지도 않는다.
         # 호출 권한은 이 승인이 정하므로 LiteLLM 쪽 서버 권한은 요구하지 않는다.
+        return
+    if _is_kit_gateway_scope(ctx, scope_type, scope_id):
+        # 단말 게이트웨이 키의 LiteLLM 서버 권한은 이 승인에서 MINT가 만들어 쓴다(kit_key_sync).
         return
     if scope_type == "key" and target.get("team_id"):
         # 팀 소속 키의 서버 권한은 팀이 허용한 서버의 부분집합이어야 한다(LiteLLM이 아니면 403).
@@ -420,6 +436,7 @@ def approve(
             "basis": basis,
         },
     )
+    base.enqueue_job(ctx, "kit_key_sync", "all")  # 단말 게이트웨이 키의 서버 권한을 맞춘다
     if first_approval:
         updated = fetchone(
             ctx.conn,
@@ -456,6 +473,7 @@ def revoke(ctx: Context, approval_id: str, reason: str, deny: bool) -> None:
         {"approval_id": approval_id, "server_id": row["server_id"], "reason": reason,
          "with_denial": deny},
     )
+    base.enqueue_job(ctx, "kit_key_sync", "all")
     if row["scope_type"] in sync_state.SYNC_SCOPES:
         # 철회로 빠진 항목은 같은 수렴 작업이 LiteLLM에서 거둔다(그 항목의 카운터·보류를 지운다)
         sync_state.reset_counters(

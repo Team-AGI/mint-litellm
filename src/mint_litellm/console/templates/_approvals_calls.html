@@ -27,7 +27,7 @@
 <td>{{ L.pick(L.PRINCIPAL, c.principal_type) }} {{ c.principal_id }}</td>
 <td class="nowrap">{{ c.requested_at | when if c.requested_at else '—' }}{% if c.status == 'pending' and c.age_seconds is not none %}<br>{{ c.age_seconds | span }} 경과{% endif %}</td>
 <td class="nowrap">{% if c.window_minutes %}{{ c.window_minutes }}분{% if c.status == 'approved' %} · 남은 {{ c.remaining_seconds | span }}{% endif %}{% else %}1회{% endif %}</td>
-<td>{{ m.badge(L.CALL_APPROVAL, c.status) }}</td>
+<td>{{ m.badge(L.CALL_APPROVAL, c.status) }}{% if c.status == 'pending' and c.hold_timed_out_at %}<br><span class="muted">대기 시간 초과 — 호출자는 응답 받음</span>{% endif %}</td>
 <td>{% if c.status == 'pending' and can(actor, 'call-approval approve') %}<form method="post" action="/call-approvals/{{ c.id }}/approve">{{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ c.state_version }}"><input type="hidden" name="window_minutes" value="{{ 0 if c.action_type in one_shot else 30 }}"><button type="submit">{{ '1회 승인' if c.action_type in one_shot else '30분 승인' }}</button></form>{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
@@ -49,6 +49,7 @@
   <dt>요청 시각</dt><dd>{{ c.requested_at | when if c.requested_at else '—' }}</dd>
   <dt>만료</dt><dd>{{ (c.valid_until or c.expires_at) | when }}</dd>
   {% if c.window_minutes %}<dt>사용 현황</dt><dd>{{ c.window_minutes }}분 · {{ c.uses }}회 사용{% if c.approved_by and c.approved_by.startswith('rule:') %} · 규칙 {{ c.approved_by[5:13] }}{% endif %}{% if c.extended_at %} · 연장됨({{ c.extended_by | masked(64) }}){% endif %}</dd>{% endif %}
+  {% if c.status == 'pending' and c.hold_timed_out_at %}<dt>대기</dt><dd>대기 시간 초과 — 호출자는 응답 받음 ({{ c.hold_timed_out_at | when }})</dd>{% endif %}
   {% if c.decision_reason %}<dt>거부 사유</dt><dd>{{ c.decision_reason | masked }}</dd>{% endif %}
 </dl>
 {% if can(actor, 'call-approval approve') and c.status in ('pending', 'approved') %}

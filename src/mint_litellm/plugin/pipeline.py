@@ -1530,6 +1530,19 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         stages.add(stage, result)
     if stages.stopped:
         return
+    # 정책이 막는 호출은 승인 요구보다 먼저 거절한다(어차피 막힐 호출로 사람 승인을 열지 않는다).
+    # 승인 여부·근무 시간에 따르는 규칙(R1, R3)은 이 선행 거절에서 뺀다. 관측 모드에서 허용으로
+    # 전환되는 finding이면 이어서 의무를 확인한다.
+    policy_findings = [
+        r for _, r in run.policy.results
+        if isinstance(r, StageResult) and r.status is StageStatus.FINDING
+        and not (r.reason_code or "").endswith(("_R1", "_R3"))
+    ]
+    if policy_findings and conclude(
+        policy_findings, mode=run.mode, observation=run.observation,
+        policy_observable=run.policy.observable,
+    ).enforced_action is Action.BLOCK:
+        return
 
     run.current = Stage.OBLIGATIONS
     run.profile = effective_profile(

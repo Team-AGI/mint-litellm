@@ -1069,7 +1069,7 @@ def prefix_clash(gateway: str, servers) -> str | None:
     """하네스의 도구 이름 접두가 게이트웨이와 겹치는 승인 서버 이름(없으면 None)."""
 
     def prefix(name: str) -> str:
-        return "mcp__" + re.sub(r"[^a-zA-Z0-9_-]", "_", name) + "__"
+        return "mcp__" + re.sub(r"[^a-zA-Z0-9_]", "_", name).lower() + "__"
 
     return next((n for n in sorted(servers) if prefix(n).startswith(prefix(gateway))), None)
 
@@ -1697,6 +1697,24 @@ class Kit:
             and not state.get("timer") and not state.get("task")
         )
 
+    def unload_apparmor(self, state: dict) -> None:
+        """프로필 파일을 지우기 전에 커널에서 내린다(상태에 이름이 없어도 추적 파일로 찾는다)."""
+        logical = f"{APPARMOR_DIR}/{APPARMOR_PROFILE}"
+        profile = state.get("apparmor") or (logical if logical in state.get("files", {}) else None)
+        parser = shutil.which("apparmor_parser") or next(
+            (p for p in ("/usr/sbin/apparmor_parser", "/sbin/apparmor_parser") if Path(p).exists()),
+            None,
+        )
+        if not profile or self.root is not None or not parser:
+            return
+        try:
+            subprocess.run(
+                [parser, "-R", str(self.physical(profile))],
+                capture_output=True, stdin=subprocess.DEVNULL, timeout=20,
+            )  # fmt: skip
+        except (OSError, subprocess.SubprocessError):
+            pass
+
     def uninstall(self) -> dict:
         state = self.load_state()
         if not state:
@@ -1707,8 +1725,7 @@ class Kit:
         elif self.user_timer(state):
             # 유닛 파일을 지우기 전에 끈다. 지운 뒤에는 이미 떠 있는 타이머가 남는다.
             capture(["systemctl", "--user", "disable", "--now", f"{UNIT}.timer"])
-        if state.get("apparmor") and self.root is None and shutil.which("apparmor_parser"):
-            capture(["apparmor_parser", "-R", str(self.physical(state["apparmor"]))])
+        self.unload_apparmor(state)
         for logical, digest in state.get("files", {}).items():
             path = self.physical(logical)
             if not path.exists():

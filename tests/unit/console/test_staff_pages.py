@@ -637,7 +637,7 @@ class KitIssuer:
     def __init__(self):
         self.made, self.deleted = [], []
 
-    def generate_kit_key(self, *, user_id, team_id, alias):
+    def generate_kit_key(self, *, user_id, team_id, alias, permission=None):
         self.made.append((user_id, team_id, alias))
         return f"sk-kit-{alias}"
 
@@ -696,7 +696,7 @@ def test_the_download_hands_out_a_kit_with_the_users_own_key_and_the_approved_se
     # 게이트웨이 MCP 전용 키는 같은 사용자·팀에 결속되고 별칭만 표에 남는다.
     assert (mcp_user, mcp_team) == (STAFFER, "team-a") and mcp_alias.startswith("mint-kit-mcp-")
     assert config["gateway_key"] == f"sk-kit-{mcp_alias}"
-    assert config["gateway"] == {"name": "litellm-gateway", "url": "https://mint.test/mcp"}
+    assert config["gateway"] == {"name": "litellm_gateway", "url": "https://mint.test/mcp"}
     assert kits.query("SELECT mcp_key_alias FROM mint.endpoint_installs") == [(mcp_alias,)]
     assert config["decide_url"] == "https://mint.test" and list(config["servers"]) == ["local-1"]
     ((stored_token, owner, stored_alias),) = kits.query(

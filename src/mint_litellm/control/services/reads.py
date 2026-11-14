@@ -262,7 +262,7 @@ def call_approvals(
         "  THEN greatest(extract(epoch FROM c.valid_until - now()), 0)::int END"
         "  AS remaining_seconds,"
         " greatest(extract(epoch FROM now() - c.requested_at), 0)::int AS age_seconds,"
-        " extended_by, extended_at,"
+        " extended_by, extended_at, hold_timed_out_at,"
         " (c.status = 'approved' AND c.window_minutes IS NOT NULL AND c.extended_at IS NULL"
         "  AND c.valid_until > now() AND c.valid_until <= now() + make_interval(mins => %s))"
         "  AS can_extend,"

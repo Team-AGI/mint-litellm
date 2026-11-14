@@ -40,12 +40,14 @@ def register_local(ctx: Context, server_id: str, contract: ExecContract) -> None
 def suspend(ctx: Context, server_id: str, *, expected_version: int | None = None) -> None:
     lock_version(ctx, "servers", server_id, expected_version)
     domain.suspend(ctx, server_id)
+    enqueue_job(ctx, "kit_key_sync", "all")
 
 
 @service("server resume")
 def resume(ctx: Context, server_id: str, *, expected_version: int | None = None) -> None:
     lock_version(ctx, "servers", server_id, expected_version)
     domain.resume(ctx, server_id)
+    enqueue_job(ctx, "kit_key_sync", "all")
 
 
 @service("server terminate")
@@ -53,3 +55,4 @@ def terminate(ctx: Context, server_id: str, *, expected_version: int | None = No
     lock_version(ctx, "servers", server_id, expected_version)
     domain.terminate(ctx, server_id)
     enqueue_job(ctx, "server_finalize", server_id)
+    enqueue_job(ctx, "kit_key_sync", "all")  # 폐기 서버를 단말 게이트웨이 키에서 거둔다

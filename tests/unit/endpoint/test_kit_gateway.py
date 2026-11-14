@@ -27,23 +27,23 @@ def test_a_managed_install_puts_the_gateway_into_both_managed_lists_with_private
     state = kit.install()
     root = tmp_path / "root"
     claude = root / "etc/claude-code/managed-mcp.json"
-    entry = json.loads(claude.read_text())["mcpServers"]["litellm-gateway"]
+    entry = json.loads(claude.read_text())["mcpServers"]["litellm_gateway"]
     assert entry == {"type": "http", "url": URL, "headers": {"Authorization": f"Bearer {KEY}"}}
     codex = root / "etc/codex"
     servers = tomllib.loads((codex / "managed_config.toml").read_text(encoding="utf-8"))
-    assert servers["mcp_servers"]["litellm-gateway"] == {
+    assert servers["mcp_servers"]["litellm_gateway"] == {
         "url": URL, "http_headers": {"Authorization": f"Bearer {KEY}"},
     }
     requirements = tomllib.loads((codex / "requirements.toml").read_text(encoding="utf-8"))
-    assert requirements["mcp_servers"]["litellm-gateway"] == {"identity": {"url": URL}}
+    assert requirements["mcp_servers"]["litellm_gateway"] == {"identity": {"url": URL}}
     assert KEY not in (codex / "requirements.toml").read_text(encoding="utf-8")
     if sys.platform != "win32":  # 키가 든 파일은 소유자·그룹만 읽는다.
         assert claude.stat().st_mode & 0o777 == 0o640
         assert (codex / "managed_config.toml").stat().st_mode & 0o777 == 0o640
     # 게이트웨이는 승인 로컬 서버 목록이 아니다: 보고하는 서버 이름에 넣지 않는다(폐기로 오인).
-    assert state["mcp_servers"] == ["srv-1", "srv-2"] and state["gateway"] == "litellm-gateway"
+    assert state["mcp_servers"] == ["srv-1", "srv-2"] and state["gateway"] == "litellm_gateway"
     listing = json.loads((root / "usr/local/lib/mint-endpoint/contracts.json").read_text())
-    assert listing["gateways"] == ["litellm-gateway"]
+    assert listing["gateways"] == ["litellm_gateway"]
     copied = json.loads((root / "usr/local/lib/mint-endpoint/kit.json").read_text())
     assert "gateway_key" not in copied and copied["gateway"]["url"] == URL
     kit.uninstall()
@@ -70,18 +70,18 @@ def test_a_refresh_keeps_the_gateway_entry_and_the_gateway_list(tmp_path, report
     assert kit.refresh(state, desired) == ["srv-3"]
     root = tmp_path / "root"
     listing = json.loads((root / "usr/local/lib/mint-endpoint/contracts.json").read_text())
-    assert listing["gateways"] == ["litellm-gateway"] and "srv-3" in listing["servers"]
+    assert listing["gateways"] == ["litellm_gateway"] and "srv-3" in listing["servers"]
     mcp = json.loads((root / "etc/claude-code/managed-mcp.json").read_text())["mcpServers"]
-    assert {"litellm-gateway", "srv-3"} <= set(mcp)
+    assert {"litellm_gateway", "srv-3"} <= set(mcp)
     codex = tomllib.loads((root / "etc/codex/managed_config.toml").read_text(encoding="utf-8"))
-    assert {"litellm-gateway", "srv-3"} <= set(codex["mcp_servers"])
+    assert {"litellm_gateway", "srv-3"} <= set(codex["mcp_servers"])
 
 
 def test_an_approved_server_whose_tool_prefix_hides_behind_the_gateway_is_refused(
     tmp_path, reports
 ):
     folder = unpack(
-        tmp_path, servers=("litellm-gateway__x",), harnesses=("claude",), gateway_key=KEY
+        tmp_path, servers=("litellm_gateway__x",), harnesses=("claude",), gateway_key=KEY
     )
     kit = make_kit(folder, tmp_path, managed=True)
     with pytest.raises(SystemExit, match="게이트웨이 이름과 겹칩니다"):
@@ -98,7 +98,7 @@ def test_the_windows_gateway_entry_lives_in_the_users_codex_config(
     kit.install()
     config = tmp_path / "home/.codex/config.toml"
     parsed = tomllib.loads(config.read_text(encoding="utf-8"))
-    assert parsed["mcp_servers"]["litellm-gateway"]["url"] == URL
+    assert parsed["mcp_servers"]["litellm_gateway"]["url"] == URL
 
 
 # --- 격리 사전 점검 ------------------------------------------------------------------------------
@@ -325,3 +325,17 @@ def test_the_user_sync_aligns_the_codex_block_with_the_approved_and_retired_list
 
 def test_the_agent_can_reconcile_without_starting_a_server(tmp_path):
     agent.main(["reconcile", "--contracts", "none", "--state-dir", str(tmp_path)])
+
+
+def test_uninstall_unloads_the_profile_even_when_the_state_lost_its_name(tmp_path, monkeypatch):
+    kit = strict_kit(tmp_path)
+    calls = []
+    monkeypatch.setattr(kit_module.shutil, "which", lambda name: "/usr/sbin/apparmor_parser")
+    monkeypatch.setattr(kit_module.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+    kit.root = None  # 실제 시스템에 설치한 경우
+    state = {"files": {"/etc/apparmor.d/mint-bwrap": "x"}}  # 다시 설치해 `apparmor` 키가 없다.
+    kit.unload_apparmor(state)
+    assert [c[:2] for c in calls] == [["/usr/sbin/apparmor_parser", "-R"]]
+    calls.clear()
+    kit.unload_apparmor({"files": {}})
+    assert calls == []

@@ -1055,6 +1055,20 @@ class PluginDatabase:
         row = await self._run(read)
         return None if row is None else str(row[0])
 
+    async def mark_call_hold_timeout(self, instance_id: str, call_id: str) -> None:
+        """승인 대기가 시간 초과로 끝나 호출자가 응답받았음을 요청에 남긴다(요청은 대기로 둔다)."""
+
+        async def write(conn: Any) -> None:
+            await conn.set_read_only(False)
+            async with conn.transaction():
+                await conn.execute(
+                    "UPDATE mint.call_approvals SET hold_timed_out_at = clock_timestamp()"
+                    " WHERE instance_id = %s AND id = %s AND status = 'pending'",
+                    (instance_id, call_id),
+                )
+
+        await self._run(write)
+
     async def confirmation_status(
         self, instance_id: str, wait: tuple[str, str, str, str]
     ) -> str | None:
