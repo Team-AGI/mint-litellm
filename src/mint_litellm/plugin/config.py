@@ -25,6 +25,8 @@ DEFAULT_BUFFER_DIR = "/var/lib/mint/buffer"
 DEFAULT_BUFFER_MAX_BYTES = 50 * 1024 * 1024
 DEFAULT_DECISION_BUDGET_MS = 300
 DEFAULT_SELFCHECK_GRACE_SECONDS = 120.0
+DEFAULT_APPROVAL_HOLD_SECONDS = 120
+MAX_APPROVAL_HOLD_SECONDS = 300
 # 승인 조건에 결과 상한이 없을 때 계약 관리 서버에 채우는 기본 상한. 0이면 채우지 않는다.
 DEFAULT_MAX_RESULT_BYTES = 1024 * 1024
 DEFAULT_MAX_RESULT_ITEMS = 1000
@@ -46,6 +48,8 @@ class PluginConfig:
     buffer_max_bytes: int = DEFAULT_BUFFER_MAX_BYTES
     db_pool_size: int = 8
     decision_budget_seconds: float = DEFAULT_DECISION_BUDGET_MS / 1000
+    # 호출별 승인을 기다리는 동안 호출을 붙잡아 두는 최대 초. 0이면 붙잡지 않고 바로 거절한다.
+    approval_hold_seconds: int = DEFAULT_APPROVAL_HOLD_SECONDS
     fingerprint_key: bytes | None = None
     fingerprint_key_version: int = 1
     readiness_url: str | None = None
@@ -114,6 +118,10 @@ class PluginConfig:
             )
             / 1000,
             fingerprint_key=key,
+            approval_hold_seconds=_integer(
+                env, "MINT_APPROVAL_HOLD_SECONDS", DEFAULT_APPROVAL_HOLD_SECONDS, 0,
+                MAX_APPROVAL_HOLD_SECONDS,
+            ),
             fingerprint_key_version=_integer(env, "MINT_FINGERPRINT_KEY_VERSION", 1, 1),
             readiness_url=env.get("MINT_READINESS_URL") or None,
             log_level=_log_level(env.get("MINT_LOG_LEVEL")),

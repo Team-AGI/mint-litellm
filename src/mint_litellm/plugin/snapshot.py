@@ -1002,6 +1002,20 @@ class PluginDatabase:
 
         return await self._run(write)
 
+    async def call_approval_status(self, instance_id: str, call_id: str) -> str | None:
+        """호출별 승인 요청의 현재 상태. 없거나 기한이 지났으면 None. 승인 대기 보류가 읽는다."""
+
+        async def read(conn: Any) -> Any:
+            cursor = await conn.execute(
+                "SELECT status FROM mint.call_approvals WHERE instance_id = %s AND id = %s"
+                " AND (status <> 'pending' OR expires_at > clock_timestamp())",
+                (instance_id, call_id),
+            )
+            return await cursor.fetchone()
+
+        row = await self._run(read)
+        return None if row is None else str(row[0])
+
     async def recent_call_outcome(self, params: Mapping[str, Any]) -> tuple[str, str | None] | None:
         """같은 호출(주체·서버·도구·인자 지문)의 가장 최근 거부·만료 결과. 없으면 None.
 

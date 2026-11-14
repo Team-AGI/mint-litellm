@@ -8,6 +8,7 @@ import concurrent.futures
 import json
 import os
 import statistics
+import threading
 import time
 from datetime import timedelta
 
@@ -423,3 +424,55 @@ def test_check_passes_on_clean_stack(world):
     done = world.mint.run("check", check=False)
     report = json.loads(done.stdout)
     assert done.returncode == 0, [f for f in report["findings"] if f["level"] == "FAIL"]
+
+
+def test_a_held_call_returns_the_tool_result_once_an_admin_approves(world, evidence):
+    """승인이 필요한 호출은 승인을 기다리며 붙잡혀 있다가 승인되면 같은 호출로 결과를 받는다.
+
+    같은 호출을 다시 보내도 승인 요청은 하나이고, 승인 소비는 한 번이다.
+    """
+    evidence.positive_control()
+    subject = world.subject()
+    relation = world.prepare(subject)
+    world.approve(subject, relation, extra=("--high-risk-tools", "echo"))
+    support.compose(
+        "up", "-d", "--wait", "--force-recreate", "litellm1",
+        env={"MINT_E_APPROVAL_HOLD_SECONDS": "60"},
+    )
+    try:
+        mark = support.marker()
+        arguments = {"text": "x", "marker": mark}
+        result: dict = {}
+
+        def held_call():
+            started = time.monotonic()
+            result["outcome"] = world.call(subject, mark=mark, arguments=arguments)
+            result["seconds"] = time.monotonic() - started
+
+        pending = (
+            "select id from mint.call_approvals where principal_id = %s and status = 'pending'"
+        )
+        worker = threading.Thread(target=held_call)
+        worker.start()
+        support.wait_until(
+            lambda: world.query(pending, (subject.user_id,)), 30, what="the pending request"
+        )
+        worker.join(2)
+        assert worker.is_alive(), "호출이 승인 결정을 기다리지 않고 반환됐다"
+        (request,) = world.query(pending, (subject.user_id,))
+        world.mint.run("call-approval", "approve", str(request["id"]))
+        worker.join(30)
+        assert not worker.is_alive()
+        outcome = result["outcome"]
+        assert outcome.allowed, outcome.body
+        evidence.assert_calls(mark, 1)
+        events = world.events(mark, wait=10)
+        held = [e for e in events if e["payload"].get("approval_hold") == "approved"]
+        assert len(held) == 1 and held[0]["payload"]["consumed_call_approval_id"]
+        count = world.query(
+            "select count(*) as n from mint.call_approvals where principal_id = %s",
+            (subject.user_id,),
+        )[0]["n"]
+        assert count == 1
+    finally:
+        support.compose("up", "-d", "--wait", "--force-recreate", "litellm1")
