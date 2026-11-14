@@ -1,0 +1,1 @@
+- Windows AppContainer 안에서 도는 서버도 실행기가 입출력을 파이프로 중계해 `tools/list` 응답(이름·설명·입력 정의)을 보고한다.

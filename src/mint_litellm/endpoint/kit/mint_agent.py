@@ -1442,13 +1442,18 @@ class AppContainerRun:
         self.track: str | None = None
         self.job = self.process = self.thread = None
         self.api: Any = None
+        self.tap: ToolListTap | None = None
+        self.parent_fds: tuple[int, int] | None = None  # (서버 입력에 쓰는 쪽, 서버 출력을 읽는 쪽)
+        self.child_fds: list[int] = []  # 서버에 넘길 파이프 끝(시작한 뒤 이쪽에서 닫는다)
 
     @classmethod
     def prepare(
         cls, server: str, approved: Mapping[str, Any], argv: Sequence[str],
         env: Mapping[str, str], home: str, state_dir: str | None,
+        tap: ToolListTap | None = None,
     ) -> AppContainerRun:  # fmt: skip
         self = cls()
+        self.tap = tap
         self.api = _win_api()
         ctypes, k32, adv, userenv, _types = self.api
         reconcile_appcontainers(state_dir)
@@ -1509,6 +1514,16 @@ class AppContainerRun:
             except (OSError, ValueError):
                 handle = None
             handles.append(handle)
+        if self.tap is not None:
+            # 입출력을 실행기가 가진 파이프로 잇는다. 서버 쪽 끝만 상속한다.
+            msvcrt = __import__("msvcrt")
+            in_r, in_w = os.pipe()
+            out_r, out_w = os.pipe()
+            self.child_fds = [in_r, out_w]
+            self.parent_fds = (in_w, out_r)
+            handles[0], handles[1] = msvcrt.get_osfhandle(in_r), msvcrt.get_osfhandle(out_w)
+            os.set_handle_inheritable(handles[0], True)
+            os.set_handle_inheritable(handles[1], True)
         unique = list(dict.fromkeys(h for h in handles if h))
         handle_array = (ctypes.c_void_p * max(len(unique), 1))(*unique)
         length = ctypes.c_size_t(0)
@@ -1548,6 +1563,8 @@ class AppContainerRun:
                 raise SandboxUnavailable(f"CreateProcess failed ({ctypes.get_last_error()})")
         finally:
             k32.DeleteProcThreadAttributeList(buffer)
+            self._close_fds(self.child_fds)  # 서버만 이 끝을 가져야 서버가 끝날 때 파이프가 닫힌다.
+            self.child_fds = []
         self.process, self.thread = proc.hProcess, proc.hThread
         self.job = k32.CreateJobObjectW(None, None)
         limits = JobLimits()
@@ -1561,6 +1578,14 @@ class AppContainerRun:
         ):
             k32.TerminateProcess(self.process, 1)
             raise SandboxUnavailable("job object failed")
+
+    @staticmethod
+    def _close_fds(fds: Sequence[int]) -> None:
+        for fd in fds:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
     def _temp_dir(self) -> str | None:
         ctypes, _k32, _adv, userenv, _types = self.api
@@ -1577,16 +1602,54 @@ class AppContainerRun:
         """서버를 풀어 끝날 때까지 기다리고 종료 코드를 돌려준다. 끝나면 권한·프로필을 정리한다."""
         ctypes, k32, *_ = self.api
         try:
+            drain = self._start_relay() if self.parent_fds else None
             k32.ResumeThread(self.thread)
             while k32.WaitForSingleObject(self.process, 500) == 0x102:  # 시간 초과면 다시 기다린다.
                 pass
+            if drain is not None:
+                drain.join(2)  # 남은 출력을 마저 전달한다(손자가 파이프를 쥐어도 2초만 기다린다).
             code = ctypes.c_uint32()
             k32.GetExitCodeProcess(self.process, ctypes.byref(code))
             return int(code.value)
         finally:
             self.close()
 
+    def _start_relay(self) -> threading.Thread:
+        """하네스 입력 -> 서버 입력, 서버 출력 -> 하네스 출력. 뒤쪽 스레드를 돌려준다."""
+        in_w, out_r = self.parent_fds
+        stdin = os.fdopen(in_w, "wb")
+        stdout = os.fdopen(out_r, "rb")
+        self.parent_fds = None
+        tap = self.tap
+
+        def feed() -> None:
+            try:
+                relay(sys.stdin.buffer, stdin, tap.client_line)
+            except (OSError, ValueError):
+                pass
+            try:
+                stdin.close()
+            except OSError:
+                pass
+
+        def drain() -> None:
+            try:
+                relay(stdout, sys.stdout.buffer, tap.server_line)
+            except (OSError, ValueError):
+                pass
+            finally:
+                stdout.close()
+
+        threading.Thread(target=feed, daemon=True).start()
+        thread = threading.Thread(target=drain, daemon=True)
+        thread.start()
+        return thread
+
     def close(self) -> None:
+        self._close_fds(self.child_fds)
+        if self.parent_fds:
+            self._close_fds(self.parent_fds)
+            self.parent_fds = None
         if self.api:
             # 작업 개체를 닫으면 남은 자식도 끝난다.
             for handle in (self.thread, self.process, self.job):
@@ -1894,7 +1957,9 @@ def run_server(
             )
         if status == "appcontainer":
             try:
-                box = AppContainerRun.prepare(server, approved, argv, env, home, state_dir)
+                box = AppContainerRun.prepare(
+                    server, approved, argv, env, home, state_dir, tap
+                )
             except SandboxUnavailable as exc:
                 _, status = unsandboxed(
                     sandbox,

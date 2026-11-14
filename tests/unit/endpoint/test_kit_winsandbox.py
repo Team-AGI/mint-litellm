@@ -314,3 +314,81 @@ def test_the_token_check_tells_a_contained_server_from_a_plain_child(tmp_path):
         listener.close()
         contained.kill()
         plain.kill()
+
+
+RPC_SERVER = r"""
+import json, sys
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg:
+        continue
+    if msg["method"] == "tools/list":
+        result = {"tools": [{"name": "echo", "description": "d", "inputSchema": {
+            "type": "object", "properties": {"text": {"type": "string"}}}}]}
+    else:
+        result = {"echo": msg["method"]}
+    print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
+"""
+
+
+@windows_only
+def test_tools_list_is_captured_from_a_contained_server_and_calls_round_trip(tmp_path):
+    command, listener, _ = setup_launch(tmp_path, "none")
+    listener.close()
+    script = tmp_path / "app" / "rpc.py"
+    script.write_text(RPC_SERVER)
+    contracts = tmp_path / "contracts.json"
+    doc = json.loads(contracts.read_text())
+    doc["servers"]["srv"]["argv"] = [str(script)]
+    contracts.write_text(json.dumps(doc))
+    requests = [{"jsonrpc": "2.0", "id": i, "method": m}
+                for i, m in ((1, "initialize"), (2, "tools/list"), (3, "tools/call"))]  # fmt: skip
+    done = subprocess.run(
+        command, input="".join(json.dumps(r) + "\n" for r in requests),
+        capture_output=True, text=True, timeout=180,
+    )  # fmt: skip
+    assert done.returncode == 0, done.stderr
+    replies = [json.loads(line) for line in done.stdout.splitlines()]
+    assert [r["id"] for r in replies] == [1, 2, 3]
+    assert replies[2]["result"] == {"echo": "tools/call"}
+    saved = json.loads((tmp_path / "state" / "tools" / "srv.json").read_text())
+    assert [t["name"] for t in saved["tools"]] == ["echo"]
+    record = json.loads(next((tmp_path / "state" / "launched").iterdir()).read_text())
+    assert record["sandbox"] == "appcontainer"
+
+
+def test_the_pipe_relay_forwards_both_ways_and_taps_the_list(tmp_path, monkeypatch):
+    import io
+    import types
+
+    in_r, in_w = os.pipe()  # 서버 입력
+    out_r, out_w = os.pipe()  # 서버 출력
+    request = b'{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n'
+    reply = (
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "tools": [{"name": "t", "description": "d", "inputSchema": {"type": "object"}}]
+                },
+            }
+        ).encode()
+        + b"\n"
+    )
+    sink = io.BytesIO()
+    monkeypatch.setattr(sys, "stdin", types.SimpleNamespace(buffer=io.BytesIO(request)))
+    monkeypatch.setattr(sys, "stdout", types.SimpleNamespace(buffer=sink))
+    run = agent.AppContainerRun()
+    run.tap = agent.ToolListTap(str(tmp_path), "srv")
+    run.parent_fds = (in_w, out_r)
+    drain = run._start_relay()
+    with os.fdopen(in_r, "rb") as server_in:
+        assert server_in.readline() == request  # 하네스 -> 서버
+        assert server_in.read() == b""  # 하네스 입력이 끝나면 서버 입력도 닫힌다.
+    os.write(out_w, reply)
+    os.close(out_w)  # 서버가 끝나 출력이 닫힌다.
+    drain.join(5)
+    assert sink.getvalue() == reply  # 서버 -> 하네스
+    saved = json.loads((tmp_path / "tools" / "srv.json").read_text())
+    assert [t["name"] for t in saved["tools"]] == ["t"]
