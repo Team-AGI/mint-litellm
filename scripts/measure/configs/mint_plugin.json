@@ -1,0 +1,10 @@
+{
+  "id": "mint_plugin",
+  "description": "LiteLLM + MINT 플러그인",
+  "kind": "plugin",
+  "base_url": "http://CONFIGURE_ME",
+  "endpoint": "/mcp/rest/tools/call",
+  "api_key_env": "MEASURE_KEY_MINT_PLUGIN",
+  "status_to_action": {"200": "allow", "403": "deny", "202": "hold", "409": "hold"},
+  "restart_command": null
+}
