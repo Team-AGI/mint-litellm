@@ -75,6 +75,16 @@ class ProcessItem(BaseModel):
     egress_unfiltered: bool | None = None
 
 
+class OutsideProcessItem(BaseModel):
+    """묶음 실행기 밖에서 직접 돈 MCP 서버 패키지(패키지 식별자만, 인자·경로는 받지 않는다)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    package: str = Field(pattern=r"^[A-Za-z0-9@][A-Za-z0-9@._:/-]{0,200}$")
+    ecosystem: Literal["npm", "pypi", "container"]
+    count: int = Field(ge=1, le=100000)
+
+
 class AutostartItem(BaseModel):
     """MCP 실행기·서버를 가리키는 자동 시작 항목. ``server``는 항목이 시작하는 서버 이름이다."""
 
@@ -128,6 +138,8 @@ class ReportBody(BaseModel):
     # 이전 묶음은 보내지 않는다(None = 보고 없음). 단말의 주장이며 MINT가 관측한 값이 아니다.
     processes: list[ProcessItem] | None = Field(default=None, max_length=64)
     autostart: list[AutostartItem] | None = Field(default=None, max_length=64)
+    # 실행기를 거치지 않고 직접 돈 MCP 서버 패키지. 이전 묶음은 보내지 않는다(None = 보고 없음).
+    outside_processes: list[OutsideProcessItem] | None = Field(default=None, max_length=64)
     removed: list[RemovedItem] | None = Field(default=None, max_length=256)
     local_mcp: list[LocalMcpItem] | None = Field(default=None, max_length=64)
 
@@ -316,6 +328,7 @@ def make_router(
                 mcp_servers=body.mcp_servers,
                 processes=_dump(body.processes),
                 autostart=_dump(body.autostart),
+                outside_processes=_dump(body.outside_processes),
                 removed=_dump(body.removed),
                 local_mcp=_dump(body.local_mcp),
             )

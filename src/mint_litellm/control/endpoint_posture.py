@@ -27,9 +27,16 @@
   ``endpoint_egress_unfiltered``. 선언한 호스트 제한이 집행되지 않는다는 뜻이며 프로세스가 끝나면
   닫힌다.
 
+- 묶음 실행기 밖에서 직접 도는 MCP 서버 패키지(``outside_processes``, 패키지 식별자만)는 서버
+  계약의 패키지와 이름으로 맞춰 본다. 폐기된 서버의 패키지만 해당하면 ``endpoint_outside_retired``
+  (높음), 승인(또는 중지) 상태 서버가 쓰는 패키지가 아니면 ``endpoint_outside_unapproved``(중간,
+  단말과 패키지마다 하나). 경보만 남기고 프로세스는 끄지 않는다. 이름에 ``mcp``가 든 패키지만
+  보고되므로 다른 이름의 패키지는 보지 못한다.
+
 조건이 사라지면(재설치·제거·키 해제·서버 되살림) 같은 스캔이 경보를 닫는다.
 """
 
+import re
 from collections.abc import Iterable, Mapping
 from datetime import timedelta
 from typing import Any
@@ -47,6 +54,8 @@ KINDS = (
     AlertKind.ENDPOINT_UNMANAGED.value,
     AlertKind.ENDPOINT_STALE_PROCESS.value,
     AlertKind.ENDPOINT_STALE_AUTOSTART.value,
+    AlertKind.ENDPOINT_OUTSIDE_RETIRED.value,
+    AlertKind.ENDPOINT_OUTSIDE_UNAPPROVED.value,
     AlertKind.ENDPOINT_UNSANDBOXED.value,
     AlertKind.ENDPOINT_EGRESS_REFUSED.value,
     AlertKind.ENDPOINT_EGRESS_UNFILTERED.value,
@@ -57,10 +66,21 @@ SILENT_AFTER = timedelta(hours=24)
 KEY_WARN = timedelta(days=7)
 
 
+def package_key(ecosystem: str, name: str) -> tuple[str, str]:
+    """계약의 패키지와 단말이 보고한 패키지를 맞추는 키(대소문자·구분 기호 차이를 지운다)."""
+    name = name.strip().lower()
+    if ecosystem == "pypi":
+        name = re.sub(r"[-_.]+", "-", name)
+    elif ecosystem == "container":
+        name = name.removeprefix("docker.io/").removeprefix("library/")
+    return ecosystem, name
+
+
 def findings(
     installs: Iterable[Mapping[str, Any]],
     statuses: Mapping[str, str],
     silent_after: timedelta = SILENT_AFTER,
+    package_status: Mapping[tuple[str, str], Iterable[str]] | None = None,
 ) -> dict[str, tuple[str, str, dict[str, str]]]:
     """설치 보고 행과 서버 상태에서 열려 있어야 할 경보. 경보 키 -> (종류, 심각도, 대상).
 
@@ -99,6 +119,22 @@ def findings(
                 wanted[f"{kind}:{row['key_alias']}:{name}"] = (
                     kind, "high", {**who, "server_id": name, "count": item["count"]}
                 )
+        for item in row.get("outside_processes") or ():
+            key = package_key(item["ecosystem"], item["package"])
+            seen = set((package_status or {}).get(key, ()))
+            if seen & set(LIVE):
+                continue
+            retired = bool(seen & set(TERMINATED))
+            kind = (
+                AlertKind.ENDPOINT_OUTSIDE_RETIRED
+                if retired
+                else AlertKind.ENDPOINT_OUTSIDE_UNAPPROVED
+            ).value
+            wanted[f"{kind}:{row['key_alias']}:{item['ecosystem']}:{item['package']}"] = (
+                kind, "high" if retired else "medium",
+                {**who, "ecosystem": item["ecosystem"], "package": item["package"],
+                 "count": item["count"]},
+            )  # fmt: skip
         if row["install_mode"] == "managed":
             for item in row.get("processes") or ():
                 if item.get("sandbox") == "none":
@@ -139,7 +175,7 @@ def scan(
     installs = fetchall(
         conn,
         "SELECT user_id, key_alias, install_mode, mcp_servers, processes, autostart,"
-        " reported_at, expires_at, clock_timestamp() AS now"
+        " outside_processes, reported_at, expires_at, clock_timestamp() AS now"
         " FROM mint.endpoint_installs WHERE instance_id = %s AND revoked_at IS NULL"
         " AND install_mode IN ('managed', 'user', 'removed')",
         (instance_id,),
@@ -153,7 +189,16 @@ def scan(
             (instance_id,),
         )
     }
-    wanted = findings(installs, statuses, silent_after)
+    package_status: dict[tuple[str, str], set[str]] = {}
+    for r in fetchall(
+        conn,
+        "SELECT p.ecosystem, p.name, s.status FROM mint.server_packages p"
+        " JOIN mint.servers s ON s.instance_id = p.instance_id AND s.server_id = p.server_id"
+        " WHERE p.instance_id = %s AND p.ecosystem <> 'executable' AND s.identity_kind = 'stdio'",
+        (instance_id,),
+    ):
+        package_status.setdefault(package_key(r["ecosystem"], r["name"]), set()).add(r["status"])
+    wanted = findings(installs, statuses, silent_after, package_status)
     open_keys = {
         r["dedup_key"]
         for r in fetchall(

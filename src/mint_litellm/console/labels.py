@@ -297,6 +297,8 @@ ALERT_KIND = {
     "endpoint_unmanaged": "관리되지 않는 설치",
     "endpoint_stale_process": "폐기 서버 프로세스 잔존",
     "endpoint_stale_autostart": "폐기 서버 자동 시작 잔존",
+    "endpoint_outside_retired": "실행기 밖에서 도는 폐기 서버 패키지",
+    "endpoint_outside_unapproved": "실행기 밖에서 도는 미승인 MCP 패키지",
     "endpoint_unsandboxed": "격리 없이 실행 중인 서버",
     "endpoint_egress_unfiltered": "허용 호스트 제한 미집행",
     "endpoint_egress_refused": "허용 호스트 밖 접속 거절",
