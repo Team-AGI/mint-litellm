@@ -67,3 +67,13 @@ def test_an_unknown_alert_is_not_found(mint):
     token = bootstrap(mint)
     code, _, err = mint.run("alert", "ack", "not-a-uuid", token=token)
     assert code == 1 and "없습니다" in err
+
+
+def test_short_ids_resolve_and_never_surface_database_errors(mint):
+    token = bootstrap(mint)
+    alert_id = raise_alert(mint)
+    code, out, err = mint.run("--json", "alert", "ack", alert_id[-5:], token=token)
+    assert code == 0, err
+    for text in ("deadbeef", "zz", "40353"):
+        code, _, err = mint.run("alert", "ack", text, token=token)
+        assert code == 1 and "없습니다" in err and "uuid" not in err.lower()

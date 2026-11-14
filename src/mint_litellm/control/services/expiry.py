@@ -50,7 +50,7 @@ def close_settled_requests(conn: psycopg.Connection, instance_id: str) -> int:
     return closed
 
 
-# 만료 전 경보를 내는 기간. 호출별 승인과 본인 확인(대기·확정 상태)에만 건다.
+# 만료 전 경보를 내는 기간.
 WARN_WITHIN = timedelta(days=7)
 # (알림 출처, 표, 상태, 만료 시각 열, 추가 조건). 승인(approvals)은 이미 같은 범위·도구로 더 늦게
 # 끝나는 활성 승인이 있으면(갱신됨) 만료 알림 대상이 아니다.
@@ -65,10 +65,13 @@ _SOURCES = (
     ("self_confirmation", "self_confirmations", ("pending", "confirmed"), "expires_at", ""),
     ("approval", "approvals", ("active",), "valid_until", RENEWED),
 )
+# 수명이 분 단위인 호출별 승인·본인 확인은 늘 만료 7일 안이라 열자마자 경보가 되므로 경보를 열지
+# 않는다(이미 열린 경보를 닫는 데에만 쓴다). 갱신이 필요한 것은 기간이 긴 승인뿐이다.
+_WARNED = {"approval"}
 
 
 def warn_expiring(conn: psycopg.Connection, instance_id: str) -> int:
-    """7일 안에 만료될 대기·확정 건마다 경보 ``approval_expiring``을 하나 연다.
+    """7일 안에 만료될 승인마다 경보 ``approval_expiring``을 하나 연다(기간이 길면 열지 않는다).
 
     한 번 연 건은 이후 해결돼도 다시 열지 않는다(운영자가 닫은 경보가 매분 되살아나지 않게).
     대기·확정 상태를 벗어난 건의 경보는 해결됨으로 닫는다. 새로 연 경보 수를 돌려준다.
@@ -76,6 +79,8 @@ def warn_expiring(conn: psycopg.Connection, instance_id: str) -> int:
     opened = 0
     with conn.transaction():
         for source, table, statuses, column, extra in _SOURCES:
+            if source not in _WARNED:
+                continue
             rows = conn.execute(
                 f"SELECT t.id, t.{column} FROM mint.{table} t"
                 f" WHERE t.instance_id = %s AND t.status = ANY(%s)"

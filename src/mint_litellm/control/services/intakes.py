@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from mint_litellm.control import alerts, intake_checks
-from mint_litellm.control.approvals import _derive_org
+from mint_litellm.control.approvals import _derive_org, check_scope_and_permission
 from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import (
@@ -912,6 +912,7 @@ def decide(
     team_id: str | None = None,
     second: Operator | None = None,
     expected_version: int | None = None,
+    litellm: Callable[[], Any] | None = None,
 ) -> dict:
     """``approve``(통과), ``except``(판별 불가, 사유 필수·2인·유효 기간 90일 이내), ``reject``."""
     require_role(ctx, f"intake {decision}")
@@ -954,7 +955,7 @@ def decide(
                     f"예외 승인의 유효 기간은 {EXCEPTION_MAX_DAYS}일을 넘을 수 없습니다."
                 )
         return _approve(ctx, row, decision, reason, valid_until, scope_type, scope_id, team_id,
-                        second_info, checks)
+                        second_info, checks, litellm)
 
 
 def _reject(ctx: Context, row: dict) -> dict:
@@ -971,6 +972,7 @@ def _approve(
     ctx: Context, row: dict, decision: str, reason: str | None, valid_until: datetime,
     scope_type: str | None, scope_id: str | None, team_id: str | None, second_info: dict | None,
     checks: list[dict],
+    litellm: Callable[[], Any] | None = None,
 ) -> dict:
     server_id = row["server_id"]
     scope_type = scope_type or "user"
@@ -1051,6 +1053,12 @@ def _approve(
                   "purpose": row["purpose"], "server_id": server_id})
     else:
         relation_id = relation["id"]
+    if litellm is not None:  # 연결 승인(approve)과 같은 범위·LiteLLM 권한 확인
+        check_scope_and_permission(
+            ctx, litellm(),
+            {"server_id": server_id, "team_id": team_id, "org_id": row["org_id"]},
+            scope_type, scope_id,
+        )
     high = sorted(t["tool"] for t in tools if t["risk_grade"] in ("high", "critical"))
     conditions = {"high_risk_tools": high} if high else {}
     basis = {"text": reason or "수용검증 통과", "intake_id": str(row["id"]),

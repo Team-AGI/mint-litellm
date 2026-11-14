@@ -107,6 +107,9 @@ th {
   position: sticky; top: 48px; background: var(--bg-subtle); font-weight: 600; z-index: 1;
   white-space: nowrap;
 }
+td { overflow-wrap: anywhere; }
+button > span[aria-hidden="true"] { margin-right: 4px; }
+td button, td .btn { white-space: nowrap; }
 td.num, th.num { text-align: right; }
 td.nowrap { white-space: nowrap; }
 table.compact th, table.compact td { height: var(--row-h-compact); }
@@ -234,6 +237,10 @@ dialog.confirm::backdrop { background: rgb(0 0 0 / 0.35); }
 dialog.confirm form { display: grid; gap: var(--s3); }
 dialog.confirm h3 { margin: 0; }
 dialog.confirm .actions { justify-content: flex-end; }
+
+@media (max-width: 1100px) {
+  table { display: block; max-width: 100%; overflow-x: auto; }
+}
 
 @media (max-width: 767px) {
   body.shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: 48px auto 1fr; }

@@ -151,3 +151,11 @@ def test_a_call_approval_wait_tells_the_agent_to_ask_again_after_approval(reason
     assert MintError.from_detail(err.detail()) == err
     # 다른 차단에는 안내 문구가 없다.
     assert "guidance" not in json.loads(error_for_reason("CONSENT_REQUIRED", REF).detail())
+
+
+def test_a_policy_detection_error_names_the_rule_without_leaking_values():
+    err = error_for_reason("POLICY_DETECT_POL-E-07", REF)
+    assert err.code == "MINT-POLICY-DETECT-POL-E-07"
+    assert "허용 목적지 밖 URL" in err.guidance
+    assert "허용 목적지 밖 URL" not in err.code
+    assert "정책 탐지" in error_for_reason("POLICY_DETECT_POL-Z-01", REF).guidance

@@ -77,9 +77,13 @@ def trend_chart(series: dict, previous: dict | None = None, links: bool = True) 
 
 
 def reason_donut(reasons: list[dict], blocked: int) -> dict:
+    merged: dict[str, int] = {}
+    for r in reasons:
+        name = labels.outcome_reason(r["code"])
+        merged[name] = merged.get(name, 0) + r["n"]
     items = [
-        {"name": labels.outcome_reason(r["code"]), "value": r["n"], "href": "/ledger?result=deny"}
-        for r in reasons
+        {"name": name, "value": n, "href": "/ledger?result=deny"}
+        for name, n in sorted(merged.items(), key=lambda kv: -kv[1])[:8]
     ]
     rest = blocked - sum(i["value"] for i in items)
     if rest > 0:
@@ -145,6 +149,7 @@ def status_dots(o, workers, zone):
         return Status(local_time(value, zone), "ok") if value else Status("기록 없음", "wait")
 
     dots = []
+    workers, stale = control_status.split_live_workers(workers)
     unverified = sum(1 for w in workers if not w["passed"])
     if workers:
         verified = len(workers) - unverified
@@ -152,9 +157,12 @@ def status_dots(o, workers, zone):
             {
                 "name": "집행 워커",
                 "status": Status(
-                    f"{verified}/{len(workers)} 정상"
-                    if not unverified
-                    else f"{unverified}개 확인 불가",
+                    (
+                        f"{verified}/{len(workers)} 정상"
+                        if not unverified
+                        else f"{unverified}개 확인 불가"
+                    )
+                    + (f" · 이전 실행 {stale}개" if stale else ""),
                     "error" if unverified else "ok",
                 ),
                 "title": "",

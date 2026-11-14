@@ -183,6 +183,28 @@ cli() {
     "${COMPOSE[@]}" run --rm ${MINT_LITELLM_KEY:+-e MINT_LITELLM_KEY} control "$@"
 }
 
+# --save-token <경로>는 컨테이너 안이 아니라 이 호스트의 경로에 저장해야 한다. 컨테이너는 --rm이라
+# 안에 쓴 파일이 사라지므로, 토큰을 JSON으로 받아 여기서 0600 파일로 쓴다.
+cli_save_token() {
+    local path="" arg skip=0 args=() reply token pattern
+    for arg in "$@"; do
+        if [ "$skip" -eq 1 ]; then path="$arg"; skip=0
+        elif [ "$arg" = "--save-token" ]; then skip=1
+        elif [[ "$arg" == --save-token=* ]]; then path="${arg#--save-token=}"
+        else args+=("$arg"); fi
+    done
+    [ "$skip" -eq 0 ] && [ -n "$path" ] || fail "--save-token에는 저장할 경로가 필요합니다."
+    [ ! -e "$path" ] || fail "$path이(가) 이미 있어 덮어쓰지 않습니다."
+    [ -d "$(dirname "$path")" ] || fail "$(dirname "$path") 폴더가 없습니다."
+    reply="$("${COMPOSE[@]}" run --rm -T ${MINT_LITELLM_KEY:+-e MINT_LITELLM_KEY} control --json         "${args[@]}")" || { echo "$reply" >&2; fail "명령이 실패했습니다."; }
+    pattern='"token": *"([A-Za-z0-9_-]+)"'
+    [[ "$reply" =~ $pattern ]] || fail "토큰을 받지 못했습니다."
+    token="${BASH_REMATCH[1]}"
+    (umask 077; printf '%s
+' "$token" > "$path") || fail "토큰을 $path에 쓰지 못했습니다."
+    echo "토큰을 $path에 저장했습니다. 이 파일을 --token-file로 주면 인증됩니다."
+}
+
 # 정책 엔진은 번들 파일이 있어야 기동한다. 파일이 없으면 저장소의 기본 정책으로 첫 번들을 게시하고,
 # 판본 등록과 활성화는 policy activate가 수행한다.
 ensure_bundle() {
@@ -402,6 +424,10 @@ case "${1:-}" in
     backup) cmd_backup ;;
     bootstrap) shift; cmd_bootstrap "$@" ;;
     upgrade) shift; cmd_upgrade "$@" ;;
-    cli) shift; require_env; cli "$@" ;;
+    cli) shift; require_env
+        case " $* " in
+            *" --save-token"*) cli_save_token "$@" ;;
+            *) cli "$@" ;;
+        esac ;;
     *) fail "사용법: ./mint.sh up | status | bootstrap <이름> <사용자> | backup | upgrade [--dry-run] | cli <명령...>" ;;
 esac

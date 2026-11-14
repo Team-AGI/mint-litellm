@@ -67,15 +67,24 @@ def _insert(
     expires_in_days: int | None,
     emitted: list | None = None,
 ) -> tuple[str, int]:
+    name = name.strip()
     token = issue_token()
     expires_at = None if expires_in_days is None else datetime.now(UTC) + timedelta(
         days=expires_in_days
     )
-    if fetchone(
+    taken = fetchone(
         ctx_conn,
-        "SELECT 1 AS x FROM mint.operators WHERE instance_id = %s AND name = %s",
+        "SELECT (expires_at IS NOT NULL AND expires_at <= now()) AS removed"
+        " FROM mint.operators WHERE instance_id = %s AND name = %s",
         (instance_id, name),
-    ):
+    )
+    if taken:
+        if taken["removed"]:
+            # 삭제는 행을 남기고 만료시키므로 같은 이름은 다시 쓸 수 없다.
+            raise ControlError(
+                f"운영자 {name}은(는) 삭제되어 같은 이름으로 다시 등록할 수 없습니다. "
+                "다른 이름을 쓰십시오."
+            )
         raise ControlError(f"운영자 {name}이(가) 이미 있습니다.")
     row = fetchone(
         ctx_conn,

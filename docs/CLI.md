@@ -29,7 +29,7 @@
 | `mint-litellm config export` | `admin` | 비밀 없이 서버 정의·승인·규칙·거부·허용 목록·조직·운영자 역할·모드 설정을 `<파일>`(JSON)로 내보낸다. | - | `config_exported` |
 | `mint-litellm config import` | `admin` | 내보낸 설정을 자연 키로 되풀이해도 같게 가져온다. 서버·운영자·승인은 가져오지 않고 할 일로 알린다. `--dry-run`은 차이만 보인다. | - | `config_imported` |
 | `mint-litellm status` | 모든 역할 | 모드, 정책 판본, 경보, 관측 항목과 같은 「할 일」 목록을 표시한다. | `/v1/mcp/server`, `/key/list`, `/team/list` | - |
-| `mint-litellm operator add` | `admin` | 운영자를 등록하고 토큰을 발급한다. `--save-token <파일>`을 주면 토큰을 화면에 보이지 않고 0600 파일로만 받는다(파일이 이미 있으면 운영자를 만들기 전에 거부한다). `admin`·`approver`는 LiteLLM 사용자 식별자 (`--user-id`) 결속이 필수이다. | `/user/info` | `operator_added` |
+| `mint-litellm operator add` | `admin` | 운영자를 등록하고 토큰을 발급한다. `--save-token <파일>`을 주면 토큰을 화면에 보이지 않고 0600 파일로만 받는다(파일이 이미 있으면 운영자를 만들기 전에 거부한다). `deploy/mint.sh cli`로 실행하면 파일은 컨테이너 안이 아니라 호스트의 그 경로에 만든다. `admin`·`approver`는 LiteLLM 사용자 식별자 (`--user-id`) 결속이 필수이다. | `/user/info` | `operator_added` |
 | `mint-litellm operator bootstrap` | 토큰 불필요 | `operators` 표가 비어 있을 때만 토큰 없이 첫 `admin` 운영자를 만들고 토큰을 발급한다. `--name`과 `--user-id`가 필요하며, 사용자가 LiteLLM의 사람 사용자로 존재하는지 확인한다. 행위자는 `bootstrap`으로 기록하고, 운영자가 이미 있으면 거부한다. | `/user/info` | `operator_added` |
 | `mint-litellm operator remove` | `admin` | 운영자를 삭제한다. 토큰이 끝나고 그 사용자의 콘솔 세션이 폐기된다. 마지막 관리자와 본인은 삭제할 수 없다. | 없음 | `operator_removed` |
 | `mint-litellm operator set-role` | `admin` | 운영자의 역할을 바꾼다(`--role`). 그 사용자의 콘솔 세션이 폐기된다. 마지막 관리자는 낮출 수 없다. | 없음 | `operator_role_changed` |
@@ -90,7 +90,7 @@
 
 ## 식별자 줄여 쓰기와 토큰 안내
 
-목록에 나온 식별자(경보·신청·호출별 승인·동기화 항목·승인·거부·동의·허용 목록)는 끝 8자리(또는 충분히 긴 앞부분)만 써도 이 배치 안에서 한 건으로 정해지면 찾아 준다(`alert ack 3f9c1a2b`). 둘 이상이면 더 길게 입력하라고 알리고, 없으면 그대로 없다고 알린다. 토큰 없이 인증이 필요한 명령을 실행하면 운영자가 한 명도 없을 때는 첫 관리자를 만드는 명령(`operator bootstrap ... --save-token`)을, 있을 때는 토큰을 받는 방법을 안내한다.
+목록에 나온 식별자(경보·신청·호출별 승인·동기화 항목·승인·거부·동의·허용 목록)는 끝 8자리(또는 충분히 긴 앞부분, 4자 이상)만 써도 이 배치 안에서 한 건으로 정해지면 찾아 준다(`alert ack 3f9c1a2b`). 둘 이상이면 더 길게 입력하라고 알리고, 없거나 식별자 꼴이 아니면 데이터베이스 오류 없이 없다고 알린다. 토큰 없이 인증이 필요한 명령을 실행하면 운영자가 한 명도 없을 때는 첫 관리자를 만드는 명령(`operator bootstrap ... --save-token`)을, 있을 때는 토큰을 받는 방법을 안내한다.
 
 ## 정책 활성화 실패와 복원
 

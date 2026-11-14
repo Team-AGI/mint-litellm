@@ -11,7 +11,7 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from mint_litellm.types.reason_codes import Reason, parse_reason_code
+from mint_litellm.types.reason_codes import Reason, parse_reason_code, policy_detect_name
 
 BLOCK_STATUS_CODE = 403
 
@@ -143,7 +143,12 @@ def error_for_reason(
             reference=reference,
             guidance=APPROVAL_GUIDANCE,
         )
+    name = policy_detect_name(reason_code)
     guidance = {
+        Reason.POLICY_DETECT: (
+            f"정책 위반({name or '정책 탐지'})으로 막혔습니다. 호출 인자를 승인된 범위에 맞게 "
+            "고쳐 다시 요청하거나 관리자에게 승인 범위를 문의하십시오."
+        ),
         Reason.CALL_APPROVAL_DENIED: DENIAL_GUIDANCE,
         Reason.CONFIRMATION_REQUIRED: CONFIRMATION_GUIDANCE,
         Reason.CONFIRMATION_STALE: CONFIRMATION_GUIDANCE,

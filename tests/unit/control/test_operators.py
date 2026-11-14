@@ -91,3 +91,18 @@ def test_distinct_person_rule():
     same_person_other_token = Operator("c", "approver", "u1")
     with pytest.raises(ControlError, match="두 번째 승인자"):
         operators.require_distinct_person(me, "u1", same_person_other_token, "승인")
+
+
+def test_a_removed_operator_name_is_reported_as_removed_by_both_remove_and_add(conn, litellm, ctx):
+    from mint_litellm.control.services import operators as service
+
+    service.add(ctx, litellm, "temp", OperatorRole.VIEWER, None, None)
+    with pytest.raises(ControlError, match="이미 있습니다"):
+        service.add(ctx, litellm, "temp", OperatorRole.VIEWER, None, None)
+    service.remove(ctx, "temp")
+    with pytest.raises(ControlError, match="삭제되어 같은 이름으로"):
+        service.add(ctx, litellm, "temp", OperatorRole.VIEWER, None, None)
+    with pytest.raises(ControlError, match="이미 삭제되었습니다"):
+        service.remove(ctx, "temp")
+    with pytest.raises(ControlError, match="없습니다"):
+        service.remove(ctx, "never-existed")

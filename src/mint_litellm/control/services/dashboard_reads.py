@@ -70,7 +70,7 @@ def decision_series(
 
 
 def block_reasons(
-    conn: psycopg.Connection, instance: str, hours: int, limit: int = 5
+    conn: psycopg.Connection, instance: str, hours: int, limit: int = 30
 ) -> list[dict[str, Any]]:
     """차단된 호출의 사유별 건수(상위 ``limit``)."""
     return fetchall(

@@ -298,8 +298,8 @@ def test_the_status_list_has_one_litellm_row_and_one_worker_row_without_raw_ids(
 
     lite = {"version": "1.106.6", "grade": "A", "tested": True, "missing": []}
     workers = [
-        {"worker_id": "7f1e986fd53e:277", "passed": True, "litellm": lite},
-        {"worker_id": "7f1e986fd53e:278", "passed": True, "litellm": lite},
+        {"worker_id": f"7f1e986fd53e:{n}", "passed": True, "litellm": lite, **at(T0)}
+        for n in (277, 278)
     ]
     o = {
         "last_seal": None,
@@ -320,7 +320,47 @@ def test_the_status_list_has_one_litellm_row_and_one_worker_row_without_raw_ids(
     assert worker["status"].level == "error" and worker["status"].text == "1개 확인 불가"
 
 
+T0 = "2026-11-15T01:00"
+
+
+def at(stamp: str) -> dict:
+    return {"last_transition_at": stamp + ":00+00:00"}
+
+
+def test_workers_from_before_a_restart_are_not_counted_as_running():
+    from mint_litellm.console.pages.dashboard import status_dots
+
+    lite = {"version": "1.106.6", "grade": "A", "tested": True, "missing": []}
+    workers = [
+        {"worker_id": f"h:{n}", "passed": True, "litellm": lite, **at(when)}
+        for n, when in ((1, "2026-11-14T20:00"), (2, "2026-11-14T20:00"), (3, "2026-11-15T01:00"),
+                        (4, "2026-11-15T01:01"))
+    ]
+    o = {
+        "last_seal": None, "last_export": None, "unhandled_jobs": 0, "jobs_failed": 0,
+        "jobs_pending": 0, "unhandled_oldest_seconds": 0,
+    }
+    worker = next(d for d in status_dots(o, workers, None) if d["name"] == "집행 워커")
+    assert worker["status"].text == "2/2 정상 · 이전 실행 2개"
+
+
 def test_the_block_rate_is_a_dash_without_any_calls(world, admin):
     html = admin.get("/").text
     card = re.search(r'차단률</div>\s*<div class="value">([^<]*)<', html)
     assert card and card.group(1) == "—"
+
+
+def test_policy_detections_get_operator_names_in_the_block_donut():
+    from mint_litellm.console.pages.dashboard import reason_donut
+
+    reasons = [
+        {"code": "POLICY_DETECT_POL-E-05", "n": 5},
+        {"code": "POLICY_DETECT_POL-E-07", "n": 4},
+        {"code": "POLICY_DETECT_POL-X-99", "n": 1},
+        {"code": "CONTRACT_DRIFT_input_schema", "n": 2},
+        {"code": "CONTRACT_DRIFT_tool_added", "n": 1},
+    ]
+    items = {i["name"]: i["value"] for i in reason_donut(reasons, 13)["items"]}
+    assert items == {
+        "인자 속 비밀": 5, "허용 목적지 밖 URL": 4, "정책 탐지": 1, "계약 변경": 3,
+    }

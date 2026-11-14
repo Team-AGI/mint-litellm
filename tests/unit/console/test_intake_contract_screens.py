@@ -17,6 +17,20 @@ READINESS = json.dumps({"credential_notice": True, "revocation_record": True,
                         "audit_access_days": 30})
 
 
+@pytest.fixture(autouse=True)
+def litellm_permission(world, monkeypatch):
+    """승인은 연결 승인과 같은 LiteLLM 권한 확인을 거친다. 여기서는 확인 자체를 기록만 한다."""
+    from mint_litellm.control.services import intakes
+
+    world.with_control_key()
+    seen = []
+    monkeypatch.setattr(
+        intakes, "check_scope_and_permission",
+        lambda ctx, litellm, relation, scope_type, scope_id: seen.append((scope_type, scope_id)),
+    )
+    return seen
+
+
 def bearer(role: str) -> dict:
     return {"Authorization": f"Bearer {TOKENS[role]}"}
 
@@ -119,6 +133,7 @@ def test_a_viewer_sees_no_decision_buttons(world):
 
 
 def test_assigning_a_requester_needs_the_control_key(world):
+    object.__setattr__(world.config, "litellm_admin", None)
     intake = add_intake(world, requested_by=None, status="received")
     admin = world.session_client("admin")
     assert "제어 평면 키가 없어" in admin.get(f"/intakes/{intake}").text
@@ -527,3 +542,10 @@ def test_resource_rows_are_saved_as_the_allowed_resources(world, monkeypatch):
         "data_return_terms": "삭제"})
     assert response.status_code == 303, response.text
     assert seen["allowed_resources"] == ["a", "b"]
+
+
+def test_approving_an_intake_in_the_console_checks_litellm_permission(world, litellm_permission):
+    intake = add_intake(world)
+    response = decide(world, intake, decision="approve")
+    assert response.status_code == 200, response.text
+    assert litellm_permission == [("user", "human-9")]
