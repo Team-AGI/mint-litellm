@@ -128,9 +128,10 @@ def test_the_ledger_shows_no_raw_values_or_identifier_column():
     assert "<th>키</th>" not in html and "조회 범위" not in html
 
 
-def test_the_blocked_result_is_one_filter_option():
+def test_the_result_is_chosen_by_the_segments_not_a_second_select():
     html = ledger_html()
-    assert html.count(">차단</option>") == 1
+    assert '<select name="result"' not in html
+    assert re.search(r'<input type="hidden" name="result" value="[^"]*">', html)
 
 
 def test_the_ledger_filters_are_plain_controls_in_the_natural_tab_order():

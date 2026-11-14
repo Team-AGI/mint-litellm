@@ -169,6 +169,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .empty { border: 1px dashed var(--border); border-radius: 6px; padding: var(--s4); text-align: center; margin-bottom: var(--s3); }
 .empty h3 { margin: 0 0 var(--s2); }
+.empty.slim { padding: var(--s3); color: var(--muted); font-size: 12px; }
+.stats-line { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s3); margin: 0 0 var(--s3); color: var(--muted); font-size: 12px; }
+.row-actions { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; margin: 0; }
 dl.detail { display: grid; grid-template-columns: 160px 1fr; gap: var(--s2) var(--s3); margin: 0 0 var(--s3); }
 dl.detail dt { color: var(--muted); }
 dl.detail dd { margin: 0; word-break: break-all; }
@@ -241,6 +244,11 @@ dialog.confirm .actions { justify-content: flex-end; }
   main { grid-column: 1; grid-row: 3; padding: var(--s3); }
   .topbar .who { display: none; }
   th { top: 0; }
+  table { display: block; max-width: 100%; overflow-x: auto; }
+  .segments { max-width: 100%; overflow-x: auto; }
+  .cmd, .filters, .filterbar { max-width: 100%; }
+  input, select, textarea, .cmd .cmd-text, button.copy { max-width: 100%; min-width: 0; }
+  textarea { min-width: 0; width: 100%; }
 }
 
 .cmd { display: flex; gap: var(--s2); align-items: center; margin: var(--s2) 0; }

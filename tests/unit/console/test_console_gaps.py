@@ -79,3 +79,45 @@ def test_the_approval_metrics_scan_can_use_the_requested_index(world):
             "EXPLAIN SELECT count(*) FROM mint.call_approvals WHERE instance_id = 'inst1'"
             " AND requested_at >= now() - make_interval(hours => 24)").fetchall())
     assert "call_approvals_requested" in plan
+
+
+def test_the_approval_center_shows_one_row_of_at_most_six_cards_and_an_inline_sla_picker(
+    world, admin
+):
+    html = admin.get("/approvals").text
+    assert html.count('class="card kpi') <= 6
+    assert 'class="stats-line"' in html and "결정 중앙값" in html
+    bar = re.search(r'<form class="filterbar".*?</form>', html, re.S).group(0)
+    assert 'name="sla"' in bar and "data-autosubmit" in bar
+    assert 'class="actions"><input type="hidden" name="tab"' not in html
+
+
+def test_the_policy_screen_names_policies_instead_of_showing_internal_ids(world, admin):
+    html = admin.get("/policy").text
+    assert "관측 허용 정책" in html and "관측으로 전환할 수 있는" not in html
+    assert re.search(r"<dt>관측 허용 정책</dt><dd>[^<]*[가-힣]", html)
+    assert "R1, R3" not in html
+
+
+def test_an_empty_fleet_shows_a_dash_instead_of_a_zero_over_zero_rate(world, admin):
+    assert card(admin.get("/endpoints").text, "적용률") == "—"
+
+
+def test_every_page_links_a_static_icon_and_the_icon_exists(world, admin):
+    from pathlib import Path
+
+    for path in ("/", "/ledger", "/approvals"):
+        assert 'rel="icon"' in admin.get(path).text
+    assert admin.get("/static/favicon.svg").status_code == 200
+    assert Path(__file__).exists()
+
+
+def test_narrow_screens_scroll_wide_blocks_inside_their_container():
+    from pathlib import Path
+
+    css = (Path(__file__).parents[3] / "src/mint_litellm/console/static/console.css").read_text(
+        encoding="utf-8"
+    )
+    narrow = css[css.index("@media (max-width: 767px)") :]
+    assert "table { display: block" in narrow and "overflow-x: auto" in narrow
+    assert "button.copy" in narrow and ".segments" in narrow

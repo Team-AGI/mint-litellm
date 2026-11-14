@@ -4,6 +4,7 @@ import json
 import re
 import uuid
 from datetime import datetime, timedelta
+from html import unescape
 
 import psycopg
 import pytest
@@ -160,7 +161,7 @@ def test_top_servers_and_alert_stats(world, conn):
 # --- 화면 -------------------------------------------------------------------------------------
 
 
-def test_the_dashboard_has_six_cards_four_charts_and_status_rows(world, admin):
+def test_the_dashboard_has_five_cards_four_charts_and_status_rows(world, admin):
     decision(world, "blocked", enforced="deny", reason="SERVER_NOT_APPROVED")
     alert(world, "critical")
     html = admin.get("/").text
@@ -170,10 +171,9 @@ def test_the_dashboard_has_six_cards_four_charts_and_status_rows(world, admin):
         "차단률",
         "호출 수(7일)",
         "적용 엔드포인트",
-        "집행 검증 워커",
     ):
         assert label in html
-    assert html.count('class="card kpi') >= 6 + 4
+    assert html.count('class="card kpi') >= 5 + 4
     assert html.count("data-chart=") == 4
     assert "승인되지 않은 서버" in html and "SERVER_NOT_APPROVED" not in shown(html)
     assert "원장 봉인" in html and "내보내기" in html
@@ -194,10 +194,10 @@ def test_the_dashboard_range_changes_the_labels_and_ignores_unknown_values(world
     assert "호출 수(7일)" in admin.get("/?range=zz").text
 
 
-def test_a_small_sample_shows_counts_instead_of_a_rate(world, admin):
+def test_a_small_sample_still_shows_a_percentage_with_the_counts(world, admin):
     decision(world, "blocked", enforced="deny")
     html = shown(admin.get("/").text)
-    assert "1건" in html and "호출 1건 중" in html and "%p" not in html
+    assert "100%" in html and "호출 1건 중 1건" in html and "%p" not in html
 
 
 def test_the_ledger_has_a_chart_chips_and_a_row_drawer(world, admin):
@@ -263,3 +263,64 @@ def test_empty_screens_render_without_fake_zeros_in_charts(world, admin, path):
     html = admin.get(path).text
     assert admin.get(path).status_code == 200
     assert 'class="chart muted">—</div>' in html or "data-chart=" not in html
+
+
+def chart_payloads(html: str) -> list[dict]:
+    return [json.loads(unescape(m)) for m in re.findall(r'data-chart="([^"]*)"', html)]
+
+
+def test_empty_charts_collapse_to_one_line_instead_of_a_blank_box(world, admin):
+    for path in ("/", "/ledger"):
+        html = admin.get(path).text
+        assert "data-chart=" not in html and 'class="chart' not in html
+        assert 'class="empty slim"' in html and "이 기간에 기록이 없습니다" in html
+
+
+def test_the_charts_carry_well_formed_data_once_there_are_records(world, admin):
+    decision(world, "blocked", enforced="deny", reason="SERVER_NOT_APPROVED", server="srv-a")
+    decision(world, server="srv-a")
+    alert(world, "critical")
+    for path, expected in (("/", {"stacked", "donut", "bars"}), ("/ledger", {"stacked", "donut"})):
+        charts = chart_payloads(admin.get(path).text)
+        assert {c["kind"] for c in charts} == expected
+        for c in charts:
+            if c["kind"] == "stacked":
+                assert c["labels"] and all(len(s["data"]) == len(c["labels"]) for s in c["series"])
+            elif c["kind"] == "donut":
+                assert c["items"] and all(i["value"] > 0 for i in c["items"])
+            else:
+                assert len(c["labels"]) == len(c["values"]) > 0
+    assert len(chart_payloads(admin.get("/").text)) == 4
+
+
+def test_the_status_list_has_one_litellm_row_and_one_worker_row_without_raw_ids():
+    from mint_litellm.console.pages.dashboard import status_dots
+
+    lite = {"version": "1.106.6", "grade": "A", "tested": True, "missing": []}
+    workers = [
+        {"worker_id": "7f1e986fd53e:277", "passed": True, "litellm": lite},
+        {"worker_id": "7f1e986fd53e:278", "passed": True, "litellm": lite},
+    ]
+    o = {
+        "last_seal": None,
+        "last_export": None,
+        "unhandled_jobs": 0,
+        "jobs_failed": 0,
+        "jobs_pending": 0,
+        "unhandled_oldest_seconds": 0,
+    }
+    dots = status_dots(o, workers, None)
+    names = [d["name"] for d in dots]
+    assert names.count("LiteLLM") == 1 and names.count("집행 워커") == 1
+    worker = next(d for d in dots if d["name"] == "집행 워커")
+    assert worker["status"].text == "2/2 정상"
+    assert not any("7f1e" in d["name"] or "7f1e" in d["title"] for d in dots)
+    workers[1]["passed"] = False
+    worker = next(d for d in status_dots(o, workers, None) if d["name"] == "집행 워커")
+    assert worker["status"].level == "error" and worker["status"].text == "1개 확인 불가"
+
+
+def test_the_block_rate_is_a_dash_without_any_calls(world, admin):
+    html = admin.get("/").text
+    card = re.search(r'차단률</div>\s*<div class="value">([^<]*)<', html)
+    assert card and card.group(1) == "—"

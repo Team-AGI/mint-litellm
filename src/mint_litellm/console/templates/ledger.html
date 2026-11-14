@@ -18,7 +18,7 @@
   <label>종류<select name="kind"><option value="">전체</option>{% for k in filters.kinds %}<option value="{{ k }}"{% if q.kind == k %} selected{% endif %}>{{ L.pick(L.EVENT_KIND, k) }}</option>{% endfor %}</select></label>
   <label>주체<select name="actor"><option value="">전체</option>{% for a in filters.actors %}<option value="{{ a }}"{% if q.actor == a %} selected{% endif %}>{{ a | who }}</option>{% endfor %}</select></label>
   <label>서버<select name="server_id"><option value="">전체</option>{% for s in servers %}<option value="{{ s }}"{% if q.server_id == s %} selected{% endif %}>{{ s }}</option>{% endfor %}</select></label>
-  <label>결과<select name="result"><option value="">전체</option>{% for k, v in L.RESULT_FILTER.items() %}<option value="{{ k }}"{% if q.result == k %} selected{% endif %}>{{ v }}</option>{% endfor %}</select></label>
+  <input type="hidden" name="result" value="{{ q.result }}">
   <details><summary>고급 필터</summary>
     <label>판정 참조<input type="text" name="ref" value="{{ q.ref }}" autocomplete="off" spellcheck="false"></label>
     <label>호출 식별자<input type="text" name="invocation" value="{{ q.invocation }}" maxlength="36" autocomplete="off"></label>
