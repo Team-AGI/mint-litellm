@@ -7,7 +7,7 @@
 <h2>정책별 효과</h2>
 {% if effect %}
 <table class="compact"><thead><tr><th>정책</th><th class="num">검사</th><th class="num">차단</th><th class="num">승인 필요</th><th>차단 비율</th></tr></thead><tbody>
-{% for e in effect %}<tr><td>{{ e.policy_id }}</td><td class="num">{{ e.checks }}</td><td class="num">{{ e.blocked }}</td><td class="num">{{ e.approval }}</td><td>{{ m.bullet(e.blocked, e.checks, 120, '차단') }}</td></tr>{% endfor %}
+{% for e in effect %}<tr><td>{{ names.get(e.policy_id, e.policy_id) }}</td><td class="num">{{ e.checks }}</td><td class="num">{{ e.blocked }}</td><td class="num">{{ e.approval }}</td><td>{{ m.bullet(e.blocked, e.checks, 120, '차단') }}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}{{ m.empty('이 기간에 걸린 정책이 없습니다', '/ledger', '호출 기록 보기') }}{% endif %}
 <h2>정책 시험 적용</h2>
@@ -37,8 +37,8 @@
 </form>
 {% endif %}
 <dl class="detail">
-  <dt>관측으로 전환할 수 있는 사유</dt><dd>{% for r in s.observable_reasons %}{{ L.pick(L.REASON, r) }}{{ ', ' if not loop.last }}{% endfor %}</dd>
-  <dt>관측 대상 정책</dt><dd>{{ s.observable_policy_ids | join }}</dd>
+  <dt>관측 허용 사유</dt><dd>{% for r in s.observable_reasons %}{{ L.pick(L.REASON, r) }}{{ ', ' if not loop.last }}{% endfor %}</dd>
+  <dt>관측 허용 정책</dt><dd>{% for i in s.observable_policy_ids %}{{ names.get(i, i) }}{{ ', ' if not loop.last }}{% endfor %}</dd>
 </dl>
 {% else %}{{ m.empty('저장된 설정이 없습니다', '/', '대시보드로 이동') }}{% endif %}
 <h2>정책 판본</h2>

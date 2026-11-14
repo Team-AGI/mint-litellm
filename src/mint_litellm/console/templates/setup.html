@@ -10,7 +10,7 @@
 <td>{{ i.title }}{% if i.optional %} <span class="muted">(선택)</span>{% endif %}</td>
 <td>{{ m.status_badge(i.status) }}</td>
 <td>{{ i.line }}{% if i.commands and actor.role == 'admin' and i.status.text != '완료' %}{% for os, cmd in i.commands %}
-<div class="filters"><span class="muted">{{ os }}</span> <button type="button" class="copy" data-copy="{{ cmd }}" title="복사">{{ cmd }}</button></div>{% endfor %}{% endif %}</td>
+<div class="filters"><span class="muted">{{ os }}</span> <button type="button" class="copy" data-copy="{{ cmd }}" title="명령 복사">{{ os }} 명령 복사</button></div>{% endfor %}{% endif %}</td>
 <td class="nowrap">{% if i.post %}<form method="post" action="{{ i.post }}" hx-boost="false">{{ m.csrf(actor) }}<button type="submit" class="primary">{{ i.action }}</button></form>
 {% elif i.href %}<a class="button" href="{{ i.href }}">{{ i.action }}</a>{% endif %}</td>
 </tr>{% endfor %}

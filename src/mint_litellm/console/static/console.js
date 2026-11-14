@@ -112,7 +112,7 @@ function initConsole(root) {
     sync();
   });
   // 시간 범위 칩: 고르면 바로 조회한다(인라인 핸들러 대신).
-  root.querySelectorAll("input[data-autosubmit]").forEach(function (input) {
+  root.querySelectorAll("[data-autosubmit]").forEach(function (input) {
     input.addEventListener("change", function () { input.form.requestSubmit(); });
   });
   // 행 전체 클릭: 첫 링크로 이동한다(행 안의 버튼·링크·입력을 누른 경우는 제외).

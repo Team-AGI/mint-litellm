@@ -5,7 +5,7 @@
 {% set total = count.applied + count.unapplied + count.stale %}
 <h1>엔드포인트</h1>
 <div class="cards">
-  {{ m.kpi('적용률', ((count.applied * 100 / total) | round | int) ~ '%' if total >= 5 else count.applied ~ '/' ~ total, href='/endpoints?tab=installs&state=applied') }}
+  {{ m.kpi('적용률', '—' if not total else (((count.applied * 100 / total) | round | int) ~ '%' if total >= 5 else count.applied ~ '/' ~ total), href='/endpoints?tab=installs&state=applied') }}
   {{ m.kpi('격리 위반', count.violation, href='/endpoints?tab=installs&state=violation', level='danger' if count.violation) }}
   {{ m.kpi('보고 끊김', count.stale, href='/endpoints?tab=installs&state=stale', level='wait' if count.stale) }}
   {{ m.kpi('관리 밖 MCP', mcp | length, href='/endpoints?tab=local-mcp') }}

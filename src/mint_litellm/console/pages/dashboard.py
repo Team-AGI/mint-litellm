@@ -6,7 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 
-from mint_litellm.console import alert_view, labels
+from mint_litellm.console import alert_view, audit_report, labels
 from mint_litellm.console.core import Actor, page_actor, require_csrf
 from mint_litellm.console.labels import Status
 from mint_litellm.console.pages.common import act
@@ -98,10 +98,9 @@ def dashboard_cards(o, series, previous, coverage, workers, wait, hours):
     if total >= 5 and before >= 5:
         rate_note = f"전 기간 대비 {100 * blocked / total - 100 * blocked_before / before:+.0f}%p"
     else:
-        rate_note = f"호출 {total}건 중"
+        rate_note = f"호출 {total}건 중 {blocked}건" if total else "호출 없음"
     waiting = o["pending_calls"] + o["pending_servers"] + o["pending_intakes"] + o["reapproval"]
     slow = (wait["average_seconds"] or 0) >= SLOW_WAIT_SECONDS
-    unverified = sum(1 for w in workers if not w["passed"])
     return [
         card(
             "승인 대기",
@@ -120,7 +119,7 @@ def dashboard_cards(o, series, previous, coverage, workers, wait, hours):
         ),
         card(
             "차단률",
-            percent(blocked, total) if total >= 5 else f"{blocked}건",
+            percent(blocked, total),
             "/ledger?result=deny",
             rate_note,
         ),
@@ -138,13 +137,6 @@ def dashboard_cards(o, series, previous, coverage, workers, wait, hours):
             "/endpoints",
             f"{coverage['managed']}/{coverage['total']}대" if coverage["total"] else None,
         ),
-        card(
-            "집행 검증 워커",
-            f"{len(workers) - unverified}/{len(workers)}",
-            "/ledger?kind=enforcement_unverified",
-            None,
-            "danger" if unverified else None,
-        ),
     ]
 
 
@@ -153,18 +145,32 @@ def status_dots(o, workers, zone):
         return Status(local_time(value, zone), "ok") if value else Status("기록 없음", "wait")
 
     dots = []
-    for w in workers:
-        state = labels.status(
-            labels.ENFORCEMENT, "enforcement_verified" if w["passed"] else "enforcement_unverified"
+    unverified = sum(1 for w in workers if not w["passed"])
+    if workers:
+        verified = len(workers) - unverified
+        dots.append(
+            {
+                "name": "집행 워커",
+                "status": Status(
+                    f"{verified}/{len(workers)} 정상"
+                    if not unverified
+                    else f"{unverified}개 확인 불가",
+                    "error" if unverified else "ok",
+                ),
+                "title": "",
+            }
         )
-        dots.append({"name": w["worker_id"], "status": state, "title": ""})
-        if w["litellm"]:
-            dots.append(
+        # 같은 LiteLLM이 워커마다 반복되므로 한 줄로 합치고, 문제가 있는 쪽을 보인다.
+        found = [w["litellm"] for w in workers if w["litellm"]]
+        if found:
+            worst = next((x for x in found if labels.litellm_missing(x)), found[0])
+            dots.insert(
+                0,
                 {
                     "name": "LiteLLM",
-                    "status": labels.litellm_badge(w["litellm"]),
-                    "title": labels.litellm_missing(w["litellm"]),
-                }
+                    "status": labels.litellm_badge(worst),
+                    "title": labels.litellm_missing(worst),
+                },
             )
     dots.append({"name": "원장 봉인", "status": stamp(o["last_seal"]), "title": ""})
     dots.append({"name": "내보내기", "status": stamp(o["last_export"]), "title": ""})
@@ -530,6 +536,13 @@ def alert_acknowledge(alert_id: str, request: Request, actor: Actor = Depends(pa
 # --- 정책 -----------------------------------------------------------------------------------
 
 
+def policy_names(actor: Actor) -> dict[str, str]:
+    """정책 식별자 -> 운영자가 읽는 이름(정책 목록의 규칙 설명)."""
+    root = actor.config.policy_source.root if actor.config.policy_source else None
+    catalog = audit_report.load_catalog(root) or {}
+    return {r["id"]: r["description"] for r in catalog.get("rules", []) if r.get("description")}
+
+
 def policy_page(request: Request, actor: Actor, error=None, status=200):
     name = range_name(request.query_params.get("range", ""))
     hours = dashboard_reads.hours_of(name)
@@ -581,6 +594,7 @@ def policy_page(request: Request, actor: Actor, error=None, status=200):
         "cards": cards,
         "tiles": tiles,
         "effect": dashboard_reads.policy_effect(actor.conn, actor.instance, hours),
+        "names": policy_names(actor),
     }
     return render(request, "policy.html", ctx, actor=actor, status=status)
 

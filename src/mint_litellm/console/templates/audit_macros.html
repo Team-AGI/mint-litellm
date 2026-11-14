@@ -3,9 +3,9 @@
 <span class="segments" role="group" aria-label="{{ label }}">{% for text, href, active in items %}<a class="segment" href="{{ href }}"{% if active %} aria-current="true"{% endif %}>{% if active %}<strong>{{ text }}</strong>{% else %}{{ text }}{% endif %}</a>{% endfor %}</span>
 {% endmacro %}
 
-{# 차트 자리. 데이터가 없으면 「—」만 둔다. #}
+{# 차트 자리. 데이터가 없으면 낮은 빈 상태 한 줄만 둔다. #}
 {% macro panel(title, data, has_data) %}
 <section><h2>{{ title }}</h2>
-{% if has_data %}<div class="chart" data-chart="{{ data | to_json }}"></div>{% else %}<div class="chart muted">—</div>{% endif %}
+{% if has_data %}<div class="chart" data-chart="{{ data | to_json }}"></div>{% else %}<div class="empty slim">이 기간에 기록이 없습니다</div>{% endif %}
 </section>
 {% endmacro %}

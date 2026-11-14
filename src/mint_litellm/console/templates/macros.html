@@ -25,7 +25,7 @@
 {% endmacro %}
 
 {# kind: stacked(결정별 누적 막대) · donut · bars. data는 console.js의 data-chart 형식을 따른다. #}
-{% macro chart(kind, data, height=240) %}<div class="chart" data-height="{{ height }}" data-chart="{{ dict(data, kind=kind) | to_json }}"></div>{% endmacro %}
+{% macro chart(kind, data, height=240) %}{% if data['items'] or data['values'] or data['series'] %}<div class="chart" data-height="{{ height }}" data-chart="{{ dict(data, kind=kind) | to_json }}"></div>{% else %}<div class="empty slim">이 기간에 기록이 없습니다</div>{% endif %}{% endmacro %}
 
 {% macro tabs(items, current, base) %}
 <nav class="tabs" aria-label="탭">{% for key, label, count in items %}<a href="{{ base }}?tab={{ key }}"{% if key == current %} aria-current="page" class="active"{% endif %}>{{ label }}{% if count %} <span class="count">{{ count }}</span>{% endif %}</a>{% endfor %}</nav>
