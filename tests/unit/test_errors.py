@@ -49,8 +49,10 @@ def test_every_reason_maps_to_a_pre_dispatch_error():
         err = error_for_reason(code, REF)
         assert re.fullmatch(r"MINT-[A-Z0-9-]+", err.code)
         assert err.dispatch_state is DispatchState.NOT_DISPATCHED
-        # 전송 전에 취소된 호출만 다시 보내도 안전하다.
-        assert err.retry_safe is (reason is Reason.CANCELLED)
+        # 전송 전에 취소된 호출과 호출별 승인 대기(승인 뒤 같은 호출 재요청)만 다시 보내도 안전하다.
+        assert err.retry_safe is (
+            reason in (Reason.CANCELLED, Reason.CALL_APPROVAL_REQUIRED, Reason.CALL_APPROVAL_STALE)
+        )
         assert err.reference == REF
 
 
@@ -139,3 +141,13 @@ def test_detail_survives_the_streamable_http_error_text():
     text = "Error: " + error_for_reason("CONSENT_REQUIRED", REF).detail()
     start = text.index("{")
     assert MintError.from_detail(text[start:]).code == "MINT-CONSENT-REQUIRED"
+
+
+@pytest.mark.parametrize("reason", ["CALL_APPROVAL_REQUIRED", "CALL_APPROVAL_STALE"])
+def test_a_call_approval_wait_tells_the_agent_to_ask_again_after_approval(reason):
+    err = error_for_reason(reason, REF)
+    assert (err.dispatch_state, err.retry_safe) == (DispatchState.NOT_DISPATCHED, True)
+    assert "승인된 뒤 같은 작업을 다시 요청하십시오" in json.loads(err.detail())["guidance"]
+    assert MintError.from_detail(err.detail()) == err
+    # 다른 차단에는 안내 문구가 없다.
+    assert "guidance" not in json.loads(error_for_reason("CONSENT_REQUIRED", REF).detail())

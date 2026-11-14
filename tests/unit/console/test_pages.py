@@ -330,6 +330,31 @@ def test_the_call_approval_screen_decides_from_the_pending_row(world, admin):
     assert world.query("SELECT status FROM mint.call_approvals")[0][0] == "rejected"
 
 
+def test_the_call_approval_screen_shows_what_is_asked_masked_and_the_denial_reason(world, admin):
+    world.query(
+        "INSERT INTO mint.policy_versions (instance_id, id, catalog_sha256, bundle_sha256)"
+        " VALUES (%s, 'v1', %s, %s)", INSTANCE, "ab" * 32, "ab" * 32)
+    call_id = str(uuid.uuid4())
+    world.query(
+        "INSERT INTO mint.call_approvals (id, instance_id, org_id, principal_type, principal_id,"
+        " server_id, tool, args_fp, fp_key_version, policy_version_id, status, requested_by,"
+        " expires_at, target, action, display) VALUES (%s, %s, 'acme', 'user', 'human-7',"
+        " 'srv-ok', 'echo', %s, 1, 'v1', 'pending', 'mint-auto', now() + interval '1 hour',"
+        " 'acme/repo', 'issue_write', %s::jsonb)",
+        call_id, INSTANCE, "ab" * 32,
+        '{"title": "<script>alert(1)</script>", "note": "key AKIAABCDEFGHIJKLMNOP",'
+        ' "body": "' + "x" * 600 + '"}')
+    html = admin.get("/call-approvals").text
+    assert "acme/repo" in html and "issue_write" in html and "human-7" in html
+    assert "<script>alert(1)</script>" not in html and "&lt;script&gt;" in html
+    assert "AKIAABCDEFGHIJKLMNOP" not in html and "x" * 300 not in html
+    version = world.query("SELECT state_version FROM mint.call_approvals")[0][0]
+    form_post(world, admin, f"/call-approvals/{call_id}/reject",
+              state_version=version, reason="범위 밖 요청")
+    assert world.query("SELECT decision_reason FROM mint.call_approvals")[0][0] == "범위 밖 요청"
+    assert "거부 사유: 범위 밖 요청" in admin.get("/call-approvals").text
+
+
 def test_the_stranger_key_is_not_an_operator_so_no_screen_opens(world):
     assert world.client.post("/login", data={"key": Keys.stranger}).status_code == 403
     assert world.client.get("/").status_code == 303

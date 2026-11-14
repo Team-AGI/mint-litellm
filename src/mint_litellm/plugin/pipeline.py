@@ -23,6 +23,7 @@ from uuid import UUID
 
 from mint_litellm.compat.litellm_1_106 import HookData, ServerResolutionError
 from mint_litellm.plugin.buffer import ConfirmationConsume, ConsumeRequest, EvidenceRecorder
+from mint_litellm.plugin.call_display import call_display
 from mint_litellm.plugin.config import PluginConfig
 from mint_litellm.plugin.list_seen import ListSeen, list_key
 from mint_litellm.plugin.obligations import (
@@ -37,7 +38,9 @@ from mint_litellm.plugin.policy.input import policy_input as make_policy_input
 from mint_litellm.plugin.policy.opa_client import Evaluation
 from mint_litellm.plugin.policy.patterns import compute_patterns
 from mint_litellm.plugin.policy.sensitive_scan import INPUT_SECRET_KINDS, scan_arguments
+from mint_litellm.plugin.resolve_guard import ResolveGuard
 from mint_litellm.plugin.snapshot import (
+    WINDOW_MAX_USES,
     ApprovalRow,
     CallApprovalRow,
     Snapshot,
@@ -46,7 +49,9 @@ from mint_litellm.plugin.snapshot import (
 )
 from mint_litellm.plugin.timing import OFF, StageClock
 from mint_litellm.plugin.token_audience import MISMATCH, UNCHECKED, audience_verdict
+from mint_litellm.plugin.token_scope import exceeded_scopes
 from mint_litellm.types.canonical import credential_scope
+from mint_litellm.types.contracts import ONE_SHOT_ACTIONS
 from mint_litellm.types.decision import (
     UNSUPPORTED_STAGE,
     Action,
@@ -79,7 +84,11 @@ from mint_litellm.types.ids import new_uuid7
 from mint_litellm.types.outcome import Outcome as DecisionOutcome
 from mint_litellm.types.outcome import decision_outcome
 from mint_litellm.types.reason_codes import ContractDriftKind, Reason
-from mint_litellm.types.reuse_policy import ALLOW_TOKEN_FORWARD, FORWARDING_AUTH
+from mint_litellm.types.reuse_policy import (
+    ALLOW_INTERNAL_ADDRESS,
+    ALLOW_TOKEN_FORWARD,
+    FORWARDING_AUTH,
+)
 from mint_litellm.types.settings import Mode, ObservationSettings, effective_mode
 from mint_litellm.types.target import (
     READ,
@@ -120,6 +129,10 @@ class SnapshotSource(Protocol):
 
     async def request_call_approval(self, params: Mapping[str, Any]) -> str | None: ...
 
+    async def recent_call_outcome(
+        self, params: Mapping[str, Any]
+    ) -> tuple[str, str | None] | None: ...
+
 
 @dataclass
 class PipelineDeps:
@@ -136,6 +149,8 @@ class PipelineDeps:
     shadow: Callable[..., None] | None = None
     # 도구 목록의 「보임·통과」 반복을 거르는 기억. 없으면 걸러 내지 않는다.
     list_seen: ListSeen | None = None
+    # 원격 서버 주소의 이름 조회 결과 재확인. 없으면 하지 않는다.
+    resolve_guard: ResolveGuard | None = None
 
 
 @dataclass(frozen=True)
@@ -347,6 +362,38 @@ def token_forward_result(
     return StageResult.stop(Reason.TOKEN_FORWARD_FORBIDDEN, detail=resolved.auth_type)
 
 
+RESOLVE_OBSERVE_WAIT = 0.2  # 초
+RESOLVE_ENFORCE_WAIT = 1.0  # 초
+
+
+async def address_verdict(
+    run: _Run, deps: PipelineDeps, resolved: ResolvedServer, selected: ApprovalRow | None
+) -> StageResult | None:
+    """원격 서버 URL의 호스트가 내부 주소로 풀리는지 호출 직전에 다시 본다(POL-R-12).
+
+    승인 조건 ``allow_internal_address``를 true로 적은 서버는 보지 않는다. ``enforce``는 막고
+    (관측 모드로 풀리지 않음), ``observe``는 호출을 통과시키되 걸린 종류를 ``resolve_findings``에
+    남긴다. 조회 실패는 ``observe``에서 통과(기록만), ``enforce``에서 차단이다.
+    """
+    guard, mode = deps.resolve_guard, deps.config.resolve_check
+    if guard is None or mode == "off" or not resolved.host:
+        return None
+    if selected is not None and selected.conditions.get(ALLOW_INTERNAL_ADDRESS) is True:
+        return None
+    verdict = guard.cached(resolved.host)
+    if verdict is None:
+        # 이름 조회가 판정 예산을 다 쓰면 승인 소비 등 뒤 단계가 시간 초과로 닫힌다. 관측은 짧게,
+        # 집행은 남은 예산의 절반까지만 기다린다(늦게 끝난 조회는 캐시에 남아 다음 호출이 쓴다).
+        enforce = mode == "enforce"
+        share, cap = (0.5, RESOLVE_ENFORCE_WAIT) if enforce else (0.25, RESOLVE_OBSERVE_WAIT)
+        verdict = await guard.check(resolved.host, min(run.deadline.remaining() * share, cap))
+    if verdict.kind is None:
+        return None
+    if mode == "enforce":
+        return StageResult.stop(Reason.RESOLVED_ADDRESS_FORBIDDEN, detail=verdict.detail())
+    run.resolve_findings.append(verdict.kind)
+
+
 def audience_result(
     bearer: str | None, resolved: ResolvedServer, mode: str, run: _Run
 ) -> StageResult | None:
@@ -365,6 +412,34 @@ def audience_result(
     run.aud_mismatch = verdict == MISMATCH
     if run.aud_mismatch and mode == "enforce":
         return StageResult.stop(Reason.TOKEN_AUDIENCE_MISMATCH, detail=resolved.auth_type)
+    return None
+
+
+def scope_result(
+    bearer: str | None, resolved: ResolvedServer, snapshot: Snapshot, mode: str, run: _Run
+) -> StageResult | None:
+    """업스트림에 전달되는 호출자 토큰(POL-O-15)의 범위가 승인된 범위를 넘으면 ``enforce``에서
+    닫는다. ``observe``는 호출을 보내고 사건에만 남긴다. 승인된 범위를 모르거나(없음·빈 목록) 토큰을
+    읽을 수 없으면 확인하지 않았다고 이유와 함께 남긴다."""
+    if resolved.auth_type not in FORWARDING_AUTH:
+        return None
+    if mode == "off":
+        run.scope_unchecked_reason = "not_forwarded"
+        return None
+    if not bearer:
+        return None
+    server = snapshot.server
+    approved = server.approved_oauth_scopes if server is not None else None
+    if not approved:
+        run.scope_unchecked_reason = "no_approved_scopes"
+        return None
+    extra = exceeded_scopes(bearer, approved)
+    if extra is None:
+        run.scope_unchecked_reason = "opaque"
+        return None
+    run.scope_exceeded = list(extra)
+    if extra and mode == "enforce":
+        return StageResult.stop(Reason.TOKEN_SCOPE_EXCEEDED, detail=resolved.auth_type)
     return None
 
 
@@ -859,14 +934,22 @@ def match_call_approval(
             Reason.CALL_APPROVAL_REQUIRED, detail="arguments cannot be fingerprinted"
         ), None
 
+    contract = current_contract(snapshot, tool)
+    one_shot_only = contract is not None and contract.action_type in ONE_SHOT_ACTIONS
+
     def same_call(row: CallApprovalRow) -> bool:
+        # 기간 승인은 인자 지문을 풀고 나머지 결속은 그대로 둔다. 1회 승인과 삭제·외부 전송·자격
+        # 접근 도구는 지문까지 정확히 맞아야 한다. 기간 승인은 사용 횟수 상한이 있다.
+        windowed = row.valid_until is not None
+        fp_free = windowed and not one_shot_only
         return (
             row.org_id == principal.org_id
             and row.principal_type == principal.principal_type.value
             and row.principal_id == principal.principal_id
             and row.server_id == resolved.server_id
             and row.tool == tool
-            and row.args_fp == fingerprint
+            and (fp_free or row.args_fp == fingerprint)
+            and (not windowed or row.uses < WINDOW_MAX_USES)
             and row.fp_key_version == config.fingerprint_key_version
             and row.contract_version is None
             and bound_to_current_contract(snapshot, tool, row.contract_id)
@@ -1053,13 +1136,21 @@ class _Run:
     started_at: int = field(default_factory=time.perf_counter_ns)
     # 막힌 호출이 연(또는 다시 쓴) 호출별 승인 요청의 식별자
     call_approval_request: str | None = None
+    # 같은 호출의 직전 요청이 거부된 사유(거부 기억 안의 재시도), 승인이 쓰이지 않고 만료됐는지
+    denial_reason: str | None = None
+    previous_expired: bool = False
     # 계약 관리가 아닌 서버에서 관측만 한 검사 결과의 정책 식별자(입력 쪽)와 검사 설정
     unmanaged_findings: list[str] = field(default_factory=list)
     scan_unmanaged: str = "observe"
+    # 서버 주소 재확인(observe)에서 걸린 종류(private·rebind·unresolved). 막지 않고 기록만 한다.
+    resolve_findings: list[str] = field(default_factory=list)
     # 전달되는 호출자 토큰의 aud 확인 결과(대상 불일치, 읽을 수 없어 확인하지 않음)
     aud_mismatch: bool = False
     aud_unchecked: bool = False
     aud_unchecked_reason: str | None = None
+    # 전달되는 호출자 토큰이 승인된 범위를 넘은 범위 이름, 확인하지 않은 이유
+    scope_exceeded: list[str] = field(default_factory=list)
+    scope_unchecked_reason: str | None = None
 
 
 def _decision_snapshot(
@@ -1289,9 +1380,16 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         if forward is not None:
             stages.add(Stage.DENIAL_APPROVAL, forward)
             return
+        address = await address_verdict(run, deps, resolved, run.selected)
+        if address is not None:
+            stages.add(Stage.DENIAL_APPROVAL, address)
         audience = audience_result(req.hook.bearer, resolved, config.token_audience, run)
         if audience is not None:
             stages.add(Stage.DENIAL_APPROVAL, audience)
+            return
+        scope = scope_result(req.hook.bearer, resolved, snapshot, config.token_scope, run)
+        if scope is not None:
+            stages.add(Stage.DENIAL_APPROVAL, scope)
             return
 
     if req.operation is OperationType.RUNTIME_DISCOVERY and (
@@ -1407,6 +1505,7 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         binding,
     )
     timing.since("fingerprint", started)
+    check = await _previous_outcome(run, deps, check, resolved, tool, hook.arguments)
     for result in check.results:
         stages.add(Stage.OBLIGATIONS, result)
     if not check.results:
@@ -1443,6 +1542,47 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
     await _open_call_approval(run, deps, check, resolved, tool, hook.arguments, binding)
 
 
+async def _previous_outcome(
+    run: _Run, deps: PipelineDeps, check: ObligationCheck, resolved: ResolvedServer, tool: str,
+    arguments: Mapping[str, Any],
+) -> ObligationCheck:
+    """승인이 없어 막힌 호출의 직전 요청이 거부됐으면 새 요청 없이 그 사유로 거절한다.
+
+    거부는 그 요청 1건에 한정되고 ``call_denial_minutes`` 안에서만 기억한다. 직전 승인이 쓰이지
+    않고 만료됐으면 막힘은 그대로 두고 그 사실만 호출자에게 알린다(새 요청은 평소처럼 열린다).
+    """
+    config, principal, snapshot = deps.config, run.principal, run.snapshot
+    first = check.results[0] if check.results else None
+    if (
+        first is None or first.detail is not None
+        or first.reason_code not in (Reason.CALL_APPROVAL_REQUIRED, Reason.CALL_APPROVAL_STALE)
+        or config.call_denial_minutes <= 0 or config.fingerprint_key is None
+        or principal.principal_type not in (
+            PrincipalType.USER, PrincipalType.TEAM_KEY, PrincipalType.SERVICE_ACCOUNT)
+        or not principal.principal_id or snapshot is None
+    ):
+        return check
+    try:
+        async with asyncio.timeout(run.deadline.remaining()):
+            prior = await deps.snapshots.recent_call_outcome({
+                "iid": config.instance_id, "principal_type": principal.principal_type.value,
+                "principal_id": principal.principal_id, "server_id": resolved.server_id,
+                "tool": tool, "args_fp": argument_fingerprint(arguments, config.fingerprint_key),
+                "fp_key_version": config.fingerprint_key_version,
+                "minutes": config.call_denial_minutes,
+            })
+    except Exception as exc:
+        log.debug("직전 호출별 승인 결과 조회 실패: %s", type(exc).__name__)
+        return check
+    if prior is None:
+        return check
+    if prior[0] == "rejected":
+        run.denial_reason = prior[1]
+        return ObligationCheck([StageResult.stop(Reason.CALL_APPROVAL_DENIED)], None)
+    run.previous_expired = True
+    return check
+
+
 async def _open_call_approval(
     run: _Run, deps: PipelineDeps, check: ObligationCheck, resolved: ResolvedServer, tool: str,
     arguments: Mapping[str, Any], binding: Target | None,
@@ -1473,13 +1613,14 @@ async def _open_call_approval(
                 "fp_key_version": config.fingerprint_key_version,
                 "policy_version_id": snapshot.policy_version.id,
                 "requested_by": AUTO_REQUESTER, "minutes": AUTO_REQUEST_MINUTES,
+                "display": call_display(arguments),
                 "contract_id": contract.id if contract is not None else None,
                 "exec_contract_sha256": resolved.exec_contract_sha256,
                 "target": binding.target if binding is not None else None,
                 "action": binding.action if binding is not None else None,
             })
     except Exception as exc:
-        log.debug("호출별 승인 요청 실패: %s", type(exc).__name__)
+        log.warning("호출별 승인 요청을 열지 못했습니다: %s", type(exc).__name__)
 
 
 def _mark_written(run: _Run) -> Callable[[], None]:
@@ -1655,8 +1796,12 @@ async def _evaluate(run: _Run, deps: PipelineDeps) -> Outcome:
         if run.call_approval_request is not None and reason in (
             Reason.CALL_APPROVAL_REQUIRED, Reason.CALL_APPROVAL_STALE
         ):
-            error = error.model_copy(update={"approval_requested": True})
+            error = error.model_copy(update={
+                "approval_requested": True, "previous_expired": run.previous_expired,
+            })
             approval_request_id = run.call_approval_request
+        elif reason == Reason.CALL_APPROVAL_DENIED:
+            error = error.model_copy(update={"denial_reason": run.denial_reason})
     return Outcome(
         allowed=allowed,
         snapshot=snapshot_doc,
@@ -1747,9 +1892,12 @@ def _context_document(
         "org_id": principal.org_id,
         "result_policy": _result_policy(run),
         "unmanaged_findings": list(dict.fromkeys(run.unmanaged_findings)),
+        "resolve_findings": list(dict.fromkeys(run.resolve_findings)),
         "aud_mismatch": run.aud_mismatch,
         "aud_unchecked": run.aud_unchecked,
         "aud_unchecked_reason": run.aud_unchecked_reason,
+        "scope_exceeded": list(run.scope_exceeded),
+        "scope_unchecked_reason": run.scope_unchecked_reason,
     }
 
 

@@ -106,7 +106,10 @@ def test_the_five_class_count_is_pinned():
     # 선언 파일 접근(I-08)은 Linux·Windows 관리형 설치에서 조건부이다.
     # 서버 실행기가 승인된 계약과 맞을 때만 서버를 시작하고 폐기 서버를 거부해 로컬 서버 시작
     # 통제(R-18·R-20)는 관리형 설치에서 부분에서 조건부로 옮겼다.
-    assert (_count("unconditional"), _count("conditional"), _count("partial")) == (38, 21, 14)
+    # 인자 패턴·허용 인자 키(E-08·E-09·E-15)와 계약 등급·삭제·외부 전송 기본 부과(I-02·I-10·E-20)는
+    # 계약 관리 서버에서만 판정되므로(policy.rego의 managed, pipeline.py의 current_contract)
+    # 무조건에서 조건부로 옮겼다.
+    assert (_count("unconditional"), _count("conditional"), _count("partial")) == (32, 27, 14)
     assert auto == 73
     # 목표(90개 중 72개 이상) 산정은 반자동 수동 증거를 함께 센다.
     assert _count("semi_auto_evidence") == 12

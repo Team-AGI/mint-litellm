@@ -14,6 +14,7 @@ from jinja2 import pass_context
 from mint_litellm.console import labels
 from mint_litellm.console.core import DEFAULT_TIME_ZONE
 from mint_litellm.control.services import reads
+from mint_litellm.plugin.policy.sensitive_scan import mask_text
 
 HERE = Path(__file__).parent
 templates = Jinja2Templates(directory=HERE / "templates")
@@ -100,6 +101,11 @@ def clip(value: Any, limit: int = 256) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
+def masked(value: Any, limit: int = 256) -> str:
+    """승인 화면에 내는 인자 표시. 저장된 값에 남은 비밀·개인정보도 한 번 더 가리고 잘라서 낸다."""
+    return clip(mask_text(str(value)) if value not in (None, "") else value, limit)
+
+
 def yes_no(value: Any) -> Any:
     return ("예" if value else "아니오") if isinstance(value, bool) else blank(value)
 
@@ -110,6 +116,7 @@ def to_json(value: Any) -> str:
 
 templates.env.filters.update(
     span=span, when=when, blank=blank, join=join, to_json=to_json, clip=clip, yes_no=yes_no,
+    masked=masked,
     who=labels.actor, countdown=countdown,
 )
 templates.env.globals.update(L=labels, ICONS=ICONS, MENU=MENU, STAFF_MENU=STAFF_MENU)

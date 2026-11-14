@@ -9,16 +9,27 @@ from mint_litellm.control import alerts
 from mint_litellm.control.db.connection import fetchall
 
 KIND = "token_audience_mismatch"
+SCOPE_KIND = "token_scope_exceeded"
 WINDOW_SECONDS = 900
+# 경보 종류마다 사건에서 걸린 호출을 고르는 조건
+_FLAGGED = {
+    KIND: "e.payload->>'aud_mismatch' = 'true'",
+    SCOPE_KIND: "jsonb_array_length(COALESCE(e.payload->'scope_exceeded', '[]')) > 0",
+}
 
 
 def run(job) -> None:
+    for kind, flagged in _FLAGGED.items():
+        _raise(job, kind, flagged)
+
+
+def _raise(job, kind: str, flagged: str) -> None:
     rows = fetchall(
         job.conn,
         "SELECT e.payload->>'server_id' AS server, count(*) AS calls FROM mint.events e"
         " WHERE e.instance_id = %s AND e.kind IN ('call_response_received', 'call_outcome_unknown')"
         " AND e.inserted_at >= now() - make_interval(secs => %s)"
-        " AND e.payload->>'aud_mismatch' = 'true' AND e.payload->>'server_id' IS NOT NULL"
+        f" AND {flagged} AND e.payload->>'server_id' IS NOT NULL"
         " GROUP BY 1",
         (job.instance_id, WINDOW_SECONDS),
     )
@@ -30,17 +41,17 @@ def run(job) -> None:
             job.conn,
             "SELECT dedup_key FROM mint.alerts WHERE instance_id = %s AND kind = %s"
             " AND status <> 'resolved'",
-            (job.instance_id, KIND),
+            (job.instance_id, kind),
         )
     }
     with job.conn.transaction():
         for r in rows:
-            key = f"{KIND}:{r['server']}"[:512]
+            key = f"{kind}:{r['server']}"[:512]
             if key not in open_keys:
                 alerts.raise_alert(
                     job.conn,
                     job.instance_id,
-                    kind=KIND,
+                    kind=kind,
                     severity="medium",
                     dedup_key=key,
                     subject={
