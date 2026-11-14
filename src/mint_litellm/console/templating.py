@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from jinja2 import pass_context
 
-from mint_litellm.console import labels
+from mint_litellm.console import labels, setup_state
 from mint_litellm.console.core import DEFAULT_TIME_ZONE
 from mint_litellm.control.services import reads
 from mint_litellm.plugin.policy.sensitive_scan import mask_text
@@ -21,7 +21,7 @@ templates = Jinja2Templates(directory=HERE / "templates")
 
 # (그룹 이름, ((경로, 이름, 배지 키), ...)). 그룹 이름이 None이면 구분선 없이 맨 위에 둔다.
 MENU = (
-    (None, (("/", "대시보드", None),)),
+    (None, (("/", "대시보드", None), ("/setup", "시작하기", "setup"))),
     ("처리할 일", (("/approvals", "승인 센터", "approvals"), ("/alerts", "경보", "alerts"))),
     ("서버", (("/servers", "서버", "servers"), ("/intakes", "도입 신청", "intakes"),
             ("/access", "접근 통제", None))),
@@ -157,6 +157,7 @@ def render(
             "alerts": reads.urgent_alert_count(actor.conn, actor.instance),
             **reads.menu_counts(actor.conn, actor.instance),
             "endpoints": _endpoint_problems(actor),
+            "setup": setup_state.pending(setup_state.steps(actor)),
         }
     return templates.TemplateResponse(
         request, name, {**base, **(context or {})}, status_code=status
