@@ -15,6 +15,17 @@ from mint_litellm.types.reason_codes import Reason, parse_reason_code
 
 BLOCK_STATUS_CODE = 403
 
+# 호출별 승인 대기 오류가 에이전트에게 전하는 다음 행동. 승인 뒤 같은 작업을 다시 요청하면 된다.
+APPROVAL_GUIDANCE = (
+    "관리자 승인이 필요합니다. 승인된 뒤 같은 작업을 다시 요청하십시오. "
+    "승인 범위·기간 안에서 정책을 다시 검사합니다."
+)
+# 관리자가 거부한 호출의 재시도. 실행되지 않았고, 되풀이하지 말고 사용자에게 알려야 한다.
+DENIAL_GUIDANCE = (
+    "관리자가 이 호출을 거부해 실행되지 않았습니다. 같은 작업을 되풀이하지 말고 사용자에게 "
+    "거부 사유를 알리십시오."
+)
+
 
 class DispatchState(StrEnum):
     NOT_DISPATCHED = "not_dispatched"
@@ -42,6 +53,8 @@ class MintError(BaseModel):
     # 만료됐다는 사실. 요청자(에이전트)가 같은 시도를 되풀이하지 않도록 돌려준다.
     denial_reason: str | None = None
     previous_expired: bool = False
+    # 호출자(에이전트)가 취할 다음 행동 안내. 승인 대기 오류에만 있다.
+    guidance: str | None = None
 
     @model_validator(mode="after")
     def _retry_only_before_dispatch(self) -> Self:
@@ -65,6 +78,8 @@ class MintError(BaseModel):
             body["denial_reason"] = self.denial_reason
         if self.previous_expired:
             body["previous_expired"] = True
+        if self.guidance is not None:
+            body["guidance"] = self.guidance
         return json.dumps(
             body,
             ensure_ascii=False,
@@ -97,7 +112,8 @@ def error_code(reason_code: str) -> str:
 def error_for_reason(
     reason_code: str, reference: str, dependency: Dependency | None = None
 ) -> MintError:
-    """전송 전 차단의 오류. 의존 서비스 불능만 재시도 안전이고 나머지는 승인·동의 뒤 재제출이다."""
+    """전송 전 차단의 오류. 의존 서비스 불능과 호출별 승인 대기만 재시도 안전이고, 나머지는
+    동의·본인 확인 뒤 재제출이다."""
     family, _ = parse_reason_code(reason_code)
     if family is Reason.DEPENDENCY_FAILURE:
         if dependency is None:
@@ -110,11 +126,21 @@ def error_for_reason(
         )
     if family is Reason.CANCELLED:
         return cancelled_error(reference, dispatched=False)
+    if family in (Reason.CALL_APPROVAL_REQUIRED, Reason.CALL_APPROVAL_STALE):
+        # 승인 대기는 업스트림 전송이 없었으므로 승인 뒤 같은 호출을 다시 보내도 안전하다.
+        return MintError(
+            code=error_code(reason_code),
+            dispatch_state=DispatchState.NOT_DISPATCHED,
+            retry_safe=True,
+            reference=reference,
+            guidance=APPROVAL_GUIDANCE,
+        )
     return MintError(
         code=error_code(reason_code),
         dispatch_state=DispatchState.NOT_DISPATCHED,
         retry_safe=False,
         reference=reference,
+        guidance=DENIAL_GUIDANCE if family is Reason.CALL_APPROVAL_DENIED else None,
     )
 
 

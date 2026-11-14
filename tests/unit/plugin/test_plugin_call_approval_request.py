@@ -33,6 +33,7 @@ def test_blocked_call_opens_a_pending_request_and_tells_the_caller(tmp_path):
     assert len(params["args_fp"]) == 64
     body = json.loads(result.error.detail())
     assert body["approval_requested"] is True and body["reference"]
+    assert body["retry_safe"] is True and "다시 요청하십시오" in body["guidance"]
     assert MintError.from_detail(result.error.detail()).approval_requested
 
 
