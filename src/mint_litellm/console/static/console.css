@@ -114,6 +114,7 @@ th {
   white-space: nowrap;
 }
 td { overflow-wrap: break-word; }
+.ident { font-family: monospace; }
 td .nowrap, td button, td .badge { white-space: nowrap; }
 button > span[aria-hidden="true"] { margin-right: 4px; }
 td button, td .btn { white-space: nowrap; }
@@ -247,6 +248,7 @@ dialog.confirm .actions { justify-content: flex-end; }
 
 @media (max-width: 1100px) {
   table { display: block; max-width: 100%; overflow-x: auto; }
+  th { position: static; }
 }
 
 @media (max-width: 1000px) {
