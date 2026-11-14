@@ -92,6 +92,7 @@ def build_conditions(
     response_scan: str | None = None,
     allow_input_secrets: list[str] | None = None,
     allow_token_forward: bool = False,
+    allow_internal_address: bool = False,
 ) -> dict:
     """정책이 읽는 승인 조건. 지정하지 않은 조건은 키를 넣지 않는다."""
     conditions: dict = {}
@@ -109,6 +110,8 @@ def build_conditions(
         conditions["response_scan"] = response_scan
     if allow_token_forward:
         conditions["allow_token_forward"] = True
+    if allow_internal_address:
+        conditions["allow_internal_address"] = True
     if allow_input_secrets:
         unknown = sorted(set(allow_input_secrets) - ALLOWABLE_INPUT_SECRETS)
         if unknown:
