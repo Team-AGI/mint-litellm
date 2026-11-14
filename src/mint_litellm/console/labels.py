@@ -306,6 +306,7 @@ ALERT_KIND = {
     "package_vulnerable": "패키지 취약점",
     "package_vuln_due": "취약점 조치 기한",
     "vuln_feed_unreachable": "취약점 조회 실패",
+    "dep_graph_unreachable": "의존 패키지 조회 실패",
     "oauth_flow_unreadable": "인증 흐름 읽기 실패",
     "instance_mismatch": "인스턴스 간 불일치",
     "export_failed": "내보내기 실패",
