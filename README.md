@@ -4,7 +4,7 @@ MINT for LiteLLM은 AI 에이전트가 MCP(Model Context Protocol)를 통해 외
 
 MCP는 Claude Code, Codex 등의 AI 에이전트가 파일 시스템, 개발 도구, 데이터베이스, 외부 API와 상호작용할 수 있도록 지원합니다. 이를 통해 AI 에이전트는 정보 조회뿐 아니라 파일 수정, 코드 실행, 외부 서비스 호출과 같은 실제 작업을 수행할 수 있습니다.
 
-![MINT for LiteLLM 간단 구성도](docs/images/architecture.png)
+![MINT for LiteLLM 개념도](docs/images/architecture.png)
 
 - 도입 수용검증 → 승인 → 호출 판정 → 변경 재승인 → 종료 판정 → 원장
 - LiteLLM의 인증·전송·자격 저장·속도 제한은 그대로 쓰고, 그 위에 승인과 정책 판정을 더합니다.
