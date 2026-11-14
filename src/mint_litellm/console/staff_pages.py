@@ -30,6 +30,7 @@ from mint_litellm.console.core import (
     require_origin,
     too_many_attempts,
 )
+from mint_litellm.console.oidc import login_context
 from mint_litellm.console.pages.common import see_other
 from mint_litellm.console.templating import render
 from mint_litellm.control import endpoint_kits, links
@@ -142,9 +143,31 @@ def staff_render(
 # --- 로그인·로그아웃 --------------------------------------------------------------------------
 
 
+def start_staff_session(
+    config: ConsoleConfig, control: psycopg.Connection, staff_conn: psycopg.Connection,
+    user_id: str, key_token: str, team_ids: tuple[str, ...],
+) -> str:
+    """직원 세션을 만들고 쿠키에 담을 세션 식별자(평문)를 돌려준다."""
+    session_id = secrets.token_urlsafe(32)
+    id_hash = console_sessions.hash_id(session_id)
+    sctx = staff.StaffContext(
+        staff_conn, control, config.instance_id, user_id,
+        consent_max_days=config.stage2.staff_consent_max_days,
+        verify_window_seconds=config.stage2.session_verify_window_seconds,
+        team_ids=team_ids, key_token=key_token,
+    )
+    now = datetime.now(UTC)
+    staff.start_session(
+        sctx, id_hash, key_token,
+        now + timedelta(seconds=config.stage2.session_idle_seconds),
+        now + timedelta(seconds=config.stage2.session_absolute_seconds),
+    )
+    return session_id
+
+
 @public.get("/staff/login", response_class=HTMLResponse)
 def login_form(request: Request) -> Response:
-    return render(request, "staff_login.html", {"error": None})
+    return render(request, "staff_login.html", login_context(request, None))
 
 
 @public.post("/staff/login", dependencies=[Depends(require_origin)])
@@ -155,40 +178,37 @@ def login_submit(
     staff_conn: psycopg.Connection = Depends(staff_connection),
 ) -> Response:
     config = config_of(request)
+    if not config.key_login:
+        return render(
+            request, "staff_login.html", login_context(request, "키 로그인은 사용하지 않습니다."),
+            status=403,
+        )
     if too_many_attempts(request):
         return render(
             request, "staff_login.html",
-            {"error": "로그인 시도가 너무 많습니다. 잠시 뒤 다시 시도하십시오."}, status=429,
+            login_context(request, "로그인 시도가 너무 많습니다. 잠시 뒤 다시 시도하십시오."),
+            status=429,
         )
     try:
         identity = login.verify(config.litellm_url, key)
     except login.LoginRefused as refused:
-        return render(request, "staff_login.html", {"error": str(refused)}, status=401)
+        return render(request, "staff_login.html", login_context(request, str(refused)), status=401)
     finally:
         key = ""  # 평문 키는 여기서 버린다
-    session_id = secrets.token_urlsafe(32)
-    id_hash = console_sessions.hash_id(session_id)
-    sctx = staff.StaffContext(
-        staff_conn, control, config.instance_id, identity.user_id,
-        consent_max_days=config.stage2.staff_consent_max_days,
-        verify_window_seconds=config.stage2.session_verify_window_seconds,
-        team_ids=identity.team_ids, key_token=identity.key_token,
-    )
-    now = datetime.now(UTC)
-    staff.start_session(
-        sctx, id_hash, identity.key_token,
-        now + timedelta(seconds=config.stage2.session_idle_seconds),
-        now + timedelta(seconds=config.stage2.session_absolute_seconds),
-    )
+    session_id = start_staff_session(
+        config, control, staff_conn, identity.user_id, identity.key_token, identity.team_ids)
     response = RedirectResponse("/staff", status_code=303)
     response.set_cookie(STAFF_COOKIE, session_id, **COOKIE_OPTIONS)
     return response
 
 
 @router.post("/staff/logout")
-def logout(actor: StaffActor = Depends(staff_actor)) -> Response:
+def logout(request: Request, actor: StaffActor = Depends(staff_actor)) -> Response:
     staff.end_session(actor.sctx, actor.id_hash)
-    response = RedirectResponse("/staff/login", status_code=303)
+    target = "/staff/login"
+    if console_sessions.is_sso_session(actor.sctx.key_token) and request.app.state.oidc is not None:
+        target = request.app.state.oidc.logout_url(request, target) or target
+    response = RedirectResponse(target, status_code=303)
     response.delete_cookie(STAFF_COOKIE, path="/", secure=True, httponly=True, samesite="strict")
     return response
 

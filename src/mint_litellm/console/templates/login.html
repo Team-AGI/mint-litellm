@@ -11,10 +11,15 @@
 <div class="login">
   <h1>MINT 관리자 콘솔</h1>
   {% if error %}<div class="banner error" role="alert">{{ error }}</div>{% endif %}
+  {% if sso %}
+  <a class="button primary" href="/auth/oidc/login?target=admin">SSO로 로그인</a>
+  {% endif %}
+  {% if key_login %}
   <form method="post" action="/login" class="form">
     <label>LiteLLM 키<input type="password" name="key" autocomplete="off" autofocus required></label>
-    <button class="primary" type="submit">로그인</button>
+    <button class="{{ '' if sso else 'primary' }}" type="submit">로그인</button>
   </form>
+  {% endif %}
   <p><a href="/staff/login">직원 화면 로그인</a></p>
 </div>
 </body>
