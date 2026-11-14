@@ -479,6 +479,7 @@ def decide_call(
     state_version: int = Form(...),
     second_approver_token: str = Form(""),
     window_minutes: int = Form(0),
+    reason: str = Form(""),
     actor: Actor = Depends(page_actor),
 ):
     def action():
@@ -489,7 +490,9 @@ def decide_call(
                 window_minutes=window_minutes or None,
             )
         elif decision == "reject":
-            call_approval_service.reject(actor.ctx, call_id, expected_version=state_version)
+            call_approval_service.reject(
+                actor.ctx, call_id, expected_version=state_version, reason=reason
+            )
         elif decision == "cancel":
             call_approval_service.cancel(actor.ctx, call_id, expected_version=state_version)
         else:

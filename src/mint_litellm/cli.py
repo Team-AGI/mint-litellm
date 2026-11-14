@@ -425,6 +425,7 @@ def _approve(run: Run) -> None:
             response_scan=a.response_scan,
             allow_input_secrets=a.allow_input_secret,
             allow_token_forward=a.allow_token_forward,
+            allow_internal_address=a.allow_internal_address,
         ),
     )
     _created(run, approval_id)
@@ -892,7 +893,9 @@ HANDLERS: dict[str, Handler] = {
         r.context(), r.args.call_approval_id, _second(r),
         window_minutes=_window_minutes(r.args.for_),
     ),
-    "call-approval reject": _done(call_approval_service.reject, "call_approval_id"),
+    "call-approval reject": lambda r: call_approval_service.reject(
+        r.context(), r.args.call_approval_id, reason=r.args.reason
+    ),
     "call-approval cancel": _done(call_approval_service.cancel, "call_approval_id"),
     "consent add": _consent_add,
     "consent revoke": _done(consent_service.revoke, "consent_id"),
@@ -1070,6 +1073,9 @@ ARGUMENTS: dict[str, list[Any]] = {
         _a("--allow-token-forward", action="store_true",
            help="호출자 토큰을 업스트림에 그대로 전달하는 서버(true_passthrough·oauth_delegate)의 "
            "호출을 이 승인에서 허용한다. 기본은 막는다"),
+        _a("--allow-internal-address", action="store_true",
+           help="서버 주소가 내부 주소(사설·루프백 등)로 풀려도 이 승인에서 허용한다. 사내에서 "
+           "운영하는 서버용이며 기본은 서버 주소 재확인이 막거나 알린다"),
         _a("--confirm-tool", action="append",
            help="호출 때 본인 확인을 요구할 도구(반복 가능, 승인 도구 안에 있어야 한다)"),
         _a("--confirm-purpose", help="본인 확인의 목적(--confirm-tool과 함께)"),
@@ -1108,7 +1114,9 @@ ARGUMENTS: dict[str, list[Any]] = {
         _a("--for", dest="for_", choices=["10m", "30m"],
            help="같은 호출을 이 시간 동안 되풀이해 승인한다(기본: 1회)"),
     ],
-    "call-approval reject": [_a("call_approval_id")],
+    "call-approval reject": [
+        _a("call_approval_id"), _a("--reason", help="요청자에게 전달할 거부 사유"),
+    ],
     "call-approval cancel": [_a("call_approval_id")],
     "consent add": [
         _a("--org", required=True),

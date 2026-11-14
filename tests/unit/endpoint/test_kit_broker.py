@@ -164,3 +164,23 @@ def test_a_refusal_with_a_mint_code_names_the_code_and_nothing_else_leaks_throug
     for odd in (b"not json", b'{"detail": "x"}', spaced):
         with pytest.raises(agent.Refuse, match=r"\(HTTP 503\)$"):
             agent._call(lambda *a, odd=odd: (503, odd), "https://m", "/p", "k", {}, 1.0)
+
+
+def test_a_pending_approval_refusal_passes_the_flag_and_guidance_to_stderr(tmp_path, server):
+    guidance = "관리자 승인이 필요합니다. 승인된 뒤 같은 작업을 다시 요청하십시오."
+    answer = {"decision": "deny", "reference": "r:1", "error": {
+        "code": "MINT-CALL-APPROVAL-REQUIRED", "approval_requested": True, "guidance": guidance}}
+    world, srv = World(tmp_path), server(answer=answer)
+    key = tmp_path / "key"
+    key.write_text("sk-k")
+    event = {"tool_name": "mcp__srv-1__search", "mcp_server": {"name": "srv-1"},
+             "tool_input": {"q": "x"}, "tool_use_id": "toolu_1"}  # fmt: skip
+    done = subprocess.run(
+        [sys.executable, str(KIT / "mint_agent.py"), "pre", "--url", srv.url.rsplit("/mint/", 1)[0],
+         "--key-file", str(key), "--contracts", world.listing, "--state-dir", str(tmp_path / "s"),
+         "--no-keepalive"],
+        input=json.dumps(event).encode(), capture_output=True, timeout=10,
+    )  # fmt: skip
+    text = done.stderr.decode("utf-8")
+    assert done.returncode == 2 and "MINT-CALL-APPROVAL-REQUIRED" in text
+    assert "approval_requested=true" in text and guidance in text

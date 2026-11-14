@@ -265,8 +265,11 @@ async def observe_response(
         aud_mismatch=bool(ctx.get("aud_mismatch")),
         aud_unchecked=bool(ctx.get("aud_unchecked")),
         aud_unchecked_reason=ctx.get("aud_unchecked_reason"),
+        scope_exceeded=tuple(ctx.get("scope_exceeded") or ()),
+        scope_unchecked_reason=ctx.get("scope_unchecked_reason"),
         sensitive_findings=dict(ctx.get("sensitive_findings") or {}),
         unmanaged_findings=tuple(ctx.get("unmanaged_findings") or ()),
+        resolve_findings=tuple(ctx.get("resolve_findings") or ()),
         scan_truncated=bool(ctx.get("scan_truncated")),
         finding_paths=tuple(ctx.get("finding_paths") or ()),
         outcome=response_outcome(
@@ -302,8 +305,13 @@ async def observe_unknown_outcome(
     if ctx.get("unmanaged_findings"):
         payload["unmanaged_findings"] = list(ctx["unmanaged_findings"])
         payload["server_id"] = ctx.get("server_id")
+    if ctx.get("resolve_findings"):
+        payload["resolve_findings"] = list(ctx["resolve_findings"])
     if ctx.get("aud_mismatch"):
         payload["aud_mismatch"] = True
+        payload["server_id"] = ctx.get("server_id")
+    if ctx.get("scope_exceeded"):
+        payload["scope_exceeded"] = list(ctx["scope_exceeded"])
         payload["server_id"] = ctx.get("server_id")
     consumed = ctx.get("consumed_call_approval")
     if isinstance(consumed, Mapping):

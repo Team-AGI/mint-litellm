@@ -1,0 +1,1 @@
+- 호출자 토큰을 그대로 전달하는 서버로 가는 호출에서 JWT의 `scope`·`scp`를 승인된 OAuth 범위와 대조하고(`MINT_TOKEN_SCOPE`, 기본 관측·경보 `token_scope_exceeded`, `enforce`는 `MINT-TOKEN-SCOPE-EXCEEDED`로 차단) 넘은 범위 이름만 사건에 남긴다(POL-O-15, 서명은 확인하지 않음).

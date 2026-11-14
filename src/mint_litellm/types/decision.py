@@ -426,6 +426,8 @@ class ResolvedServer(BaseModel):
     audiences: tuple[str, ...] = Field(default=(), exclude=True, repr=False)
     # 서버 정의에 관리자가 설정한 OAuth 범위. 승인된 범위와 비교하는 데만 쓴다.
     oauth_scopes: tuple[str, ...] = ()
+    # 서버 URL의 호스트. 이름 조회 결과 재확인에만 쓰며 사건에는 남기지 않는다.
+    host: str | None = Field(default=None, exclude=True)
 
     @model_validator(mode="after")
     def _identity_shape(self) -> Self:
@@ -556,6 +558,10 @@ class DecisionSnapshot(BaseModel):
     # 새 행부터 남는 값. ``outcome``은 네 부분 요약, ``decision_us``는 판정에 걸린 마이크로초.
     outcome: Outcome | None = None
     decision_us: int | None = Field(default=None, ge=0)
+    # 승인 대기 보류를 거친 판정에만 남는다. 결과는 approved·denied·expired·timed_out이고
+    # 시간은 밀리초이다.
+    approval_hold: str | None = None
+    approval_hold_ms: int | None = Field(default=None, ge=0)
     cause: str | None = Field(default=None, exclude=True)
 
     @field_validator("missing_reasons", mode="after")

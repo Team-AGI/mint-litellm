@@ -125,7 +125,9 @@ SELECT jsonb_build_object(
             OR (d.scope_type = 'server' AND d.scope_id = %(server_id)s))
     ),
     'call_approvals', (
-        SELECT coalesce(jsonb_agg(to_jsonb(c)), '[]'::jsonb) FROM mint.call_approvals c
+        SELECT coalesce(jsonb_agg(to_jsonb(c) || jsonb_build_object('uses', (
+            SELECT count(*) FROM mint.call_approval_uses u WHERE u.call_approval_id = c.id))),
+            '[]'::jsonb) FROM mint.call_approvals c
         WHERE c.instance_id = %(iid)s AND c.status = 'approved'
           AND c.server_id = %(server_id)s AND c.tool = %(tool)s
           AND c.principal_id = %(principal_id)s
@@ -208,13 +210,20 @@ WHERE instance_id = %(iid)s AND id = %(id)s AND status = 'approved'
   AND valid_until IS NULL AND expires_at > clock_timestamp()
 """ + _CONSUME_MATCH.format(contract="contract_version IS NULL")
 
+# 기간 승인 한 건의 사용 횟수 상한. 인자 지문을 풀어 쓰는 대신 폭주를 막는다.
+# ponytail: 상한 검사와 삽입이 한 문장이라 동시 호출이 겹치면 동시 수만큼 넘을 수 있다.
+WINDOW_MAX_USES = 50
+
 # 기간을 고른 승인의 사용: 승인 행은 그대로 두고 호출마다 사용 표에 한 행을 넣는다. 같은 결속
-# 조건이 지금도 맞고 기간 안일 때만 한 행이 들어가며, 한 호출은 한 번만 기록된다.
-WINDOW_CONSUME_HEAD = """
+# 조건이 지금도 맞고 기간 안이며 사용 횟수가 상한 미만일 때만 한 행이 들어가며, 한 호출은 한
+# 번만 기록된다.
+WINDOW_CONSUME_HEAD = f"""
 INSERT INTO mint.call_approval_uses (instance_id, call_approval_id, invocation_id)
 SELECT instance_id, id, %(invocation_id)s::uuid FROM mint.call_approvals
 WHERE instance_id = %(iid)s AND id = %(id)s AND status = 'approved'
   AND valid_until > clock_timestamp()
+  AND (SELECT count(*) FROM mint.call_approval_uses u
+       WHERE u.call_approval_id = call_approvals.id) < {WINDOW_MAX_USES}
 """
 WINDOW_CONSUME_TAIL = " ON CONFLICT DO NOTHING"
 
@@ -387,6 +396,8 @@ class CallApprovalRow:
     exec_contract_sha256: str | None = None
     # 승인할 때 고른 사용 기간의 끝. 비어 있으면 1회 승인이다.
     valid_until: datetime | None = None
+    # 기간 승인의 지금까지 사용 횟수(스냅숏 시점).
+    uses: int = 0
 
 
 @dataclass(frozen=True)
@@ -574,6 +585,7 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
                 action=c.get("action"),
                 exec_contract_sha256=c.get("exec_contract_sha256"),
                 valid_until=_maybe_time(c.get("valid_until")),
+                uses=c.get("uses", 0),
             )
             for c in doc["call_approvals"]
         ),
@@ -937,7 +949,7 @@ class PluginDatabase:
                            WHERE instance_id = %(iid)s AND principal_id = %(principal_id)s
                              AND status = 'pending' AND expires_at > clock_timestamp()) < 20
                     ON CONFLICT DO NOTHING
-                """, {**params, "display": Jsonb(params["display"])})
+                """, {**params, "display": Jsonb(params.get("display") or {})})
 
         await self._run(write)
 
@@ -947,6 +959,7 @@ class PluginDatabase:
         열린 요청의 식별자(없으면 None: 주체별 대기 상한 초과). 승인은 하지 않는다.
         """
         from psycopg import IsolationLevel
+        from psycopg.types.json import Jsonb
 
         async def write(conn: Any) -> str | None:
             await conn.set_isolation_level(IsolationLevel.READ_COMMITTED)
@@ -971,23 +984,69 @@ class PluginDatabase:
                     INSERT INTO mint.call_approvals
                         (id, instance_id, org_id, principal_type, principal_id, server_id, tool,
                          args_fp, fp_key_version, policy_version_id, status, requested_by,
-                         expires_at, contract_id, exec_contract_sha256, target, action)
+                         expires_at, contract_id, exec_contract_sha256, target, action, display)
                     SELECT %(id)s, %(iid)s::mint.ident, %(org_id)s::mint.ident,
                            %(principal_type)s, %(principal_id)s, %(server_id)s, %(tool)s,
                            %(args_fp)s, %(fp_key_version)s, %(policy_version_id)s::mint.ident,
                            'pending', %(requested_by)s,
                            clock_timestamp() + make_interval(mins => %(minutes)s),
                            %(contract_id)s::uuid, %(exec_contract_sha256)s::text,
-                           %(target)s, %(action)s
+                           %(target)s, %(action)s, %(display)s
                     WHERE (SELECT count(*) FROM mint.call_approvals
                            WHERE instance_id = %(iid)s AND principal_id = %(principal_id)s
                              AND status = 'pending' AND expires_at > clock_timestamp()) < 20
                     RETURNING id
-                """, params)
+                """, {**params, "display": Jsonb(params.get("display") or {})})
                 row = await cursor.fetchone()
                 return None if row is None else str(row[0])
 
         return await self._run(write)
+
+    async def call_approval_status(self, instance_id: str, call_id: str) -> str | None:
+        """호출별 승인 요청의 현재 상태. 없거나 기한이 지났으면 None. 승인 대기 보류가 읽는다."""
+
+        async def read(conn: Any) -> Any:
+            cursor = await conn.execute(
+                "SELECT status FROM mint.call_approvals WHERE instance_id = %s AND id = %s"
+                " AND (status <> 'pending' OR expires_at > clock_timestamp())",
+                (instance_id, call_id),
+            )
+            return await cursor.fetchone()
+
+        row = await self._run(read)
+        return None if row is None else str(row[0])
+
+    async def recent_call_outcome(self, params: Mapping[str, Any]) -> tuple[str, str | None] | None:
+        """같은 호출(주체·서버·도구·인자 지문)의 가장 최근 거부·만료 결과. 없으면 None.
+
+        ``minutes`` 안에 거부됐으면 ``("rejected", 사유)``, 승인이 쓰이지 않고 끝났으면
+        ``("expired", None)``이다. 행은 시간이 지나면 조회에서 빠지므로 거부가 쌓이지 않는다.
+        """
+
+        async def read(conn: Any) -> Any:
+            cursor = await conn.execute("""
+                SELECT outcome, reason FROM (
+                    SELECT CASE WHEN status = 'rejected' THEN 'rejected' ELSE 'expired' END
+                               AS outcome,
+                           decision_reason AS reason,
+                           CASE WHEN status = 'rejected' THEN coalesce(decided_at, expires_at)
+                                ELSE coalesce(valid_until, expires_at) END AS at
+                    FROM mint.call_approvals
+                    WHERE instance_id = %(iid)s AND principal_type = %(principal_type)s
+                      AND principal_id = %(principal_id)s AND server_id = %(server_id)s
+                      AND tool = %(tool)s AND args_fp = %(args_fp)s
+                      AND fp_key_version = %(fp_key_version)s
+                      AND (status IN ('rejected', 'expired')
+                           OR (status = 'approved'
+                               AND coalesce(valid_until, expires_at) <= clock_timestamp()))
+                ) t
+                WHERE at > clock_timestamp() - make_interval(mins => %(minutes)s)
+                ORDER BY at DESC LIMIT 1
+            """, params)
+            return await cursor.fetchone()
+
+        row = await self._run(read)
+        return None if row is None else (row[0], row[1])
 
     async def read_decision(
         self, instance_id: str, invocation_id: UUID, attempt_id: int
