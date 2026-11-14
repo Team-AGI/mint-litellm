@@ -1,22 +1,48 @@
-{% extends "base.html" %}{% import "macros.html" as m %}
+{% extends "base.html" %}{% import "macros.html" as m %}{% import "audit_macros.html" as au %}
 {% block title %}경보 · MINT{% endblock %}
+{% block page_class %}wide{% endblock %}
 {% block body %}
 <h1>경보</h1>
-<form method="get" action="/alerts" class="filters">
-  <label>상태<select name="status"><option value="">전체</option>{% for k, v in L.ALERT_STATUS.items() %}<option value="{{ k }}"{% if q.status == k %} selected{% endif %}>{{ v.text }}</option>{% endfor %}</select></label>
-  <label>심각도<select name="severity"><option value="">전체</option>{% for k in ['critical', 'high', 'medium', 'low'] %}<option value="{{ k }}"{% if q.severity == k %} selected{% endif %}>{{ L.ALERT_SEVERITY[k].text }}</option>{% endfor %}</select></label>
+{% if cards %}
+<div class="cards">{% for c in cards %}{{ m.kpi(c.label, c.value, c.href, c.note, c.level, c.trend) }}{% endfor %}</div>
+{{ au.panel('종류별 상위', kinds, kinds['values'] | length) }}
+{% endif %}
+<form method="get" action="/alerts" class="filterbar">
+  {{ au.choices('상태', statuses) }}{{ au.choices('심각도', severities) }}
+  <input type="hidden" name="status" value="{{ q.status }}"><input type="hidden" name="severity" value="{{ q.severity }}">
   <label>종류<select name="kind"><option value="">전체</option>{% for k in filters.kinds %}<option value="{{ k }}"{% if q.kind == k %} selected{% endif %}>{{ L.pick(L.ALERT_KIND, k) }}</option>{% endfor %}</select></label>
   <label>서버<select name="server_id"><option value="">전체</option>{% for s in filters.servers %}<option value="{{ s }}"{% if q.server_id == s %} selected{% endif %}>{{ s }}</option>{% endfor %}</select></label>
   <button type="submit" class="primary">조회</button>
 </form>
 {% if rows %}
-<table><thead><tr><th>시각</th><th>심각도</th><th>상태</th><th>종류</th><th>서버</th><th>요약</th><th>관련 화면</th></tr></thead><tbody>
-{% for a in rows %}<tr>
-<td class="nowrap"><a href="/alerts/{{ a.id }}">{{ a.last_at | when }}</a></td><td>{{ m.badge(L.ALERT_SEVERITY, a.severity) }}</td><td>{{ m.badge(L.ALERT_STATUS, a.status) }}</td>
-<td>{{ L.pick(L.ALERT_KIND, a.kind) }}</td><td>{{ a.server_id | blank }}</td><td>{{ a.summary }}</td>
-<td>{% if a.link %}<a href="{{ a.link[0] }}">{{ a.link[1] }}</a>{% else %}—{% endif %}</td>
+<table class="clickable compact"><thead><tr><th>시각</th><th>심각도</th><th>상태</th><th>종류</th><th>서버</th><th>요약</th></tr></thead><tbody>
+{% for r in rows %}<tr>
+<td class="nowrap"><a href="/alerts?{{ qs ~ '&' if qs }}open={{ r.id }}">{{ r.last_at | when }}</a></td><td>{{ m.badge(L.ALERT_SEVERITY, r.severity) }}</td><td>{{ m.badge(L.ALERT_STATUS, r.status) }}</td>
+<td>{{ L.pick(L.ALERT_KIND, r.kind) }}</td><td>{{ r.server_id | blank }}</td><td>{{ r.summary }}</td>
 </tr>{% endfor %}
 </tbody></table>
-{{ m.pager('/alerts?status=' ~ (q.status | urlencode) ~ '&severity=' ~ (q.severity | urlencode) ~ '&kind=' ~ (q.kind | urlencode) ~ '&server_id=' ~ (q.server_id | urlencode), page, rows | length) }}
+{{ m.pager('/alerts?' ~ qs, page, rows | length) }}
 {% else %}{{ m.empty('조건에 맞는 경보가 없습니다', '/alerts', '조건 지우기') }}{% endif %}
+{% if a %}
+{% call m.drawer(L.pick(L.ALERT_KIND, a.kind), '/alerts?' ~ qs if qs else '/alerts') %}
+<dl class="detail">
+  <dt>상태</dt><dd>{{ m.badge(L.ALERT_STATUS, a.status) }}</dd>
+  <dt>심각도</dt><dd>{{ m.badge(L.ALERT_SEVERITY, a.severity) }}</dd>
+  <dt>요약</dt><dd>{{ summary }}</dd>
+  <dt>서버</dt><dd>{{ a.server_id | blank }}</dd>
+  <dt>처음 발생</dt><dd>{{ a.first_at | when }}</dd>
+  <dt>마지막 발생</dt><dd>{{ a.last_at | when }}</dd>
+  <dt>발생 횟수</dt><dd>{{ a.count }}</dd>
+  {% if a.acknowledged_by %}<dt>확인한 사람</dt><dd>{{ a.acknowledged_by | who }}</dd>{% endif %}
+  {% if a.resolved_at %}<dt>해결 시각</dt><dd>{{ a.resolved_at | when }}</dd>{% endif %}
+  {% for name, lines in fields %}<dt>{{ name }}</dt><dd>{% for line in lines %}<div>{{ line }}</div>{% endfor %}</dd>{% endfor %}
+</dl>
+<div class="actions">
+  {% if link %}<a class="button" href="{{ link[0] }}">{{ link[1] }}</a>{% endif %}
+  {% if a.status == 'open' and actor.role == 'admin' %}
+  <form method="post" action="/alerts/{{ a.id }}/acknowledge">{{ m.csrf(actor) }}<button type="submit" class="primary">확인함</button></form>
+  {% endif %}
+</div>
+{% endcall %}
+{% endif %}
 {% endblock %}

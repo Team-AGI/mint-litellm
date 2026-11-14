@@ -1,0 +1,11 @@
+{# 감사 화면(대시보드·호출 기록·경보·정책)이 함께 쓰는 선택 막대. 링크로 움직여 스크립트 없이 동작한다. #}
+{% macro choices(label, items) %}
+<span class="segments" role="group" aria-label="{{ label }}">{% for text, href, active in items %}<a class="segment" href="{{ href }}"{% if active %} aria-current="true"{% endif %}>{% if active %}<strong>{{ text }}</strong>{% else %}{{ text }}{% endif %}</a>{% endfor %}</span>
+{% endmacro %}
+
+{# 차트 자리. 데이터가 없으면 「—」만 둔다. #}
+{% macro panel(title, data, has_data) %}
+<section><h2>{{ title }}</h2>
+{% if has_data %}<div class="chart" data-chart="{{ data | to_json }}"></div>{% else %}<div class="chart muted">—</div>{% endif %}
+</section>
+{% endmacro %}

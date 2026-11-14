@@ -125,20 +125,21 @@ def test_the_blocked_result_is_one_filter_option():
 def test_the_ledger_filters_are_plain_controls_in_the_natural_tab_order():
     html = ledger_html()
     assert 'type="date"' not in html  # 날짜 칸이 구획마다 초점을 잡아 Tab이 갇히지 않게 한다
-    assert 'name="since"' in html and f'value="{Y}11-03"' in html
+    assert 'name="since"' in html and f'placeholder="{Y}11-03"' in html
     assert "tabindex" not in html
     form = re.search(r"<form method=\"get\".*?</form>", html, re.S).group(0)
     names = re.findall(r"<(?:input|select|button|a)\b[^>]*", form)
-    assert [re.search(r'name="(\w+)"', n).group(1) for n in names[:6]] == [
-        "since", "until", "kind", "actor", "server_id", "result"]
+    assert [re.search(r'name="(\w+)"', n).group(1) for n in names[:7]] == [
+        "range", "since", "until", "kind", "actor", "server_id", "result"]
 
 
 def test_time_and_kind_cells_do_not_wrap():
     row = {"inserted_at": datetime(2026, 11, 3, tzinfo=UTC), "kind": "decision_evaluated",
-           "actor": None, "server_id": None, "result": "allow"}
+           "actor": None, "server_id": None, "result": "allow", "event_id": "e1"}
     html = ledger_html([row])
     assert html.count('<td class="nowrap">') == 2
-    cells = f'<td class="nowrap">{Y}11-03 09:00</td><td class="nowrap">호출 판정</td>'
+    cells = (f'<td class="nowrap"><a href="/ledger?open=e1">{Y}11-03 09:00</a></td>'
+             '<td class="nowrap">호출 판정</td>')
     assert cells in html
 
 
@@ -271,7 +272,8 @@ def test_the_alert_list_shows_korean_values_and_a_link():
     for raw in ("sync_divergence", "registry_missing", "open", "high"):
         assert raw not in shown
     assert "LiteLLM 설정 불일치" in shown and "높음" in shown and "열림" in shown
-    assert 'href="/servers/srv"' in html and f'href="/alerts/{ALERT_ID}"' in html
+    assert f'href="/alerts?open={ALERT_ID}"' in html
+    assert 'href="/servers/srv"' in alert_detail_html()
     assert "<code>" not in html and "<th>키</th>" not in html
 
 
@@ -285,14 +287,16 @@ def alert_detail_html(status="open", role="admin", **cols):
     row = alert_row(status=status, **cols)
     actor = SimpleNamespace(csrf="t", role=role, session=SimpleNamespace(operator_name="n"))
     return render(
-        "alert_detail.html", a=row, actor=actor,
-        summary=alert_view.summary(row["kind"], row["subject"]),
+        "alerts.html", rows=[], page=1, qs="", actor=actor,
+        filters={"kinds": [], "servers": []},
+        q={k: "" for k in ("status", "severity", "kind", "server_id")},
+        a=row, summary=alert_view.summary(row["kind"], row["subject"]),
         fields=alert_view.subject_rows(row["subject"], "Asia/Seoul"),
         link=alert_view.link(row["kind"], row["subject"]),
     )
 
 
-def test_the_alert_detail_is_a_labelled_table_without_raw_keys_or_json():
+def test_the_alert_drawer_is_labelled_without_raw_keys_or_json():
     html = alert_detail_html()
     shown = re.sub(r"<[^>]+>", "\n", html)
     assert "레지스트리에 없음" in shown and "unknown_key" not in shown
