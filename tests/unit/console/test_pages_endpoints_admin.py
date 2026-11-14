@@ -129,3 +129,22 @@ def test_transfer_tab_lists_commands_and_recent_backups_for_admins_only(world, a
     assert "mint-litellm backup create" in html and "b1.mbk" in html and "백업 생성" in html
     viewer = world.session_client("viewer")
     assert "mint-litellm backup" not in viewer.get("/admin?tab=transfer").text
+
+
+def test_siem_tab_shows_status_and_requests_a_test_for_admins_only(world, admin):
+    world.query(
+        "INSERT INTO mint.siem_targets (instance_id, name, kind, endpoint, secret_ref, created_by,"
+        " failing_since, last_error, consecutive_failures, cursor_seq)"
+        " VALUES (%s, 'main', 'hec', 'https://s.test:8088/services/collector/event?k=secret',"
+        " 'env:T_TOKEN', 'admin', now(), 'http_503', 3, 0)", INSTANCE)
+    html = admin.get("/admin?tab=siem").text
+    assert "SIEM 전달" in html and "Splunk HEC" in html and "https://s.test:8088" in html
+    assert "HTTP 503 응답" in html and "3회 연속" in html and "시험 전송" in html
+    assert "T_TOKEN" not in html and "k=secret" not in html
+    viewer = world.session_client("viewer")
+    assert "SIEM 전달" not in viewer.get("/admin?tab=siem").text
+    assert form_post(world, viewer, "/admin/siem/main/test").status_code == 403
+    assert form_post(world, admin, "/admin/siem/none/test").status_code == 404
+    assert form_post(world, admin, "/admin/siem/main/test").status_code == 303
+    sql = "SELECT test_requested_at IS NOT NULL FROM mint.siem_targets WHERE name = 'main'"
+    assert world.query(sql)[0][0] is True

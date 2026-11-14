@@ -133,6 +133,11 @@ JOB = {
     "done": Status("완료", "ok"),
     "failed": Status("실패", "error"),
 }
+SIEM_STATE = {
+    "ok": Status("정상", "ok"),
+    "wait": Status("전달 전", "wait"),
+    "error": Status("전달 실패", "error"),
+}
 ALERT_SEVERITY = {
     "low": Status("낮음", "wait"),
     "medium": Status("보통", "wait"),
@@ -334,6 +339,32 @@ TIME_ZONE = {
     "UTC": "협정 세계시",
 }
 
+SIEM_KIND = {
+    "syslog": "syslog", "cef": "CEF(syslog)", "hec": "Splunk HEC", "elastic": "Elastic 벌크",
+    "otlp": "OTLP 로그",
+}
+
+# SIEM 전달 오류 코드
+SIEM_ERROR = {
+    "secret_missing": "토큰을 읽지 못함",
+    "timeout": "응답 시간 초과",
+    "connection_refused": "연결 거절",
+    "connection_failed": "연결 실패",
+    "dns_error": "주소 조회 실패",
+    "tls_error": "TLS 인증 실패",
+}
+
+
+def siem_error(code: str | None) -> str:
+    if not code:
+        return "—"
+    if code.startswith("http_"):
+        return f"HTTP {code[5:]} 응답"
+    if code.startswith("elastic_item_"):
+        return f"일부 항목 거절({code[13:]})"
+    return SIEM_ERROR.get(code, "기타 오류")
+
+
 # 경보 종류(경보 발생·해결 사건에 함께 보인다)
 ALERT_KIND = {
     "contract_drift": "계약 변경",
@@ -345,6 +376,7 @@ ALERT_KIND = {
     "token_audience_mismatch": "토큰 대상 불일치",
     "token_scope_exceeded": "토큰 범위 초과",
     "config_plaintext_secret": "설정의 평문 비밀",
+    "siem_forward_failing": "SIEM 전달 실패",
     "approval_dormant": "미사용 승인",
     "endpoint_stale_server": "폐기 서버 항목 잔존",
     "endpoint_unmanaged": "관리되지 않는 설치",
@@ -467,6 +499,8 @@ EVENT_KIND = {
     "backup_restored": "백업 복원",
     "config_exported": "설정 내보내기",
     "config_imported": "설정 가져오기",
+    "siem_target_added": "SIEM 대상 추가",
+    "siem_target_removed": "SIEM 대상 제거",
     "event_partition_exported": "원장 월 구간 내보냄",
     "event_partition_dropped": "원장 월 구간 삭제",
 }
@@ -500,6 +534,7 @@ SESSION_END_REASON = {
 
 NOTICES = {
     "webhook_tested": "시험 메시지를 보냈습니다.",
+    "siem_test_requested": "시험 전송을 요청했습니다. 잠시 뒤 새로 고쳐 결과를 확인하십시오.",
     "suspended": "서버를 중지했습니다.",
     "resumed": "서버를 재개했습니다.",
     "approved": "승인했습니다.",
