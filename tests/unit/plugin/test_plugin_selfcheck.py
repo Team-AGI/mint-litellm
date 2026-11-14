@@ -61,6 +61,19 @@ class FakeGuardrail:
         self.__dict__.update(attributes)
 
 
+class FakeOutputGuardrail:
+    """결과 통제를 맡는 출력 전용 가드레일 대역."""
+
+    should_run_guardrail = _always_judges
+    mint_should_run_guardrail = _always_judges
+    use_native_lifecycle_hooks = False
+    event_hook = ["post_mcp_call"]
+    default_on = True
+
+    def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        return inputs
+
+
 class OtherGuardrail(FakeGuardrail):
     """MINT가 아닌 다른 가드레일 대역."""
 
@@ -80,11 +93,12 @@ def guardrail(**override):
 GOOD_GENERAL = {"require_key_mcp_access_defined": True, "disable_env_credential_login": True}
 LOGGER = FakeLogger()
 GUARDRAIL = guardrail()
+OUTPUT = FakeOutputGuardrail()
 
 
 def view(**override):
     args = {
-        "callbacks": [LOGGER, GUARDRAIL],
+        "callbacks": [LOGGER, OUTPUT, GUARDRAIL],
         "general_settings": GOOD_GENERAL,
         "strict_guardrail_modes": True,
         "store_prompts_in_spend_logs": False,
@@ -477,7 +491,7 @@ def make_runtime(
         retry_seconds=retry,
         recheck_seconds=retry,
     )
-    runtime.logger, runtime.guardrail = LOGGER, GUARDRAIL
+    runtime.logger, runtime.guardrail, runtime.output_guardrail = LOGGER, GUARDRAIL, OUTPUT
     runtime.readiness_waits = waited
     return runtime, store, stopped, state
 
@@ -1154,3 +1168,27 @@ def test_a_registry_entry_with_a_local_servers_identifier_is_reported_not_blocki
     clash = view(registry=[entry("local-1", names=("other",))])
     assert contract_mismatches(clash, [local()]) == [("local-1", "identity_kind")]
     assert failed(run_checks(clash, controlled=[local()])) == set()
+
+
+def test_the_output_guardrail_is_required_where_the_result_stage_exists():
+    def modes_failed(output, **override):
+        results = check_items(
+            view(**override),
+            logger=LOGGER,
+            guardrail=GUARDRAIL,
+            controlled=[registered()],
+            output_guardrail=output,
+        )
+        return SelfCheckItem.GUARDRAIL_MODES in failed(results)
+
+    assert modes_failed(OUTPUT) is False
+    assert modes_failed(None) is True  # 등록되지 않았다
+    assert modes_failed(OUTPUT, callbacks=[LOGGER, GUARDRAIL]) is True  # 콜백 목록에 없다
+    narrow = FakeOutputGuardrail()
+    narrow.event_hook = ["post_mcp_call", "pre_call"]
+    assert modes_failed(narrow, callbacks=[LOGGER, narrow, GUARDRAIL]) is True
+    native = FakeOutputGuardrail()
+    native.use_native_lifecycle_hooks = True
+    assert modes_failed(native, callbacks=[LOGGER, native, GUARDRAIL]) is True
+    # 결과 단계가 없는 LiteLLM(등급 C)에는 이 가드레일이 없어도 된다.
+    assert modes_failed(None, result_guardrail=False) is False

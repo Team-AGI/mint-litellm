@@ -117,15 +117,20 @@ def inspect_result(
     items: int,
     texts: Sequence[str],
     max_chars: int = DEFAULT_MAX_SCAN_CHARS,
+    limits: bool = True,
 ) -> list[str]:
-    """결과 한 건이 걸린 정책 식별자. 크기·항목 수 상한(E-16), 지시문 표지(E-04) 순으로 본다."""
+    """결과 한 건이 걸린 정책 식별자. 크기·항목 수 상한(E-16), 지시문 표지(E-04) 순으로 본다.
+
+    ``limits``가 거짓이면 상한은 보지 않는다(본문만 보는 출력 어댑터 단계).
+    """
     if not policy:
         return []
     findings: list[str] = []
     max_bytes, max_items = policy.get("max_result_bytes"), policy.get("max_result_items")
     # 크기를 잴 수 없는 결과는 상한이 있을 때 넘은 것으로 본다.
-    if (max_bytes is not None and (size is None or size > max_bytes)) or (
-        max_items is not None and items > max_items
+    if limits and (
+        (max_bytes is not None and (size is None or size > max_bytes))
+        or (max_items is not None and items > max_items)
     ):
         findings.append(POL_RESULT_LIMIT)
     if policy.get("scan") and scan_instructions(texts, max_chars):
@@ -144,7 +149,55 @@ def _clip(texts: Sequence[str], budget: int) -> list[str]:
     return out
 
 
-def screen_result(
+# 한 호출의 결과 검사가 호출 컨텍스트에 남기는 값. 같은 호출을 두 단계가 보면 합친다.
+_SCREEN_KEYS = (
+    "output_findings",
+    "output_blocked",
+    "output_masked",
+    "sensitive_findings",
+    "unmanaged_findings",
+    "finding_paths",
+    "scan_truncated",
+)
+
+
+def _merge_screens(ctx: dict[str, Any], prior: dict[str, Any]) -> None:
+    """앞 단계(출력 어댑터)의 검사 값에 이번 단계의 값을 합친다. 막힘이 가림보다 앞선다."""
+    findings = [*prior.get("output_findings", ()), *ctx.get("output_findings", ())]
+    if findings:
+        ctx["output_findings"] = list(dict.fromkeys(findings))
+    counts = dict(prior.get("sensitive_findings") or {})
+    for kind, count in (ctx.get("sensitive_findings") or {}).items():
+        counts[kind] = counts.get(kind, 0) + count
+    if counts:
+        ctx["sensitive_findings"] = dict(sorted(counts.items()))
+    for key in ("unmanaged_findings", "finding_paths"):
+        merged = [*prior.get(key, ()), *ctx.get(key, ())]
+        if merged:
+            ctx[key] = sorted(set(merged)) if key == "unmanaged_findings" else merged
+    if prior.get("scan_truncated"):
+        ctx["scan_truncated"] = True
+    blocked = bool(ctx.get("output_blocked") or prior.get("output_blocked"))
+    masked = bool(ctx.get("output_masked") or prior.get("output_masked"))
+    ctx["output_blocked"], ctx["output_masked"] = blocked, masked and not blocked
+
+
+def screen_result(ctx: dict[str, Any], **kwargs: Any) -> bool:
+    """``_screen_result``와 같다. 출력 어댑터가 같은 호출의 본문을 이미 검사했으면
+    (``output_adapter``) 그 결과에 합쳐서 남긴다."""
+    prior = (
+        {key: ctx.pop(key) for key in _SCREEN_KEYS if key in ctx}
+        if ctx.get("output_adapter")
+        else {}
+    )
+    blocked = _screen_result(ctx, **kwargs)
+    if prior:
+        _merge_screens(ctx, prior)
+        blocked = bool(ctx["output_blocked"])
+    return blocked
+
+
+def _screen_result(
     ctx: dict[str, Any],
     *,
     size: int | None,
@@ -153,11 +206,14 @@ def screen_result(
     structured: Sequence[tuple[str, str]] = (),
     structured_truncated: bool = False,
     max_chars: int = DEFAULT_MAX_SCAN_CHARS,
+    limits: bool = True,
 ) -> bool:
     """결과를 검사해 호출 컨텍스트에 걸린 정책을 남긴다. 호출자에게 주지 않고 막아야 하면 참.
 
     허용된 호출만 본다. 남긴 값은 같은 호출의 응답 관측 사건이 읽는다. 비밀·개인정보는
     탐지 종류와 건수만 남기고, 가리기(``output_masked``)는 호출한 쪽이 결과 본문에 적용한다.
+    ``limits``가 거짓이면 크기·항목 수는 보지 않는다(텍스트만 보는 출력 어댑터 단계가 쓰며,
+    상한은 결과 객체를 보는 로거 훅이 맡는다).
     ``structured``(구조화된 결과의 ``(JSON 경로, 문자열)``)는 본문과 같은 검사를 받고, 걸리면 경로를
     ``finding_paths``에 남긴다. 구조화된 결과의 개인정보는 경로만 남기고 통과시키며, 알려진 형식의
     비밀은 가릴 수 없으므로 가리기 모드에서도 막는다. 고엔트로피 문자열은 건수만 남기고
@@ -168,7 +224,8 @@ def screen_result(
     """
     if not ctx.get("allowed"):
         return False
-    ctx["result_items"] = items
+    if limits:
+        ctx["result_items"] = items
     policy = ctx.get("result_policy")
     mode = (policy or {}).get("response_scan")
     truncated = (
@@ -179,7 +236,7 @@ def screen_result(
     pairs = _clip([t for _, t in structured], max_chars - sum(map(len, body)))
     structured = [(p, t) for (p, _), t in zip(structured, pairs, strict=False)]
     findings = inspect_result(
-        policy, size=size, items=items, texts=[*body, *pairs], max_chars=max_chars
+        policy, size=size, items=items, texts=[*body, *pairs], max_chars=max_chars, limits=limits
     )
     if truncated and policy and policy.get("scan"):
         findings.append(POL_RESULT_SCAN_LIMIT)

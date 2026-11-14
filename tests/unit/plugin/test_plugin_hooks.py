@@ -1261,7 +1261,7 @@ class TestLoggerRegistration:
         import litellm
 
         rig = ChainRunner().build_rig(tmp_path, monkeypatch, contract_snapshot)
-        assert litellm.callbacks == [rig.logger, rig.guardrail]
+        assert litellm.callbacks == [rig.logger, rig.runtime.output_guardrail, rig.guardrail]
         assert rig.logger.registered_by_guardrail is True
 
     def test_a_logger_listed_in_the_configuration_makes_the_startup_fail(
@@ -1293,7 +1293,8 @@ class TestLoggerRegistration:
             default_on=True,
         )
         litellm.callbacks.append(again)
-        assert litellm.callbacks == [rig.logger, again]
+        assert litellm.callbacks == [rig.logger, rig.runtime.output_guardrail, again]
+        assert len([c for c in litellm.callbacks if type(c).__name__ == "MintOutputGuardrail"]) == 1
 
 
 class TestConstructors:
