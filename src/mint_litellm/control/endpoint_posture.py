@@ -23,7 +23,8 @@
 
 - 보고한 서버가 허용 호스트 밖 접속을 거절당한 적이 있으면(``egress_refused``가 0보다 큼)
   ``endpoint_egress_refused``. 실행 중인 프로세스가 끝나면 기록이 사라져 닫힌다.
-- 보고한 서버가 허용 호스트 목록을 거르지 못한 채(Windows, ``egress_unfiltered``) 실행 중이면
+- 보고한 서버가 허용 호스트 목록을 거르지 못한 채(Windows, ``egress_unfiltered``, 또는 승인 계약이
+  ``network: hosts``인 서버가 ``appcontainer``로 실행 중) 실행 중이면
   ``endpoint_egress_unfiltered``. 선언한 호스트 제한이 집행되지 않는다는 뜻이며 프로세스가 끝나면
   닫힌다.
 
@@ -43,7 +44,7 @@ from typing import Any
 
 import psycopg
 
-from mint_litellm.control import alerts
+from mint_litellm.control import alerts, endpoint_kits
 from mint_litellm.control.db.connection import fetchall
 from mint_litellm.endpoint.remediation import LIVE
 from mint_litellm.types.events import AlertKind
@@ -81,10 +82,14 @@ def findings(
     statuses: Mapping[str, str],
     silent_after: timedelta = SILENT_AFTER,
     package_status: Mapping[tuple[str, str], Iterable[str]] | None = None,
+    contracts: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, tuple[str, str, dict[str, str]]]:
     """설치 보고 행과 서버 상태에서 열려 있어야 할 경보. 경보 키 -> (종류, 심각도, 대상).
 
-    ``now``(데이터베이스 시각)가 없는 행은 시간 점검(침묵·키 만료)을 건너뛴다.
+    ``now``(데이터베이스 시각)가 없는 행은 시간 점검(침묵·키 만료)을 건너뛴다. ``contracts``는
+    승인된 서버의 실행 계약이며, 관리자 계정 Windows 보고기는 계약을 몰라 호스트 제한 미집행을
+    직접 보고하지 못하므로 ``network: hosts`` 계약 서버가 ``appcontainer``(Windows)로 돌면
+    보고에 플래그가 없어도 미집행으로 본다.
     """
     wanted: dict[str, tuple[str, str, dict[str, str]]] = {}
     for row in installs:
@@ -150,7 +155,8 @@ def findings(
                     {**who, "server_id": item["server"], "count": item["egress_refused"]},
                 )  # fmt: skip
         for item in row.get("processes") or ():
-            if item.get("egress_unfiltered"):
+            hosts = (contracts or {}).get(item["server"], {}).get("network") == "hosts"
+            if item.get("egress_unfiltered") or (hosts and item.get("sandbox") == "appcontainer"):
                 kind = AlertKind.ENDPOINT_EGRESS_UNFILTERED.value
                 wanted[f"{kind}:{row['key_alias']}:{item['server']}"] = (
                     kind, "medium", {**who, "server_id": item["server"]}
@@ -198,7 +204,13 @@ def scan(
         (instance_id,),
     ):
         package_status.setdefault(package_key(r["ecosystem"], r["name"]), set()).add(r["status"])
-    wanted = findings(installs, statuses, silent_after, package_status)
+    wanted = findings(
+        installs,
+        statuses,
+        silent_after,
+        package_status,
+        contracts=endpoint_kits.approved_contracts(conn, instance_id),
+    )
     open_keys = {
         r["dedup_key"]
         for r in fetchall(
