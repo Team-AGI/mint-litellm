@@ -36,6 +36,7 @@
 | `mint-litellm operator add` | `admin` | 운영자를 등록하고 토큰을 발급한다. `--save-token <파일>`을 주면 토큰을 화면에 보이지 않고 0600 파일로만 받는다(파일이 이미 있으면 운영자를 만들기 전에 거부한다). `deploy/mint.sh cli`로 실행하면 파일은 컨테이너 안이 아니라 호스트의 그 경로에 만든다. `admin`·`approver`는 LiteLLM 사용자 식별자 (`--user-id`) 결속이 필수이다. | `/user/info` | `operator_added` |
 | `mint-litellm operator bootstrap` | 토큰 불필요 | `operators` 표가 비어 있을 때만 토큰 없이 첫 `admin` 운영자를 만들고 토큰을 발급한다. `--name`과 `--user-id`가 필요하며, 사용자가 LiteLLM의 사람 사용자로 존재하는지 확인한다. 행위자는 `bootstrap`으로 기록하고, 운영자가 이미 있으면 거부한다. | `/user/info` | `operator_added` |
 | `mint-litellm operator remove` | `admin` | 운영자를 삭제한다. 토큰이 끝나고 그 사용자의 콘솔 세션이 폐기된다. 마지막 관리자와 본인은 삭제할 수 없다. | 없음 | `operator_removed` |
+| `mint-litellm operator chat-bind` | `admin` | 운영자를 Slack 사용자 식별자에 결속하거나(`--slack-user U…`) 지운다(`--clear`). `admin`·`approver`만 결속할 수 있고 한 Slack 사용자는 한 운영자에만 결속된다. | 없음 | `operator_chat_bound` |
 | `mint-litellm operator set-role` | `admin` | 운영자의 역할을 바꾼다(`--role`). 그 사용자의 콘솔 세션이 폐기된다. 마지막 관리자는 낮출 수 없다. | 없음 | `operator_role_changed` |
 | `mint-litellm server register` | `admin` | LiteLLM에 등록된 서버를 승인 대기 상태로 등록한다. | `/v1/mcp/server/{server_id}` | `server_registered` |
 | `mint-litellm server register-local` | `admin` | 로컬 실행(stdio) 서버를 LiteLLM 없이 실행 계약(`--contract` JSON 파일)으로 승인 대기 상태로 등록한다. 서버가 접근할 경로는 계약 파일의 `file_access`나 `--read`·`--read-write`(반복 가능)로 선언한다. 네트워크는 `--network none|any`(또는 계약 파일의 `network`)로 선언하며, `none`이면 단말 격리가 막고 생략하면 제한이 없다. `--allow-host HOST[:PORT]`(반복 가능, 정확한 이름 또는 `*.도메인`, 포트를 생략하면 모든 포트)를 주면 `network`는 `hosts`가 되어 그 호스트만 단말 격리 안에서 서버 실행기의 중계를 거쳐 나갈 수 있다(`--network`의 다른 값과는 함께 쓰지 못한다). | - | `server_registered` |
@@ -232,6 +233,8 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 | `MINT_EVENT_RETENTION_DAYS` | 사건 원장 보관 일수(31 이상). 설정하면 달 전체가 이보다 오래되고 내보내기 파일을 다시 읽어 확인한 월 분할을 지운다. 없으면 아무것도 지우지 않는다. MINT는 기본값을 정하지 않는다 | 없음(끔) |
 | `MINT_WEBHOOK_FORMATS` | 웹훅 주소마다 하나씩, 같은 순서로 적는 전송 형식(`json`·`slack`·`teams`). 수가 맞지 않거나 모르는 값이면 기동을 거부한다. | 모두 `json` |
 | `MINT_SIEM_ALERT_MINUTES` | SIEM 전달이 이 시간(분)을 넘게 막히면 경보 `siem_forward_failing`(높음)을 연다. 전달이 풀리면 닫힌다. | `15` |
+| `MINT_SLACK_SIGNING_SECRET` | Slack 앱의 요청 서명 비밀. 설정하면 `slack` 형식의 호출별 승인 요청에 승인·거부 단추가 붙고 콘솔이 `POST /chat/slack/actions`를 받는다. 없으면 단추도 수신 주소도 없다. | 없음(끔) |
+| `MINT_SLACK_BOT_TOKEN` | 거부 사유 입력창을 여는 Slack 봇 토큰. 없으면 거부 단추가 사유 없이 `chat`을 사유로 남기고 거부한다. | 없음 |
 | `MINT_LINK_TTL_SECONDS` | 알림 속 콘솔 바로가기 링크의 유효 시간(초, 최소 60). | `86400` |
 | `MINT_BULK_WINDOW_SECONDS`, `MINT_BULK_BASELINE_SECONDS` | 대량 추출 탐지의 최근 구간(초)과 평균을 내는 기간(초). 평균은 최근 구간 앞의 기간을 최근 구간 길이로 나눈 값이다. | `900`, `604800` |
 | `MINT_BULK_FACTOR` | 최근 구간의 결과량이 구간당 평균의 이 배수 이상이면 경보 후보이다. | `5` |
@@ -370,6 +373,14 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 `MINT_WEBHOOK_FORMATS`로 주소마다 형식을 고른다. `json`은 위 본문 그대로이고, `slack`은 Slack 수신 웹훅(블록), `teams`는 Microsoft Teams 수신 웹훅·Workflows(적응형 카드)용이다. 두 채팅 형식 모두 한국어 요지, 심각도, 서버, 조치 문구를 담고 콘솔 링크 버튼을 붙인다. 서명 헤더는 형식과 관계없이 같다.
 
 승인 요청 경보(`call_approval_requested` 호출별 승인 요청, `intake_pending` 승인을 기다리는 도입 신청, `approval_recert_due`·`approval_recert_held` 승인 재확인, `approval_dormant` 미사용 승인)에는 `MINT_CONSOLE_URL`이 있을 때 해당 화면으로 가는 서명 링크(`/link/<토큰>`)가 붙는다(`json` 본문에서는 `action_url`). 토큰은 웹훅 서명 키에서 파생한 키로 서명하고 `MINT_LINK_TTL_SECONDS`(기본 24시간) 뒤 만료된다. 링크는 항목을 미리 골라 보여 줄 뿐이며 승인·철회를 하지 않는다. 열려면 평소처럼 콘솔에 로그인해야 하고, 승인은 콘솔에서 확인 단계(CSRF 포함)를 거쳐야 한다. 호출별 승인 요청과 신청 승인 대기 경보는 결정되거나 만료되면 승인 만료 검사 작업이 닫는다.
+
+`MINT_SLACK_SIGNING_SECRET`이 있으면 `slack` 형식의 호출별 승인 요청 메시지에 「30분 승인」「1회 승인」「거부」 단추가 붙는다. 단추는 Slack 앱의 대화형 요청 주소(`<콘솔 주소>/chat/slack/actions`)로 가며, 콘솔은 로그인 세션 없이 요청 서명만으로 받는다.
+
+- 서명은 `X-Slack-Signature`(`v0=` + HMAC-SHA256(`v0:<시각>:<본문>`))와 `X-Slack-Request-Timestamp`로 확인한다. 시각 차이가 5분을 넘거나 서명이 다르거나 같은 서명을 두 번째로 받으면 401이고 아무것도 처리하지 않는다. 비밀이 없으면 이 주소는 404이다.
+- Slack 사용자는 관리자가 `operator chat-bind <이름> --slack-user U…`(운영자 화면의 「Slack 결속」)로 결속한 운영자로만 처리할 수 있다. 결속이 없으면 누른 사람에게만 보이는 거절 메시지가 나가고 아무것도 바뀌지 않는다.
+- 처리는 콘솔과 같은 서비스를 그 운영자 이름으로 부른다. 승인자·관리자 역할 확인, 호출 주체와 같은 사용자의 운영자는 승인 불가(두 번째 승인자 단추는 없으므로 채팅에서는 불가), 1회만 되는 동작은 「30분 승인」을 눌러도 1회, 사건 기록(`actor`는 운영자 이름, 본문 `channel`은 `slack`)이 모두 같다. 이미 처리되었거나 만료된 요청은 결정자와 상태로 메시지를 바꿀 뿐 다시 처리하지 않는다.
+- 거부 사유는 필수이다. `MINT_SLACK_BOT_TOKEN`이 있으면 거부 단추가 사유 입력창을 열고, 없으면 사유 없이 거부하되 사유란에 `chat`을 남긴다.
+- Teams 적응형 카드는 링크 단추만 있다. 카드의 승인 단추(`Action.Execute`)는 Bot Framework 봇 등록과 Azure AD 토큰 검증이 필요한데 수신 웹훅만으로는 받을 수 없어 지원하지 않는다. Teams에서는 서명 링크로 콘솔을 열어 승인한다.
 
 작업 `approval_dormant_scan`은 1시간마다 `MINT_DORMANT_DAYS`(기본 30일) 동안 판정에 한 번도 선택되지 않은 활성 승인을 찾는다. 기준 시각은 마지막 재확인(없으면 승인 시작)이라 갓 승인한 건은 들지 않는다. 서버마다 요약 경보 `approval_dormant`를 하나 열고(열려 있는 동안 다시 열지 않는다), 해당 승인이 없어지면 닫는다. 콘솔 승인 내역의 「미사용」 필터에서 관리자가 선택한 승인을 한꺼번에 「유지」(재확인으로 기준 시각을 새로 시작)하거나 「철회」(기존 철회 경로)한다.
 

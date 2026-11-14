@@ -315,7 +315,30 @@ def _slack_escape(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def _slack(row: Mapping[str, Any], summary: str, action: str, link: str | None) -> dict:
+SLACK_APPROVE_30 = "mint_call_approve_30"
+SLACK_APPROVE_ONCE = "mint_call_approve_once"
+SLACK_REJECT = "mint_call_reject"
+
+
+def _slack_buttons(call_id: str) -> dict:
+    def button(action_id: str, text: str, style: str | None = None) -> dict:
+        item: dict[str, Any] = {"type": "button", "action_id": action_id, "value": call_id,
+                                "text": {"type": "plain_text", "text": text}}
+        if style:
+            item["style"] = style
+        return item
+
+    return {
+        "type": "actions",
+        "block_id": "mint_call_decide",
+        "elements": [button(SLACK_APPROVE_30, "30분 승인", "primary"),
+                     button(SLACK_APPROVE_ONCE, "1회 승인"),
+                     button(SLACK_REJECT, "거부", "danger")],
+    }
+
+
+def _slack(row: Mapping[str, Any], summary: str, action: str, link: str | None,
+           buttons: bool = False) -> dict:
     severity = SEVERITY_LABEL.get(row["severity"], row["severity"])
     fields = [{"type": "mrkdwn", "text": f"*심각도*\n{_slack_escape(severity)}"}]
     for label, value in _facts(row):
@@ -326,6 +349,9 @@ def _slack(row: Mapping[str, Any], summary: str, action: str, link: str | None) 
         {"type": "section", "fields": fields},
         {"type": "section", "text": {"type": "mrkdwn", "text": f"*조치*\n{_slack_escape(action)}"}},
     ]
+    call_id = (row.get("subject") or {}).get("id")
+    if buttons and row["kind"] == "call_approval_requested" and call_id:
+        blocks.append(_slack_buttons(str(call_id)))
     if link:
         blocks.append(
             {
@@ -372,11 +398,18 @@ def build_body(
     console_url: str | None,
     fmt: str = "json",
     link: str | None = None,
+    buttons: bool = False,
 ) -> bytes:
-    """전송 본문. ``fmt``는 json(기본)·slack·teams. ``link``는 해당 항목으로 가는 서명 링크."""
+    """전송 본문. ``fmt``는 json(기본)·slack·teams. ``link``는 해당 항목으로 가는 서명 링크.
+
+    ``buttons``이고 형식이 slack이면 호출별 승인 요청에 승인·거부 단추를 더한다.
+    """
     summary, action = GUIDE.get(row["kind"], DEFAULT_GUIDE)
     if fmt in ("slack", "teams"):
-        chat = (_slack if fmt == "slack" else _teams)(row, summary, action, link or console_url)
+        if fmt == "slack":
+            chat = _slack(row, summary, action, link or console_url, buttons)
+        else:
+            chat = _teams(row, summary, action, link or console_url)
         return json.dumps(chat, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
             "utf-8"
         )

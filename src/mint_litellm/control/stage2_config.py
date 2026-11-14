@@ -193,6 +193,9 @@ class Stage2Settings:
     endpoint_key_days: int = 90
     intake_allowed_ports: tuple[int, ...] = (443, 8443)
     console_url: str | None = None
+    # 채팅 승인(Slack): 요청 서명 비밀과 모달을 여는 봇 토큰. 서명 비밀이 없으면 채팅 승인은 꺼진다.
+    slack_signing_secret: str | None = None
+    slack_bot_token: str | None = None
     # 호출량 급증: 최근 구간, 지난 기간(평균을 내는 기간), 평균의 몇 배, 최소 호출 수
     spike_window_seconds: int = 300
     spike_baseline_seconds: int = 86400
@@ -276,6 +279,8 @@ class Stage2Settings:
             if env.get("MINT_LITELLM_CONFIG") else None,
             siem_alert_minutes=_seconds(env, "MINT_SIEM_ALERT_MINUTES", 15),
             console_url=(env.get("MINT_CONSOLE_URL") or "").strip() or None,
+            slack_signing_secret=(env.get("MINT_SLACK_SIGNING_SECRET") or "").strip() or None,
+            slack_bot_token=(env.get("MINT_SLACK_BOT_TOKEN") or "").strip() or None,
         )
         if settings.session_idle_seconds > settings.session_absolute_seconds:
             raise ControlError(

@@ -143,6 +143,21 @@ def set_operator_role(
     )
 
 
+@router.post("/operators/{name}/chat-bind")
+def bind_operator_chat(
+    name: str,
+    request: Request,
+    slack_user: str = Form(""),
+    actor: Actor = Depends(page_actor),
+):
+    return act(
+        actor,
+        lambda: operator_service.chat_bind(actor.ctx, name, slack_user.strip() or None),
+        "operator_chat_bound", "/admin?tab=operators",
+        tabbed(request, actor, "operators"),
+    )
+
+
 @router.post("/operators/{name}/remove")
 def remove_operator(
     name: str,

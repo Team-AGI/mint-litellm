@@ -217,6 +217,7 @@ def _alert_deliver(job: JobContext) -> None:
                         row, settings.console_url, settings.webhook_hmac_key,
                         settings.link_ttl_seconds,
                     ),
+                    buttons=bool(settings.slack_signing_secret),
                 ),
             )
     job.conn.execute(
