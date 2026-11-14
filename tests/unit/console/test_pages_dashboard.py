@@ -46,7 +46,7 @@ def test_the_menu_lists_only_screens_that_exist(admin):
     labels = re.findall(r'<nav class="sidebar".*?</nav>', html, re.S)[0]
     badge = r'(?: <span class="badge error">\d+</span>)?'
     names = [n.strip() for n in re.findall(r">([^<]+)" + badge + "</a>", labels)]
-    assert names == ["대시보드", "승인 센터", "경보", "서버", "도입 신청", "접근 통제",
+    assert names == ["대시보드", "시작하기", "승인 센터", "경보", "서버", "도입 신청", "접근 통제",
                      "엔드포인트", "호출 기록", "정책", "운영자·조직"]
     assert re.search(r"승인 센터 <span class=\"badge error\">[1-9]\d*</span>", labels)
     for text in ("준비 중", "예정", "곧 제공", "TBD"):
@@ -283,7 +283,7 @@ def test_the_ledger_defaults_to_seven_days_and_shows_the_organisation_time_zone(
     now = datetime.now(ZoneInfo("Asia/Seoul"))
     shown = {f"{moment:%Y-%m-%d %H:%M}" for moment in (now, now - timedelta(minutes=1))}
     assert any(f">{text}</a></td>" in html for text in shown)
-    assert "UTC" not in html and 'type="date"' not in html
+    assert "UTC" not in html and 'type="date"' in html
     assert "/api/v1/ledger/export?format=csv" in html
 
 

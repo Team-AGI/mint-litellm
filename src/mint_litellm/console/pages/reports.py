@@ -6,7 +6,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response
 
-from mint_litellm.console import audit_report
+from mint_litellm.console import audit_report, setup_state
 from mint_litellm.console.core import Actor, api_actor, page_actor, public, require_csrf
 from mint_litellm.console.templating import render
 
@@ -32,6 +32,7 @@ def audit_page(
     actor: Actor = Depends(page_actor),
 ):
     report = make(actor, range, since, until)
+    setup_state.mark(actor.conn, actor.instance, "audit_report", actor.ctx.operator.name)
     meta = report["meta"]
     current = "" if since or until else range or audit_report.DEFAULT_RANGE
     export = urlencode({"from": meta["from"], "to": meta["to"]})
