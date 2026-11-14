@@ -146,7 +146,8 @@ def test_a_viewer_cannot_list_operators_and_the_list_has_no_secrets(world):
                  403, AdminCode.FORBIDDEN)
     rows = world.client.get("/api/v1/operators", headers=bearer("approver")).json()["items"]
     assert {r["name"] for r in rows} == {"admin", "approver", "viewer"}
-    assert all(set(r) == {"name", "role", "user_id", "expires_at", "state_version"} for r in rows)
+    keys = {"name", "role", "user_id", "expires_at", "state_version", "slack_user"}
+    assert all(set(r) == keys for r in rows)
 
 
 def test_a_session_carries_the_operators_role_into_the_services(world):
@@ -278,7 +279,7 @@ def grant(world, relation, **overrides):
 def test_granting_needs_the_control_key_the_console_normally_lacks(world):
     response = grant(world, relation_of(world, "srv-wait"))
     body = assert_error(response, 403, AdminCode.FORBIDDEN)
-    assert "제어 평면 키" in body["message"]
+    assert "게이트웨이 관리 키" in body["message"]
 
 
 def test_an_exception_approval_cannot_exceed_ninety_days(world):

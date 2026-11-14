@@ -1,5 +1,6 @@
 """관리자 콘솔 앱: FastAPI + Jinja2(서버 렌더링) + HTMX. 빌드 단계와 외부 자산이 없다."""
 
+import json
 import logging
 from collections.abc import Mapping
 from pathlib import Path
@@ -9,6 +10,7 @@ from fastapi import Depends, FastAPI, Form, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from mint_litellm.console import api, chat, login, pages, staff_pages
 from mint_litellm.console.core import (
@@ -23,6 +25,7 @@ from mint_litellm.console.core import (
     require_origin,
     too_many_attempts,
 )
+from mint_litellm.console.error_pages import error_reply, wants_page
 from mint_litellm.console.templating import render
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import console_sessions
@@ -61,10 +64,10 @@ def create_app(
                 "요청 %s 처리 실패: %s %s",
                 request.state.request_id, request.method, request.url.path,
             )
-            response = JSONResponse(
+            response = error_reply(
+                request, 500,
                 {"code": "MINT-ADMIN-UNAVAILABLE", "message": "요청을 처리하지 못했습니다.",
                  "reference": request.state.request_id},
-                status_code=500,
             )
         for name, value in HEADERS.items():
             response.headers[name] = value
@@ -74,40 +77,64 @@ def create_app(
         return response
 
     @app.exception_handler(ControlError)
-    async def control_error(request: Request, error: ControlError):
+    def control_error(request: Request, error: ControlError):
         if isinstance(error, Unauthenticated) and not request.url.path.startswith("/api/"):
             return login_redirect(request)
-        return error_response(error, request.state.request_id)
+        reply = error_response(error, request.state.request_id)
+        if not wants_page(request):
+            return reply
+        return error_reply(request, reply.status_code, json.loads(reply.body))
+
+    @app.exception_handler(StarletteHTTPException)
+    def http_error(request: Request, error: StarletteHTTPException):
+        message = "주소가 올바르지 않습니다." if error.status_code == 404 else ""
+        if error.status_code == 405:
+            message = "이 주소에서는 지원하지 않는 요청입니다."
+        if wants_page(request):
+            return error_reply(
+                request, error.status_code,
+                {"message": message, "reference": request.state.request_id},
+            )
+        return JSONResponse(
+            {"detail": error.detail}, status_code=error.status_code, headers=error.headers
+        )
 
     @app.exception_handler(RequestValidationError)
-    async def invalid_request(request: Request, error: RequestValidationError):
+    def invalid_request(request: Request, error: RequestValidationError):
         fields = ", ".join(".".join(str(p) for p in e["loc"][1:]) or "본문" for e in error.errors())
-        return JSONResponse(
+        return error_reply(
+            request, 400,
             {
                 "code": "MINT-ADMIN-INVALID-INPUT",
                 "message": f"요청 값이 올바르지 않습니다: {fields}",
                 "reference": request.state.request_id,
             },
-            status_code=400,
         )
 
     @app.exception_handler(ValueError)
-    async def bad_value(request: Request, error: ValueError):
-        return JSONResponse(
+    def bad_value(request: Request, error: ValueError):
+        return error_reply(
+            request, 400,
             {"code": "MINT-ADMIN-INVALID-INPUT", "message": "입력 값이 올바르지 않습니다.",
              "reference": request.state.request_id},
-            status_code=400,
         )
 
     @app.exception_handler(psycopg.Error)
-    async def database_error(request: Request, error: psycopg.Error):
-        return JSONResponse(
+    def database_error(request: Request, error: psycopg.Error):
+        if isinstance(error, psycopg.errors.DataError) and request.method == "GET":
+            # 식별자 형식이 틀린 주소는 장애가 아니라 없는 대상이다
+            return error_reply(
+                request, 404,
+                {"code": "MINT-ADMIN-NOT-FOUND", "message": "대상을 찾을 수 없습니다.",
+                 "reference": request.state.request_id},
+            )
+        return error_reply(
+            request, 503,
             {
                 "code": "MINT-ADMIN-UNAVAILABLE",
                 "message": "데이터베이스 요청을 처리하지 못했습니다.",
                 "reference": request.state.request_id,
             },
-            status_code=503,
         )
 
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")

@@ -1258,6 +1258,7 @@ def win_grants(
     try:  # 가상 환경이면 그 바탕 인터프리터 폴더도 읽어야 한다.
         cfg = ntpath.join(ntpath.dirname(folder), "pyvenv.cfg")
         text = read_text(cfg) if read_text else open(cfg, encoding="utf-8").read()
+        add(ntpath.dirname(folder), "RX")  # 환경 안의 패키지(.pyd 등)도 읽고 실행해야 한다.
         for line in text.splitlines():
             if line.lower().startswith("home") and "=" in line:
                 add(line.split("=", 1)[1].strip(), "RX")
@@ -2029,6 +2030,16 @@ def kick_report(folder: str) -> None:
         pass
 
 
+def utf8_streams(*streams) -> None:
+    """훅 입력·오류 출력을 UTF-8로 맞춘다. 하니스는 UTF-8로 주고받는데 Windows 파이프의 기본
+    인코딩은 지역 코드 페이지라서, 그대로 두면 한국어 안내가 깨지고 한글 인자가 다르게 읽힌다."""
+    for stream in streams:
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):
+            pass
+
+
 def _give_up(code: int, message: str) -> None:
     sys.stderr.write(message + "\n")
     sys.stderr.flush()
@@ -2050,6 +2061,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--http-timeout", type=float, default=HTTP_TIMEOUT)
     parser.add_argument("--deadline", type=float, default=HOOK_DEADLINE)
     args = parser.parse_args(argv)
+    utf8_streams(sys.stdin, sys.stderr)
 
     if args.command == "serve":
         serve_broker(

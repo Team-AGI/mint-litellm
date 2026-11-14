@@ -249,6 +249,8 @@ def access_page(request: Request, actor: Actor, error=None, status=200, tab=None
             ("allowlists", "허용 목록", counts["allowlists"]),
         ],
         "rows": [],
+        "server": "",
+        "servers": [],
     }
     if tab == "approvals":
         rows = reads.approvals(
@@ -257,6 +259,8 @@ def access_page(request: Request, actor: Actor, error=None, status=200, tab=None
         ctx["rows"] = _with_recert(actor, rows)
     elif tab == "dormant":
         server = query.get("server")
+        ctx["server"] = server or ""
+        ctx["servers"] = sorted({r["server_id"] for r in stale})
         ctx["rows"] = [r for r in stale if not server or r["server_id"] == server]
     return render(request, "access.html", ctx, actor=actor, status=status)
 
@@ -511,12 +515,8 @@ def decide_call(
 
     ok = {"approve": "call_approved", "reject": "call_rejected", "cancel": "call_cancelled",
           "extend": "call_extended"}
-    back = "/approvals?tab=calls"
-    if decision in ("approve", "reject"):  # 처리하면 다음 대기 요청을 이어서 연다
-        later = [r for r in reads.call_approvals(actor.conn, actor.instance, status="pending")
-                 if str(r["id"]) != call_id]
-        back += f"&focus={later[0]['id']}" if later else ""
-    return act(actor, action, ok.get(decision, "call_approved"), back,
+    # 처리한 뒤에는 목록으로 돌아간다. 다음 요청을 말없이 열면 연속 오승인이 나기 쉽다.
+    return act(actor, action, ok.get(decision, "call_approved"), "/approvals?tab=calls",
                lambda **kw: approvals_page(request, actor, tab="calls", **kw))
 
 

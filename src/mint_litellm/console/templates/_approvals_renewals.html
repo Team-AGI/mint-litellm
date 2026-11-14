@@ -9,9 +9,7 @@
 </tr>{% endfor %}
 </tbody></table>
 {% if actor.role == 'admin' and can_grant %}
-<form method="post" action="/approvals/renew">
-  {{ m.csrf(actor) }}<button type="submit" class="primary">변경 없는 {{ renewal.unchanged | length }}건 일괄 갱신</button>
-</form>{% endif %}
+{% call m.confirm_dialog('renew-all', '변경 없는 ' ~ (renewal.unchanged | length) ~ '건 일괄 갱신', '승인 일괄 갱신', '변경이 없는 승인 ' ~ (renewal.unchanged | length) ~ '건의 유효 기간이 늘어납니다.', '/approvals/renew', actor, '일괄 갱신', danger=false, trigger_class='primary') %}{% endcall %}{% endif %}
 {% endif %}
 {% if renewal.changed %}
 <h3>변경이 있어 따로 승인할 항목</h3>

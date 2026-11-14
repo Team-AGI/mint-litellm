@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from mint_litellm.control import change_summary
+from mint_litellm.control.contract_observe import drift_kind
 
 DEPLOYMENT = "(배포)"
 # 줄 비교 상한: 한쪽이라도 이 줄 수(정규화 JSON)나 바이트 수를 넘으면 줄 비교를 하지 않는다.
@@ -23,6 +24,16 @@ def _pretty(text: str | None) -> list[str]:
         return text.split("\n")
 
 
+def _differs(approved: str, observed: str) -> bool:
+    """관측기가 변경으로 치는 차이만 센다(서버 목록·상세 카드와 같은 판정)."""
+    if approved == observed:
+        return False
+    try:
+        return drift_kind(json.loads(approved), json.loads(observed)) != "none"
+    except (ValueError, AttributeError):
+        return True
+
+
 def changes(info: dict[str, Any]) -> list[dict[str, Any]]:
     """``contract diff`` 결과에서 추가·삭제·변경된 항목(도구와 배포)을 낸다."""
     approved = {
@@ -38,7 +49,7 @@ def changes(info: dict[str, Any]) -> list[dict[str, Any]]:
             kind = "removed"
         elif a is None:
             kind = "added"
-        elif a["canonical_text"] != o["canonical_text"]:
+        elif _differs(a["canonical_text"], o["canonical_text"]):
             kind = "changed"
         else:
             continue

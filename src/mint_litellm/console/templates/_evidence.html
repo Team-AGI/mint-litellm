@@ -2,11 +2,11 @@
 <table><thead><tr><th>증빙</th><th>필요한 때</th><th>상태</th><th>유효 기한</th><th>확인한 사람</th></tr></thead><tbody>
 {% for e in evidence %}<tr><td>{{ e.label }}</td><td>{{ L.pick(L.EVIDENCE_GATE, e.gate) }}</td><td>{{ m.badge(L.EVIDENCE, e.state) }}</td><td class="nowrap">{{ e.row.valid_until | when if e.row and e.row.valid_until else '—' }}</td><td>{{ (e.row.attached_by | who) if e.row else '—' }}</td></tr>{% endfor %}
 </tbody></table>
-{% if actor.role != 'viewer' and evidence %}
+{% set kinds = evidence | selectattr('key', 'can_attach', actor) | list %}{% if kinds %}
 <h2>증빙 첨부</h2>
 <form method="post" action="{{ evidence_action }}" class="form cols">
   {{ m.csrf(actor) }}
-  <label>증빙 종류<select name="kind">{% for e in evidence %}<option value="{{ e.key }}">{{ e.label }}</option>{% endfor %}</select></label>
+  <label>증빙 종류<select name="kind">{% for e in kinds %}<option value="{{ e.key }}">{{ e.label }}</option>{% endfor %}</select></label>
   <label>문서 위치<input name="ref"></label>
   <label>문서 해시<input name="sha256" maxlength="64"></label>
   <label>유효 기간(일)<input type="number" name="valid_days" min="1"></label>

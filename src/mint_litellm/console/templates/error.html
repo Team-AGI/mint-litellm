@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · MINT{% endblock %}
+{% block page_class %}narrow{% endblock %}
+{% block body %}
+<div class="empty">
+  <h1>{{ title }}</h1>
+  {% if message %}<p>{{ message }}</p>{% endif %}
+  <p class="muted">참조 번호 {{ reference }}</p>
+  <div class="actions"><a class="button primary" href="{{ back_href }}">{{ back_name }}</a>{% if back_href != '/' %}<a class="button" href="/">대시보드로</a>{% endif %}</div>
+</div>
+{% endblock %}

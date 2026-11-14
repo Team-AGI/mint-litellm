@@ -21,11 +21,8 @@
 <td class="nowrap">{{ a.valid_from | when }} ~ {{ a.valid_until | when }}</td><td>{{ a.granted_by | who }}</td>
 <td class="nowrap">{% if a.recert %}{{ a.recert_due | when }} {{ m.badge(L.RECERT, a.recert) }}{% else %}—{% endif %}</td>
 <td><span class="actions">
-{% if a.recert and actor.role == 'admin' %}<form method="post" action="/approvals/{{ a.id }}/recertify">
-  {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ a.state_version }}">
-  <button type="submit"{% if a.recert in ('due', 'overdue', 'held') %} class="primary"{% endif %}>재확인</button>
-</form>{% endif %}
-{% if actor.role != 'viewer' %}<button type="button" data-dialog-open="revoke-{{ a.id }}">철회</button>
+{% if a.recert and actor.role == 'admin' %}{% call m.confirm_dialog('recert-' ~ a.id, '재확인', '승인 재확인', '이 승인이 여전히 필요함을 기록하고 재확인 주기를 새로 시작합니다. 유효 기간은 늘어나지 않습니다.', '/approvals/' ~ a.id ~ '/recertify', actor, '재확인', danger=false, trigger_class='primary' if a.recert in ('due', 'overdue', 'held') else '') %}<input type="hidden" name="state_version" value="{{ a.state_version }}">{% endcall %}{% endif %}
+{% if can(actor, 'revoke') %}<button type="button" data-dialog-open="revoke-{{ a.id }}">철회</button>
 <dialog id="revoke-{{ a.id }}" class="confirm" aria-labelledby="revoke-{{ a.id }}-title">
   <form method="post" action="/approvals/{{ a.id }}/revoke" hx-boost="false">
     {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ a.state_version }}">
@@ -44,8 +41,9 @@
 {% else %}{{ m.empty('유효한 승인이 없습니다', '/approvals?tab=servers', '승인 센터 보기') }}{% endif %}
 
 {% elif tab == 'dormant' %}
+{% if servers | length > 1 or server %}<form method="get" action="/access" class="filterbar"><input type="hidden" name="tab" value="dormant"><label>서버<select name="server" data-autosubmit><option value="">전체</option>{% for s in servers %}<option value="{{ s }}"{% if s == server %} selected{% endif %}>{{ s }}</option>{% endfor %}{% if server and server not in servers %}<option value="{{ server }}" selected>{{ server }}</option>{% endif %}</select></label></form>{% endif %}
 {% if rows %}
-<form method="post">
+<form method="post" id="dormant">
 {{ m.csrf(actor) }}
 <table><thead><tr><th></th><th>서버</th><th>대상</th><th>도구</th><th>구분</th><th>유효 기간</th><th>승인자</th></tr></thead><tbody>
 {% for a in rows %}<tr>
@@ -58,24 +56,24 @@
 </tbody></table>
 {% if actor.role == 'admin' %}<div class="actions">
   <button type="submit" formaction="/approvals/dormant/keep">선택 유지</button>
-  <button type="submit" formaction="/approvals/dormant/revoke" class="danger">선택 철회</button>
+  {{ m.confirm_submit('dormant-revoke', '선택 철회', '선택한 승인 철회', '고른 미사용 승인을 모두 철회합니다. 철회한 승인은 되돌릴 수 없고 다시 승인받아야 합니다.', 'dormant', '철회', '/approvals/dormant/revoke') }}
 </div>{% endif %}
 </form>
-{% else %}{{ m.empty('미사용 ' ~ dormant_days ~ '일 넘은 승인이 없습니다', '/access?tab=approvals', '유효 승인 보기') }}{% endif %}
+{% else %}{{ m.empty('미사용 ' ~ dormant_days ~ '일 넘은 승인이 없습니다', '/access?tab=dormant' if server else '/access?tab=approvals', '조건 지우기' if server else '유효 승인 보기') }}{% endif %}
 
 {% elif tab == 'denials' %}
-{% if actor.role != 'viewer' %}<p class="actions"><a class="button primary" href="/access?tab=denials&amp;new=1">거부 등록</a></p>{% endif %}
+{% if can(actor, 'deny') %}<p class="actions"><a class="button primary" href="/access?tab=denials&amp;new=1">거부 등록</a></p>{% endif %}
 {% if denials %}
 <table><thead><tr><th>대상</th><th>서버</th><th>도구</th><th>사유</th><th>등록자</th><th>상태</th><th></th></tr></thead><tbody>
 {% for d in denials %}<tr>
 <td>{{ L.pick(L.SCOPE, d.scope_type) }} {{ m.ident(d.scope_id) }}</td><td>{{ d.server_id | blank }}</td><td>{{ d.tools | join }}</td>
 <td>{{ d.reason }}</td><td>{{ d.created_by | who }}</td>
 <td>{{ m.badge({'a': L.Status('유효', 'block'), 'l': L.Status('해제됨', 'off')}, 'l' if d.lifted_at else 'a') }}</td>
-<td>{% if not d.lifted_at and actor.role != 'viewer' %}<form method="post" action="/denials/{{ d.id }}/lift">{{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ d.state_version }}"><button type="submit">해제</button></form>{% endif %}</td>
+<td>{% if not d.lifted_at and can(actor, 'denial lift') %}{% call m.confirm_dialog('lift-deny-' ~ d.id, '해제', '거부 해제', L.pick(L.SCOPE, d.scope_type) ~ ' ' ~ d.scope_id ~ '에 걸린 거부가 풀리고 다시 승인을 받을 수 있습니다.', '/denials/' ~ d.id ~ '/lift', actor, '거부 해제', danger=false, trigger_class='') %}<input type="hidden" name="state_version" value="{{ d.state_version }}">{% endcall %}{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
 {% else %}{{ m.empty('등록된 거부가 없습니다', '/access?tab=approvals', '유효 승인 보기') }}{% endif %}
-{% if new and actor.role != 'viewer' %}
+{% if new and can(actor, 'deny') %}
 {% call m.drawer('거부 등록', '/access?tab=denials', true) %}
 <form method="post" action="/denials" class="form">
   {{ m.csrf(actor) }}

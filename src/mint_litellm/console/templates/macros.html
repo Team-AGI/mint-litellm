@@ -64,6 +64,18 @@
 </dialog>
 {% endmacro %}
 
+{# 다른 폼(form_id)의 제출을 확인 창으로 감싼다. 입력은 그 폼에 있고 확인 단추가 그 폼을 제출한다. #}
+{% macro confirm_submit(id, trigger, title, effect, form_id, verb, action=none, danger=true, trigger_class=none) %}
+<button type="button" class="{{ trigger_class if trigger_class is not none else ('danger' if danger else '') }}" data-dialog-open="{{ id }}">{{ trigger }}</button>
+<dialog id="{{ id }}" class="confirm" aria-labelledby="{{ id }}-title">
+  <div class="stack">
+    <h3 id="{{ id }}-title">{{ title }}</h3>
+    <div class="effect">{{ effect }}</div>
+    <div class="actions"><button type="button" data-dialog-close>취소</button><button type="submit" form="{{ form_id }}"{% if action %} formaction="{{ action }}"{% endif %} class="{{ 'danger' if danger else 'primary' }}">{{ verb }}</button></div>
+  </div>
+</dialog>
+{% endmacro %}
+
 {# 해시값 복사 버튼. 값은 data-copy 속성, 복사는 console.js. #}
 {% macro copy_hash(value) %}<button type="button" class="copy" data-copy="{{ value }}" title="{{ value }}">{{ value[-8:] }} 복사</button>{% endmacro %}
 
@@ -72,7 +84,7 @@
 
 {% macro nav(groups, path, badges) %}
 {% for group, items in groups %}<div class="group">{% if group %}<div class="group-title">{{ group }}</div>{% endif %}
-{% for href, text, key in items %}<a href="{{ href }}" class="{{ 'active' if nav_active(path, href) else '' }}">{{ text }}{% if key and badges and badges.get(key) %} <span class="badge error">{{ badges[key] }}</span>{% endif %}</a>
+{% for href, text, key in items %}<a href="{{ href }}"{% if href.startswith('/reports') %} hx-boost="false"{% endif %} class="{{ 'active' if nav_active(path, href) else '' }}">{{ text }}{% if key and badges and badges.get(key) %} <span class="badge error">{{ badges[key] }}</span>{% endif %}</a>
 {% endfor %}</div>
 {% endfor %}
 {% endmacro %}

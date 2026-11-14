@@ -57,6 +57,21 @@ def test_uninstalling_removes_the_timer_and_the_reporter(folder, tmp_path, repor
     assert not (kit.programs / "mint_kit.py").exists()
 
 
+def test_a_user_level_uninstall_stops_the_timer_before_its_unit_files_go(
+    folder, tmp_path, reports, monkeypatch
+):
+    kit, _ = installed(folder, tmp_path, reports)
+    timer = kit.home / ".config/systemd/user/mint-report.timer"
+    seen = []
+    monkeypatch.setattr(
+        kit_module, "capture", lambda command: seen.append((command[1:4], timer.exists()))
+    )
+    # 시험 배치는 시스템 경로를 쓰지 않으므로 사용자 타이머가 있는 것으로 본다.
+    monkeypatch.setattr(kit, "user_timer", lambda state: True)
+    kit.uninstall()
+    assert seen == [(["--user", "disable", "--now"], True)]
+
+
 def test_a_windows_install_asks_for_a_task_with_the_jitter_on_the_command(
     folder, tmp_path, reports, monkeypatch
 ):

@@ -18,11 +18,12 @@ def test_the_sla_card_counts_calls_waiting_longer_than_the_chosen_limit(world, a
     seed(world, age="20 minutes")
     seed(world, age="1 minute")
     html = admin.get("/approvals").text
-    assert card(html, "SLA 초과") == "2" and "5분 넘게 대기" in html
+    assert card(html, "처리 기한 초과") == "2" and "5분 넘게 대기" in html
     assert 'class="card kpi danger"' in html
-    assert card(admin.get("/approvals?sla=15").text, "SLA 초과") == "1"
-    assert card(admin.get("/approvals?sla=60").text, "SLA 초과") == "0"
-    assert card(admin.get("/approvals?sla=7").text, "SLA 초과") == "2"  # 허용 값이 아니면 기본
+    assert card(admin.get("/approvals?sla=15").text, "처리 기한 초과") == "1"
+    assert card(admin.get("/approvals?sla=60").text, "처리 기한 초과") == "0"
+    # 허용 값이 아니면 기본
+    assert card(admin.get("/approvals?sla=7").text, "처리 기한 초과") == "2"
 
 
 def test_the_endpoint_and_operator_cards_show_the_unmanaged_count_and_role_split(world, admin):
@@ -33,12 +34,12 @@ def test_the_endpoint_and_operator_cards_show_the_unmanaged_count_and_role_split
 
 
 def test_attaching_evidence_from_the_server_detail_records_it(world, admin):
-    page = admin.get("/servers/srv-ok?tab=evidence").text
+    page = admin.get("/servers/srv-ok?tab=usage").text
     assert 'action="/servers/srv-ok/evidence"' in page and "증빙 첨부" in page
     response = form_post(world, admin, "/servers/srv-ok/evidence", kind="version_review",
                          summary="취약점 없음 확인", ref="doc-1", valid_days="10")
     assert response.status_code == 303
-    assert response.headers["location"] == "/servers/srv-ok?tab=evidence&ok=evidence_attached"
+    assert response.headers["location"] == "/servers/srv-ok?tab=usage&ok=evidence_attached"
     count = world.query("SELECT count(*) FROM mint.policy_evidence WHERE subject_id = 'srv-ok'")
     assert count[0][0] == 1
     shown = admin.get(response.headers["location"]).text

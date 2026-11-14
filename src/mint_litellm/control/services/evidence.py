@@ -22,6 +22,8 @@ from mint_litellm.types.ids import new_uuid7
 WARN_WITHIN = timedelta(days=7)
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _ROLES = ("admin", "approver")
+# 이 종류의 증빙은 관리자만 붙일 수 있다(화면 단추도 같은 값을 따른다).
+ADMIN_ONLY_KINDS = frozenset({"instance_exception"})
 
 
 @dataclass(frozen=True)
@@ -202,7 +204,7 @@ def attach(
     if ctx.operator.role not in _ROLES:
         raise forbidden(f"증빙 첨부는 {ctx.operator.role} 역할로 실행할 수 없습니다.", exit_code=4)
     kind = kind_of(kind_key)
-    if kind.key == "instance_exception" and ctx.operator.role != "admin":
+    if kind.key in ADMIN_ONLY_KINDS and ctx.operator.role != "admin":
         raise forbidden("인스턴스 간 불일치 예외는 admin만 붙일 수 있습니다.", exit_code=4)
     subject_id = str(subject_id)
     summary = (summary or "").strip()
