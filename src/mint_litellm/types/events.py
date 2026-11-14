@@ -411,6 +411,8 @@ class ResponseObservation(BaseModel):
     sensitive_findings: dict[str, int] = Field(default_factory=dict)
     # 계약 관리가 아닌 서버에서 막지 않고 관측만 한 검사 결과(결과 지시문 표지·인자 비밀).
     unmanaged_findings: tuple[str, ...] = ()
+    # 서버 주소 재확인이 observe에서 막지 않고 관측만 한 종류(private·rebind·unresolved)
+    resolve_findings: tuple[str, ...] = ()
     # 업스트림에 전달된 호출자 토큰의 aud가 서버 대상과 다름(관측 모드) / 읽을 수 없어 확인하지 않음
     aud_mismatch: bool = False
     aud_unchecked: bool = False
@@ -459,5 +461,6 @@ class AlertKind(StrEnum):
     CALL_SPIKE = "call_spike"
     BULK_EXTRACTION = "bulk_extraction"
     CONTENT_FINDING_UNMANAGED = "content_finding_unmanaged"
+    SERVER_ADDRESS_INTERNAL = "server_address_internal"
     RESULT_UNENFORCED = "result_unenforced"
     CONFIG_PLAINTEXT_SECRET = "config_plaintext_secret"

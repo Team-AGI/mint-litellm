@@ -42,6 +42,7 @@ from mint_litellm.plugin.pipeline import (
     evaluate_request,
 )
 from mint_litellm.plugin.policy.opa_client import Evaluation, OPAClient
+from mint_litellm.plugin.resolve_guard import ResolveGuard
 from mint_litellm.plugin.restore_watch import RestoreWatch
 from mint_litellm.plugin.result import ResultDeps
 from mint_litellm.plugin.shadow import ShadowWatch
@@ -446,6 +447,7 @@ class PluginRuntime:
     _reported: dict[str, dict[str, str]] = field(default_factory=dict, repr=False)
     _observed_hashes: dict[str, dict[str, str]] = field(default_factory=dict, repr=False)
     _list_seen: ListSeen | None = field(default=None, repr=False)
+    _resolve_guard: ResolveGuard = field(default_factory=ResolveGuard, repr=False)
     _grade: str | None = field(default=None, repr=False)
     _secrets_checked: bool = field(default=False, repr=False)
     _task: asyncio.Task[None] | None = field(default=None, repr=False)
@@ -473,6 +475,7 @@ class PluginRuntime:
             self._list_seen = ListSeen(self.config.list_dedup_seconds)
         return PipelineDeps(
             list_seen=self._list_seen,
+            resolve_guard=self._resolve_guard,
             config=self.config,
             snapshots=self.database,
             recorder=self.recorder,

@@ -37,6 +37,7 @@ from mint_litellm.plugin.policy.input import policy_input as make_policy_input
 from mint_litellm.plugin.policy.opa_client import Evaluation
 from mint_litellm.plugin.policy.patterns import compute_patterns
 from mint_litellm.plugin.policy.sensitive_scan import INPUT_SECRET_KINDS, scan_arguments
+from mint_litellm.plugin.resolve_guard import ResolveGuard
 from mint_litellm.plugin.snapshot import (
     ApprovalRow,
     CallApprovalRow,
@@ -80,7 +81,11 @@ from mint_litellm.types.ids import new_uuid7
 from mint_litellm.types.outcome import Outcome as DecisionOutcome
 from mint_litellm.types.outcome import decision_outcome
 from mint_litellm.types.reason_codes import ContractDriftKind, Reason
-from mint_litellm.types.reuse_policy import ALLOW_TOKEN_FORWARD, FORWARDING_AUTH
+from mint_litellm.types.reuse_policy import (
+    ALLOW_INTERNAL_ADDRESS,
+    ALLOW_TOKEN_FORWARD,
+    FORWARDING_AUTH,
+)
 from mint_litellm.types.settings import Mode, ObservationSettings, effective_mode
 from mint_litellm.types.target import (
     READ,
@@ -137,6 +142,8 @@ class PipelineDeps:
     shadow: Callable[..., None] | None = None
     # 도구 목록의 「보임·통과」 반복을 거르는 기억. 없으면 걸러 내지 않는다.
     list_seen: ListSeen | None = None
+    # 원격 서버 주소의 이름 조회 결과 재확인. 없으면 하지 않는다.
+    resolve_guard: ResolveGuard | None = None
 
 
 @dataclass(frozen=True)
@@ -342,6 +349,30 @@ def token_forward_result(
     if selected is not None and selected.conditions.get(ALLOW_TOKEN_FORWARD) is True:
         return None
     return StageResult.stop(Reason.TOKEN_FORWARD_FORBIDDEN, detail=resolved.auth_type)
+
+
+async def address_verdict(
+    run: _Run, deps: PipelineDeps, resolved: ResolvedServer, selected: ApprovalRow | None
+) -> StageResult | None:
+    """원격 서버 URL의 호스트가 내부 주소로 풀리는지 호출 직전에 다시 본다(POL-R-12).
+
+    승인 조건 ``allow_internal_address``를 true로 적은 서버는 보지 않는다. ``enforce``는 막고
+    (관측 모드로 풀리지 않음), ``observe``는 호출을 통과시키되 걸린 종류를 ``resolve_findings``에
+    남긴다. 조회 실패는 ``observe``에서 통과(기록만), ``enforce``에서 차단이다.
+    """
+    guard, mode = deps.resolve_guard, deps.config.resolve_check
+    if guard is None or mode == "off" or not resolved.host:
+        return None
+    if selected is not None and selected.conditions.get(ALLOW_INTERNAL_ADDRESS) is True:
+        return None
+    verdict = guard.cached(resolved.host)
+    if verdict is None:
+        verdict = await guard.check(resolved.host, run.deadline.remaining())
+    if verdict.kind is None:
+        return None
+    if mode == "enforce":
+        return StageResult.stop(Reason.RESOLVED_ADDRESS_FORBIDDEN, detail=verdict.detail())
+    run.resolve_findings.append(verdict.kind)
 
 
 def audience_result(
@@ -1081,6 +1112,8 @@ class _Run:
     # 계약 관리가 아닌 서버에서 관측만 한 검사 결과의 정책 식별자(입력 쪽)와 검사 설정
     unmanaged_findings: list[str] = field(default_factory=list)
     scan_unmanaged: str = "observe"
+    # 서버 주소 재확인(observe)에서 걸린 종류(private·rebind·unresolved). 막지 않고 기록만 한다.
+    resolve_findings: list[str] = field(default_factory=list)
     # 전달되는 호출자 토큰의 aud 확인 결과(대상 불일치, 읽을 수 없어 확인하지 않음)
     aud_mismatch: bool = False
     aud_unchecked: bool = False
@@ -1315,6 +1348,9 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         if forward is not None:
             stages.add(Stage.DENIAL_APPROVAL, forward)
             return
+        address = await address_verdict(run, deps, resolved, run.selected)
+        if address is not None:
+            stages.add(Stage.DENIAL_APPROVAL, address)
         audience = audience_result(req.hook.bearer, resolved, config.token_audience, run)
         if audience is not None:
             stages.add(Stage.DENIAL_APPROVAL, audience)
@@ -1774,6 +1810,7 @@ def _context_document(
         "org_id": principal.org_id,
         "result_policy": _result_policy(run),
         "unmanaged_findings": list(dict.fromkeys(run.unmanaged_findings)),
+        "resolve_findings": list(dict.fromkeys(run.resolve_findings)),
         "aud_mismatch": run.aud_mismatch,
         "aud_unchecked": run.aud_unchecked,
         "aud_unchecked_reason": run.aud_unchecked_reason,
