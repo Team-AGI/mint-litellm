@@ -107,7 +107,8 @@ def admin_page(request: Request, actor: Actor, error=None, status=200, tab=None)
         "orgs": reads.orgs(actor.conn, actor.instance),
         "bindings": reads.bindings(actor.conn, actor.instance),
         "suggestions": org_service.list_suggestions(actor.ctx),
-        "tab": tab if tab in ("orgs", "suggestions") else "operators",
+        "transfers": reads.transfers(actor.conn, actor.instance) if actor.role == "admin" else [],
+        "tab": tab if tab in ("orgs", "suggestions", "transfer") else "operators",
         "error": error,
     }
     return render(request, "admin.html", ctx, actor=actor, status=status)

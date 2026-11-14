@@ -19,7 +19,7 @@ from uuid import UUID
 
 import psycopg
 
-from mint_litellm import cli_evidence, cli_restore, cli_upgrade
+from mint_litellm import cli_backup, cli_evidence, cli_restore, cli_upgrade
 from mint_litellm.control import (
     allowlists,
     approvals,
@@ -1276,7 +1276,7 @@ ARGUMENTS.update(INTAKE_ARGUMENTS)
 
 def _add_arguments(parser: argparse.ArgumentParser, name: str) -> None:
     for spec in {**ARGUMENTS, **cli_restore.ARGUMENTS, **cli_evidence.ARGUMENTS,
-                 **cli_upgrade.ARGUMENTS}.get(name, []):
+                 **cli_upgrade.ARGUMENTS, **cli_backup.ARGUMENTS}.get(name, []):
         if spec == "SUBJECT":
             group = parser.add_mutually_exclusive_group(required=True)
             group.add_argument("--team")
@@ -1301,7 +1301,8 @@ def build_parser() -> argparse.ArgumentParser:
     root.add_argument("--json", action="store_true", help="결과를 JSON 한 개로 출력")
     tree: dict[tuple[str, ...], argparse._SubParsersAction] = {(): root.add_subparsers(
         dest="group0", metavar="명령", required=True)}
-    commands = [*COMMANDS, *cli_restore.COMMANDS, *cli_evidence.COMMANDS, *cli_upgrade.COMMANDS]
+    commands = [*COMMANDS, *cli_restore.COMMANDS, *cli_evidence.COMMANDS, *cli_upgrade.COMMANDS,
+                *cli_backup.COMMANDS]
     # 하위 명령도 가진 명령(``org suggest``)은 하위 명령 없이 부르면 자기 자신이 실행된다.
     parents = {c.path for c in commands if any(o.path[:len(c.path)] == c.path != o.path
                                               for o in commands)}
@@ -1336,7 +1337,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 COMMAND_INDEX: dict[str, CliCommand] = {
     c.name: c for c in [*COMMANDS, *cli_restore.COMMANDS, *cli_evidence.COMMANDS,
-                        *cli_upgrade.COMMANDS]
+                        *cli_upgrade.COMMANDS, *cli_backup.COMMANDS]
 }
 
 
@@ -1450,7 +1451,7 @@ def run_command(args: argparse.Namespace, environ: dict[str, str]) -> None:
         if ctx is not None:
             expand_ids(run)
         extra = {**cli_restore.HANDLERS, **cli_evidence.HANDLERS,
-                 **cli_upgrade.HANDLERS}
+                 **cli_upgrade.HANDLERS, **cli_backup.HANDLERS}
         (HANDLERS.get(command.name) or extra[command.name])(run)
     if args.json:
         print(json.dumps(_result(run, command), ensure_ascii=False, default=str))

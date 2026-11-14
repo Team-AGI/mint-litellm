@@ -242,3 +242,6 @@ dialog.confirm .actions { justify-content: flex-end; }
   .topbar .who { display: none; }
   th { top: 0; }
 }
+
+.cmd { display: flex; gap: var(--s2); align-items: center; margin: var(--s2) 0; }
+.cmd .cmd-text { flex: 1; padding: var(--s2); background: var(--bg-subtle); border-radius: 4px; font-family: monospace; overflow-wrap: anywhere; }
