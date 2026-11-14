@@ -147,6 +147,8 @@ class CallRequest:
     resolution_failure: StageResult | None
     invocation_id: UUID = field(default_factory=new_uuid7)
     attempt_id: int = 1
+    # 승인 대기 보류 뒤 다시 하는 판정이면 (보류 결과, 걸린 밀리초)
+    hold: tuple[str, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -157,6 +159,8 @@ class Outcome:
     evidence: Evidence
     context: dict[str, Any]
     timing: StageClock = OFF
+    # 호출별 승인 요청을 열었거나 다시 쓴 막힘이면 그 요청의 식별자. 승인 대기 보류가 쓴다.
+    approval_request_id: str | None = None
 
 
 def scope_matches(scope_type: str, scope_id: str, principal: Principal, server_id: str) -> bool:
@@ -1137,6 +1141,8 @@ def _decision_snapshot(
         missing_reasons=reasons,
         outcome=_outcome_of(conclusion),
         decision_us=(time.perf_counter_ns() - run.started_at) // 1000,
+        approval_hold=req.hold[0] if req.hold else None,
+        approval_hold_ms=req.hold[1] if req.hold else None,
         cause="control_key_call"
         if conclusion.stop is not None and conclusion.stop.detail == "control_key_call"
         else None,
@@ -1636,6 +1642,7 @@ async def _evaluate(run: _Run, deps: PipelineDeps) -> Outcome:
     snapshot_doc = _decision_snapshot(run, conclusion, consume, attempt_id=attempt)
     allowed = conclusion.enforced_action is Action.ALLOW
     error: MintError | None = None
+    approval_request_id: str | None = None
     if not allowed:
         reason = blocking_reason(
             conclusion, mode=run.mode, observation=run.observation, policy_observable=observable
@@ -1649,6 +1656,7 @@ async def _evaluate(run: _Run, deps: PipelineDeps) -> Outcome:
             Reason.CALL_APPROVAL_REQUIRED, Reason.CALL_APPROVAL_STALE
         ):
             error = error.model_copy(update={"approval_requested": True})
+            approval_request_id = run.call_approval_request
     return Outcome(
         allowed=allowed,
         snapshot=snapshot_doc,
@@ -1656,6 +1664,7 @@ async def _evaluate(run: _Run, deps: PipelineDeps) -> Outcome:
         evidence=evidence,
         context=_context_document(run, snapshot_doc, allowed, consume),
         timing=run.timing,
+        approval_request_id=approval_request_id,
     )
 
 

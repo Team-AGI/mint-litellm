@@ -111,6 +111,18 @@ MINT_SETTINGS: tuple[MintSettingRow, ...] = (
         ),
     ),
     MintSettingRow(
+        key="MINT_APPROVAL_HOLD_SECONDS",
+        source=SettingSource.ENV,
+        rule=(
+            "호출별 승인이 필요해 막힌 호출을 승인 결정을 기다리며 붙잡아 두는 최대 시간"
+            "(초, 기본 120, 0이면 붙잡지 않고 바로 거절, 최대 300). 그 사이 승인되면 판정을 "
+            "처음부터 다시 돌려 모든 검사를 거친 뒤 같은 호출로 결과를 돌려주고, 거부·만료·시간 "
+            "초과는 기존 거절을 돌려준다. 클라이언트의 도구 호출 제한(Claude Code "
+            "`MCP_TOOL_TIMEOUT`, Codex `tool_timeout_sec`)이 이 값보다 짧으면 클라이언트가 "
+            "먼저 포기한다. 저장된 설정으로 덮지 않는다."
+        ),
+    ),
+    MintSettingRow(
         key="MINT_LOG_LEVEL",
         source=SettingSource.ENV,
         rule=(

@@ -492,7 +492,8 @@ class PluginRuntime:
         return ResultDeps(config=self.config, database=self.database, recorder=self.recorder)
 
     async def judge_call(
-        self, data: Mapping[str, Any], auth: Any, timing: StageClock = OFF
+        self, data: Mapping[str, Any], auth: Any, timing: StageClock = OFF,
+        hold: tuple[str, int] | None = None,
     ) -> Outcome:
         started = timing.now()
         request = build_request(
@@ -505,6 +506,8 @@ class PluginRuntime:
             principal_factory=compat.principal_from_auth,
         )
         timing.since("hook", started)
+        if hold is not None:
+            request = replace(request, hold=hold)
         return await evaluate_request(request, self.deps, timing)
 
     async def judge_refused_request(
