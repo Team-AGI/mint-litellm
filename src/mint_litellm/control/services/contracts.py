@@ -16,7 +16,7 @@ from mint_litellm.control.errors import (
     stale_evidence,
 )
 from mint_litellm.control.services import evidence
-from mint_litellm.control.services.base import enqueue_job, service
+from mint_litellm.control.services.base import enqueue_job, require_role, service, transact
 from mint_litellm.types.canonical import (
     canonical_text,
     credential_scope,
@@ -55,6 +55,85 @@ def show(ctx: Context, server_id: str) -> dict:
             (ctx.instance_id, server_id),
         ),
     }
+
+
+def approve_provisional(
+    ctx: Context, server_id: str, *, expected_version: int | None = None
+) -> dict:
+    """로컬(stdio) 서버의 임시 계약을 승인된 도구 계약으로 바꾼다.
+
+    관측한 정의(이름·설명·입력 정의)가 계약 정본이 되고, 이미 승인된 같은 도구의 계약은 대체된다.
+    실행(``exec``) 유형은 도구 계약의 행위 분류에 없어 옮기지 않고 임시 계약으로 남긴다. 신청·수용
+    검증을 거치는 원격 서버의 재승인과 달리 운영자가 관측 목록을 보고 직접 승인한다.
+    """
+    require_role(ctx, "contract reapprove")
+    with transact(ctx):
+        server = fetchone(
+            ctx.conn,
+            "SELECT * FROM mint.servers WHERE instance_id=%s AND server_id=%s FOR UPDATE",
+            (ctx.instance_id, server_id),
+        )
+        if server is None:
+            raise not_found("서버가 없습니다.")
+        if (
+            server["identity_kind"] != "stdio"
+            or server["status"] != "approved"
+            or server["contract_status"] == "managed"
+        ):
+            raise conflict("승인된 로컬 서버의 임시 계약만 승인할 수 있습니다.")
+        if expected_version is not None and server["state_version"] != expected_version:
+            raise conflict("서버 상태 버전이 다릅니다.")
+        rows = fetchall(
+            ctx.conn,
+            "SELECT * FROM mint.provisional_contracts WHERE instance_id=%s AND server_id=%s"
+            " AND action_type <> 'exec' ORDER BY tool FOR UPDATE",
+            (ctx.instance_id, server_id),
+        )
+        if not rows:
+            raise conflict("승인할 임시 계약이 없습니다.")
+        approved = []
+        for row in rows:
+            value = {
+                "name": row["tool"],
+                "description": row["description"],
+                "input_schema": row["input_schema"],
+            }
+            ctx.conn.execute(
+                "UPDATE mint.tool_contracts SET status='superseded' WHERE instance_id=%s"
+                " AND server_id=%s AND credential_scope='server' AND tool=%s"
+                " AND status IN ('approved', 'candidate')",
+                (ctx.instance_id, server_id, row["tool"]),
+            )
+            contract_id = new_uuid7()
+            text = canonical_text(value)
+            ctx.conn.execute(
+                "INSERT INTO mint.tool_contracts (id, instance_id, server_id, credential_scope,"
+                " tool, canonical_text, sha256, pin_sha256, source)"
+                " VALUES (%s, %s, %s, 'server', %s, %s, %s, %s, 'observed')",
+                (contract_id, ctx.instance_id, server_id, row["tool"], text, sha256(value),
+                 pin_sha256(value)),
+            )
+            ctx.conn.execute(
+                "UPDATE mint.tool_contracts SET action_type=%s, risk_grade=%s WHERE id=%s",
+                (row["action_type"], row["risk_grade"], contract_id),
+            )
+            version = fetchone(
+                ctx.conn,
+                "UPDATE mint.tool_contracts SET status='approved' WHERE id=%s RETURNING version",
+                (contract_id,),
+            )["version"]
+            ctx.emit(
+                EventKind.CONTRACT_APPROVED, contract_id, version,
+                {"server_id": server_id, "tool": row["tool"], "risk_grade": row["risk_grade"],
+                 "action_type": row["action_type"], "source": "provisional"},
+            )
+            approved.append(row["tool"])
+        ctx.conn.execute(
+            "DELETE FROM mint.provisional_contracts WHERE instance_id=%s AND server_id=%s"
+            " AND tool = ANY(%s)",
+            (ctx.instance_id, server_id, approved),
+        )
+        return {"server_id": server_id, "approved": approved}
 
 
 @service("contract diff")

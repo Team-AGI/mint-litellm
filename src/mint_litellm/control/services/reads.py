@@ -708,6 +708,18 @@ def reapproval_plan(conn: psycopg.Connection, instance: str, server_id: str) -> 
     )
 
 
+def provisional_contracts(
+    conn: psycopg.Connection, instance: str, server_id: str
+) -> list[dict[str, Any]]:
+    """관측한 도구 목록으로 만든 임시 계약(도구별 추정 행위 유형·위험 등급·허용 인자 키)."""
+    return fetchall(
+        conn,
+        "SELECT tool, action_type, risk_grade, description, input_keys, reported_by, observed_at"
+        " FROM mint.provisional_contracts WHERE instance_id = %s AND server_id = %s ORDER BY tool",
+        (instance, server_id),
+    )
+
+
 def candidates(conn: psycopg.Connection, instance: str, server_id: str) -> dict[str, Any]:
     return {
         "tools": fetchall(

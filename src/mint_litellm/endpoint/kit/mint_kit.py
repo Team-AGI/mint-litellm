@@ -72,6 +72,9 @@ LAST_REPORT = "last_report"
 REPORTER_KEY = "reporter.key"  # Windows 관리형: SYSTEM 보고기가 읽는 키 사본
 RETIRED_FILE = "retired.json"  # 마지막 보고 응답의 폐기 서버 목록(실행기가 읽는다)
 LAUNCHED = "launched"  # 실행기가 띄운 서버 프로세스의 기록
+TOOLS_DIR = "tools"  # 실행기가 본 서버별 도구 목록(이름·설명·입력 정의)
+TOOLS_SENT = "tools_sent.json"  # 서버 -> 마지막으로 보고한 목록의 해시
+MAX_TOOL_LISTS = 4  # 보고 한 번에 싣는 서버 수(나머지는 다음 보고)
 SYSTEMD_DIR = "/etc/systemd/system"
 MAX_PENDING = 256
 UNIT = "mint-report"
@@ -793,6 +796,50 @@ def scan_local_mcp(home: Path) -> list[dict]:
     except (ImportError, OSError, ValueError):
         pass  # tomllib은 Python 3.11부터라 이전 판본에서는 Codex 설정을 읽지 않는다.
     return sorted(found.values(), key=lambda i: (i["harness"], i["name"]))[:MAX_ITEMS]
+
+
+def scan_tool_lists(home: Path) -> list[dict]:
+    """실행기가 남긴 도구 목록 중 마지막 보고 뒤 바뀐 것(사용자 홈을 읽으므로 사용자 권한으로)."""
+    folder = home / STATE_REL / TOOLS_DIR
+    try:
+        sent = json.loads((home / STATE_REL / TOOLS_SENT).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        sent = {}
+    items: list[dict] = []
+    try:
+        files = sorted(folder.glob("*.json"))
+    except OSError:
+        return items
+    for path in files:
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+            server, digest, tools = doc["server"], doc["sha256"], doc["tools"]
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if (
+            isinstance(server, str) and isinstance(digest, str) and isinstance(tools, list)
+            and sent.get(server) != digest
+        ):
+            items.append({"server": server, "sha256": digest, "tools": tools,
+                          "truncated": bool(doc.get("truncated"))})
+        if len(items) >= MAX_TOOL_LISTS:
+            break
+    return items
+
+
+def mark_tool_lists_sent(home: Path, items: list[dict]) -> None:
+    """보고한 목록의 해시를 남겨 같은 목록을 다시 보내지 않게 한다."""
+    path = home / STATE_REL / TOOLS_SENT
+    try:
+        sent = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        sent = {}
+    sent.update({i["server"]: i["sha256"] for i in items})
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(sent), encoding="utf-8")
+    except OSError:
+        pass
 
 
 def proc_start(pid: int, windows: bool) -> str | None:
@@ -1556,7 +1603,10 @@ class Kit:
             outside = scan_outside(self.windows)
         except Exception:
             return {}
-        found = {} if self.system_mode else {"local_mcp": scan_local_mcp(self.home)}
+        found = (
+            {} if self.system_mode
+            else {"local_mcp": scan_local_mcp(self.home), "tool_lists": scan_tool_lists(self.home)}
+        )
         return {
             "processes": processes, "autostart": autostart, "outside_processes": outside, **found
         }
@@ -1592,6 +1642,8 @@ class Kit:
             finally:
                 os.unlink(handle.name)
         self.answer = answer if isinstance(answer, dict) else {}
+        if answer and payload.get("tool_lists"):
+            self.run_as_user(lambda: mark_tool_lists_sent(self.home, payload["tool_lists"]))
         if answer and pending:
             state.pop("pending_removed", None)
             self.save_state(state)

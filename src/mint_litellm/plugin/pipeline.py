@@ -486,19 +486,49 @@ def current_contract(snapshot: Snapshot, tool: str) -> ToolContractRow | None:
     )
 
 
+def observed_contract(snapshot: Snapshot, tool: str) -> ToolContractRow | None:
+    """계약 관리가 아닌 로컬 서버에서, 운영자가 관측한 도구 목록으로 승인한 이 도구의 계약.
+
+    정의가 바뀌어 드리프트가 표시된 계약은 쓰지 않는다. 판정은 계속 임시 계약으로 한다.
+    """
+    server = snapshot.server
+    if server is None or server.contract_status == "managed" or server.identity_kind != "stdio":
+        return None
+    return next(
+        (c for c in snapshot.tool_contracts
+         if c.credential_scope == "server" and c.tool == tool and c.drift == "none"), None)
+
+
 def tool_traits(
     snapshot: Snapshot, tool: str, arguments: Mapping[str, Any]
 ) -> tuple[str | None, str | None, bool]:
     """(행위 유형, 위험 등급, 임시 계약 여부). 승인된 계약이 있으면 그 값, 계약 관리 서버가 아니면
-    도구 이름·인자로 추정한 임시 계약 값. 계약 관리 서버인데 승인된 계약이 없으면 값이 없다."""
+    관측한 도구 목록의 승인본·임시 계약, 그것도 없으면 도구 이름·인자로 추정한 값(임시 계약).
+    계약 관리 서버인데 승인된 계약이 없으면 값이 없다. 임시 계약은 승인 규칙을 넓히지 않는다."""
     contract = current_contract(snapshot, tool)
     if contract is not None:
         return contract.action_type, contract.risk_grade, False
     server = snapshot.server
     if server is not None and server.contract_status == "managed":
         return None, None, False
+    observed = observed_contract(snapshot, tool)
+    if observed is not None and observed.action_type and observed.risk_grade:
+        return observed.action_type, observed.risk_grade, True
+    if snapshot.provisional is not None:
+        return snapshot.provisional.action_type, snapshot.provisional.risk_grade, True
     guess = infer_provisional(tool, keys=arguments)
     return guess.action_type, guess.risk_grade, True
+
+
+def observed_input_keys(snapshot: Snapshot, tool: str) -> tuple[str, ...] | None:
+    """로컬 서버의 도구가 받는 입력 항목(관측한 승인본, 없으면 임시 계약). 모르면 None."""
+    observed = observed_contract(snapshot, tool)
+    if observed is not None and observed.input_keys is not None:
+        return observed.input_keys
+    server = snapshot.server
+    if server is None or server.contract_status == "managed" or snapshot.provisional is None:
+        return None
+    return snapshot.provisional.input_keys
 
 
 def bound_to_current_contract(snapshot: Snapshot, tool: str, bound: str | None) -> bool:
@@ -739,7 +769,10 @@ def build_policy_input(
                 selected.conditions,
                 tool=tool,
                 action_type=action_type,
-                input_keys=None if contract is None else contract.input_keys,
+                input_keys=(
+                    observed_input_keys(snapshot, tool) if contract is None
+                    else contract.input_keys
+                ),
                 data_grade=snapshot.data_grade,
                 purpose=getattr(snapshot.relations.get(selected.relation_id), "purpose", None),
             ),

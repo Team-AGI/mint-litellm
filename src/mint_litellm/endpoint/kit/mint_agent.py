@@ -1643,8 +1643,214 @@ def unsandboxed(policy: Sandbox, message: str) -> tuple[None, str]:
     return None, "none"
 
 
-def spawn_and_exit(path: str, argv: list[str], env: Mapping[str, str]) -> None:
+# 서버가 ``tools/list``에 답한 도구 목록(이름·설명·입력 정의)만 사용자 캐시에 남긴다. 호출 인자와
+# 결과는 읽지도 남기지도 않는다. 보고기가 바뀐 목록만 MINT에 보낸다.
+TOOLS_DIR = "tools"
+TOOLS_MAX = 100
+TOOL_NAME_MAX = 128
+TOOL_DESC_MAX = 500
+TOOL_SCHEMA_MAX = 4096
+TOOL_SCHEMA_DEPTH = 12
+TOOL_PROPS_MAX = 64
+LINE_MAX = 2 * 1024 * 1024
+LIST_BYTES_MAX = 40 * 1024
+
+
+def _schema_ok(schema: Any, level: int = 0) -> bool:
+    if level > TOOL_SCHEMA_DEPTH:
+        return False
+    if isinstance(schema, dict):
+        return all(_schema_ok(v, level + 1) for v in schema.values())
+    if isinstance(schema, list):
+        return all(_schema_ok(v, level + 1) for v in schema)
+    return True
+
+
+def _skeleton(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """너무 큰 입력 정의는 항목 이름과 형식만 남긴다."""
+    props = schema.get("properties")
+    kept: dict[str, Any] = {}
+    if isinstance(props, dict):
+        for key in list(props)[:TOOL_PROPS_MAX]:
+            kind = props[key].get("type") if isinstance(props[key], dict) else None
+            kept[str(key)[:TOOL_NAME_MAX]] = {"type": kind} if isinstance(kind, str) else {}
+    required = schema.get("required")
+    result: dict[str, Any] = {"type": "object", "properties": kept}
+    if isinstance(required, list):
+        result["required"] = [r for r in required if isinstance(r, str) and r in kept]
+    return result
+
+
+def clean_tools(raw: Any) -> tuple[list[dict[str, Any]], bool]:
+    """``tools/list`` 결과에서 보고할 도구만 한도 안으로 추린다. (도구 목록, 잘렸는가)."""
+    cut = False
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for tool in raw if isinstance(raw, list) else []:
+        name = tool.get("name") if isinstance(tool, dict) else None
+        if not isinstance(name, str) or not name or name in seen:
+            continue
+        if len(name) > TOOL_NAME_MAX or len(out) >= TOOLS_MAX:
+            cut = True
+            continue
+        seen.add(name)
+        desc = tool.get("description")
+        desc = desc if isinstance(desc, str) else ""
+        schema = tool.get("inputSchema", tool.get("input_schema"))
+        schema = schema if isinstance(schema, dict) else {}
+        if not _schema_ok(schema) or len(json.dumps(schema)) > TOOL_SCHEMA_MAX:
+            schema, cut = _skeleton(schema), True
+        cut = cut or len(desc) > TOOL_DESC_MAX
+        out.append({"name": name, "description": desc[:TOOL_DESC_MAX], "input_schema": schema})
+    while out and len(json.dumps(out)) > LIST_BYTES_MAX:
+        out.pop()
+        cut = True
+    return out, cut
+
+
+def tools_digest(tools: Sequence[Mapping[str, Any]]) -> str:
+    text = json.dumps(list(tools), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+class ToolListTap:
+    """하네스와 서버 사이의 줄 단위 JSON-RPC에서 ``tools/list`` 요청과 그 응답만 본다."""
+
+    def __init__(self, state_dir: str, server: str) -> None:
+        self.folder = os.path.join(os.path.expanduser(state_dir), TOOLS_DIR)
+        self.server = server
+        self.pending: dict[Any, bool] = {}  # 요청 식별자 -> 첫 쪽(커서 없음)인가
+        self.pages: list[Any] = []
+
+    def client_line(self, line: bytes) -> None:
+        if b"tools/list" not in line:
+            return
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            return
+        if isinstance(msg, dict) and msg.get("method") == "tools/list" and "id" in msg:
+            params = msg.get("params")
+            first = not (isinstance(params, dict) and params.get("cursor"))
+            if isinstance(msg["id"], (str, int)) and len(self.pending) < 16:
+                self.pending[msg["id"]] = first
+
+    def server_line(self, line: bytes) -> None:
+        if not self.pending or b'"result"' not in line:
+            return
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            return
+        key = msg.get("id") if isinstance(msg, dict) else None
+        if not isinstance(key, (str, int)) or key not in self.pending:
+            return
+        first = self.pending.pop(key)
+        result = msg.get("result")
+        if not isinstance(result, dict) or not isinstance(result.get("tools"), list):
+            return
+        if first:
+            self.pages = []
+        self.pages.extend(result["tools"][: TOOLS_MAX + 1])
+        if len(self.pages) > 10 * TOOLS_MAX:
+            self.pages = []
+        elif not result.get("nextCursor"):
+            self.save()
+
+    def save(self) -> bool:
+        """바뀐 목록만 쓴다(같으면 쓰지 않는다). 쓰지 못해도 서버에는 영향이 없다."""
+        tools, cut = clean_tools(self.pages)
+        self.pages = []
+        digest = tools_digest(tools)
+        name = re.sub(r"[^A-Za-z0-9_.-]", "_", self.server)[:100]
+        path = os.path.join(self.folder, f"{name}.json")
+        try:
+            with open(path, encoding="utf-8") as handle:
+                if json.load(handle).get("sha256") == digest:
+                    return False
+        except (OSError, ValueError, AttributeError):
+            pass
+        try:
+            os.makedirs(self.folder, mode=0o700, exist_ok=True)
+            with open(f"{path}.tmp", "w", encoding="utf-8") as handle:
+                json.dump(
+                    {"server": self.server, "sha256": digest, "truncated": cut, "tools": tools},
+                    handle,
+                )
+            os.replace(f"{path}.tmp", path)
+        except OSError:
+            return False
+        return True
+
+
+def relay(source: Any, sink: Any, watch: Callable[[bytes], None] | None) -> None:
+    """줄을 그대로 전달하며 ``watch``에 완성된 줄(상한 이내)만 보여 준다."""
+    line, over = bytearray(), False
+    while True:
+        chunk = source.readline(65536)
+        if not chunk:
+            return
+        sink.write(chunk)
+        sink.flush()
+        if watch is None:
+            continue
+        if not over:
+            line += chunk
+            if len(line) > LINE_MAX:
+                over = True
+                line.clear()
+        if chunk.endswith(b"\n"):
+            if not over:
+                try:
+                    watch(bytes(line))
+                except Exception:  # 관측은 전달을 막지 않는다.
+                    pass
+            line.clear()
+            over = False
+
+
+def spawn_and_relay(
+    path: str,
+    argv: Sequence[str],
+    env: Mapping[str, str],
+    tap: ToolListTap | None = None,
+    pass_fd: int | None = None,
+) -> int:
+    """서버를 자식으로 띄워 표준 입출력을 그대로 잇고 종료 코드를 돌려준다(``tap``이 있으면
+    그 사이에서 도구 목록 응답만 본다). ``pass_fd``는 검증한 실행 파일 기술자(리눅스)다."""
+    extra: dict[str, Any] = {}
+    if pass_fd is not None:
+        extra = {"executable": f"/proc/self/fd/{pass_fd}", "pass_fds": (pass_fd,)}
+    child = subprocess.Popen(
+        [path, *argv[1:]], env=dict(env), stdin=subprocess.PIPE, stdout=subprocess.PIPE, **extra
+    )
+
+    def feed() -> None:
+        try:
+            relay(sys.stdin.buffer, child.stdin, tap.client_line if tap else None)
+        except (OSError, ValueError):
+            pass
+        try:
+            child.stdin.close()
+        except OSError:
+            pass
+
+    threading.Thread(target=feed, daemon=True).start()
+    try:
+        relay(child.stdout, sys.stdout.buffer, tap.server_line if tap else None)
+    except (OSError, ValueError):
+        pass
+    except KeyboardInterrupt:
+        child.terminate()
+    return child.wait()
+
+
+def spawn_and_exit(
+    path: str, argv: list[str], env: Mapping[str, str], tap: ToolListTap | None = None
+) -> None:
     """exec가 없는 Windows용. 자식을 띄워 표준 입출력을 그대로 잇고 같은 종료 코드로 끝난다."""
+    if tap is not None:
+        sys.exit(spawn_and_relay(path, argv, env, tap))
     sys.exit(subprocess.call([path, *argv[1:]], env=dict(env)))
 
 
@@ -1675,6 +1881,7 @@ def run_server(
     env = launch_env(approved, environ)
     if approved.get("cwd"):
         os.chdir(approved["cwd"])
+    tap = ToolListTap(state_dir, server) if state_dir is not None else None
     wrapped, status, box = None, None, None
     home = env.get("HOME") or os.path.expanduser("~")
     hosts = network_mode(approved) == "hosts" and os.name != "nt" and sandbox is not None
@@ -1713,7 +1920,7 @@ def run_server(
                 proxy.start()
                 env = {**env, **proxy_env()}
             os.close(fd)
-            spawn_and_exit(wrapped[0], wrapped, env)
+            spawn_and_exit(wrapped[0], wrapped, env, tap)
     finally:
         if proxy is not None:
             proxy.stop()
@@ -1726,7 +1933,10 @@ def run_server(
     if execve is None and os.name == "nt":
         # 한계: Windows는 열어 둔 기술자로 실행할 수 없어 닫고 경로로 실행한다(검증과 실행 사이 틈).
         os.close(fd)
-        spawn_and_exit(executable, argv, env)
+        spawn_and_exit(executable, argv, env, tap)
+    if execve is None and tap is not None and os.path.isdir("/proc/self/fd"):
+        # 검증한 기술자로 자식을 띄워 사이에서 도구 목록 응답만 본다(/proc이 있는 리눅스).
+        sys.exit(spawn_and_relay(executable, argv, env, tap, pass_fd=fd))
     execve = execve or os.execve
     try:
         execve(fd, argv, env)

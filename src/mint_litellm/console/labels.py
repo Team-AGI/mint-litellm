@@ -192,6 +192,7 @@ ACTION = {
     "write": "쓰기",
     "delete": "삭제",
     "external_send": "외부 전송",
+    "exec": "실행",
     "credential_access": "자격 접근",
 }
 CHECK_REASON = {
@@ -524,6 +525,7 @@ NOTICES = {
     "intake_approved": "신청을 승인했습니다.",
     "intake_rejected": "신청을 거절했습니다.",
     "reapproval_planned": "재승인 계획을 등록했습니다. 반영은 작업 실행기가 진행합니다.",
+    "provisional_approved": "임시 계약을 승인된 도구 계약으로 바꿨습니다.",
     "operator_removed": "운영자를 삭제했습니다.",
     "staff_confirmed": "확인했습니다.",
     "staff_rejected": "거절했습니다.",

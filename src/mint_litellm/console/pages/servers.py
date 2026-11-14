@@ -122,6 +122,7 @@ def contract_context(request: Request, actor: Actor, server_id: str) -> dict:
         "sides": compare.side_by_side(chosen["approved"], chosen["observed"]) if chosen else None,
         "plan": reads.reapproval_plan(actor.conn, actor.instance, server_id),
         "cand": reads.candidates(actor.conn, actor.instance, server_id),
+        "provisional": reads.provisional_contracts(actor.conn, actor.instance, server_id),
     }
 
 
@@ -652,6 +653,24 @@ def reapprove_contracts(
             expected_version=state_version,
         ),
         "reapproval_planned",
+        f"/servers/{server_id}?tab=contract",
+        lambda **kw: server_page(request, actor, server_id, tab="contract", **kw),
+    )
+
+
+@router.post("/contracts/{server_id}/approve-provisional")
+def approve_provisional_contracts(
+    server_id: str,
+    request: Request,
+    state_version: int = Form(...),
+    actor: Actor = Depends(page_actor),
+):
+    return act(
+        actor,
+        lambda: contract_service.approve_provisional(
+            actor.ctx, server_id, expected_version=state_version
+        ),
+        "provisional_approved",
         f"/servers/{server_id}?tab=contract",
         lambda **kw: server_page(request, actor, server_id, tab="contract", **kw),
     )

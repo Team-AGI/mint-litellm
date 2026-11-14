@@ -89,3 +89,26 @@ def test_an_unknown_tab_falls_back_to_the_overview_and_old_paths_still_redirect(
     assert moved.headers["location"].startswith("/servers/srv-ok?tab=contract")
     assert admin.get("/contracts", follow_redirects=False).headers["location"] == (
         "/servers?filter=changed")
+
+
+def test_the_contract_tab_shows_provisional_contracts_and_converts_them(world, admin):
+    world.query(
+        "INSERT INTO mint.servers (id, instance_id, server_id, status, identity_kind,"
+        " exec_contract_sha256, exec_contract_version, transport, auth_type, registered_by)"
+        " VALUES (gen_random_uuid(), %s, 'loc', 'awaiting_approval', 'stdio', %s, 1, 'stdio',"
+        " 'none', 'admin')", INSTANCE, "ab" * 32)
+    world.query("UPDATE mint.servers SET status = 'approved' WHERE server_id = 'loc'")
+    world.query(
+        "INSERT INTO mint.provisional_contracts (instance_id, server_id, tool, action_type,"
+        " risk_grade, description, input_schema, input_keys) VALUES"
+        " (%s, 'loc', 'read_file', 'read', 'low', 'd', '{\"type\":\"object\"}', '{path}')",
+        INSTANCE)
+    html = admin.get("/servers/loc?tab=contract").text
+    assert "임시 계약" in html and "read_file" in html and "읽기" in html
+    assert "승인해 계약으로 전환" in html
+    version = world.query("SELECT state_version FROM mint.servers WHERE server_id = 'loc'")[0][0]
+    done = form_post(world, admin, "/contracts/loc/approve-provisional", state_version=version)
+    assert done.status_code == 303 and "ok=provisional_approved" in done.headers["location"]
+    assert world.query("SELECT status FROM mint.tool_contracts WHERE tool = 'read_file'") == [
+        ("approved",)]
+    assert world.query("SELECT count(*) FROM mint.provisional_contracts")[0][0] == 0

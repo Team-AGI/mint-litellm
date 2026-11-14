@@ -1,6 +1,20 @@
 {% import "macros.html" as m %}
 {% set base = '/servers/' ~ (s.server_id | urlencode) %}
-{% if provisional and not c.rows and not c.cand.tools and not c.cand.deployments %}
+{% if c.provisional %}
+<h2>임시 계약</h2>
+<p class="muted">서버가 알린 도구 목록에서 추정한 값입니다. 승인한 계약이 아니며 보호 규칙에만 쓰입니다.</p>
+<table><thead><tr><th>도구</th><th>추정 동작</th><th>위험 등급</th><th>허용 인자 키</th><th>관측</th></tr></thead><tbody>
+{% for p in c.provisional %}<tr><td>{{ p.tool }}</td><td>{{ L.pick(L.ACTION, p.action_type) }}</td><td>{{ L.pick(L.RISK, p.risk_grade) }}</td><td>{{ p.input_keys | join(', ') | blank }}</td><td>{{ p.observed_at | when }}</td></tr>{% endfor %}
+</tbody></table>
+{% if actor.role != 'viewer' %}
+<form method="post" action="/contracts/{{ s.server_id | urlencode }}/approve-provisional" class="form cols">
+  {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ s.state_version }}">
+  <div class="effect full">실행 유형을 뺀 도구가 승인된 계약으로 바뀌고, 지금의 이름·설명·입력 정의가 승인본이 됩니다</div>
+  <div class="actions full"><button type="submit" class="primary">승인해 계약으로 전환</button></div>
+</form>
+{% endif %}
+{% endif %}
+{% if provisional and not c.provisional and not c.rows and not c.cand.tools and not c.cand.deployments %}
 {{ m.empty('승인된 계약이 없습니다', '/intakes', '도입 신청 보기') }}
 {% else %}
 <dl class="detail">

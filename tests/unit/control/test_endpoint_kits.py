@@ -320,3 +320,29 @@ def test_the_plugin_role_may_write_the_unmanaged_list_but_nothing_else_of_the_ro
     with pytest.raises(errors.CheckViolation), conn.transaction():
         conn.execute("UPDATE mint.endpoint_installs SET local_mcp = '{}'::jsonb")
     conn.execute("RESET ROLE")
+
+
+def test_a_report_stores_the_tool_list_once_per_server_and_key(fresh_db, plugin_dsn):
+    pytest.importorskip("psycopg_pool")
+    with psycopg.connect(fresh_db) as admin:
+        admin.execute(
+            "INSERT INTO mint.endpoint_installs (instance_id, key_token, user_id, key_alias,"
+            " issued_by) VALUES (%s, 'tok-t', 'u1', 'mint-kit-t', 'u1')", (INSTANCE,))
+
+    async def run(tools):
+        database = PluginDatabase(plugin_dsn)
+        try:
+            return await database.report_install(
+                INSTANCE, "tok-t", mode="managed", kit_version="k", claude_version=None,
+                mcp_servers=[], tool_lists=[{"server": "loc", "truncated": False,
+                                             "tools": tools}])
+        finally:
+            await database.close()
+
+    one = [{"name": "a", "description": "", "input_schema": {"type": "object"}}]
+    assert asyncio.run(run(one)) == "recorded"
+    assert asyncio.run(run(one)) == "recorded"
+    asyncio.run(run(one + [{"name": "b", "description": "", "input_schema": {}}]))
+    with psycopg.connect(fresh_db) as admin:
+        rows = admin.execute("SELECT tools FROM mint.endpoint_tool_lists").fetchall()
+    assert len(rows) == 1 and [t["name"] for t in rows[0][0]] == ["a", "b"]
