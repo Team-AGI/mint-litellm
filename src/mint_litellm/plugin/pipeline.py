@@ -1524,7 +1524,7 @@ async def _open_call_approval(
                 "action": binding.action if binding is not None else None,
             })
     except Exception as exc:
-        log.debug("호출별 승인 요청 실패: %s", type(exc).__name__)
+        log.warning("호출별 승인 요청을 열지 못했습니다: %s", type(exc).__name__)
 
 
 def _mark_written(run: _Run) -> Callable[[], None]:
