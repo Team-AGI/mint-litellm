@@ -196,14 +196,16 @@ def test_marker_errors_are_none():
     assert _markers_client(lambda path: (200, {"result": {}})) == (None, None, None)
 
 
-def test_stage1_servers_get_no_patterns_and_are_not_blocked_by_url_arguments(tmp_path):
+def test_servers_without_a_contract_get_patterns_and_a_provisional_contract(tmp_path):
     calls = []
     h = harness(tmp_path, evaluate=evaluator(calls=calls))
     outcome = decide(h, arguments={"u": "http://10" + D + "0.0.1/", "p": "../x"})
     assert outcome.allowed
-    assert "patterns" not in calls[0]["arguments"]
-    assert calls[0]["server"]["contract_status"] == "none"
+    assert calls[0]["arguments"]["patterns"]["path_traversal"] is True
+    assert calls[0]["server"]["contract_status"] == "provisional"
     assert calls[0]["server"].keys() >= {"id", "status"}
+    assert calls[0]["tool"]["action_type"] in {"read", "write", "delete", "exec",
+                                               "external_send", "credential_access"}
 
 
 def test_managed_servers_send_the_contract_status(tmp_path):
