@@ -113,7 +113,9 @@ def test_the_five_class_count_is_pinned():
     # 허용 인자 키(E-08·E-15)는 승인된 계약의 입력 정의에서만 기본값을 채워 조건부로 남고,
     # 인자 패턴(E-09)과 계약 등급·삭제·외부 전송 기본 부과(I-02·I-10·E-20)는 승인된 계약이 없는
     # 서버에도 임시 계약(pipeline.py의 tool_traits)으로 판정되어 무조건이다.
-    assert (_count("unconditional"), _count("conditional"), _count("partial")) == (36, 23, 14)
+    assert (_count("unconditional"), _count("conditional"), _count("partial")) == (35, 25, 13)
+    # 결과 상한 기본값(E-16)은 계약 관리 서버에만 채워져 조건부로 내렸고, 직접 연결 제한(E-06)은
+    # 관리형 설치가 승인 서버 밖을 막아 부분에서 조건부로 올렸다.
     assert auto == 73
     # 목표(90개 중 72개 이상) 산정은 반자동 수동 증거를 함께 센다.
     assert _count("semi_auto_evidence") == 12
