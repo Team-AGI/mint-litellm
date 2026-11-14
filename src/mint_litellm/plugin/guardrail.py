@@ -30,6 +30,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 
 from mint_litellm.compat import litellm_1_106 as compat
 from mint_litellm.endpoint.decide import install_from_env
+from mint_litellm.plugin import guardrail_log
 from mint_litellm.plugin.approval_hold import hold_if_confirmation_pending, hold_if_pending
 from mint_litellm.plugin.code_exec import code_execution
 from mint_litellm.plugin.logger import MintLogger, internal_block
@@ -119,6 +120,7 @@ class MintGuardrail(CustomGuardrail):
     async def _screen_provider_mcp(self, user_api_key_dict, data, call_type):
         """모델 요청(패스스루 포함)을 거른다. 공급자 쪽 MCP와 허용되지 않은 실시간 경로를 막고,
         판정 불능도 차단한다."""
+        began = guardrail_log.clock()
         try:
             if is_realtime(call_type) and not self._runtime.config.allow_realtime:
                 reason, kind = Reason.REALTIME_FORBIDDEN, "realtime"
@@ -135,10 +137,19 @@ class MintGuardrail(CustomGuardrail):
             )
         except Exception as exc:
             log.error("모델 요청 판정 오류: %s", type(exc).__name__)
-            raise internal_block() from exc
+            raise self._internal_block(data, began, "pre_call") from exc
+        guardrail_log.record_decision(self, data, outcome, began, event="pre_call")
         if outcome.error is None:
             raise internal_block()
         raise HTTPException(status_code=403, detail=outcome.error.detail())
+
+    def _internal_block(self, data, began, event):
+        """판정 코드 오류로 막는 예외를 만들며 같은 사건을 가드레일 기록에 남긴다."""
+        blocked = internal_block()
+        guardrail_log.record_internal_error(
+            self, data, guardrail_log.error_reference(blocked), began, event=event
+        )
+        return blocked
 
     async def _discover(self, user_api_key_dict, data):
         try:
@@ -163,6 +174,7 @@ class MintGuardrail(CustomGuardrail):
         reference = None
         allowed = False
         timing = StageClock() if timed else OFF
+        began = guardrail_log.clock()
         try:
             try:
                 outcome = await self._runtime.judge_call(data, user_api_key_dict, timing)
@@ -187,12 +199,13 @@ class MintGuardrail(CustomGuardrail):
                 )
             except Exception as exc:
                 log.error("도구 호출 판정 오류: %s", type(exc).__name__)
-                raise internal_block() from exc
+                raise self._internal_block(data, began, "pre_mcp_call") from exc
             # 인자 확인이 들어 있는 훅 데이터 해석은 판정 안에서 한 번만 한다.
             reference, allowed = outcome.snapshot.decision_ref, outcome.allowed
             details = compat.logging_details(data.get("litellm_logging_obj"))
             if details is not None:
                 details[MINT_CTX_KEY] = outcome.context
+            guardrail_log.record_decision(self, data, outcome, began, event="pre_mcp_call")
             if not outcome.allowed:
                 assert outcome.error is not None
                 raise HTTPException(status_code=403, detail=outcome.error.detail())

@@ -48,6 +48,9 @@
   {% if ev.kind == 'decision_evaluated' %}
   <dt>결과</dt><dd>{{ L.pick(L.OUTCOME_BUCKET, ev.bucket) }}{% if ev.outcome %} · {{ L.pick(L.OUTCOME, ev.outcome) }}{% endif %}</dd>
   {% if ev.reason %}<dt>사유</dt><dd>{{ L.outcome_reason(ev.reason) }}</dd>{% endif %}
+  {% if ev.payload.litellm_call_id %}<dt>LiteLLM 호출 ID</dt><dd>{{ ev.payload.litellm_call_id }}</dd>{% endif %}
+  {% if ev.payload.decision_ref %}<dt>판정 참조</dt><dd>{{ ev.payload.decision_ref }}</dd>{% endif %}
+  {% for r in ev.spend_records %}{% if loop.first %}<dt>LiteLLM 지출 기록</dt><dd>{% endif %}<div>{{ r.label }}</div>{% if loop.last %}</dd>{% endif %}{% endfor %}
   {% if ev.policy_ids %}<dt>적용 정책</dt><dd>{{ ev.policy_ids | join }}</dd>{% endif %}
   {% if ev.decision_us is not none %}<dt>판정 시간</dt><dd>{{ (ev.decision_us / 1000) | round(1) }}밀리초</dd>{% endif %}
   {% endif %}

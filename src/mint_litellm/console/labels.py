@@ -695,6 +695,18 @@ OUTCOME_REASON = {
 }
 
 
+# LiteLLM 지출 기록에 남은 MINT 가드레일 기록의 결과 구분
+SPEND_OUTCOME = {
+    "allowed": "허용",
+    "observed": "관측",
+    "policy_denied": "정책 차단",
+    "approval_pending": "승인 대기",
+    "dependency_error": "판정 오류",
+    "output_blocked": "결과 차단",
+    "masked": "결과 가림",
+}
+
+
 def outcome_reason(code: str | None) -> str:
     """판정 사유 코드의 한국어 이름. ``CONTRACT_DRIFT_<종류>``는 계약 변경으로 묶는다."""
     if not code:

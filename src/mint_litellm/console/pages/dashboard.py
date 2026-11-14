@@ -299,6 +299,18 @@ def ledger_cards(series, previous):
     ]
 
 
+def _spend_records(config, payload) -> list[dict]:
+    """호출 기록 상세에 보일 LiteLLM 지출 기록의 MINT 기록. 켜지 않았거나 못 읽으면 빈 목록."""
+    call_id = payload.get("litellm_call_id") if isinstance(payload, dict) else None
+    if not (config.spend_lookup and config.litellm_admin and isinstance(call_id, str) and call_id):
+        return []
+    try:
+        rows = config.litellm_admin.spend_guardrail(call_id)
+        return [{"label": labels.SPEND_OUTCOME.get(r.get("outcome"), "기록됨")} for r in rows]
+    except Exception:
+        return []
+
+
 @router.get("/ledger")
 def ledger(
     request: Request,
@@ -403,6 +415,7 @@ def ledger(
             if shown.get("invocation_id")
             else None
         )
+        shown["spend_records"] = _spend_records(actor.config, shown.get("payload"))
     ctx = {
         "rows": rows,
         "filters": reads.ledger_filters(actor.conn, actor.instance),
