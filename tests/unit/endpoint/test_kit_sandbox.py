@@ -340,6 +340,7 @@ def test_a_package_runner_keeps_its_cache_and_leaves_the_rest_of_home_alone(tmp_
 
 # --- 호스트 허용 목록(network: hosts) -------------------------------------------------------
 
+
 def quad(*parts):
     return ".".join(str(p) for p in parts)  # 소스에 주소 글자를 직접 두지 않는다
 
@@ -584,3 +585,37 @@ def test_a_hosts_server_reaches_only_declared_hosts_through_the_proxy(tmp_path):
     (record,) = [json.loads(p.read_text()) for p in (tmp_path / "state/launched").iterdir()]
     assert record["sandbox"] == "bwrap" and record["egress_refused"] == 1
     assert not list(__import__("pathlib").Path("/tmp").glob("mint-egress-*"))  # 중계 폴더는 지운다.
+
+
+def test_windows_token_status_maps_children_of_launchers():
+    launch = r"python C:\k\mint_agent.py run --contracts c --server "
+    rows = [
+        (10, 1, "python.exe", launch + "inside"),
+        (11, 10, "python.exe", "server"),
+        (12, 10, "conhost.exe", ""),  # 콘솔 호스트는 서버가 아니다.
+        (20, 1, "python.exe", launch + "outside"),
+        (21, 20, "node.exe", "server"),
+        (30, 1, "python.exe", launch + "mixed"),
+        (31, 30, "node.exe", "a"),
+        (32, 30, "node.exe", "b"),
+        (40, 1, "python.exe", launch + "locked"),
+        (41, 40, "node.exe", "server"),
+    ]
+    mine = kit.win_container_name("inside", 10)
+    sids = {11: "S-IN", 21: "", 31: "S-IN2", 32: "S-OTHER", 41: None}
+    names = {mine: "S-IN", kit.win_container_name("mixed", 30): "S-IN2"}
+    got = kit.classify_windows(rows, sids.get, lambda n: names.get(n, "S-X"))
+    assert got == {"inside": "appcontainer", "outside": "none", "mixed": "none"}
+
+
+def test_observed_token_status_beats_records_and_fills_the_admin_reporter(tmp_path, monkeypatch):
+    monkeypatch.setattr(kit, "proc_start", lambda pid, windows: "t1")
+    launched(tmp_path, "a", 1, "t1", "appcontainer")
+    items = [{"server": n, "count": 1} for n in "abc"]
+    observed = {"a": "none", "b": "appcontainer"}
+    got = {
+        i["server"]: i["sandbox"] for i in kit.with_sandbox(items, tmp_path, True, True, observed)
+    }
+    assert got == {"a": "none", "b": "appcontainer", "c": "unsupported"}
+    (item,) = kit.with_sandbox([{"server": "b", "count": 1}], tmp_path, True, False, observed)
+    assert item["sandbox"] == "appcontainer" and "egress_unfiltered" not in item

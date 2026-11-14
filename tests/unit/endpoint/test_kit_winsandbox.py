@@ -280,3 +280,37 @@ def test_the_server_dies_with_the_launcher_and_leftovers_are_reconciled(tmp_path
     finally:
         listener.close()
         proc.kill()
+
+
+@windows_only
+def test_the_token_check_tells_a_contained_server_from_a_plain_child(tmp_path):
+    kit = load("mint_kit")
+    command, listener, _ = setup_launch(tmp_path, "none", hang=True)
+    contained = subprocess.Popen(
+        command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+        stderr=subprocess.DEVNULL,
+    )  # fmt: skip
+    fake = (
+        "import subprocess,sys,time;"
+        "subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);time.sleep(60)"
+    )
+    plain = subprocess.Popen(
+        [sys.executable, "-c", fake, "mint_agent.py", "run", "--contracts", "c"]
+        + ["--server", "plain"]
+    )  # fmt: skip
+    try:
+        contained.stdin.write("hi\n")
+        contained.stdin.flush()
+        contained.stdout.readline()  # 서버가 AppContainer 안에서 떠 있다.
+        got = {}
+        for _ in range(50):
+            got = kit.windows_sandbox_status()
+            if {"srv", "plain"} <= set(got):
+                break
+            time.sleep(0.2)
+        assert got["srv"] == "appcontainer"
+        assert got["plain"] == "none"
+    finally:
+        listener.close()
+        contained.kill()
+        plain.kill()
