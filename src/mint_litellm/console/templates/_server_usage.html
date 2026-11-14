@@ -1,0 +1,13 @@
+{% import "macros.html" as m %}
+<h2>이용 관계</h2>
+{% if s.relations %}
+<table><thead><tr><th>조직</th><th>팀</th><th>목적</th><th>상태</th></tr></thead><tbody>
+{% for r in s.relations %}<tr><td>{{ r.org_name }}</td><td>{{ r.team_id | blank }}</td><td>{{ r.purpose }}</td><td>{{ m.badge(L.RELATION, r.status) }}</td></tr>{% endfor %}
+</tbody></table>
+{% else %}<p class="muted">이용 관계 없음</p>{% endif %}
+<h2>승인</h2>
+{% if s.approvals %}
+<table><thead><tr><th>대상</th><th>도구</th><th>구분</th><th>유효 기간</th><th>상태</th></tr></thead><tbody>
+{% for a in s.approvals %}<tr><td>{{ L.pick(L.SCOPE, a.scope_type) }} {{ a.scope_id }}</td><td>{{ a.tools | join }}</td><td>{{ L.pick(L.APPROVAL_CLASS, a.class) }}</td><td class="nowrap">{{ a.valid_from | when }} ~ {{ a.valid_until | when }}</td><td>{{ m.badge(L.APPROVAL, a.status) }}</td></tr>{% endfor %}
+</tbody></table>
+{% else %}<p class="muted">승인 없음</p>{% endif %}

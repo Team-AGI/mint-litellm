@@ -1,0 +1,55 @@
+{% import "macros.html" as m %}
+{% set base = '/servers/' ~ (s.server_id | urlencode) %}
+{% if provisional and not c.rows and not c.cand.tools and not c.cand.deployments %}
+{{ m.empty('승인된 계약이 없습니다', '/intakes', '도입 신청 보기') }}
+{% else %}
+<dl class="detail">
+  <dt>재승인 계획</dt><dd>{% if c.plan %}{{ m.badge(L.PLAN, c.plan.status) }} · 요청자 {{ c.plan.requested_by }}{% else %}—{% endif %}</dd>
+</dl>
+{% if c.rows %}
+<table><thead><tr><th>항목</th><th>변경</th><th>변경 요약</th><th></th></tr></thead><tbody>
+{% for r in c.rows %}<tr{% if c.chosen and c.chosen.name == r.name and c.chosen.scope == r.scope %} class="selected"{% endif %}>
+<td>{{ r.name }}</td><td>{{ m.badge(L.CHANGE, r.change) }}</td><td>{{ r.summary | blank }}</td>
+<td><a class="button" href="{{ base }}?tab=contract&amp;scope={{ r.scope | urlencode }}&amp;name={{ r.name | urlencode }}">비교</a></td>
+</tr>{% endfor %}
+</tbody></table>
+{% else %}<p class="muted">승인본과 다른 항목 없음</p>{% endif %}
+
+{% if c.chosen %}
+<h2>{{ c.chosen.name }}</h2>
+{% if c.sides.skipped %}
+<div class="banner" role="status">크기가 커서 줄 비교를 생략했습니다</div>
+<table><thead><tr><th>판본</th><th>지문</th><th class="num">크기(바이트)</th></tr></thead><tbody>
+<tr><td>승인본</td><td><span title="{{ c.sides.approved.sha256 }}">{{ c.sides.approved.sha256[-8:] }}</span></td><td class="num">{{ c.sides.approved.bytes }}</td></tr>
+<tr><td>현재본</td><td><span title="{{ c.sides.observed.sha256 }}">{{ c.sides.observed.sha256[-8:] }}</span></td><td class="num">{{ c.sides.observed.bytes }}</td></tr>
+</tbody></table>
+{% else %}
+<div class="grid">
+  <section><h3>승인본</h3><pre class="json diff">{% for line, changed in c.sides.approved %}<code class="{{ 'changed' if changed else '' }}">{{ line }}</code>
+{% endfor %}</pre></section>
+  <section><h3>현재본</h3><pre class="json diff">{% for line, changed in c.sides.observed %}<code class="{{ 'changed' if changed else '' }}">{{ line }}</code>
+{% endfor %}</pre></section>
+</div>
+{% endif %}
+{% endif %}
+
+{% if s.exec_drift %}
+<h2>실행 계약 변경</h2>
+<table><thead><tr><th>구분</th><th>판정</th><th>더해진 항목</th><th>빠진 항목</th></tr></thead><tbody>
+{% for axis in ['file', 'exec', 'network'] %}{% set r = s.exec_drift.axes[axis] %}<tr><td>{{ L.AXIS[axis] }}</td><td>{{ L.AXIS_VERDICT[r.verdict] }}</td><td>{{ r.added | join(', ') | blank }}</td><td>{{ r.removed | join(', ') | blank }}</td></tr>{% endfor %}
+</tbody></table>
+{% endif %}
+
+{% if actor.role != 'viewer' and (c.cand.tools or c.cand.deployments) %}
+<h2>재승인</h2>
+<form method="post" action="/contracts/{{ s.server_id | urlencode }}/reapprove" class="form cols">
+  {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ s.state_version }}">
+  <label>재검사 증거가 있는 신청<select name="intake_id" required>{% for n in c.cand.intakes %}<option value="{{ n.id }}">{{ n.created_at | when }}</option>{% endfor %}</select></label>
+  {% if c.cand.deployments %}<label>후보 배포 계약<select name="deployment_contract_id"><option value="">선택 안 함</option>{% for d in c.cand.deployments %}<option value="{{ d.id }}">판본 {{ d.version }}</option>{% endfor %}</select></label>{% endif %}
+  {% if c.cand.tools %}<fieldset class="form full"><legend>후보 도구 계약</legend>
+  {% for t in c.cand.tools %}<label class="radio"><input type="checkbox" name="tool_contract_ids" value="{{ t.id }}"> {{ t.tool }} (위험 등급 {{ L.pick(L.RISK, t.risk_grade) }}, {{ L.pick(L.ACTION, t.action_type) }})</label>{% endfor %}</fieldset>{% endif %}
+  <div class="effect full">선택한 계약의 재승인 계획만 등록합니다</div>
+  <div class="actions full"><button type="submit" class="primary" {% if not c.cand.intakes %}disabled{% endif %}>재승인 계획 등록</button></div>
+</form>
+{% endif %}
+{% endif %}

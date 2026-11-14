@@ -1,16 +1,31 @@
-{% extends "base.html" %}{% import "macros.html" as m %}
-{% block title %}MCP 서버 · MINT{% endblock %}
+{% extends "base.html" %}{% import "macros.html" as m %}{% import "_server_actions.html" as a %}
+{% block title %}서버 · MINT{% endblock %}
+{% block page_class %}wide{% endblock %}
 {% block body %}
-<h1>MCP 서버</h1>
+<h1>서버</h1>
+{% if total %}
+<div class="grid">
+  <div class="chart" data-chart="{{ dict(donut, kind='donut') | to_json }}"></div>
+  <div class="cards">
+    {{ m.kpi('서버', total, '/servers') }}
+    {{ m.kpi('계약 변경', numbers.changed, '/servers?filter=changed', level='danger' if numbers.changed) }}
+    {{ m.kpi('취약점 조치 필요', numbers.vuln, '/servers?filter=vuln', level='danger' if numbers.vuln) }}
+  </div>
+</div>
+<nav class="tabs" aria-label="필터">{% for href, label, n in chips %}<a href="/servers{{ href }}"{% if (kind and href == '?filter=' ~ kind) or (not kind and not href) %} class="active" aria-current="page"{% endif %}>{{ label }} <span class="count">{{ n }}</span></a>{% endfor %}</nav>
+{% endif %}
 {% if rows %}
-<table><thead><tr><th>서버</th><th>상태</th><th>전송</th><th>인증</th><th class="num">이용 관계</th><th class="num">유효 승인</th><th class="num">도구</th><th>계약</th></tr></thead><tbody>
+<table class="clickable"><thead><tr><th>서버</th><th>상태</th><th>계약</th><th>취약점</th><th class="num">유효 승인</th><th class="num">도구</th><th></th></tr></thead><tbody>
 {% for s in rows %}<tr>
 <td><a href="/servers/{{ s.server_id | urlencode }}">{{ s.server_id }}</a></td>
 <td>{{ m.badge(L.SERVER, s.status) }}</td>
-<td>{{ L.pick(L.TRANSPORT, s.transport) }}</td><td>{{ L.pick(L.AUTH_TYPE, s.auth_type) }}</td>
-<td class="num">{{ s.relations }}</td><td class="num">{{ s.approvals }}</td><td class="num">{{ s.tools }}</td>
-<td>{% if s.deployment_drift or s.drifted %}<span class="badge error"><span class="icon" aria-hidden="true">▲</span>변경됨</span>{% elif s.contract_status == 'managed' %}<span class="badge ok"><span class="icon" aria-hidden="true">✓</span>일치</span>{% else %}—{% endif %}</td>
+<td>{% if s.contract %}<a href="/servers/{{ s.server_id | urlencode }}?tab=contract">{% if s.contract == 'pending' and s.plan_status %}{{ m.badge(L.PLAN, s.plan_status) }}{% else %}{{ m.badge(L.CONTRACT_STATE, s.contract) }}{% endif %}</a>{% else %}—{% endif %}</td>
+<td>{% if s.vulns %}<a href="/servers/{{ s.server_id | urlencode }}?tab=vulns"><span class="badge error"><span class="icon" aria-hidden="true">▲</span>치명 {{ s.vulns }}</span></a>{% else %}—{% endif %}</td>
+<td class="num">{{ s.approvals }}</td><td class="num">{{ s.tools }}</td>
+<td class="actions">{% if actor.role == 'admin' %}{% if s.status == 'approved' %}{{ a.suspend(s, actor, 'stop-' ~ loop.index, s.approvals, '/servers') }}{% elif s.status == 'suspended' %}{{ a.resume(s, actor, 'resume-' ~ loop.index, '/servers') }}{% endif %}{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
-{% else %}{{ m.empty('등록된 MCP 서버가 없습니다', '/intakes', '신청 목록 보기') }}{% endif %}
+{% elif kind == 'changed' %}{{ m.empty('계약 변경이 있는 서버가 없습니다', '/servers', '서버 목록 보기') }}
+{% elif kind or status %}{{ m.empty('조건에 맞는 서버가 없습니다', '/servers', '조건 지우기') }}
+{% else %}{{ m.empty('등록된 MCP 서버가 없습니다', '/intakes', '도입 신청 보기') }}{% endif %}
 {% endblock %}

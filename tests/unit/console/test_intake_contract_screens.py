@@ -3,6 +3,7 @@
 import json
 import re
 import uuid
+from datetime import timedelta
 
 import pytest
 from console_fixtures import HEX, TOKENS
@@ -99,7 +100,8 @@ def test_the_detail_shows_eight_checks_risk_grade_and_the_evidence_expiry(world)
                  "종료 준비", "공급망"):
         assert name in html
     assert "증거 만료" in html and "낮음" in html and "읽기" in html
-    assert "X_CODE" in html and "<code>X_CODE</code>" not in html and "human-9" in html
+    assert "X_CODE" in html and "<code>X_CODE</code>" not in html
+    assert "human-9" in world.session_client("approver").get(f"/intakes/{intake}?tab=info").text
     assert 'name="valid_days" value="90"' in html
 
 
@@ -251,7 +253,7 @@ def test_the_drift_list_shows_only_servers_with_changes(world):
     seed_drift(world)
     world.query("UPDATE mint.tool_contracts SET drift = 'description' WHERE tool = 'echo'")
     html = world.session_client("viewer").get("/servers?filter=changed").text
-    assert "srv-ok" in html and "srv-wait" not in html and "비교" in html
+    assert "srv-ok" in html and "srv-wait" not in html and "tab=contract" in html
 
 
 def test_an_empty_drift_list_has_one_next_action(world):
@@ -325,7 +327,7 @@ def test_the_plan_progress_is_shown(world):
         " %s)", uuid.uuid4(), INSTANCE, intake, json.dumps({}))
     viewer = world.session_client("viewer")
     html = viewer.get("/servers/srv-ok?tab=contract").text
-    assert "반영 대기" in html and "작업 실행기가 반영하는 중" in html
+    assert "반영 대기" in html
     assert "반영 대기" in viewer.get("/servers?filter=changed").text
 
 
@@ -403,7 +405,7 @@ def test_an_oversized_schema_shows_the_skip_notice_on_the_screen(world):
                 canon({"description": "x" * 300_000}))
     viewer = world.session_client("viewer")
     html = viewer.get("/servers/srv-ok?tab=contract&scope=server&name=echo").text
-    assert "크기가 커서 줄 비교를 생략했습니다" in html and html.count("<code>") >= 2
+    assert "크기가 커서 줄 비교를 생략했습니다" in html and "<code>" not in html
     assert 'class="changed"' not in html
 
 
@@ -451,3 +453,77 @@ def test_the_console_recheck_takes_a_url_and_reports_a_hash_mismatch(world):
                                  json={"state_version": version(world, intake),
                                        "url": "http://x.test/mcp"})
     assert response.status_code in (400, 409, 422), response.text
+
+
+# --- 새 화면 구성 ----------------------------------------------------------------------------
+
+
+def test_the_list_shows_the_stage_chart_and_marks_a_stalled_intake(world, monkeypatch):
+    intake = add_intake(world, status="passed")
+    admin = world.session_client("admin")
+    html = admin.get("/intakes").text
+    assert 'data-chart="' in html and "/intakes/new" in html and "신청 등록" in html
+    assert " style=" not in html
+    assert f'href="/intakes/{intake}"' in html and "24시간 넘게 정체" in html
+    assert "/intakes?status=stalled" in html
+    assert intake not in admin.get("/intakes?status=stalled").text
+    monkeypatch.setattr("mint_litellm.console.pages.servers.STALL", timedelta(0))
+    assert intake in admin.get("/intakes?status=stalled").text
+    assert "신청 등록" not in world.session_client("viewer").get("/intakes").text
+
+
+def test_the_detail_shows_progress_steps_tabs_and_equal_decision_buttons(world):
+    intake = add_intake(world)
+    admin = world.session_client("admin")
+    html = admin.get(f"/intakes/{intake}").text
+    assert "결정 대기" in html and "다음 행동" in html
+    assert 'name="decision" value="approve"' in html and 'name="decision" value="reject"' in html
+    assert 'class="danger"' not in html.split('name="decision" value="reject"')[0][-200:]
+    for tab in ("overview", "info", "evidence"):
+        assert admin.get(f"/intakes/{intake}?tab={tab}").status_code == 200
+
+
+def test_rejecting_from_the_decision_form_needs_a_reason_and_records_it(world):
+    intake = add_intake(world)
+    admin = world.session_client("admin")
+    data = {"csrf": world.csrf(admin), "decision": "reject",
+            "state_version": version(world, intake), "scope_type": "user",
+            "scope_id": "human-9", "valid_days": "90"}
+    assert admin.post(f"/intakes/{intake}/decision", data=data).status_code == 400
+    ok = admin.post(f"/intakes/{intake}/decision", data={**data, "reason": "위험이 큼"})
+    assert ok.status_code == 303 and "intake_rejected" in ok.headers["location"]
+    assert world.query("SELECT decision FROM mint.intakes")[0][0] == "rejected"
+
+
+def test_the_new_form_moves_through_three_steps_and_adds_resource_rows(world):
+    admin = world.session_client("admin")
+    keep = {"csrf": world.csrf(admin), "server_id": "docs", "provider": "p", "purpose": "목적",
+            "owner_user_id": "human-1"}
+    one = admin.get("/intakes/new").text
+    assert 'name="server_id"' in one and 'name="resource"' not in one
+    two = admin.post("/intakes/new", data={**keep, "step": "1", "go": "next"}).text
+    assert 'name="resource"' in two and 'type="hidden" name="server_id" value="docs"' in two
+    more = admin.post("/intakes/new", data={**keep, "step": "2", "go": "add",
+                                            "resource": ["docs"]}).text
+    assert more.count('name="resource"') == 2
+    three = admin.post("/intakes/new", data={**keep, "step": "2", "go": "next",
+                                             "resource": ["docs"]}).text
+    assert 'name="data_return_terms"' in three
+    assert 'type="hidden" name="resource" value="docs"' in three
+    assert "신청 등록" in three
+
+
+def test_resource_rows_are_saved_as_the_allowed_resources(world, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(
+        "mint_litellm.console.pages.servers.intake_service.create",
+        lambda *args, **kw: seen.update(kw))
+    world.with_control_key()
+    admin = world.session_client("admin")
+    response = admin.post("/intakes", data={
+        "csrf": world.csrf(admin), "server_id": "docs", "provider": "p", "owner_user_id": "human-9",
+        "purpose": "목적", "data_grade": "internal", "resource": ["a", " ", "b"],
+        "credential_notice": "a", "revocation_record": "b", "audit_access_days": "30",
+        "data_return_terms": "삭제"})
+    assert response.status_code == 303, response.text
+    assert seen["allowed_resources"] == ["a", "b"]

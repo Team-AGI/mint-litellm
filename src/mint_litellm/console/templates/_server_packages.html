@@ -1,0 +1,6 @@
+{% import "macros.html" as m %}
+{% if s.packages %}
+<table><thead><tr><th>구분</th><th>이름</th><th>버전</th><th>제공처</th></tr></thead><tbody>
+{% for p in s.packages %}<tr><td>{{ L.pick(L.PACKAGE_KIND, p.ecosystem) }}</td><td>{{ p.name }}</td><td>{{ p.version | blank if p.ecosystem != 'executable' else ('내용 ' ~ p.version[:8]) }}{% if not p.pinned %} <span class="badge wait"><span class="icon" aria-hidden="true">{{ ICONS.wait }}</span>버전 미고정</span>{% endif %}</td><td>{{ '로컬' if p.registry == 'local' else p.registry }}</td></tr>{% endfor %}
+</tbody></table>
+{% else %}<p class="muted">실행 패키지 없음</p>{% endif %}

@@ -1,0 +1,5 @@
+{% if s.vulns %}
+<table><thead><tr><th>패키지</th><th>구분</th><th>취약점</th><th>심각도</th><th>확인 시각</th><th>조치 기한</th></tr></thead><tbody>
+{% for v in s.vulns %}<tr><td>{{ v.name }} {{ v.version }}{% if v.path %}<br>{{ v.path }}{% endif %}</td><td>{{ '의존 패키지' if v.path else '직접 사용' }}</td><td>{{ v.vuln_id }}</td><td>{{ L.pick(L.VULN_SEVERITY, v.severity) }}{% if v.cvss is not none %} ({{ v.cvss }}){% endif %}{% if v.exploited %} · 악용 확인{% endif %}</td><td class="nowrap">{{ v.first_seen_at | when }}</td><td class="nowrap">{% if v.severity == 'critical' or v.exploited %}{% set left = v.deadline_at | countdown %}<span class="badge {{ 'error' if left == '기한 지남' else 'wait' }}"><span class="icon" aria-hidden="true">{{ ICONS.error if left == '기한 지남' else ICONS.wait }}</span>{{ left }}</span>{% else %}—{% endif %}</td></tr>{% endfor %}
+</tbody></table>
+{% else %}<p class="muted">알려진 취약점 없음</p>{% endif %}

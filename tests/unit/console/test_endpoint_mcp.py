@@ -84,7 +84,7 @@ def fields(world, client):
 
 def test_a_viewer_cannot_submit_the_form_and_a_failed_submit_keeps_the_values(world):
     viewer = world.session_client("viewer").get("/intakes/new").text
-    assert "신청 등록" not in viewer
+    assert 'action="/intakes"' not in viewer
     admin = world.session_client("admin")
     response = admin.post("/intakes", data=fields(world, admin))
     assert response.status_code == 403 and 'value="docs.example.com"' in response.text
