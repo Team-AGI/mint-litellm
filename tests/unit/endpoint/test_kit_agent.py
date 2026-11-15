@@ -301,9 +301,24 @@ def test_a_call_without_a_server_field_is_matched_to_the_approved_server(world):
     wire = Wire()
     decide(world, wire, mcp_server=None)
     assert [(r[2]["server"], r[2]["tool"]) for r in wire.requests] == [("srv-1", "search")]
-    with pytest.raises(agent.Refuse, match="no MCP server"):
+    with pytest.raises(agent.Refuse, match="server other is not an approved local server"):
         decide(world, wire, mcp_server=None, tool_name="mcp__other__x")
     assert len(wire.requests) == 1
+
+
+def test_an_unapproved_server_is_named_for_both_claude_and_codex_inputs(world):
+    """서버 이름은 도구 이름 mcp__<서버>__<도구>에서도 읽는다(Claude·Codex 모두 같은 안내)."""
+    wire = Wire()
+    for override in (
+        {"tool_name": "mcp__directfs__list_directory", "mcp_server": None},
+        {"tool_name": "mcp__directfs__list_directory", "mcp_server": {"name": "directfs"}},
+        {"tool_name": "mcp__direct-fs__list_directory", "mcp_server": None},
+    ):
+        with pytest.raises(agent.Refuse, match="is not an approved local server"):
+            decide(world, wire, **override)
+    with pytest.raises(agent.Refuse, match="no MCP server"):
+        decide(world, wire, mcp_server=None, tool_name="mcp__nothing")
+    assert wire.requests == []
 
 
 def test_a_call_to_the_gateway_server_passes_the_hook_and_is_decided_inside_litellm(world):
@@ -325,11 +340,11 @@ def test_a_call_to_the_gateway_server_passes_the_hook_and_is_decided_inside_lite
     # 승인된 로컬 서버는 그대로 판정하고, 게이트웨이 접두를 가장한 이름은 통과시키지 않는다.
     decide(world, wire)
     assert [r[2]["server"] for r in wire.requests] == ["srv-1"]
-    with pytest.raises(agent.Refuse, match="no MCP server"):
+    with pytest.raises(agent.Refuse, match="litellm_gatewayx is not an approved"):
         decide(world, wire, mcp_server=None, tool_name="mcp__litellm_gatewayx__x")
     doc["gateways"] = []
     open(world.listing, "w").write(json.dumps(doc))
-    with pytest.raises(agent.Refuse, match="no MCP server"):
+    with pytest.raises(agent.Refuse, match="litellm_gateway is not an approved"):
         decide(world, wire, mcp_server=None, tool_name="mcp__litellm_gateway__x")
 
 

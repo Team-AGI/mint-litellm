@@ -484,9 +484,8 @@ def endpoint_kit(
             "단말 경로가 꺼져 있어 설치 묶음을 발급할 수 없습니다. 운영자가 "
             "MINT_ENDPOINT_ROUTES=true로 켠 뒤 다시 시도하세요.", 503,
         )
+    # 승인된 로컬 서버가 없어도 게이트웨이 항목과 키만으로 의미가 있어 묶음을 낸다.
     contracts = endpoint_kits.approved_contracts(sctx.control, sctx.instance_id)
-    if not contracts:
-        return endpoint_page(request, actor, "승인된 로컬 서버가 없습니다.", 409)
     team_id = sctx.team_ids[0] if sctx.team_ids else None
     try:
         key = endpoint_kits.issue_key(

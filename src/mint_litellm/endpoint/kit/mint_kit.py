@@ -1244,9 +1244,10 @@ class Kit:
     # -- 설치 -------------------------------------------------------------------------------------
 
     def gateway(self) -> dict | None:
-        """관리형 단말의 하네스 설정에 넣을 게이트웨이(이름·주소·MCP 전용 키). 없으면 None."""
+        """하네스 설정에 넣을 게이트웨이(이름·주소·MCP 전용 키). 없으면 None. 사용자 수준 설치는
+        사용자 설정 파일(Claude 사용자 범위, Codex config.toml 구간)에 같은 항목을 넣는다."""
         named, key = self.config.get("gateway"), self.config.get("gateway_key")
-        if not self.managed or not isinstance(named, dict) or not key:
+        if not isinstance(named, dict) or not key:
             return None
         return {"name": named["name"], "url": named["url"], "key": key}
 
@@ -1327,12 +1328,15 @@ class Kit:
         parser = shutil.which("apparmor_parser")
         if not apparmor_blocks_userns() or not parser:
             return False
-        if not self.physical(APPARMOR_DIR).is_dir():
+        if not self.dry_run and not self.physical(APPARMOR_DIR).is_dir():
             return False
         logical = f"{APPARMOR_DIR}/{APPARMOR_PROFILE}"
         path = self.physical(logical)
         profile = apparmor_profile(os.path.realpath(bwrap)).encode()
         self.write_tracked(state, path, logical, profile, 0o644)
+        if self.dry_run:  # 목록용: 프로필은 쓰지만 적용(apparmor_parser)은 하지 않는다.
+            state["apparmor"] = logical
+            return True
         done = subprocess.run(
             [parser, "-r", str(path)], capture_output=True, stdin=subprocess.DEVNULL
         )
@@ -1352,7 +1356,13 @@ class Kit:
         (실행기는 격리할 수 없으면 서버를 시작하지 않는다). 격리 없는 시작을 허용한 묶음은 멈추는
         대신 경고만 한다.
         """
-        if self.windows or not (self.managed and self.strict):
+        if self.windows or not self.managed:
+            return
+        if self.dry_run:  # 실제 설치가 쓸 AppArmor 프로필도 같은 함수로 목록에 올린다.
+            if bwrap := shutil.which("bwrap"):
+                self.allow_apparmor_userns(state, bwrap)
+            return
+        if not self.strict:
             return
         allowed = bool(self.config.get("allow_unsandboxed"))
         bwrap = shutil.which("bwrap")
@@ -1751,6 +1761,21 @@ class Kit:
             )
             if done.returncode == 0:
                 state["mcp_servers"].append(name)
+        gateway = self.gateway()
+        if gateway and claude is not None:
+            definition = {
+                "type": "http", "url": gateway["url"],
+                "headers": {"Authorization": "Bearer " + gateway["key"]},
+            }  # fmt: skip
+            subprocess.run(
+                [claude, "mcp", "remove", "-s", "user", gateway["name"]], capture_output=True
+            )
+            done = subprocess.run(
+                [claude, "mcp", "add-json", "-s", "user", gateway["name"], json.dumps(definition)],
+                capture_output=True,
+            )
+            if done.returncode == 0:
+                state["user_gateway"] = gateway["name"]  # 승인 서버 목록(보고)과 따로 지운다.
 
     def codex_config(self) -> Path:
         return self.home / ".codex/config.toml"
@@ -1779,7 +1804,7 @@ class Kit:
         if in_user_config:
             names = self.write_codex_block(
                 state, mcp, None if self.managed else hooks,
-                self.gateway() if self.windows else None,
+                self.gateway() if self.windows or not self.managed else None,
             )
         return names
 
@@ -1971,7 +1996,7 @@ class Kit:
                 text = (json.dumps(settings, indent=2) + NL).encode()
                 write_atomic(settings_path, text, 0o600, self.owner)
         claude = self.claude()
-        for name in state.get("mcp_servers", []):
+        for name in [*state.get("mcp_servers", []), *filter(None, [state.get("user_gateway")])]:
             if claude is not None:
                 subprocess.run([claude, "mcp", "remove", "-s", "user", name], capture_output=True)
 

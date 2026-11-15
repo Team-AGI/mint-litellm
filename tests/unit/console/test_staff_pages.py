@@ -756,8 +756,8 @@ def test_without_key_issuance_or_approved_servers_there_is_no_kit(sworld):
     sworld.app.state.config = dataclasses.replace(
         sworld.config, kit_issuer=KitIssuer(), endpoint_routes=True
     )
-    empty = download(client)
-    assert empty.status_code == 409 and "승인된 로컬 서버가 없습니다" in empty.text
+    empty = download(client)  # 승인된 로컬 서버가 없어도 게이트웨이 항목·키만으로 묶음을 받는다.
+    assert empty.status_code == 200 and empty.headers["content-type"] == "application/gzip"
 
 
 def test_a_kit_is_refused_with_a_clear_message_while_the_endpoint_routes_are_off(kits):

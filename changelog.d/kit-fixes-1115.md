@@ -1,0 +1,1 @@
+- 단말 키트: 미승인 로컬 서버를 훅이 막을 때 도구 이름(`mcp__서버__도구`)에서 서버를 읽어 「server X is not an approved local server」로 안내한다(Codex·Claude 입력 모두). `install.sh --dry-run` 목록에 AppArmor 프로필(`/etc/apparmor.d/mint-bwrap`)이 실제 설치와 같은 함수로 올라온다. 사용자 수준 설치도 게이트웨이 MCP 항목을 사용자 설정 파일(Claude 사용자 범위, Codex `config.toml` 구간)에 넣고 제거 때 지운다. 승인된 로컬 서버가 없는 직원도 설치 묶음(게이트웨이 항목·키)을 받는다.

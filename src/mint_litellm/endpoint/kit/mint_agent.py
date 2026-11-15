@@ -272,6 +272,9 @@ def server_and_tool(event: Mapping[str, Any], known: Sequence[str] = ()) -> tupl
     if server is None and isinstance(name, str):
         # Codex는 서버 이름을 따로 주지 않는다. 승인된 서버 중 도구 이름의 접두와 맞는 것을 쓴다.
         server = next((s for s in known if has_prefix(name, s)), None)
+        if server is None and name.startswith("mcp__") and "__" in name[5:]:
+            # 승인 목록에 없는 서버: 이름에서 서버를 읽어 「승인되지 않은 서버」로 안내한다.
+            server = name[5:].split("__", 1)[0]
     if not isinstance(server, str) or not isinstance(name, str):
         raise Refuse("hook input has no MCP server or tool name")
     prefix = server_prefix(server)

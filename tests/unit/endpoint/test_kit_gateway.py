@@ -50,15 +50,51 @@ def test_a_managed_install_puts_the_gateway_into_both_managed_lists_with_private
     assert not [f for f in root.rglob("*") if f.is_file()]  # 키가 든 파일을 포함해 남는 파일이 없다
 
 
-def test_a_user_level_install_does_not_write_the_gateway_key(tmp_path, reports):
+def test_a_user_level_install_puts_the_gateway_into_the_users_own_settings(
+    tmp_path, reports, monkeypatch
+):
+    calls = []
+    monkeypatch.setattr(kit_module.Kit, "claude", lambda self: "/bin/claude")
+    real = subprocess.run
+    monkeypatch.setattr(
+        kit_module.subprocess, "run",
+        lambda cmd, **kw: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, b"", b"")
+        if cmd[0] == "/bin/claude" else real(cmd, **kw),
+    )  # fmt: skip
     kit = make_kit(gateway_folder(tmp_path), tmp_path, managed=False)
-    kit.install()
-    written = [p for p in tmp_path.rglob("*") if p.is_file() and p.name != "mint-kit.tar.gz"]
-    unpacked = tmp_path / "unpacked"
-    for path in written:
-        if unpacked in path.parents:
-            continue
-        assert KEY not in path.read_text(encoding="utf-8", errors="ignore")
+    state = kit.install()
+    added = [c for c in calls if c[1:5] == ["mcp", "add-json", "-s", "user"]]
+    gateway = json.loads(next(c[6] for c in added if c[5] == "litellm_gateway"))
+    assert gateway == {"type": "http", "url": URL, "headers": {"Authorization": f"Bearer {KEY}"}}
+    parsed = tomllib.loads((tmp_path / "home/.codex/config.toml").read_text(encoding="utf-8"))
+    assert parsed["mcp_servers"]["litellm_gateway"]["url"] == URL
+    # 승인 서버 목록(보고)에는 넣지 않고 따로 추적해 제거 때 지운다.
+    assert "litellm_gateway" not in state["mcp_servers"]
+    assert state["user_gateway"] == "litellm_gateway" and state["gateway"] == "litellm_gateway"
+    calls.clear()
+    kit.uninstall()
+    assert ["/bin/claude", "mcp", "remove", "-s", "user", "litellm_gateway"] in calls
+    config = tmp_path / "home/.codex/config.toml"
+    assert not config.exists() or "litellm_gateway" not in config.read_text(encoding="utf-8")
+
+
+def test_a_kit_without_any_approved_local_server_still_installs_the_gateway(tmp_path, reports):
+    folder = unpack(tmp_path, servers=(), harnesses=("claude", "codex"), gateway_key=KEY)
+    kit = make_kit(folder, tmp_path, managed=True)
+    state = kit.install()
+    mcp = json.loads((tmp_path / "root/etc/claude-code/managed-mcp.json").read_text())
+    assert list(mcp["mcpServers"]) == ["litellm_gateway"] and state["mcp_servers"] == []
+
+
+def test_the_dry_run_lists_the_apparmor_profile_the_real_install_would_write(
+    tmp_path, monkeypatch
+):
+    kit = make_kit(unpack(tmp_path, harnesses=("claude",)), tmp_path, managed=True, dry_run=True)
+    host = Host(monkeypatch, probes=[False], blocked=True)
+    state = state_for(kit)
+    kit.ensure_sandbox_tool(state)
+    assert "/etc/apparmor.d/mint-bwrap" in state["files"]
+    assert host.calls == []  # 적용(apparmor_parser)은 하지 않는다.
 
 
 def test_a_refresh_keeps_the_gateway_entry_and_the_gateway_list(tmp_path, reports):
