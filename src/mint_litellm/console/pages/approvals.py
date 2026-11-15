@@ -12,6 +12,7 @@ from mint_litellm.console.pages.common import act, lines, page_number, see_other
 from mint_litellm.console.templating import render
 from mint_litellm.control import dormant, key_block
 from mint_litellm.control.approvals import DEFAULT_CALL_WINDOW
+from mint_litellm.control.db.connection import fetchall
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import allowlists as allowlist_service
 from mint_litellm.control.services import approval_metrics, dashboard_reads, reads
@@ -40,6 +41,20 @@ def _with_recert(actor: Actor, rows: list[dict]) -> list[dict]:
          "recert_due": recert_service.due_at(r, period)}
         for r in rows
     ]
+
+
+def _with_missing(actor: Actor, rows: list[dict]) -> list[dict]:
+    """LiteLLM에서 키·팀이 삭제되어 동기화를 멈춘 승인에 ``target_missing``을 붙인다."""
+    gone = {
+        r["dedup_key"].removeprefix("sync_target_missing:")
+        for r in fetchall(
+            actor.conn,
+            "SELECT dedup_key FROM mint.alerts WHERE instance_id = %s"
+            " AND kind = 'sync_target_missing' AND status <> 'resolved'",
+            (actor.instance,),
+        )
+    }
+    return [{**r, "target_missing": f"{r['scope_type']}:{r['scope_id']}" in gone} for r in rows]
 
 
 def _focus(request: Request) -> str | None:
@@ -256,7 +271,7 @@ def access_page(request: Request, actor: Actor, error=None, status=200, tab=None
         rows = reads.approvals(
             actor.conn, actor.instance, status="active", page=page_number(request), only_id=focus
         )
-        ctx["rows"] = _with_recert(actor, rows)
+        ctx["rows"] = _with_missing(actor, _with_recert(actor, rows))
     elif tab == "dormant":
         server = query.get("server")
         ctx["server"] = server or ""

@@ -127,6 +127,8 @@ class JobContext:
     policy_data: Any = None
     # 되돌림 판정의 현재 값(작업 실행기가 채운다). 외부 쓰기 경계가 읽는다.
     verdict: Callable[[], Any] = lambda: None
+    # 작업이 정상 종료할 때 ``last_error_code``에 남길 결과(예: ``target_missing``)
+    outcome: str | None = None
 
     def checkpoint(self) -> None:
         if self.cancel.is_set():
@@ -447,6 +449,15 @@ def backoff_seconds(attempts: int, kind: str | None = None, settings: Any = None
     return min(2**attempts * 5, retry_cap(kind, settings) or MAX_BACKOFF_SECONDS)
 
 
+# 지금 실패 중인 작업: 같은 종류·대상에서 가장 최근에 등록된 행이 ``failed``인 것. 이후에 성공했거나
+# 새로 등록된(다시 시도 중인) 대상의 지난 실패는 세지 않는다. ``mint.jobs``를 ``j``로 붙여 쓴다.
+CURRENT_FAILED_SQL = (
+    "j.status = 'failed' AND NOT EXISTS (SELECT 1 FROM mint.jobs n WHERE"
+    " n.instance_id = j.instance_id AND n.kind = j.kind AND n.target_ref = j.target_ref"
+    " AND (n.created_at, n.id) > (j.created_at, j.id))"
+)
+
+
 def period_key(kind: str, period_start: datetime) -> str:
     """예약 작업의 멱등 키 ``<kind>:<주기 시작 시각>``. 시각은 UTC 초 단위 ISO 8601이다."""
     return f"{kind}:{period_start.astimezone(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')}"
@@ -490,15 +501,17 @@ def extend(conn: psycopg.Connection, job_id: Any, owner: str, lease_seconds: flo
     )
 
 
-def complete(conn: psycopg.Connection, job_id: Any, owner: str) -> bool:
+def complete(
+    conn: psycopg.Connection, job_id: Any, owner: str, outcome: str | None = None
+) -> bool:
     """작업을 끝낸다. 같은 종류·대상의 「작업 실패」 경보는 이 성공으로 해결된다."""
     row = fetchone(
         conn,
         "UPDATE mint.jobs SET status = 'done', lease_owner = NULL, lease_until = NULL,"
-        " last_error_code = NULL, updated_at = now()"
+        " last_error_code = %s, updated_at = now()"
         " WHERE id = %s AND status = 'running' AND lease_owner = %s"
         " RETURNING instance_id, kind, target_ref",
-        (job_id, owner),
+        (outcome, job_id, owner),
     )
     if row is None:
         return False

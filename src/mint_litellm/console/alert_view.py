@@ -92,6 +92,7 @@ SUMMARY = {
     "export_failed": "내보내기에 실패했습니다.",
     "sync_divergence": "서버 {server_id}의 LiteLLM 설정이 MINT와 다릅니다.",
     "sync_foreign_change": "LiteLLM 설정이 MINT 밖에서 바뀌었습니다.",
+    "sync_target_missing": "LiteLLM에서 {target}이(가) 삭제되어 승인을 반영할 수 없습니다.",
     "evidence_missing": "서버 {server_id}에 필수 증빙이 없습니다.",
     "evidence_expiring": "서버 {server_id}의 증빙이 곧 만료됩니다.",
     "job_failed": "작업이 실패했습니다. 대상 {target_ref}",

@@ -424,6 +424,7 @@ ALERT_KIND = {
     "export_failed": "내보내기 실패",
     "sync_divergence": "LiteLLM 설정 불일치",
     "sync_foreign_change": "LiteLLM 설정 외부 변경",
+    "sync_target_missing": "승인 대상(키·팀) 없음",
     "evidence_missing": "증빙 누락",
     "evidence_expiring": "증빙 만료 임박",
     "job_failed": "작업 실패",

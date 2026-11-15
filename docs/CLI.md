@@ -150,7 +150,7 @@
 
 ## 권한 동기화 `sync`
 
-작업 실행기가 키·팀 범위 승인을 LiteLLM의 `object_permission`(`mcp_servers`, `mcp_tool_permissions`)에 맞춘다. 쓸 때마다 MINT가 넣지 않은 항목은 그대로 둔 전체 목록과 전체 맵을 보내고, 쓴 뒤 다시 읽어 반영 여부를 확인한다. 팀 소속 키는 팀이 허용한 서버만 받을 수 있어 팀이 먼저 맞춰진다. `MINT_RECONCILE_SECONDS`마다 재조회해 MINT가 반영한 항목이 외부에서 지워졌으면 다시 부여한다. 같은 항목이 `MINT_SYNC_HOLD_WINDOW_SECONDS` 안에 다시 지워지면 그 항목은 보류되어 다시 부여하지 않고 경보 `sync_divergence`와 사건 `sync_held`를 남긴다. `sync status --held`로 찾아 `sync resume <id>`로 풀거나, 승인을 철회한다. 작업 실행기가 LiteLLM을 부르려면 `MINT_LITELLM_URL`과 `MINT_LITELLM_KEY`가 필요하다.
+작업 실행기가 키·팀 범위 승인을 LiteLLM의 `object_permission`(`mcp_servers`, `mcp_tool_permissions`)에 맞춘다. 쓸 때마다 MINT가 넣지 않은 항목은 그대로 둔 전체 목록과 전체 맵을 보내고, 쓴 뒤 다시 읽어 반영 여부를 확인한다. 팀 소속 키는 팀이 허용한 서버만 받을 수 있어 팀이 먼저 맞춰진다. `MINT_RECONCILE_SECONDS`마다 재조회해 MINT가 반영한 항목이 외부에서 지워졌으면 다시 부여한다. 같은 항목이 `MINT_SYNC_HOLD_WINDOW_SECONDS` 안에 다시 지워지면 그 항목은 보류되어 다시 부여하지 않고 경보 `sync_divergence`와 사건 `sync_held`를 남긴다. `sync status --held`로 찾아 `sync resume <id>`로 풀거나, 승인을 철회한다. LiteLLM에서 키·팀이 삭제되어 읽기가 없다고 하거나 쓰기가 404이고 대상을 다시 읽어도 없으면(경로·판본 문제의 404는 해당하지 않아 기존대로 실패로 센다) 작업은 재시도 없이 `target_missing` 결과로 끝나고 경보 `sync_target_missing`이 대상마다 한 건 열린다. 재조회는 새 승인이 동기화를 다시 등록하거나 대상이 다시 나타날 때까지 그 대상을 맞추지 않고, 승인은 자동 철회하지 않으며 접근 통제 화면에 「대상 없음」으로 보인다. 단말 게이트웨이 키도 같다. `status`·`doctor`의 실패한 작업은 같은 종류·대상에서 가장 나중 작업이 실패인 것만 센다. 작업 실행기가 LiteLLM을 부르려면 `MINT_LITELLM_URL`과 `MINT_LITELLM_KEY`가 필요하다.
 
 ## 봉인·내보내기·복원 명령
 

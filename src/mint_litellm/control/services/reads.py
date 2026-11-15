@@ -8,6 +8,7 @@ import psycopg
 
 from mint_litellm.control.approvals import CALL_EXTEND_WITHIN_MINUTES
 from mint_litellm.control.db.connection import fetchall, fetchone
+from mint_litellm.control.jobs import CURRENT_FAILED_SQL
 
 PAGE_SIZE = 50
 EXPORT_LIMIT = 100_000
@@ -623,8 +624,8 @@ def overview(
         r["status"]: r["n"]
         for r in fetchall(
             conn,
-            "SELECT status, count(*) AS n FROM mint.jobs WHERE instance_id = %s"
-            " AND status IN ('pending', 'failed') GROUP BY status",
+            "SELECT j.status, count(*) AS n FROM mint.jobs j WHERE j.instance_id = %s"
+            f" AND (j.status = 'pending' OR ({CURRENT_FAILED_SQL})) GROUP BY j.status",
             (instance,),
         )
     }

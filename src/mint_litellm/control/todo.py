@@ -5,6 +5,7 @@ from typing import Any
 import psycopg
 
 from mint_litellm.control.db.connection import fetchall, fetchone
+from mint_litellm.control.jobs import CURRENT_FAILED_SQL
 from mint_litellm.types.events import EventKind
 
 SETUP_MISSING = {"what": "데이터베이스가 준비되지 않았습니다", "next": "mint-litellm init"}
@@ -118,8 +119,8 @@ def _collect(conn: psycopg.Connection, instance: str) -> list[dict[str, str]]:
         add(f"열린 경보 {alerts}건", "mint-litellm alert list --status open")
     for row in fetchall(
         conn,
-        "SELECT kind, last_error_code, count(*) AS n FROM mint.jobs WHERE instance_id = %s"
-        " AND status = 'failed' GROUP BY kind, last_error_code ORDER BY n DESC LIMIT 3",
+        "SELECT j.kind, j.last_error_code, count(*) AS n FROM mint.jobs j WHERE j.instance_id = %s"
+        f" AND {CURRENT_FAILED_SQL} GROUP BY j.kind, j.last_error_code ORDER BY n DESC LIMIT 3",
         (instance,),
     ):
         add(
