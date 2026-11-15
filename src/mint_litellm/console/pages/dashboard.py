@@ -268,7 +268,7 @@ def dashboard(
             ),
             card("오늘 처리", dashboard_reads.decided_today(conn, instance, zone), "/approvals"),
             card(
-                "기간 요청",
+                "들어온 승인 요청",
                 metrics["opened"],
                 None,
                 f"사람 {metrics['approved_by_person']} · 규칙 {metrics['approved_by_rule']}",

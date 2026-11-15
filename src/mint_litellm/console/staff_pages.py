@@ -442,7 +442,7 @@ def my_approvals(actor: StaffActor) -> list[dict]:
 @router.get("/api/v1/me/call-approvals")
 def my_approvals_api(actor: StaffActor = Depends(staff_actor)):
     keep = ("id", "server_id", "tool", "action", "display", "view", "decider", "decision_reason",
-            "requested_at", "decided_at", "remaining_seconds", "uses_left")
+            "requested_at", "decided_at", "remaining_seconds", "uses_left", "hold_timed_out_at")
     return {"items": reads.jsonable([{k: r[k] for k in keep} for r in my_approvals(actor)])}
 
 

@@ -725,6 +725,7 @@ def test_the_page_shows_the_managed_and_the_unmanaged_state_in_korean(kits):
                " claude_version = '2.1.0', mcp_servers = '[\"local-1\"]', reported_at = now()")
     page = client.get("/staff/endpoint").text
     assert "관리되지 않음" in page and "2.1.0" in page and "local-1" in page
+    assert "게이트웨이, local-1" in page  # 게이트웨이 키도 서버 열에
     for enum in ("managed", "pending", "removed", "revoked"):
         assert enum not in page
     admin = kits.session_client("admin")
@@ -830,7 +831,8 @@ def add_call_approval(world, user, tool, status="pending", approved_by=None, win
 
 
 def test_the_my_requests_screen_shows_only_own_requests_in_korean_with_the_outcome(sworld):
-    add_call_approval(sworld, STAFFER, "waiting_tool")
+    waiting = add_call_approval(sworld, STAFFER, "waiting_tool")
+    sworld.query("UPDATE mint.call_approvals SET hold_timed_out_at = now() WHERE id = %s", waiting)
     add_call_approval(sworld, STAFFER, "window_tool", "approved", "kim", window=30)
     auto = add_call_approval(sworld, STAFFER, "auto_tool", "approved", f"rule:{uuid.uuid4()}",
                              window=10)
@@ -840,7 +842,7 @@ def test_the_my_requests_screen_shows_only_own_requests_in_korean_with_the_outco
     page = client.get("/staff/confirmations?tab=mine")
     assert page.status_code == 200
     assert "their_tool" not in page.text
-    for text in ("waiting_tool", "대기", "승인", "남은", "50회 남음", "거부"):
+    for text in ("waiting_tool", "대기", "승인", "남은", "50회 남음", "거부", "다시 요청하세요"):
         assert text in page.text
     assert "범위 밖" not in page.text  # 처리자·사유는 행을 열었을 때만
     assert "자동 규칙" in client.get(f"/staff/confirmations?tab=mine&open={auto}").text

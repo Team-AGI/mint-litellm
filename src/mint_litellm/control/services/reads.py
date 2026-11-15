@@ -287,7 +287,7 @@ def my_call_approvals(
         conn,
         "SELECT c.id, c.server_id, c.tool, c.status, c.approved_by, c.expires_at,"
         " c.window_minutes, c.valid_until, c.action, c.display, c.requested_at, c.decided_at,"
-        " c.decision_reason,"
+        " c.decision_reason, c.hold_timed_out_at,"
         " (SELECT count(*) FROM mint.call_approval_uses u WHERE u.call_approval_id = c.id) AS uses"
         " FROM mint.call_approvals c WHERE c.instance_id = %s AND c.principal_type = 'user'"
         " AND c.principal_id = %s"

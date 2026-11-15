@@ -22,7 +22,7 @@
 <td>{{ r.team_id | blank }}</td>
 <td>{{ m.badge(L.INSTALL, r.state) }}</td>
 <td>{{ r.claude_version | blank }}</td>
-<td>{{ (r.mcp_servers or []) | join }}</td>
+<td>{{ ((['게이트웨이'] if r.gateway else []) + (r.mcp_servers or [])) | join }}</td>
 <td class="nowrap">{{ r.issued_at | when }}</td>
 <td class="nowrap">{{ r.reported_at | when }}</td>
 </tr>{% endfor %}
