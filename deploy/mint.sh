@@ -110,6 +110,7 @@ ensure_kit_issuer_key() {
     fi
     MINT_KIT_ISSUER_KEY="$(head -n 1 "$file")"
     export MINT_KIT_ISSUER_KEY
+    write_service_env
 }
 
 # 제어 평면 키는 .env의 MINT_LITELLM_KEY가 우선이고, 없으면 비밀 폴더의 control.key를 쓴다.
@@ -121,6 +122,20 @@ load_control_key() {
         MINT_LITELLM_KEY="$(head -n 1 "$file")"
         export MINT_LITELLM_KEY
     fi
+    write_service_env
+}
+
+# 콘솔·작업 실행기는 compose env_file로 이 파일의 키를 받는다(docker compose를 직접 실행해도 들어간다).
+write_service_env() {
+    local dir control kit
+    dir="$(env_value MINT_SECRETS_DIR)"
+    [ -n "$dir" ] && [ -d "$dir" ] || return 0
+    control="$(env_value MINT_LITELLM_KEY)"
+    [ -n "$control" ] || control="$(head -n 1 "$dir/control.key" 2>/dev/null || true)"
+    kit="$(env_value MINT_KIT_ISSUER_KEY)"
+    [ -n "$kit" ] || kit="$(head -n 1 "$dir/kit_issuer.key" 2>/dev/null || true)"
+    (umask 077 && printf 'MINT_LITELLM_KEY=%s\nMINT_KIT_ISSUER_KEY=%s\n' "$control" "$kit" \
+        > "$dir/services.env")
 }
 
 ensure_control_key() {

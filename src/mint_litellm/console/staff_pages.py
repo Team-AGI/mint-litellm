@@ -19,15 +19,17 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from mint_litellm.console import labels, login
 from mint_litellm.console.core import (
-    COOKIE_OPTIONS,
     STAFF_COOKIE,
     STATUS,
     ConsoleConfig,
     Unauthenticated,
     config_of,
     db,
+    delete_cookie,
+    read_cookie,
     require_csrf,
     require_origin,
+    set_cookie,
     too_many_attempts,
 )
 from mint_litellm.console.oidc import login_context
@@ -86,7 +88,7 @@ def staff_actor(
     staff_conn: psycopg.Connection = Depends(staff_connection),
 ) -> StaffActor:
     config = config_of(request)
-    session_id = request.cookies.get(STAFF_COOKIE)
+    session_id = read_cookie(request, STAFF_COOKIE)
     if not session_id:
         raise StaffUnauthenticated()
     id_hash = console_sessions.hash_id(session_id)
@@ -204,7 +206,7 @@ def login_submit(
     session_id = start_staff_session(
         config, control, staff_conn, identity.user_id, identity.key_token, identity.team_ids)
     response = RedirectResponse("/staff", status_code=303)
-    response.set_cookie(STAFF_COOKIE, session_id, **COOKIE_OPTIONS)
+    set_cookie(response, request, STAFF_COOKIE, session_id)
     return response
 
 
@@ -216,7 +218,7 @@ def logout(request: Request, actor: StaffActor = Depends(staff_actor)) -> Respon
     if oidc_client is not None and console_sessions.is_oidc_session(actor.sctx.key_token):
         target = oidc_client.logout_url(request, target) or target
     response = RedirectResponse(target, status_code=303)
-    response.delete_cookie(STAFF_COOKIE, path="/", secure=True, httponly=True, samesite="strict")
+    delete_cookie(response, request, STAFF_COOKIE)
     return response
 
 

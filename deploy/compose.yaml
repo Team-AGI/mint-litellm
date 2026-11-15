@@ -137,6 +137,9 @@ services:
     profiles: ["worker"]
     command: ["worker"]
     entrypoint: ["mint-litellm"]
+    env_file:  # mint.sh가 제어 평면 키·단말 묶음 키를 적는 파일(compose를 직접 실행해도 키가 들어간다)
+      - path: ${MINT_SECRETS_DIR}/services.env
+        required: false
     environment:
       MINT_INSTANCE_ID: ${MINT_INSTANCE_ID:-default}
       MINT_DATABASE_URL: postgresql://mint_worker_app:${MINT_WORKER_DB_PASSWORD:?MINT_WORKER_DB_PASSWORD를 .env에 설정하십시오}@postgres:5432/mint
@@ -146,7 +149,6 @@ services:
       MINT_WORKER_LEASE_SECONDS: ${MINT_WORKER_LEASE_SECONDS:-60}
       MINT_OBSERVE_SECONDS: ${MINT_OBSERVE_SECONDS:-3600}
       MINT_LITELLM_URL: http://litellm:4000
-      MINT_LITELLM_KEY: ${MINT_LITELLM_KEY:-}
       MINT_OPA_URL: http://opa:8181
     volumes:
       - export:/var/lib/mint/export
@@ -159,19 +161,20 @@ services:
     restart: unless-stopped
 
   # 관리자 콘솔. ./mint.sh up·upgrade가 함께 띄운다.
-  # 제어 평면 키(MINT_LITELLM_KEY)는 읽기 경로 전용으로만 쓰며 설치 기본은 설정이다. 쿠키가 Secure이므로 TLS는 앞단에서 끝내고 이 포트로 전달한다.
+  # 제어 평면 키(MINT_LITELLM_KEY)는 읽기 경로 전용으로만 쓰며 설치 기본은 설정이다. HTTPS로 운영하려면 TLS를 앞단에서 끝내고 X-Forwarded-Proto: https를 붙여 이 포트로 전달한다.
   console:
     image: mint-litellm:${COMPOSE_PROJECT_NAME:-local}
     profiles: ["console"]
     command: ["console", "--host", "*", "--port", "8080"]
     entrypoint: ["mint-litellm"]
+    env_file:  # mint.sh가 제어 평면 키·단말 묶음 키를 적는 파일(compose를 직접 실행해도 키가 들어간다)
+      - path: ${MINT_SECRETS_DIR}/services.env
+        required: false
     environment:
       MINT_INSTANCE_ID: ${MINT_INSTANCE_ID:-default}
       MINT_DATABASE_URL: postgresql://mint_control_app:${MINT_CONTROL_DB_PASSWORD:?MINT_CONTROL_DB_PASSWORD를 .env에 설정하십시오}@postgres:5432/mint
       MINT_STAFF_DATABASE_URL: postgresql://mint_staff_app:${MINT_STAFF_DB_PASSWORD:?MINT_STAFF_DB_PASSWORD를 .env에 설정하십시오}@postgres:5432/mint
       MINT_LITELLM_URL: http://litellm:4000
-      MINT_LITELLM_KEY: ${MINT_LITELLM_KEY:-}
-      MINT_KIT_ISSUER_KEY: ${MINT_KIT_ISSUER_KEY:-}
       MINT_ENDPOINT_PUBLIC_URL: ${MINT_ENDPOINT_PUBLIC_URL:-}
       MINT_ENDPOINT_ROUTES: ${MINT_ENDPOINT_ROUTES:-true}
       MINT_LITELLM_UI_URL: ${MINT_LITELLM_UI_URL:-}

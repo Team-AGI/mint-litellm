@@ -11,10 +11,11 @@ from fastapi.responses import RedirectResponse, Response
 from mint_litellm.console import oidc
 from mint_litellm.console.core import (
     COOKIE,
-    COOKIE_OPTIONS,
     STAFF_COOKIE,
     config_of,
     db,
+    delete_cookie,
+    set_cookie,
     too_many_attempts,
 )
 from mint_litellm.console.login import LoginRefused
@@ -44,7 +45,7 @@ def _client(request: Request) -> oidc.OidcClient:
 
 def _refuse(request: Request, target: str, message: str, status: int) -> Response:
     response = render(request, PAGES[target][0], login_context(request, message), status=status)
-    response.delete_cookie(oidc.STATE_COOKIE, path="/", secure=True, httponly=True, samesite="lax")
+    delete_cookie(response, request, oidc.STATE_COOKIE, samesite="lax")
     return response
 
 
@@ -124,6 +125,6 @@ def oidc_callback(
     except AdminError as refused:
         return _refuse(request, target, refused.message, 403)
     response = RedirectResponse("/" if target == "admin" else "/staff", status_code=303)
-    response.set_cookie(cookie, session_id, **COOKIE_OPTIONS)
-    response.delete_cookie(oidc.STATE_COOKIE, path="/", secure=True, httponly=True, samesite="lax")
+    set_cookie(response, request, cookie, session_id)
+    delete_cookie(response, request, oidc.STATE_COOKIE, samesite="lax")
     return response

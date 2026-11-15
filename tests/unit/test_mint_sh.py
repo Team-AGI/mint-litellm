@@ -256,6 +256,13 @@ def test_up_and_upgrade_make_the_control_key_once_store_it_and_hand_it_to_the_wo
         assert stat.S_IMODE(key_file.stat().st_mode) == 0o600
     assert "worker-sees:sk-issued-control" in log
     assert "KEY_KIND=control" in log and "KEY_KIND=kit" in log
+    # 콘솔·작업 실행기가 compose env_file로 받는 파일에도 같은 키가 들어간다.
+    service_env = tmp_path / "secrets" / "services.env"
+    lines = service_env.read_text(encoding="utf-8").splitlines()
+    assert "MINT_LITELLM_KEY=sk-issued-control" in lines
+    assert any(ln.startswith("MINT_KIT_ISSUER_KEY=sk-") for ln in lines)
+    if os.name != "nt":
+        assert stat.S_IMODE(service_env.stat().st_mode) == 0o600
     assert "sk-issued-control" not in log.replace("worker-sees:sk-issued-control", "")
     # 키를 만든 뒤 init을 다시 실행해 면제 키로 저장하고, 키 값은 인자가 아니라 환경으로 간다.
     assert log.count("init --out") == 2 and "-e MINT_LITELLM_KEY" in log
@@ -286,6 +293,20 @@ def test_a_key_in_the_env_file_wins_over_the_stored_control_key(tmp_path):
     log = (tmp_path / "docker.log").read_text(encoding="utf-8")
     assert "worker-sees:sk-stored" not in log
     assert "KEY_KIND" not in log
+    lines = (secrets / "services.env").read_text(encoding="utf-8").splitlines()
+    assert "MINT_LITELLM_KEY=sk-from-env" in lines and "MINT_KIT_ISSUER_KEY=sk-kit" in lines
+
+
+def test_compose_hands_the_service_keys_to_the_console_and_worker_through_the_env_file():
+    text = (SCRIPT.parent / "compose.yaml").read_text(encoding="utf-8")
+    for name, following in (("worker", "console"), ("console", None)):
+        block = text.split(f"\n  {name}:\n", 1)[1]
+        if following:
+            block = block.split(f"\n  {following}:\n", 1)[0]
+        block = block.split("\nvolumes:\n", 1)[0]
+        assert "path: ${MINT_SECRETS_DIR}/services.env" in block and "required: false" in block
+        # environment의 빈 값이 env_file을 덮어쓰지 않도록 두 키는 environment에 두지 않는다.
+        assert "MINT_LITELLM_KEY:" not in block and "MINT_KIT_ISSUER_KEY:" not in block
 
 
 BOOTSTRAP_DOCKER = (

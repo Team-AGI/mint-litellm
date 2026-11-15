@@ -20,6 +20,7 @@ import httpx
 from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
 
+from mint_litellm.console.cookies import read_cookie, set_cookie
 from mint_litellm.console.login import LoginRefused
 from mint_litellm.control.errors import ControlError
 from mint_litellm.control.services import console_sessions
@@ -95,7 +96,8 @@ class SsoIdentity:
 def saved_target(request: Request) -> str:
     """로그인을 시작한 화면(admin 또는 staff). 쿠키가 없거나 깨졌으면 admin."""
     try:
-        saved = json.loads(base64.urlsafe_b64decode(request.cookies.get(STATE_COOKIE, "") + "=="))
+        packed = read_cookie(request, STATE_COOKIE) or ""
+        saved = json.loads(base64.urlsafe_b64decode(packed + "=="))
         return "staff" if saved["t"] == "staff" else "admin"
     except (ValueError, KeyError, TypeError):
         return "admin"
@@ -183,17 +185,14 @@ class OidcClient:
             {"s": state, "n": nonce, "v": verifier, "t": target, "x": time.time() + STATE_SECONDS}
         ).encode())
         # 인증 서버에서 돌아오는 이동은 다른 사이트에서 오므로 이 쿠키만 Lax이다.
-        response.set_cookie(
-            STATE_COOKIE, packed, max_age=STATE_SECONDS, httponly=True, secure=True,
-            samesite="lax", path="/",
-        )
+        set_cookie(response, request, STATE_COOKIE, packed, max_age=STATE_SECONDS, samesite="lax")
         return response
 
     def finish(self, request: Request, code: str, state: str) -> SsoIdentity:
         """콜백을 검증해 신원을 돌려준다. 어느 단계든 실패하면 ``LoginRefused``."""
         try:
             saved = json.loads(base64.urlsafe_b64decode(
-                request.cookies.get(STATE_COOKIE, "") + "=="))
+                (read_cookie(request, STATE_COOKIE) or "") + "=="))
             expected_state, nonce, verifier, target, deadline = (
                 saved["s"], saved["n"], saved["v"], saved["t"], saved["x"])
         except (ValueError, KeyError, TypeError):
