@@ -122,6 +122,13 @@ COMMANDS: tuple[CliCommand, ...] = (
         events=(EventKind.OPERATOR_ADDED,),
     ),
     CliCommand(
+        path=("user", "password-reset"),
+        summary="LiteLLM 사용자에게 관리 화면(과 콘솔) 비밀번호를 새로 정하고 한 번만 알린다. "
+        "`MINT_LITELLM_ADMIN_KEY`(관리 권한 키)로만 쓰며 비밀번호는 저장하지 않는다.",
+        roles=ADMIN_ONLY,
+        litellm_reads=("/user/info",),
+    ),
+    CliCommand(
         path=("operator", "remove"),
         summary="운영자를 삭제한다(토큰과 콘솔 세션이 끝난다). 마지막 관리자·본인은 불가.",
         roles=ADMIN_ONLY,

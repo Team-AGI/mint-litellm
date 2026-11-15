@@ -21,6 +21,8 @@ from mint_litellm.types.events import EventKind
 
 # 키 없이 SSO로 연 세션의 key_token 접두사(뒤는 발급자와 주체의 SHA-256)
 SSO_PREFIX = "sso:"
+# LiteLLM 아이디·비밀번호 로그인의 세션 자리표(키가 없는 세션이라 키 재확인을 건너뛴다)
+PASSWORD_PREFIX = "pw:"
 _ROLE_RANK = {"viewer": 0, "approver": 1, "admin": 2}
 
 
@@ -34,6 +36,11 @@ class SessionInfo:
 
 
 def is_sso_session(key_token: str) -> bool:
+    """키 없이 연 세션(SSO 또는 LiteLLM 비밀번호 로그인)."""
+    return key_token.startswith((SSO_PREFIX, PASSWORD_PREFIX))
+
+
+def is_oidc_session(key_token: str) -> bool:
     return key_token.startswith(SSO_PREFIX)
 
 

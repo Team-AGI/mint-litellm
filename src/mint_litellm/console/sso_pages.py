@@ -60,10 +60,10 @@ def oidc_login(request: Request, target: str = "admin") -> Response:
         return _refuse(request, target, str(refused), 503)
 
 
-def _human_user(config, user_id: str) -> dict:
+def human_user(config, user_id: str) -> dict:
     """제어 평면 키로 LiteLLM 사용자를 읽는다. 없거나 사람 역할이 아니면 거부한다."""
     if config.litellm_admin is None:
-        raise LoginRefused("SSO 로그인에는 제어 평면 키(MINT_LITELLM_KEY)가 필요합니다.")
+        raise LoginRefused("로그인에는 제어 평면 키(MINT_LITELLM_KEY)가 필요합니다.")
     try:
         user = config.litellm_admin.get_user(user_id)
     except LiteLLMError:
@@ -73,6 +73,31 @@ def _human_user(config, user_id: str) -> dict:
     if user.get("user_role") not in HUMAN_ROLES:
         raise LoginRefused("사람 사용자가 아닙니다.")
     return user
+
+
+def open_session(
+    config, conn: psycopg.Connection, target: str, user_id: str, key_token: str, user: dict,
+    via: dict,
+) -> tuple[str, str]:
+    """로그인 수단과 무관하게 관리자·직원 세션을 연다. (쿠키 이름, 세션 식별자)를 돌려준다."""
+    if target == "admin":
+        session_id, _ = console_sessions.create(
+            conn, config.instance_id, config.stage2, user_id=user_id, key_token=key_token,
+            via=via,
+        )
+        return COOKIE, session_id
+    if not config.staff_database_url:
+        raise AdminError(AdminCode.NOT_FOUND, "직원 화면이 설정되어 있지 않습니다.")
+    with connect(config.staff_database_url) as staff_conn:
+        session_id = start_staff_session(
+            config, conn, staff_conn, user_id, key_token, console_sessions.teams_of_user(user),
+        )
+    ledger.record(
+        conn, config.instance_id, EventKind.CONSOLE_SESSION_STARTED,
+        entity_id=console_sessions.hash_id("sso:" + session_id), state_version=1,
+        actor=user_id, payload={"subject": "staff", **via},
+    )
+    return STAFF_COOKIE, session_id
 
 
 @router.get("/auth/oidc/callback")
@@ -90,28 +115,10 @@ def oidc_callback(
             raise LoginRefused("SSO 서버가 로그인을 허용하지 않았습니다.")
         identity = client.finish(request, code, state)
         target = identity.target if identity.target in PAGES else "admin"
-        user = _human_user(config, identity.user_id)
+        user = human_user(config, identity.user_id)
         via = {"method": "oidc", "issuer": identity.issuer, "idp_subject": identity.subject}
-        if target == "admin":
-            session_id, _ = console_sessions.create(
-                conn, config.instance_id, config.stage2, user_id=identity.user_id,
-                key_token=identity.key_token, via=via,
-            )
-            cookie = COOKIE
-        else:
-            if not config.staff_database_url:
-                raise AdminError(AdminCode.NOT_FOUND, "직원 화면이 설정되어 있지 않습니다.")
-            with connect(config.staff_database_url) as staff_conn:
-                session_id = start_staff_session(
-                    config, conn, staff_conn, identity.user_id, identity.key_token,
-                    console_sessions.teams_of_user(user),
-                )
-            ledger.record(
-                conn, config.instance_id, EventKind.CONSOLE_SESSION_STARTED,
-                entity_id=console_sessions.hash_id("sso:" + session_id), state_version=1,
-                actor=identity.user_id, payload={"subject": "staff", **via},
-            )
-            cookie = STAFF_COOKIE
+        cookie, session_id = open_session(
+            config, conn, target, identity.user_id, identity.key_token, user, via)
     except LoginRefused as refused:
         return _refuse(request, target, str(refused), 401)
     except AdminError as refused:

@@ -301,7 +301,7 @@ def test_configuration_from_the_environment():
     ):
         with pytest.raises(ControlError):
             oidc.OidcConfig.from_env(env)
-    assert ConsoleConfig.__dataclass_fields__["key_login"].default is True
+    assert ConsoleConfig.__dataclass_fields__["key_login"].default is False
 
 
 def test_the_client_secret_is_read_from_a_file(tmp_path):

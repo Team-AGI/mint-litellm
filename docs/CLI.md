@@ -1,6 +1,6 @@
 # CLI
 
-`mint-litellm`은 운영자용 명령줄 도구이다. `init`과 `operator bootstrap`을 제외한 모든 명령은 운영자 토큰으로 인증하며, 변경의 행위자는 토큰에 결속된 운영자 이름이다. CLI는 LiteLLM에 쓰지 않는다. 계약 재승인은 계획과 동기화 작업을 등록한다.
+`mint-litellm`은 운영자용 명령줄 도구이다. `init`과 `operator bootstrap`을 제외한 모든 명령은 운영자 토큰으로 인증하며, 변경의 행위자는 토큰에 결속된 운영자 이름이다. CLI는 LiteLLM에 쓰지 않는다(예외는 `user password-reset` 하나이며 관리 권한 키를 따로 받는다). 계약 재승인은 계획과 동기화 작업을 등록한다.
 
 ## 역할
 
@@ -40,6 +40,7 @@
 | `mint-litellm status` | 모든 역할 | 모드, 정책 판본, 경보, 관측 항목과 같은 「할 일」 목록을 표시한다. | `/v1/mcp/server`, `/key/list`, `/team/list` | - |
 | `mint-litellm operator add` | `admin` | 운영자를 등록하고 토큰을 발급한다. `--save-token <파일>`을 주면 토큰을 화면에 보이지 않고 0600 파일로만 받는다(파일이 이미 있으면 운영자를 만들기 전에 거부한다). `deploy/mint.sh cli`로 실행하면 파일은 컨테이너 안이 아니라 호스트의 그 경로에 만든다. `admin`·`approver`는 LiteLLM 사용자 식별자 (`--user-id`) 결속이 필수이다. | `/user/info` | `operator_added` |
 | `mint-litellm operator bootstrap` | 토큰 불필요 | `operators` 표가 비어 있을 때만 토큰 없이 첫 `admin` 운영자를 만들고 토큰을 발급한다. `--name`과 `--user-id`가 필요하며, 사용자가 LiteLLM의 사람 사용자로 존재하는지 확인한다. 행위자는 `bootstrap`으로 기록하고, 운영자가 이미 있으면 거부한다. | `/user/info` | `operator_added` |
+| `mint-litellm user password-reset` | `admin` | LiteLLM 사용자에게 관리 화면과 콘솔이 같이 쓰는 비밀번호를 새로 정하고 로그인 아이디(이메일)와 함께 한 번만 알린다. `--save-file <경로>`를 주면 화면에 보이지 않고 0600 파일로만 받는다. 이메일이 없는 사용자는 `--email`로 함께 정한다. 비밀번호는 `MINT_LITELLM_ADMIN_KEY`(관리 권한 키)로만 정하며 저장하지 않고, LiteLLM이 첫 로그인 때 변경을 요구한다. `deploy/mint.sh cli`는 마스터 키를 이 변수로 넘긴다. | `/user/info` | - |
 | `mint-litellm operator remove` | `admin` | 운영자를 삭제한다. 토큰이 끝나고 그 사용자의 콘솔 세션이 폐기된다. 마지막 관리자와 본인은 삭제할 수 없다. | 없음 | `operator_removed` |
 | `mint-litellm operator chat-bind` | `admin` | 운영자를 Slack 사용자 식별자에 결속하거나(`--slack-user U…`) 지운다(`--clear`). `admin`·`approver`만 결속할 수 있고 한 Slack 사용자는 한 운영자에만 결속된다. | 없음 | `operator_chat_bound` |
 | `mint-litellm operator set-role` | `admin` | 운영자의 역할을 바꾼다(`--role`). 그 사용자의 콘솔 세션이 폐기된다. 마지막 관리자는 낮출 수 없다. | 없음 | `operator_role_changed` |
@@ -130,7 +131,7 @@
 
 ### 직원 화면
 
-같은 콘솔 프로세스가 `/staff` 아래에 직원 화면을 연다. 직원 화면의 연결은 `MINT_STAFF_DATABASE_URL`(`mint_staff_app` 로그인의 주소)로 따로 만들며, 이 값이 없으면 직원 화면은 열리지 않는다. 직원 로그인은 관리자와 같은 본인 키 확인이지만 운영자 행이 필요 없고, 세션 쿠키 `__Host-mint_staff`는 관리자 세션과 따로다. 세션에는 로그인 때 본인 키 정보의 `team_id`에서 읽은 소속 팀이 함께 저장되며 작업 실행기의 재확인이 새 값으로 갱신한다. 화면 입력으로 팀을 받는 곳은 없다.
+같은 콘솔 프로세스가 `/staff` 아래에 직원 화면을 연다. 직원 화면의 연결은 `MINT_STAFF_DATABASE_URL`(`mint_staff_app` 로그인의 주소)로 따로 만들며, 이 값이 없으면 직원 화면은 열리지 않는다. 직원 로그인은 관리자와 같은 아이디·비밀번호(LiteLLM 관리 화면과 같은 자격) 확인이지만 운영자 행이 필요 없고, 세션 쿠키 `__Host-mint_staff`는 관리자 세션과 따로다. 세션에는 로그인 때 본인 키 정보의 `team_id`에서 읽은 소속 팀이 함께 저장되며 작업 실행기의 재확인이 새 값으로 갱신한다. 화면 입력으로 팀을 받는 곳은 없다.
 
 - **쓸 수 있는 서버·도구**: 소속 조직의 이용 관계가 있는 승인된 서버와, 본인·본인 팀·본인 조직·본인 키 범위의 유효한 승인이 허용하는 도구.
 - **본인 확인 요청**: 정책이 본인 확인을 요구해 만든 요청을 확인·거절·취소한다. 확인은 호출한 키와 다른 키로 로그인한 세션에서만 된다(`require_separate_confirm_key`). 화면에 보이는 인자 값은 필드당 256자까지이며 요청이 끝나면 데이터베이스에서 지워진다.

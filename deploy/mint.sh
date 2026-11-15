@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MINT 배포 보조 스크립트: up | status | bootstrap | backup | upgrade | cli
+# MINT 배포 보조 스크립트: up | status | bootstrap | password | backup | upgrade | cli
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -303,6 +303,39 @@ cmd_bootstrap() {
     load_operator_token
     cli policy activate initial || echo "기본 정책을 적용하지 못했습니다. ./mint.sh status로 확인하십시오." >&2
     echo "첫 관리자 $1을(를) 만들었습니다. 토큰은 $file에 있습니다. 상태: ./mint.sh status"
+    issue_ui_password "$2" || true
+}
+
+# LiteLLM 사용자에게 관리 화면(과 콘솔)에 로그인할 비밀번호를 정해 비밀 폴더에 0600으로 두고 안내한다.
+# 마스터 키는 이 명령의 컨테이너에만 넘긴다. 실패해도 호출한 쪽은 계속한다(./mint.sh password로 다시 한다).
+issue_ui_password() {
+    local user="$1" email="${2:-}" file reply login password p_login p_password ui
+    file="$(env_value MINT_SECRETS_DIR)/ui-login-${user//[^A-Za-z0-9._@-]/_}.txt"
+    [ ! -e "$file" ] || { echo "$file이 이미 있습니다. 새로 정하려면 파일을 지운 뒤 다시 실행하십시오." >&2; return 1; }
+    reply="$(env "MINT_LITELLM_ADMIN_KEY=$(env_value LITELLM_MASTER_KEY)"         "${COMPOSE[@]}" run --rm -T -e MINT_LITELLM_ADMIN_KEY ${MINT_LITELLM_KEY:+-e MINT_LITELLM_KEY}         control --json user password-reset "$user" ${email:+--email "$email"})"         || { echo "$reply" >&2; echo "비밀번호를 정하지 못했습니다. ./mint.sh password $user [--email <이메일>]로 다시 시도하십시오." >&2; return 1; }
+    p_login='"login": *"([^"]+)"'
+    p_password='"password": *"([A-Za-z0-9]+)"'
+    [[ "$reply" =~ $p_login ]] && login="${BASH_REMATCH[1]}" || return 1
+    [[ "$reply" =~ $p_password ]] && password="${BASH_REMATCH[1]}" || return 1
+    (umask 077; printf '%s %s
+' "$login" "$password" > "$file") || { echo "비밀번호를 $file에 쓰지 못했습니다." >&2; return 1; }
+    ui="$(env_value MINT_LITELLM_UI_URL)"
+    echo "로그인 정보를 $file(아이디와 비밀번호 한 줄)에 두었습니다. 사용자에게 안전하게 전하십시오."
+    echo "  아이디: $login (첫 로그인 때 LiteLLM이 비밀번호 변경을 요구합니다)"
+    echo "  LiteLLM 관리 화면: ${ui:-http://<서버 주소>:$(env_value MINT_LITELLM_PORT || true)/ui}"
+    echo "  MINT 콘솔: https://<콘솔 주소>  (같은 아이디·비밀번호, 포트 $(env_value MINT_CONSOLE_PORT))"
+}
+
+cmd_password() {
+    require_env
+    [ "$#" -ge 1 ] || fail "사용법: ./mint.sh password <LiteLLM 사용자> [--email <이메일>]"
+    local user="$1"
+    shift
+    case "${1:-}" in
+        "") issue_ui_password "$user" ;;
+        --email) [ -n "${2:-}" ] || fail "--email에는 이메일이 필요합니다."; issue_ui_password "$user" "$2" ;;
+        *) fail "사용법: ./mint.sh password <LiteLLM 사용자> [--email <이메일>]" ;;
+    esac
 }
 
 # 백업은 데이터베이스 두 개, 정책 번들, LiteLLM 설정을 한 폴더에 모은다. 하나라도 비면 폴더를 지운다.
@@ -443,11 +476,13 @@ case "${1:-}" in
     status) cmd_status ;;
     backup) cmd_backup ;;
     bootstrap) shift; cmd_bootstrap "$@" ;;
+    password) shift; cmd_password "$@" ;;
     upgrade) shift; cmd_upgrade "$@" ;;
     cli) shift; require_env
         case " $* " in
             *" --save-token"*) cli_save_token "$@" ;;
+            *" password-reset"*) env "MINT_LITELLM_ADMIN_KEY=$(env_value LITELLM_MASTER_KEY)"                 "${COMPOSE[@]}" run --rm -e MINT_LITELLM_ADMIN_KEY ${MINT_LITELLM_KEY:+-e MINT_LITELLM_KEY} control "$@" ;;
             *) cli "$@" ;;
         esac ;;
-    *) fail "사용법: ./mint.sh up | status | bootstrap <이름> <사용자> | backup | upgrade [--dry-run] | cli <명령...>" ;;
+    *) fail "사용법: ./mint.sh up | status | bootstrap <이름> <사용자> | password <사용자> | backup | upgrade [--dry-run] | cli <명령...>" ;;
 esac
