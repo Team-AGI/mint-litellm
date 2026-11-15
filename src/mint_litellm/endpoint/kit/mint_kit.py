@@ -500,14 +500,31 @@ def classify_windows(rows, token_sid, container_sid) -> dict[str, str]:
     return found
 
 
-def net_filtered(programs: Path, windows: bool) -> set[str]:
+def win_start_table() -> dict[int, str]:
+    """Windows: 실행 중인 모든 프로세스의 (PID -> 시작 시각 표지)를 한 번에 읽는다.
+
+    기록마다 PowerShell을 부르면 실행기 기록이 쌓였을 때 보고가 몇 분씩 걸린다."""
+    out = capture([
+        "powershell", "-NoProfile", "-Command",
+        "Get-Process | ForEach-Object { try { "
+        '"$($_.Id) $($_.StartTime.ToFileTimeUtc())" } catch {} }',
+    ])  # fmt: skip
+    table: dict[int, str] = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0].isdigit():
+            table[int(parts[0])] = parts[1]
+    return table
+
+
+def net_filtered(programs: Path, windows: bool, start_of=None) -> set[str]:
     """Windows: 호스트 허용 방화벽 규칙이 걸려 있고 그 실행기가 아직 도는 서버 이름들."""
     found: set[str] = set()
     folder = programs / NET_DIR / "rules"
     for path in sorted(folder.glob("*.json")) if windows and folder.is_dir() else []:
         try:
             record = json.loads(path.read_text(encoding="utf-8"))
-            if proc_start(int(record["pid"]), windows) == str(record["start"]):
+            if (start_of or proc_start)(int(record["pid"]), windows) == str(record["start"]):
                 found.add(str(record["server"]))
         except (OSError, ValueError, KeyError, TypeError):
             continue
@@ -529,6 +546,7 @@ def with_sandbox(
     read_records: bool = True,
     observed: dict[str, str] | None = None,
     filtered: set[str] | None = None,
+    start_of=None,
 ) -> list[dict]:
     """프로세스 항목에 서버별 격리 상태를 더한다(실행기가 남긴 기록 중 아직 살아 있는 것만).
 
@@ -554,7 +572,7 @@ def with_sandbox(
         except (OSError, ValueError, KeyError, TypeError):
             continue
         if status in ("bwrap", "appcontainer", "none") and start:
-            if proc_start(pid, windows) == start:
+            if (start_of or proc_start)(pid, windows) == start:
                 seen[server] = "none" if "none" in (status, seen.get(server)) else status
                 if isinstance(record.get("egress_refused"), int) and record["egress_refused"] >= 0:
                     refused[server] = refused.get(server, 0) + record["egress_refused"]
@@ -1986,10 +2004,12 @@ class Kit:
 
     def read_inventory(self) -> dict:
         try:
+            table = win_start_table() if self.windows else None
+            start_of = (lambda pid, windows: table.get(pid)) if table is not None else None
             processes = with_sandbox(
                 scan_processes(self.windows), self.home, self.windows, not self.system_mode,
                 windows_sandbox_status() if self.windows else None,
-                net_filtered(self.programs, self.windows),
+                net_filtered(self.programs, self.windows, start_of), start_of,
             )
             extra = {"profile": False} if self.system_mode else {}
             autostart = scan_autostart(self.home, self.windows, self.account.name, **extra)
@@ -2225,7 +2245,7 @@ class Kit:
         for child, parent, _ in rows:
             if parent == pid:
                 self.kill(child)
-        for _ in range(10):
+        for _ in range(20):
             time.sleep(0.5)
             if pid not in {row[0] for row in process_entries(True)}:
                 return

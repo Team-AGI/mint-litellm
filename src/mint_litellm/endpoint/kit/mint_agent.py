@@ -1638,6 +1638,7 @@ NET_DIR = "net"
 NET_GROUP = "MINT sandbox "
 NET_WAIT = 30.0
 NET_ADDRESSES_MAX = 256
+HOSTS_POLL = 1.0  # 서버가 도는 동안 허용 호스트 이름을 다시 푸는 간격(초)
 PROFILE_NAME = re.compile(r"^mint\.[A-Za-z0-9_-]{1,32}\.[0-9]{1,10}$")
 SERVER_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
@@ -1670,6 +1671,19 @@ def egress_allow_list(
             elif found.get(key, set()) is not None:
                 found.setdefault(key, set()).add(port)
     return [{"ip": ip, "ports": sorted(p) if p else None} for ip, p in sorted(found.items())]
+
+
+def merge_allow(old: list[dict], new: list[dict]) -> list[dict]:
+    """허용 주소 목록의 합집합(포트 None은 모든 포트). 주소가 한쪽에만 있어도 남는다."""
+    merged: dict[str, set[int] | None] = {}
+    for item in [*old, *new]:
+        ports = item["ports"]
+        if item["ip"] not in merged:
+            merged[item["ip"]] = None if ports is None else set(ports)
+        elif merged[item["ip"]] is not None:
+            merged[item["ip"]] = None if ports is None else merged[item["ip"]] | set(ports)
+    return [{"ip": ip, "ports": sorted(p) if p is not None else None}
+            for ip, p in sorted(merged.items())]  # fmt: skip
 
 
 def address_gaps(addresses: Sequence[str]) -> list[str]:
@@ -1721,30 +1735,38 @@ def net_rules(name: str, allow: Sequence[Mapping[str, Any]]) -> list[tuple[str, 
 
 
 def net_script(sid: str, name: str, allow: Sequence[Mapping[str, Any]]) -> str:
-    """차단 규칙을 만드는 PowerShell(방화벽 COM 개체: 모듈을 읽지 않아 빠르다).
+    """차단 규칙을 만들거나(이미 있으면 주소를 바꾸는) PowerShell(방화벽 COM 개체: 빨리 돈다).
 
-    방화벽이 꺼져 있으면 3, 만들지 못하면 만든 규칙을 지우고 4로 끝난다. 입력은 ``net_request``가
-    검증한 값(주소·숫자)이라 글자 그대로 넣어도 안전하다.
+    방화벽이 꺼져 있으면 3, 새로 만들다 실패하면 이번에 만든 규칙만 지우고 4로 끝난다.
+    입력은 ``net_request``가 검증한 값(주소·숫자)이라 글자 그대로 넣어도 안전하다.
     """
     rules = net_rules(name, allow)
     adds = "\n".join(f"  Block '{n}' '{addr}' {proto} '{ports}'" for n, addr, proto, ports in rules)
-    removes = "\n".join(f"  $p.Rules.Remove('{n}')" for n, *_ in rules)
     return (
         "$ErrorActionPreference = 'Stop'\n"
         "$p = New-Object -ComObject HNetCfg.FwPolicy2\n"
         "if (-not ($p.FirewallEnabled(1) -and $p.FirewallEnabled(2) -and $p.FirewallEnabled(4)))"
         " { exit 3 }\n"
-        "function Block($name, $addr, $proto, $ports) {\n"
+        "$added = @()\n"
+        "function Block($rule, $addr, $proto, $ports) {\n"
+        "  $r = $null\n"
+        "  try { $r = $p.Rules.Item($rule) } catch { }\n"
+        "  if ($r) {\n"
+        "    $r.RemoteAddresses = $addr\n"
+        "    if ($proto -ne 0) { $r.RemotePorts = $ports }\n"
+        "    return\n"
+        "  }\n"
         "  $r = New-Object -ComObject HNetCfg.FWRule\n"
-        f"  $r.Name = $name; $r.Grouping = '{NET_GROUP + name}'; $r.Direction = 2; $r.Action = 0\n"
+        f"  $r.Name = $rule; $r.Grouping = '{NET_GROUP + name}'; $r.Direction = 2; $r.Action = 0\n"
         f"  $r.LocalAppPackageId = '{sid}'; $r.RemoteAddresses = $addr\n"
         "  if ($proto -ne 0) { $r.Protocol = $proto; $r.RemotePorts = $ports }\n"
         "  $r.Enabled = $true\n"
         "  $p.Rules.Add($r)\n"
+        "  $script:added += $rule\n"
         "}\n"
         f"try {{\n{adds}\n}} catch {{\n"
         "  $ErrorActionPreference = 'SilentlyContinue'\n"
-        f"{removes}\n"
+        "  foreach ($n in $added) { $p.Rules.Remove($n) }\n"
         "  exit 4\n}\n"
     )
 
@@ -1824,8 +1846,6 @@ def net_apply(folder: str, request: Mapping[str, Any]) -> str | None:
         return "profile sid"
     rules = os.path.join(folder, NET_DIR, "rules")
     record_path = os.path.join(rules, request["profile"] + ".json")
-    if os.path.exists(record_path):  # 같은 프로필의 이전 규칙이 남아 있으면 먼저 지운다
-        net_drop(folder, request["profile"])
     code = _powershell(net_script(sid, request["profile"], request["allow"]))
     if code:
         return "firewall disabled" if code == 3 else "rule failed"
@@ -1951,6 +1971,8 @@ class AppContainerRun:
         self.parent_fds: tuple[int, int] | None = None  # (서버 입력에 쓰는 쪽, 서버 출력을 읽는 쪽)
         self.child_fds: list[int] = []  # 서버에 넘길 파이프 끝(시작한 뒤 이쪽에서 닫는다)
         self.desktop: list[Any] = []  # 세션 0에서 만든 전용 데스크톱·창 스테이션 핸들
+        self.hosts_request: dict[str, Any] = {}
+        self.watch_stop = threading.Event()  # 호스트 주소 갱신을 멈추는 신호
 
     @classmethod
     def prepare(
@@ -2002,17 +2024,27 @@ class AppContainerRun:
         """``network: hosts``: 선언한 호스트 밖으로 못 나가게 방화벽 규칙을 건다(서버를 풀기 전).
 
         돌려주는 값은 걸지 못한 사유(성공이면 None). 못 걸면 서버는 인터넷 전체에 열려 실행된다.
+        걸었으면 서버가 도는 동안 이름을 다시 풀어, 새로 나온 주소(회전하는 CDN)를 규칙에 더한다.
         """
         allow = egress_allow_list(entries)
         if allow is None:
             return "wildcard host"
         self.record["net"] = True  # 규칙을 건 뒤 실행기가 죽어도 다음 정리가 지운다
         self._save()
-        return net_ask(
-            KIT_DIR,
-            {"op": "allow", "profile": self.record["profile"], "server": server,
-             "pid": os.getpid(), "start": self.record["start"], "allow": allow},
-        )  # fmt: skip
+        self.hosts_request = {"op": "allow", "profile": self.record["profile"], "server": server,
+                              "pid": os.getpid(), "start": self.record["start"]}  # fmt: skip
+        failed = net_ask(KIT_DIR, {**self.hosts_request, "allow": allow})
+        if failed is None:
+            threading.Thread(target=self._watch_hosts, args=(entries, allow), daemon=True).start()
+        return failed
+
+    def _watch_hosts(self, entries: Sequence[str], allow: list[dict]) -> None:
+        while not self.watch_stop.wait(HOSTS_POLL):
+            found = egress_allow_list(entries)
+            merged = merge_allow(allow, found or [])[:NET_ADDRESSES_MAX]
+            if merged != allow:
+                allow = merged
+                net_ask(KIT_DIR, {**self.hosts_request, "allow": allow})
 
     def _save(self) -> None:
         if self.track:
@@ -2173,6 +2205,7 @@ class AppContainerRun:
         return thread
 
     def close(self) -> None:
+        self.watch_stop.set()
         self._close_fds(self.child_fds)
         if self.parent_fds:
             self._close_fds(self.parent_fds)

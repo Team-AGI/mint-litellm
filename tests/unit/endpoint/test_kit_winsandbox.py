@@ -241,7 +241,8 @@ def test_the_rule_script_blocks_one_package_and_closes_on_failure():
     assert script.count("  Block '") == 3 and "$r.LocalAppPackageId = 'S-1-15-2-1-2'" in script
     assert "$r.Action = 0" in script and "$r.Direction = 2" in script  # 나가는 차단
     assert "$r.Grouping = 'MINT sandbox mint.s.7'" in script
-    assert script.count("$p.Rules.Remove(") == 3  # 실패하면 만든 규칙을 지운다
+    assert "$p.Rules.Remove($n)" in script  # 실패하면 이번에 만든 규칙만 지운다
+    assert "$p.Rules.Item($rule)" in script  # 이미 있으면 주소만 바꾼다(갱신 중에도 열리지 않는다)
     assert "exit 3" in script and "exit 4" in script  # 방화벽 꺼짐·실패는 시작을 거부하게 알린다
 
 
@@ -621,3 +622,13 @@ def test_permission_changes_take_turns_across_threads():
     one.join(10)
     two.join(10)
     assert order == ["first in", "first out", "second in"]
+
+
+def test_new_addresses_are_added_to_the_allowed_set_never_dropped():
+    old = [{"ip": ALLOWED, "ports": [443]}, {"ip": OTHER, "ports": [80]}]
+    new = [
+        {"ip": ALLOWED, "ports": [8443]}, {"ip": DOC, "ports": None}, {"ip": OTHER, "ports": None},
+    ]
+    got = {item["ip"]: item["ports"] for item in agent.merge_allow(old, new)}
+    assert got == {ALLOWED: [443, 8443], OTHER: None, DOC: None}
+    assert {i["ip"] for i in agent.merge_allow(old, [])} == {ALLOWED, OTHER}
