@@ -291,6 +291,8 @@ def test_a_key_in_the_env_file_wins_over_the_stored_control_key(tmp_path):
 BOOTSTRAP_DOCKER = (
     'case "$*" in\n'
     '  *"operator bootstrap"*) echo \'{"ok": true, "token": "mint_op-1_x", "id": "boss"}\';;\n'
+    '  *"user password-reset"*) echo \'{"ok": true, "login": "boss@x.test", '
+    '"password": "Pw1abcDEF2ghiJKL"}\';;\n'
     '  *"cli-token-sees"*) ;;\n'
     '  *" status"*) echo "status-token:$MINT_OPERATOR_TOKEN" >> "$FAKE_DOCKER_LOG";;\n'
     '  *" doctor"*) echo "doctor-ran" >> "$FAKE_DOCKER_LOG";;\n'
@@ -315,6 +317,13 @@ def test_bootstrap_stores_the_first_admin_token_and_later_commands_use_it(tmp_pa
     log = (tmp_path / "docker.log").read_text(encoding="utf-8")
     assert "--json operator bootstrap --name boss --user-id human-1" in log
     assert "policy activate initial" in log
+    assert "user password-reset human-1" in log
+    ui_login = secrets / "ui-login-human-1.txt"
+    assert ui_login.read_text(encoding="utf-8") == "boss@x.test Pw1abcDEF2ghiJKL\n"
+    if os.name != "nt":
+        assert stat.S_IMODE(ui_login.stat().st_mode) == 0o600
+    assert "Pw1abcDEF2ghiJKL" not in result.stdout + result.stderr
+    assert "boss@x.test" in result.stdout
     run(tmp_path, env, "status", docker_tail=BOOTSTRAP_DOCKER)
     assert "status-token:mint_op-1_x" in (tmp_path / "docker.log").read_text(encoding="utf-8")
 

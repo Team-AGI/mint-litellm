@@ -1,0 +1,1 @@
+- 콘솔·직원 화면은 LiteLLM 관리 화면과 같은 아이디·비밀번호로 로그인한다(LiteLLM `/v2/login`에 위임, 비밀번호 비저장, 마스터 키 계정 거부). 키 로그인은 기본 닫힘(`MINT_CONSOLE_KEY_LOGIN`), `./mint.sh bootstrap`과 `./mint.sh password`·`user password-reset`이 LiteLLM 비밀번호를 정해 준다.

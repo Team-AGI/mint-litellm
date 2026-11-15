@@ -20,7 +20,7 @@ MCP는 Claude Code, Codex 등의 AI 에이전트가 파일 시스템, 개발 도
 | 정책 엔진 | `opa` | 활성화된 정책 번들(Rego)로 판정합니다. 정책별 집행 위치와 분류는 `policy/catalog.json`에 있습니다. |
 | 저장소 | `postgres` | MINT DB(승인·동의·판정 사건·계약·작업 큐)와 LiteLLM DB를 따로 둡니다. 판정 사건 원장은 추가만 하고 작업 실행기가 주기적으로 해시 연쇄로 봉인합니다. |
 | 작업 실행기 | `worker` | 수용검증, 계약 관측과 재승인, LiteLLM 권한 동기화, 승인 만료·재확인, 호출 급증·대량 추출·취약점 점검, 봉인·서명 내보내기, 경보와 웹훅 전송을 맡습니다. |
-| 관리자 콘솔 | `console` | 관리자 화면(신청·승인·호출별 승인·계약 변경·경보·원장·정책·단말)과 직원 화면(사용 가능한 서버, 본인 확인, 동의, 단말 설치)을 제공합니다. LiteLLM 키로 로그인하고, 지표는 `/api/v1/metrics`에서 나옵니다. |
+| 관리자 콘솔 | `console` | 관리자 화면(신청·승인·호출별 승인·계약 변경·경보·원장·정책·단말)과 직원 화면(사용 가능한 서버, 본인 확인, 동의, 단말 설치)을 제공합니다. LiteLLM 관리 화면과 같은 아이디·비밀번호(또는 SSO)로 로그인하고, 지표는 `/api/v1/metrics`에서 나옵니다. |
 | 운영 명령 | `control` | `mint-litellm` CLI. 정책 판본 활성화, 증빙, 복원 점검 같은 운영자 작업을 합니다. |
 | 단말 설치 묶음 | 직원 PC | 관리형으로 설치하면 Claude Code·Codex에 관리형 설정과 호출 전후 훅을 넣어 로컬 MCP 호출도 MINT가 판정하게 하고, 묶음 실행기로 시작하는 로컬 MCP는 승인된 실행 계약과 같을 때만 격리해 실행합니다(Linux bubblewrap, Windows AppContainer). 사용자 수준 설치는 「관리되지 않음」으로 보고되며, 설치 상태는 주기적으로 보고합니다. |
 
@@ -50,7 +50,7 @@ compose 묶음(LiteLLM, PostgreSQL, 정책 엔진, 작업 실행기, 콘솔)은 
 cd deploy
 cp .env.example .env        # 값을 채운다
 ./mint.sh up                # 이미지 빌드, 마이그레이션, 기동
-./mint.sh bootstrap <이름> <LiteLLM 사용자>   # 첫 관리자와 기본 정책
+./mint.sh bootstrap <이름> <LiteLLM 사용자>   # 첫 관리자·기본 정책·로그인 비밀번호(LiteLLM 관리 화면과 콘솔 공용)
 ./mint.sh status            # 상태와 할 일
 ```
 

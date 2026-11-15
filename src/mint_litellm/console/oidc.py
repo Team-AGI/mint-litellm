@@ -284,4 +284,5 @@ def login_context(request: Request, error: str | None) -> dict:
     return {
         "error": error, "sso": request.app.state.oidc is not None,
         "key_login": request.app.state.config.key_login,
+        "litellm_ui_url": request.app.state.config.litellm_ui_url,
     }

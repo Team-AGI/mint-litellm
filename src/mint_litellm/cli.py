@@ -34,6 +34,7 @@ from mint_litellm.control import (
     checks,
     ledger,
     litellm_config,
+    litellm_password,
     operators,
     org_suggest,
     policy_check,
@@ -378,6 +379,34 @@ def _operator_bootstrap(run: Run) -> None:
             run.emitted,
         ),
     )
+
+
+def _user_password_reset(run: Run) -> None:
+    """관리 화면 비밀번호를 새로 정해 한 번만 알린다(``--save-file``이면 0600 파일로만)."""
+    a = run.args
+    given = a.save_file
+    path = Path(given) if given else None
+    if path:
+        secrets_file.reserve_private(path)
+    try:
+        login, password = litellm_password.set_password(
+            run.cfg.litellm_url or "", run.environ.get("MINT_LITELLM_ADMIN_KEY", ""), a.user,
+            email=a.email,
+        )
+        if path:
+            secrets_file.fill_private(path, f"{login} {password}")
+    except BaseException:
+        if path:
+            path.unlink(missing_ok=True)
+        raise
+    run.data["login"] = login
+    run.say(f"로그인 아이디: {login}")
+    if path:
+        run.data["password_file"] = given
+        run.say(f"아이디와 비밀번호를 {given}에 한 줄로 저장했습니다. 첫 로그인 때 바꾸게 됩니다.")
+        return
+    run.data["password"] = password
+    run.say(f"비밀번호(다시 표시되지 않습니다): {password}")
 
 
 def _window_minutes(value: str | None) -> int | None:
@@ -888,6 +917,7 @@ HANDLERS: dict[str, Handler] = {
     "doctor": _doctor,
     "operator add": _operator_add,
     "operator bootstrap": _operator_bootstrap,
+    "user password-reset": _user_password_reset,
     "operator remove": _done(operator_service.remove, "name"),
     "operator chat-bind": lambda r: operator_service.chat_bind(
         r.context(), r.args.name, None if r.args.clear else r.args.slack_user
@@ -1037,6 +1067,11 @@ ARGUMENTS: dict[str, list[Any]] = {
     ],
     "operator bootstrap": [
         _a("--name", required=True), _a("--user-id", required=True), _SAVE_TOKEN,
+    ],
+    "user password-reset": [
+        _a("user", help="LiteLLM 사용자 식별자"),
+        _a("--email", help="이메일이 없는 사용자에게 함께 정한다(관리 화면 로그인 아이디)"),
+        _a("--save-file", help="화면에 보이지 않고 0600 파일로만 받는다(없는 경로)"),
     ],
     "operator remove": [_a("name")],
     "operator chat-bind": [

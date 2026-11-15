@@ -174,10 +174,16 @@ def login_form(request: Request) -> Response:
 def login_submit(
     request: Request,
     key: str = Form(""),
+    username: str = Form(""),
+    password: str = Form(""),
     control: psycopg.Connection = Depends(db),
     staff_conn: psycopg.Connection = Depends(staff_connection),
 ) -> Response:
     config = config_of(request)
+    if not key:
+        from mint_litellm.console.password_login import sign_in  # 순환 참조를 피한다
+
+        return sign_in(request, control, "staff", username, password)
     if not config.key_login:
         return render(
             request, "staff_login.html", login_context(request, "키 로그인은 사용하지 않습니다."),
@@ -206,8 +212,9 @@ def login_submit(
 def logout(request: Request, actor: StaffActor = Depends(staff_actor)) -> Response:
     staff.end_session(actor.sctx, actor.id_hash)
     target = "/staff/login"
-    if console_sessions.is_sso_session(actor.sctx.key_token) and request.app.state.oidc is not None:
-        target = request.app.state.oidc.logout_url(request, target) or target
+    oidc_client = request.app.state.oidc
+    if oidc_client is not None and console_sessions.is_oidc_session(actor.sctx.key_token):
+        target = oidc_client.logout_url(request, target) or target
     response = RedirectResponse(target, status_code=303)
     response.delete_cookie(STAFF_COOKIE, path="/", secure=True, httponly=True, samesite="strict")
     return response

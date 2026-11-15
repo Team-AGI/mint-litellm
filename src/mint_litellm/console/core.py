@@ -105,8 +105,10 @@ class ConsoleConfig:
     spend_lookup: bool = False
     # OIDC 로그인 설정(MINT_OIDC_*). 없으면 SSO 버튼을 보이지 않는다.
     oidc: OidcConfig | None = None
-    # 본인 LiteLLM 키 입력 로그인. MINT_CONSOLE_KEY_LOGIN=off이면 끈다(OIDC가 있어야 한다).
-    key_login: bool = True
+    # 본인 LiteLLM 키 입력 로그인. 기본은 끔이며 비상 접속용으로만 MINT_CONSOLE_KEY_LOGIN=on.
+    key_login: bool = False
+    # 로그인 화면의 LiteLLM 관리 화면 링크 주소(MINT_LITELLM_UI_URL). 없으면 링크를 숨긴다.
+    litellm_ui_url: str | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "ConsoleConfig":
@@ -128,10 +130,11 @@ class ConsoleConfig:
         except OSError:
             raise ControlError("MINT_ENDPOINT_CA_FILE을 읽을 수 없습니다.") from None
         oidc_config = OidcConfig.from_env(env)
-        key_login = (env.get("MINT_CONSOLE_KEY_LOGIN") or "on").strip().lower() not in (
-            "off", "0", "false", "no")
-        if not key_login and oidc_config is None:
-            raise ControlError("키 로그인을 끄려면 MINT_OIDC_ISSUER를 먼저 설정해야 합니다.")
+        key_login = (env.get("MINT_CONSOLE_KEY_LOGIN") or "").strip().lower() in (
+            "on", "1", "true", "yes")
+        ui_url = (env.get("MINT_LITELLM_UI_URL") or "").strip().rstrip("/") or None
+        if ui_url and not ui_url.startswith(("https://", "http://")):
+            raise ControlError("MINT_LITELLM_UI_URL은 http(s) 주소여야 합니다.")
         return cls(
             control, stage2, control.litellm_url, admin, control.require_database(), staff_url,
             zone,
@@ -144,6 +147,7 @@ class ConsoleConfig:
             spend_lookup=_truthy(env.get("MINT_SPEND_LOG_LOOKUP")),
             oidc=oidc_config,
             key_login=key_login,
+            litellm_ui_url=ui_url,
         )
 
     @property
