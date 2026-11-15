@@ -28,10 +28,13 @@ from mint_litellm.console.core import (
     Unauthenticated,
     config_of,
     db,
+    delete_cookie,
     error_response,
     login_redirect,
+    read_cookie,
     require_csrf,
     require_origin,
+    set_cookie,
     too_many_attempts,
 )
 from mint_litellm.console.error_pages import error_reply, wants_page
@@ -198,15 +201,13 @@ def create_app(
                 raise
             return render(request, "login.html", login_context(request, error.message), status=403)
         response = RedirectResponse("/", status_code=303)
-        response.set_cookie(
-            COOKIE, session_id, httponly=True, secure=True, samesite="strict", path="/"
-        )
+        set_cookie(response, request, COOKIE, session_id)
         return response
 
     @app.post("/logout", dependencies=[Depends(require_csrf)])
     def logout(request: Request, conn: psycopg.Connection = Depends(db)) -> Response:
         cfg = config_of(request)
-        session_id = request.cookies.get(COOKIE)
+        session_id = read_cookie(request, COOKIE)
         info = None
         if session_id:
             info = console_sessions.lookup(conn, cfg.instance_id, cfg.stage2, session_id)
@@ -219,7 +220,7 @@ def create_app(
         if info is not None and console_sessions.is_oidc_session(info.key_token) and app.state.oidc:
             target = app.state.oidc.logout_url(request, target) or target
         response = RedirectResponse(target, status_code=303)
-        response.delete_cookie(COOKIE, path="/", secure=True, httponly=True, samesite="strict")
+        delete_cookie(response, request, COOKIE)
         return response
 
     return app

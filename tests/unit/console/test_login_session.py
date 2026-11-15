@@ -44,6 +44,20 @@ def test_the_session_cookie_is_host_bound_http_only_secure_and_strict(world):
     assert "samesite=strict" in cookie and "path=/" in cookie and "domain" not in cookie
 
 
+def test_plain_http_keeps_the_login_with_an_unprefixed_non_secure_cookie(world):
+    # 브라우저는 HTTP 응답의 Secure·__Host- 쿠키를 버리므로 평문 운영에서는 접두사 없는 쿠키를 쓴다.
+    http = world.client.__class__(world.app, base_url="http://testserver", follow_redirects=False)
+    response = http.post("/login", data={"key": Keys.admin})
+    cookie = response.headers["set-cookie"].lower()
+    assert cookie.startswith("mint_session=") and "secure" not in cookie
+    assert "httponly" in cookie and "samesite=strict" in cookie
+    assert http.get("/").status_code == 200
+    # HTTPS 요청은 __Host- 이름만 읽으므로 평문으로 받은 쿠키는 세션으로 쓰이지 않는다.
+    https = world.client.__class__(world.app, base_url="https://testserver", follow_redirects=False)
+    https.cookies.set("mint_session", http.cookies["mint_session"])
+    assert https.get("/").status_code == 303
+
+
 def test_the_plain_key_is_never_stored(world):
     attempt(world, Keys.admin)
     stored = world.query(

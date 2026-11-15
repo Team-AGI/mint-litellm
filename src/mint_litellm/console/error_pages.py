@@ -6,7 +6,7 @@ from urllib.parse import unquote
 from fastapi import Request
 from fastapi.responses import JSONResponse, Response
 
-from mint_litellm.console.core import COOKIE, Actor, config_of, is_staff_path
+from mint_litellm.console.core import COOKIE, Actor, config_of, is_staff_path, read_cookie
 from mint_litellm.console.templating import MENU, render
 from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import connect
@@ -52,7 +52,7 @@ def _back(request: Request) -> tuple[str, str]:
 
 def _shell(request: Request, context: dict, status: int) -> Response | None:
     """로그인한 운영자에게는 메뉴가 있는 화면으로. 세션을 확인할 수 없으면 None."""
-    session_id = request.cookies.get(COOKIE)
+    session_id = read_cookie(request, COOKIE)
     if not session_id or is_staff_path(request):
         return None
     config = config_of(request)

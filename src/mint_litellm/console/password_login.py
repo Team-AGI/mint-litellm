@@ -16,7 +16,7 @@ import psycopg
 from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
 
-from mint_litellm.console.core import COOKIE_OPTIONS, config_of, too_many_attempts
+from mint_litellm.console.core import config_of, set_cookie, too_many_attempts
 from mint_litellm.console.login import LoginRefused
 from mint_litellm.console.oidc import login_context
 from mint_litellm.console.sso_pages import PAGES, TOO_MANY, human_user, open_session
@@ -114,5 +114,5 @@ def sign_in(
     finally:
         password = ""  # 비밀번호는 여기서 버린다
     response = RedirectResponse("/" if target == "admin" else "/staff", status_code=303)
-    response.set_cookie(cookie, session_id, **COOKIE_OPTIONS)
+    set_cookie(response, request, cookie, session_id)
     return response

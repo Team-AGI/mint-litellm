@@ -13,6 +13,14 @@ import psycopg
 from fastapi import Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
+from mint_litellm.console.cookies import (  # noqa: F401  다른 화면 모듈이 여기서 가져간다
+    COOKIE_OPTIONS,
+    cookie_name,
+    delete_cookie,
+    is_https,
+    read_cookie,
+    set_cookie,
+)
 from mint_litellm.console.oidc import OidcConfig
 from mint_litellm.control import operators
 from mint_litellm.control.config import ControlConfig
@@ -38,9 +46,6 @@ STATUS = {
 }
 INVALID = "MINT-ADMIN-INVALID-INPUT"
 DEFAULT_TIME_ZONE = "Asia/Seoul"
-COOKIE_OPTIONS = {"httponly": True, "secure": True, "samesite": "strict", "path": "/"}
-
-
 class ReadOnlyLiteLLM:
     """제어 평면 키의 읽기 경로 전용 클라이언트. 쓰기 메서드가 없고 확인 읽기만 낸다."""
 
@@ -268,7 +273,7 @@ async def require_csrf(request: Request) -> None:
         return
     if request.headers.get("authorization", "").lower().startswith("bearer "):
         return
-    cookie = request.cookies.get(STAFF_COOKIE if is_staff_path(request) else COOKIE)
+    cookie = read_cookie(request, STAFF_COOKIE if is_staff_path(request) else COOKIE)
     if not cookie:
         return  # 세션이 없으면 인증 단계가 거부한다(로그인 요청은 출처만 확인한다)
     sent = request.headers.get("x-csrf-token")
@@ -298,7 +303,7 @@ def actor_dep(*, allow_token: bool):
                 raise Unauthenticated(str(error)) from None
             ctx = Context(conn, config.instance_id, operator)
             return Actor(ctx, None, None, config, request_id)
-        session_id = request.cookies.get(COOKIE)
+        session_id = read_cookie(request, COOKIE)
         info = (
             console_sessions.lookup(conn, config.instance_id, config.stage2, session_id)
             if session_id

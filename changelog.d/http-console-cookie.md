@@ -1,0 +1,1 @@
+- 관리자·직원 콘솔을 평문 HTTP 주소(사내망 IP:포트)로 열어도 로그인이 유지된다. HTTPS(앞단 프록시의 `X-Forwarded-Proto: https` 포함)에서는 지금처럼 `__Host-`·Secure 쿠키를 쓰고, HTTP에서는 접두사 없는 쿠키를 쓴다. HTTPS 요청은 HTTP로 받은 쿠키를 세션으로 받지 않는다.
