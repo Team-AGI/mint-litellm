@@ -183,11 +183,12 @@ def with_user(world, email="p@acme.test"):
     )
 
 
-def test_a_generated_password_meets_the_litellm_default_rules():
+def test_a_generated_password_meets_the_litellm_default_rules_including_a_special_character():
     for _ in range(50):
         password = litellm_password.generate_password()
         assert len(password) >= 12 and re.search("[A-Z]", password)
         assert re.search("[a-z]", password) and re.search("[0-9]", password)
+        assert re.search("[^A-Za-z0-9]", password)  # LiteLLM 기본 규칙은 특수문자도 요구한다
 
 
 def test_set_password_updates_the_user_and_returns_the_login(world):

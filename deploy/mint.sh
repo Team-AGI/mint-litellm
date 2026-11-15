@@ -329,7 +329,7 @@ issue_ui_password() {
     [ ! -e "$file" ] || { echo "$file이 이미 있습니다. 새로 정하려면 파일을 지운 뒤 다시 실행하십시오." >&2; return 1; }
     reply="$(env "MINT_LITELLM_ADMIN_KEY=$(env_value LITELLM_MASTER_KEY)"         "${COMPOSE[@]}" run --rm -T -e MINT_LITELLM_ADMIN_KEY ${MINT_LITELLM_KEY:+-e MINT_LITELLM_KEY}         control --json user password-reset "$user" ${email:+--email "$email"})"         || { echo "$reply" >&2; echo "비밀번호를 정하지 못했습니다. ./mint.sh password $user [--email <이메일>]로 다시 시도하십시오." >&2; return 1; }
     p_login='"login": *"([^"]+)"'
-    p_password='"password": *"([A-Za-z0-9]+)"'
+    p_password='"password": *"([A-Za-z0-9._-]+)"'
     [[ "$reply" =~ $p_login ]] && login="${BASH_REMATCH[1]}" || return 1
     [[ "$reply" =~ $p_password ]] && password="${BASH_REMATCH[1]}" || return 1
     (umask 077; printf '%s %s

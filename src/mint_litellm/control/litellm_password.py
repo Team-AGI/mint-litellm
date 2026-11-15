@@ -20,16 +20,22 @@ MISSING_KEY = (
     "필요합니다. deploy/mint.sh cli로 실행하면 마스터 키를 넘겨 줍니다."
 )
 
+SPECIALS = "-_."
+
 
 def generate_password() -> str:
-    """LiteLLM 기본 규칙(12자 이상, 대문자·소문자·숫자)을 만족하는 무작위 비밀번호."""
-    pool = string.ascii_letters + string.digits
+    """LiteLLM 기본 규칙(12자 이상, 대문자·소문자·숫자·특수문자)을 만족하는 무작위 비밀번호.
+
+    특수문자는 셸·JSON에 그대로 옮겨도 안전한 ``-_.``만 쓴다.
+    """
+    pool = string.ascii_letters + string.digits + SPECIALS
     while True:
         password = "".join(secrets.choice(pool) for _ in range(20))
         if (
             any(c.isupper() for c in password)
             and any(c.islower() for c in password)
             and any(c.isdigit() for c in password)
+            and any(c in SPECIALS for c in password)
         ):
             return password
 
