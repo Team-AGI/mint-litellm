@@ -189,6 +189,28 @@ def test_approve_requires_the_target_to_exist_in_litellm(ctx, litellm):
         approve(ctx, litellm, relation, scope_type="user", scope_id="nobody")
 
 
+def test_user_approval_uses_litellm_v2_permission_detail(ctx, litellm, stub, conn):
+    relation = prepare(ctx, litellm)
+    body = json.loads(
+        json.dumps(stub.routes[("/user/info", frozenset({("user_id", "human-1")}))][1])
+    )
+    body["user_info"].update(object_permission_id="perm-1", object_permission=None)
+    stub.set("/user/info", body, user_id="human-1")
+    stub.set(
+        "/v2/user/info",
+        {
+            "user_id": "human-1",
+            "object_permission": {
+                "object_permission_id": "perm-1",
+                "mcp_servers": ["ctl-everything"],
+            },
+        },
+        user_id="human-1",
+    )
+    approve(ctx, litellm, relation, scope_type="user", scope_id="human-1")
+    assert fetchone(conn, "SELECT scope_type FROM mint.approvals")["scope_type"] == "user"
+
+
 def test_approve_is_refused_when_litellm_has_not_granted_the_server(ctx, litellm, stub, conn):
     relation = prepare(ctx, litellm)
     info = json.loads(json.dumps(stub.routes[("/key/info", frozenset({("key", GOOD_KEY)}))][1]))

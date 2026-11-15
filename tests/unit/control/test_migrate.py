@@ -25,6 +25,32 @@ def test_applies_once_and_is_a_no_op_the_second_time(fresh_db):
         assert names == ALL
 
 
+def test_control_role_can_read_every_backup_table(fresh_db):
+    with psycopg.connect(fresh_db) as conn:
+        missing = conn.execute(
+            "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace"
+            " WHERE n.nspname = 'mint' AND c.relkind IN ('r', 'p') AND NOT c.relispartition"
+            " AND NOT has_table_privilege('mint_control', c.oid, 'SELECT')"
+        ).fetchall()
+        assert missing == []
+        assert conn.execute(
+            "SELECT has_column_privilege('mint_control', 'mint.jobs', 'run_after', 'UPDATE')"
+        ).fetchone()[0]
+
+
+def test_control_login_can_create_json_backup(fresh_db, login_roles):
+    from ctl_fixtures import LOGIN_PASSWORDS
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    from mint_litellm.control.backup import _json_body
+    from mint_litellm.control.db.roles import LOGIN_ROLES
+
+    params = conninfo_to_dict(fresh_db)
+    params.update(user=LOGIN_ROLES["mint_control"], password=LOGIN_PASSWORDS["mint_control"])
+    body, _ = _json_body(make_conninfo(**params))
+    assert b'"contract_observation_receipts"' in body
+
+
 def test_first_run_on_an_empty_database_applies_everything(fresh_db):
     from psycopg.conninfo import conninfo_to_dict, make_conninfo
 

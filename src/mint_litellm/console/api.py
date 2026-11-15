@@ -718,6 +718,7 @@ class IntakeDecisionBody(Versioned):
     scope_type: Literal["key", "user", "team"] | None = None
     scope_id: str | None = None
     team_id: str | None = None
+    allowed_hosts: list[str] | None = None
     second_approver_token: str | None = None
 
 
@@ -746,8 +747,15 @@ def decide_intake(actor: Actor, intake_id: str, body: IntakeDecisionBody) -> dic
             days=intake_days(body.decision, body.valid_days, strict)
         )
     return intake_service.decide(
-        actor.ctx, intake_id, body.decision, reason=body.reason, valid_until=valid_until,
-        scope_type=body.scope_type, scope_id=body.scope_id, team_id=body.team_id,
+        actor.ctx,
+        intake_id,
+        body.decision,
+        reason=body.reason,
+        valid_until=valid_until,
+        scope_type=body.scope_type,
+        scope_id=body.scope_id,
+        team_id=body.team_id,
+        allowed_hosts=body.allowed_hosts,
         second=second_approver(actor, body.second_approver_token),
         expected_version=body.state_version,
         litellm=None if body.decision == "reject" else actor.litellm,

@@ -96,10 +96,16 @@ def _show(run) -> None:
     row = key_block.show(run.conn, run.cfg.instance_id, run.args.proposal_id)
     run.data.update(_public(row))
     run.say(f"{row['id']}  {row['status']}  {row['signal']}")
-    run.say(f"키 {row['key_alias'] or '—'}  사용자 {row['user_id'] or '—'}  "
-            f"팀 {row['team_id'] or '—'}(키 {row['team_key_count']}개, 구성원 "
-            f"{row['team_member_count']}명)")
-    run.say(f"증거 {row['evidence']}")
+    run.say(
+        f"키 {row['key_alias'] or '—'}  사용자 {row['user_id'] or '—'}  팀 {row['team_id'] or '—'}"
+    )
+    if row["team_key_count"] is not None or row["team_member_count"] is not None:
+        keys = row["team_key_count"] if row["team_key_count"] is not None else "미확인"
+        members = row["team_member_count"] if row["team_member_count"] is not None else "미확인"
+        run.say(f"팀 영향: 키 {keys}개, 구성원 {members}명")
+    for key, value in (row["evidence"] or {}).items():
+        shown = ", ".join(map(str, value)) if isinstance(value, list) else str(value)
+        run.say(f"증거 {key}: {shown}")
     run.say(f"만료 {row['expires_at']:%Y-%m-%d %H:%M}  상태 버전 {row['state_version']}")
 
 

@@ -838,9 +838,12 @@ def test_high_risk_tools_land_in_the_approval_conditions(world):
     drop = {**TOOL, "name": "drop", "annotations": {"destructiveHint": True}}
     world.stub.tools = (200, {"tools": [TOOL, drop], "message": "ok"})
     intake_id = passed(world)
-    world.decide(intake_id, "approve", valid_until=FUTURE)
+    world.decide(intake_id, "approve", valid_until=FUTURE, allowed_hosts=["learn.microsoft.com"])
     approval = fetchone(world.conn, "SELECT * FROM mint.approvals")
-    assert approval["conditions"] == {"high_risk_tools": ["drop"]}
+    assert approval["conditions"] == {
+        "high_risk_tools": ["drop"],
+        "allowed_hosts": ["learn.microsoft.com"],
+    }
     assert (approval["scope_type"], approval["scope_id"]) == ("user", "owner-1")  # 기본: 책임자
     assert world.jobs("sync_target") == []  # 사용자 범위는 LiteLLM 권한을 바꾸지 않는다
 
@@ -2250,9 +2253,28 @@ def test_a_retired_server_keeps_an_alert_open_until_access_revocation_is_attache
     assert evidence.scan_alerts(world.conn, INSTANCE) == 1
     alert = fetchone(world.conn, "SELECT * FROM mint.alerts WHERE kind = 'evidence_missing'")
     assert [i["evidence"] for i in alert["subject"]["items"]] == ["access_revocation"]
+    world.call(
+        lambda ctx: evidence.enqueue_job(ctx, "server_finalize", "srv-a"),
+        name="boss",
+        user="boss-1",
+        role="approver",
+    )
+    world.conn.execute(
+        "UPDATE mint.jobs SET run_after = now() + interval '1 hour'"
+        " WHERE kind = 'server_finalize' AND target_ref = 'srv-a'"
+    )
     attach(world, "access_revocation", "srv-a", summary="서비스 계정 삭제, 공유 권한 회수")
-    assert fetchone(world.conn, "SELECT status FROM mint.alerts WHERE id = %s",
-                    (alert["id"],))["status"] == "resolved"
+    assert fetchone(
+        world.conn,
+        "SELECT run_after <= now() AS ready FROM mint.jobs"
+        " WHERE kind = 'server_finalize' AND target_ref = 'srv-a'",
+    )["ready"]
+    assert (
+        fetchone(world.conn, "SELECT status FROM mint.alerts WHERE id = %s", (alert["id"],))[
+            "status"
+        ]
+        == "resolved"
+    )
     assert evidence.scan_alerts(world.conn, INSTANCE) == 0
     # 폐기 마무리 작업이 증빙을 기다리므로 붙이면 다시 등록된다
     assert fetchone(world.conn, "SELECT status FROM mint.jobs WHERE kind = 'server_finalize'"

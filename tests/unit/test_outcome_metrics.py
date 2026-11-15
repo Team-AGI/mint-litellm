@@ -80,7 +80,7 @@ def test_block_error_carries_reference_only():
     ref = f"{uuid4()}:1"
     detail = json.loads(error_for_reason("DENIED", ref).detail())
     assert detail["reference"] == ref
-    assert set(detail) == {"code", "dispatch_state", "retry_safe", "reference"}
+    assert set(detail) == {"code", "dispatch_state", "retry_safe", "reference", "guidance"}
 
 
 def test_ledger_reference_filter():

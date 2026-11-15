@@ -244,6 +244,25 @@ class TestGuardrailJudgment:
         assert obj.model_call_details[MINT_CTX_KEY]["allowed"] is False
         assert len(store.of_kind("decision_evaluated")) == 1
 
+    def test_the_spend_log_copy_of_the_arguments_is_masked_but_the_call_arguments_are_not(
+        self, tmp_path, contract_snapshot
+    ):
+        # LiteLLM은 이 사본을 가림 설정과 상관없이 지출 기록에 저장한다(1.106.6 operations.py).
+        runtime, _, _ = build_runtime(
+            tmp_path, snapshot(server=contract_snapshot.server, approvals=())
+        )
+        secret = "AKIA" + "Q2BXYZ7KDJ4LMN5P"  # EXAMPLE로 끝나는 문서 예시 키는 가리지 않는다
+        arguments = {"q": f"key {secret}", "nested": [{"v": secret}], "n": 3}
+        obj = logging_obj()
+        meta = {"name": "search", "arguments": arguments}
+        obj.model_call_details["mcp_tool_call_metadata"] = meta
+        with pytest.raises(HTTPException):
+            pre(runtime.guardrail, synthesized(obj, mcp_arguments=arguments))
+        logged = obj.model_call_details["mcp_tool_call_metadata"]["arguments"]
+        assert secret not in json.dumps(logged) and logged["n"] == 3
+        assert "[MASKED:" in logged["q"] and "[MASKED:" in logged["nested"][0]["v"]
+        assert arguments["q"] == f"key {secret}"
+
     def test_the_error_detail_is_a_json_string(self, tmp_path, contract_snapshot):
         runtime, _, _ = build_runtime(
             tmp_path, snapshot(server=contract_snapshot.server, approvals=())
@@ -252,7 +271,9 @@ class TestGuardrailJudgment:
             pre(runtime.guardrail, synthesized(logging_obj()))
         detail = raised.value.detail
         assert isinstance(detail, str)
-        assert set(json.loads(detail)) == {"code", "dispatch_state", "retry_safe", "reference"}
+        assert set(json.loads(detail)) == {
+            "code", "dispatch_state", "retry_safe", "reference", "guidance"
+        }
 
     def test_an_internal_block_uses_the_same_reference_form(self):
         from mint_litellm.plugin.logger import internal_block

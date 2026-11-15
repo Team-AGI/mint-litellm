@@ -37,6 +37,7 @@ from mint_litellm.plugin.approval_hold import hold_if_confirmation_pending, hold
 from mint_litellm.plugin.code_exec import code_execution
 from mint_litellm.plugin.logger import MintLogger, internal_block
 from mint_litellm.plugin.output_guardrail import MintOutputGuardrail
+from mint_litellm.plugin.policy.sensitive_scan import mask_text
 from mint_litellm.plugin.provider_mcp import external_mcp, is_realtime
 from mint_litellm.plugin.selfcheck import (
     PluginRuntime,
@@ -195,6 +196,9 @@ class MintGuardrail(CustomGuardrail):
         allowed = False
         timing = StageClock() if timed else OFF
         began = guardrail_log.clock()
+        # 허용·차단과 상관없이 지출 기록에 남을 인자 사본의 비밀값을 가린다.
+        with contextlib.suppress(Exception):
+            compat.mask_logged_mcp_arguments(data.get("litellm_logging_obj"), mask_text)
         try:
             try:
                 outcome = await self._runtime.judge_call(data, user_api_key_dict, timing)

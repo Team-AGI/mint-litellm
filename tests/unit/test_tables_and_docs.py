@@ -87,6 +87,7 @@ def test_control_plane_routes():
         "/key/info",
         "/team/info",
         "/user/info",
+        "/v2/user/info",
         "/key/list",
         "/team/list",
         "/user/list",
