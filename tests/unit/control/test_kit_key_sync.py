@@ -11,6 +11,7 @@ from ctl_fixtures import INSTANCE
 pytest.importorskip("psycopg")
 
 from mint_litellm.control import endpoint_kits, kit_key_sync  # noqa: E402
+from mint_litellm.control.litellm_write import LiteLLMHttpError  # noqa: E402
 from mint_litellm.control.services import orgs, relations  # noqa: E402
 from mint_litellm.control.services import servers as services  # noqa: E402
 
@@ -140,3 +141,38 @@ def test_a_revoked_install_is_left_alone(conn, world):
     conn.execute("UPDATE mint.endpoint_installs SET revoked_at = now()")
     client = Client()
     assert kit_key_sync.sync_kit_keys(conn, INSTANCE, client) == 0 and client.written == []
+
+
+class VanishingClient(Client):
+    """읽을 때는 있던 키가 쓰기 직전에 지워진다. ``route_404``이면 키는 그대로 두고 쓰기만 404."""
+
+    def __init__(self, route_404=False):
+        super().__init__()
+        self.route_404 = route_404
+
+    def update_key_permission(self, token, servers, tools):
+        if not self.route_404:
+            self.key = None
+        raise LiteLLMHttpError("404", 404, {"detail": "Not Found"})
+
+    def get_key(self, token):
+        return self.key
+
+
+def test_a_gateway_key_deleted_in_litellm_opens_one_alert_and_does_not_stop_the_sync(conn, world):
+    relation, _, token = world
+    approve(conn, relation, "user", "u1")
+    client = VanishingClient()
+    assert kit_key_sync.sync_kit_keys(conn, INSTANCE, client) == 0
+    kit_key_sync.sync_kit_keys(conn, INSTANCE, client)
+    rows = conn.execute(
+        "SELECT dedup_key, status FROM mint.alerts WHERE kind = 'sync_target_missing'"
+    ).fetchall()
+    assert rows == [(f"sync_target_missing:key:{token}", "open")]
+
+
+def test_a_gateway_key_write_404_for_another_reason_still_raises(conn, world):
+    relation, _, _ = world
+    approve(conn, relation, "user", "u1")
+    with pytest.raises(LiteLLMHttpError):
+        kit_key_sync.sync_kit_keys(conn, INSTANCE, VanishingClient(route_404=True))

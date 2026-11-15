@@ -12,11 +12,13 @@ MINT가 넣지 않은 항목은 그대로 둔다.
 - ``tool_permission`` 행의 ``tools``는 MINT가 더한 도구뿐이다(원래 있던 도구는 넣지 않는다).
 """
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
 import psycopg
 
+from mint_litellm.control.alerts import raise_alert
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.types.canonical import credential_scope, sha256
 from mint_litellm.types.ids import new_uuid7
@@ -34,6 +36,31 @@ def split_ref(ref: str) -> tuple[str, str]:
     if kind not in SYNC_SCOPES or not target_id:
         raise ValueError(f"동기화 대상 형식이 올바르지 않습니다: {ref}")
     return kind, target_id
+
+
+def missing_key(ref: str) -> str:
+    return f"sync_target_missing:{ref}"
+
+
+def raise_target_missing(conn: psycopg.Connection, instance_id: str, ref: str, via: str) -> None:
+    """키·팀이 LiteLLM에서 지워졌다는 경보를 대상마다 한 건 연다(``via``: 알게 된 쪽)."""
+    kind, target_id = split_ref(ref)
+    raise_alert(
+        conn, instance_id, kind="sync_target_missing", severity="high", dedup_key=missing_key(ref),
+        subject={"target": ref, "target_type": kind, "target_id": target_id, "via": via},
+    )
+
+
+def target_gone(client: Any, kind: str, target_id: str, error: Any) -> bool:
+    """쓰기가 404였을 때 그 404가 대상이 없어서인가(경로·판본 문제의 404가 아니라).
+
+    대상을 다시 읽어 없으면, 또는 응답 본문이 대상 식별자를 짚으면 대상 없음이다.
+    """
+    read = client.get_key if kind == "key" else client.get_team
+    if read(target_id) is None:
+        return True
+    body = json.dumps(getattr(error, "body", None), ensure_ascii=False, default=str)
+    return len(target_id) >= 8 and target_id in body  # 짧은 식별자는 본문과 우연히 겹친다
 
 
 # --- 원하는 상태 ----------------------------------------------------------------

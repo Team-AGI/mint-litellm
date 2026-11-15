@@ -4,6 +4,7 @@
 받은 실제 응답을 따른다. 클라이언트의 HTTP 경로는 그대로 실행되고 서버만 응답을 고정한다.
 """
 
+import base64
 import dataclasses
 import hashlib
 import json
@@ -56,12 +57,24 @@ def auth_error(message: str, kind: str = "auth_error") -> dict:
     return {"error": {"message": message, "type": kind, "param": "None", "code": "401"}}
 
 
+def fake_ui_token(claims: dict) -> str:
+    """서명 없는 JWT 꼴(콘솔은 본문만 읽는다)."""
+    def part(value: dict) -> str:
+        return base64.urlsafe_b64encode(json.dumps(value).encode()).rstrip(b"=").decode()
+
+    return f"{part({'alg': 'HS256'})}.{part(claims)}.sig"
+
+
 class LiteLLMStub:
     """``(경로, 인증 값, key 쿼리)``별 응답. 등록되지 않은 요청은 404이다."""
 
     def __init__(self) -> None:
         self.routes: dict[tuple[str, str, str | None], tuple[int, object]] = {}
         self.requests: list[tuple[str, str, dict]] = []
+        self.logins: dict[str, tuple[str, dict]] = {}
+        self.posts: list[tuple[str, dict]] = []
+        self.login_status = 0
+        self.post_auth: list[str] = []
         stub = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -75,6 +88,29 @@ class LiteLLMStub:
                     (404, {"error": {"message": "not found", "code": "404"}}),
                 )
                 payload = json.dumps(body).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def do_POST(self):  # noqa: N802
+                """``/v2/login``: ``stub.logins[아이디] = (비밀번호, 화면 토큰 본문)``."""
+                length = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(length) or b"{}")
+                stub.posts.append((urlsplit(self.path).path, body))
+                stub.post_auth.append(self.headers.get("Authorization", ""))
+                known = stub.logins.get(body.get("username"))
+                if urlsplit(self.path).path == "/user/update":
+                    status, reply = 200, {}
+                elif (urlsplit(self.path).path == "/v2/login" and known
+                      and known[0] == body["password"]):
+                    status, reply = 200, {"redirect_url": "x", "token": fake_ui_token(known[1])}
+                elif stub.login_status:
+                    status, reply = stub.login_status, {"error": {"message": "x"}}
+                else:
+                    status, reply = 401, {"error": {"message": "Invalid credentials"}}
+                payload = json.dumps(reply).encode()
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(payload)))
@@ -181,6 +217,7 @@ def world(fresh_db, login_roles, stub, tmp_path):
     config = ConsoleConfig(
         control, stage2, stub.url, None, url,
         login_url(fresh_db, "mint_staff_app", "pw-staff"),
+        key_login=True,
     )
     app = create_app(config)
     client = TestClient(app, base_url="https://testserver", follow_redirects=False)

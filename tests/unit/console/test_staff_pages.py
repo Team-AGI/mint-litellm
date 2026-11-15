@@ -111,7 +111,7 @@ def test_the_same_key_cannot_open_the_admin_console_without_an_operator_row(swor
 
 @pytest.mark.parametrize("key, text", [
     ("sk-unknown", "키를 확인할 수 없습니다"),
-    ("", "키를 입력하십시오"),
+    ("", "아이디와 비밀번호를 입력하십시오"),
 ])
 def test_staff_login_refuses_unknown_and_empty_keys(sworld, key, text):
     client, response = staff_login(sworld, key)

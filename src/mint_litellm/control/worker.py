@@ -282,7 +282,7 @@ class Worker:
         if ctx.lost.is_set():
             log.warning("작업 %s(%s)의 임대를 잃어 결과를 기록하지 않습니다.", job["kind"], job_id)
         elif outcome == "ok":
-            jobs.complete(conn, job_id, self.owner)
+            jobs.complete(conn, job_id, self.owner, ctx.outcome)
         elif outcome == "cancelled":
             jobs.release(conn, job_id, self.owner, "shutdown")
         elif outcome == "restore_blocked":

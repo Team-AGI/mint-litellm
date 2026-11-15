@@ -32,6 +32,16 @@ def test_a_stale_screen_is_refused_with_a_conflict_message(world, admin):
     assert response.status_code == 409 and "상태 버전" in response.text
 
 
+def test_an_approval_whose_key_was_deleted_in_litellm_is_marked_missing(world, admin):
+    add_approval(world)
+    assert "대상 없음" not in admin.get("/access?tab=approvals").text
+    world.query(
+        "INSERT INTO mint.alerts (id, instance_id, kind, severity, dedup_key, subject)"
+        " VALUES (gen_random_uuid(), %s, 'sync_target_missing', 'high',"
+        " 'sync_target_missing:user:human-5', '{}')", INSTANCE)
+    assert "대상 없음" in admin.get("/access?tab=approvals").text
+
+
 def test_revoke_and_revoke_with_denial_are_separate_buttons(world, admin):
     add_approval(world)
     html = admin.get("/access?tab=approvals").text

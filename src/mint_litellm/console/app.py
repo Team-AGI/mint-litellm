@@ -12,7 +12,16 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from mint_litellm.console import api, chat, login, oidc, pages, sso_pages, staff_pages
+from mint_litellm.console import (
+    api,
+    chat,
+    login,
+    oidc,
+    pages,
+    password_login,
+    sso_pages,
+    staff_pages,
+)
 from mint_litellm.console.core import (
     COOKIE,
     ConsoleConfig,
@@ -158,9 +167,12 @@ def create_app(
 
     @app.post("/login", dependencies=[Depends(require_origin)])
     def login_submit(
-        request: Request, key: str = Form(""), conn: psycopg.Connection = Depends(db)
+        request: Request, key: str = Form(""), username: str = Form(""),
+        password: str = Form(""), conn: psycopg.Connection = Depends(db),
     ) -> Response:
         cfg = config_of(request)
+        if not key:
+            return password_login.sign_in(request, conn, "admin", username, password)
         if not cfg.key_login:
             return render(
                 request, "login.html", login_context(request, "키 로그인은 사용하지 않습니다."),
@@ -204,7 +216,7 @@ def create_app(
                     reason="logout",
                 )
         target = "/login"
-        if info is not None and console_sessions.is_sso_session(info.key_token) and app.state.oidc:
+        if info is not None and console_sessions.is_oidc_session(info.key_token) and app.state.oidc:
             target = app.state.oidc.logout_url(request, target) or target
         response = RedirectResponse(target, status_code=303)
         response.delete_cookie(COOKIE, path="/", secure=True, httponly=True, samesite="strict")
