@@ -128,7 +128,7 @@ def test_a_launch_refuses_when_managed_and_falls_back_when_not(tmp_path, monkeyp
     assert json.loads(record.read_text())["sandbox"] == "none" and started == ["exec"]
 
 
-def test_hosts_on_windows_runs_unfiltered_and_says_so(tmp_path, monkeypatch, capsys):
+def hosts_launch(tmp_path, monkeypatch, why):
     exe = tmp_path / "srv.exe"
     exe.write_bytes(b"x")
     doc = {
@@ -137,8 +137,13 @@ def test_hosts_on_windows_runs_unfiltered_and_says_so(tmp_path, monkeypatch, cap
     }  # fmt: skip
     contracts = tmp_path / "c.json"
     contracts.write_text(json.dumps({"servers": {"s": doc}}))
+    asked = []
 
     class Box:
+        def limit_hosts(self, server, entries):
+            asked.append((server, entries))
+            return why
+
         def run(self):
             return 0
 
@@ -147,9 +152,177 @@ def test_hosts_on_windows_runs_unfiltered_and_says_so(tmp_path, monkeypatch, cap
     with pytest.raises(SystemExit):
         agent.run_server("s", str(contracts), {}, state_dir=str(tmp_path / "st"),
                          sandbox=agent.Sandbox(True))  # fmt: skip
-    assert "mint-egress unfiltered" in capsys.readouterr().err
     (record,) = (tmp_path / "st" / "launched").iterdir()
-    assert json.loads(record.read_text())["egress_unfiltered"] is True
+    assert asked == [("s", ["a.example"])]
+    return json.loads(record.read_text())
+
+
+def test_hosts_on_windows_without_a_firewall_rule_runs_unfiltered_and_says_so(
+    tmp_path, monkeypatch, capsys
+):
+    record = hosts_launch(tmp_path, monkeypatch, "no helper")
+    assert "mint-egress unfiltered" in capsys.readouterr().err
+    assert record["egress_unfiltered"] is True and "egress_filtered" not in record
+
+
+def test_hosts_on_windows_with_a_firewall_rule_is_recorded_as_filtered(
+    tmp_path, monkeypatch, capsys
+):
+    record = hosts_launch(tmp_path, monkeypatch, None)
+    assert "mint-egress firewall" in capsys.readouterr().err
+    assert record["egress_filtered"] is True and "egress_unfiltered" not in record
+
+
+# --- 호스트 허용 방화벽 ----------------------------------------------------------------------
+
+
+def v4(*parts):
+    return ".".join(str(part) for part in parts)
+
+
+ALLOWED = v4(1, 2, 3, 4)
+OTHER = v4(5, 6, 7, 8)
+PUBLIC = v4(93, 184, 216, 34)
+PRIVATE = v4(10, 0, 0, 5)
+DOC = v4(198, 51, 100, 7)
+ALL_V4 = f"{v4(0, 0, 0, 0)}-{v4(255, 255, 255, 255)}"
+ALL_V6 = "::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+
+
+def ask_for(profile="mint.s.1", allow=()):
+    return {"op": "allow", "profile": profile, "server": "s", "pid": 1, "start": "5",
+            "allow": list(allow)}  # fmt: skip
+
+
+def test_allowed_hosts_resolve_to_public_addresses_and_ports():
+    names = {"a.example": [PUBLIC, PRIVATE], "b.example": ["2606:2800:220:1::1"]}
+
+    def resolve(host, port):
+        if host not in names:
+            raise OSError("no name")
+        return names[host]
+
+    got = agent.egress_allow_list(["a.example:443", "b.example", "gone.example", DOC], resolve)
+    assert got == [
+        {"ip": DOC, "ports": None},
+        {"ip": "2606:2800:220:1::1", "ports": None},
+        {"ip": PUBLIC, "ports": [443]},
+    ]  # 사설 주소와 풀리지 않는 이름은 빠진다.
+    both = agent.egress_allow_list(["a.example:443", "a.example"], resolve)
+    assert both == [{"ip": PUBLIC, "ports": None}]  # 포트 없는 선언이 모든 포트를 연다.
+    assert agent.egress_allow_list(["*.example.com"], resolve) is None  # 풀 수 없다.
+
+
+def test_the_blocked_ranges_are_everything_but_the_allowed_addresses():
+    assert agent.address_gaps([ALLOWED])[:2] == [
+        f"{v4(0, 0, 0, 0)}-{v4(1, 2, 3, 3)}", f"{v4(1, 2, 3, 5)}-{v4(255, 255, 255, 255)}",
+    ]  # fmt: skip
+    edges = [v4(0, 0, 0, 0), v4(255, 255, 255, 255)]
+    assert agent.address_gaps(edges)[0] == f"{v4(0, 0, 0, 1)}-{v4(255, 255, 255, 254)}"
+    v6 = [r for r in agent.address_gaps([ALLOWED, "::1"]) if ":" in r]
+    assert v6 == ["::", "::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"]  # 한 주소는 범위가 아니다
+    assert agent.address_gaps([]) == [ALL_V4, ALL_V6]
+    assert agent.port_gaps([443]) == "1-442,444-65535"
+    assert agent.port_gaps([1, 65535]) == "2-65534"
+
+
+def test_the_rule_script_blocks_one_package_and_closes_on_failure():
+    allow = [{"ip": ALLOWED, "ports": [443]}, {"ip": OTHER, "ports": None}]
+    names = agent.net_rules("mint.s.7", allow)
+    ranges = [v4(0, 0, 0, 0) + "-" + v4(1, 2, 3, 3), v4(1, 2, 3, 5) + "-" + v4(5, 6, 7, 7),
+              v4(5, 6, 7, 9) + "-" + v4(255, 255, 255, 255), ALL_V6]  # fmt: skip
+    assert names[0] == ("MINT sandbox mint.s.7 a", ",".join(ranges), 0, "")
+    ports = "1-442,444-65535"
+    assert names[1:] == [
+        ("MINT sandbox mint.s.7 0/6", ALLOWED, 6, ports),
+        ("MINT sandbox mint.s.7 0/17", ALLOWED, 17, ports),
+    ]  # 허용 주소라도 선언한 포트 밖은 막는다(TCP·UDP)
+    script = agent.net_script("S-1-15-2-1-2", "mint.s.7", allow)
+    assert script.count("  Block '") == 3 and "$r.LocalAppPackageId = 'S-1-15-2-1-2'" in script
+    assert "$r.Action = 0" in script and "$r.Direction = 2" in script  # 나가는 차단
+    assert "$r.Grouping = 'MINT sandbox mint.s.7'" in script
+    assert "$p.Rules.Remove($n)" in script  # 실패하면 이번에 만든 규칙만 지운다
+    assert "$p.Rules.Item($rule)" in script  # 이미 있으면 주소만 바꾼다(갱신 중에도 열리지 않는다)
+    assert "exit 3" in script and "exit 4" in script  # 방화벽 꺼짐·실패는 시작을 거부하게 알린다
+
+
+def test_a_request_is_checked_before_it_is_acted_on():
+    ok = ask_for("mint.srv-1.42", [{"ip": ALLOWED, "ports": [443, 80]}])
+    assert agent.net_request(ok)["allow"] == [{"ip": ALLOWED, "ports": [80, 443]}]
+    assert agent.net_request({"op": "drop", "profile": "mint.srv-1.42"}) == {
+        "op": "drop", "profile": "mint.srv-1.42",
+    }  # fmt: skip
+    for bad in (
+        {**ok, "profile": "other.srv.1"}, {**ok, "profile": "mint.a b.1"},
+        {**ok, "allow": [{"ip": ALLOWED + "; calc", "ports": None}]},
+        {**ok, "allow": [{"ip": ALLOWED, "ports": [70000]}]},
+        {**ok, "allow": [{"ip": ALLOWED, "ports": []}]},
+        {**ok, "start": "x"}, {**ok, "server": "a'b"}, {**ok, "op": "other"}, "text", None,
+    ):
+        assert agent.net_request(bad) is None
+
+
+def test_the_helper_applies_requests_drops_stale_rules_and_leaves_a_result(tmp_path, monkeypatch):
+    requests = tmp_path / "net" / "req"
+    rules = tmp_path / "net" / "rules"
+    requests.mkdir(parents=True)
+    rules.mkdir()
+    ask = ask_for(allow=[{"ip": ALLOWED, "ports": None}])
+    (requests / "mint.s.1.json").write_text(json.dumps(ask))
+    (requests / "bad.json").write_text(json.dumps({"op": "allow", "profile": "x"}))
+    (requests / "half.json").write_text("{")
+    (rules / "mint.old.2.json").write_text(
+        json.dumps({"profile": "mint.old.2", "server": "old", "pid": 2, "start": "1"})
+    )
+    applied, dropped = [], []
+    monkeypatch.setattr(agent, "net_apply", lambda folder, request: applied.append(request) or None)
+    monkeypatch.setattr(agent, "net_drop", lambda folder, profile: dropped.append(profile))
+    monkeypatch.setattr(agent, "proc_start", lambda pid: None)  # 실행기가 모두 끝났다
+    agent.net_serve(str(tmp_path))
+    assert [r["profile"] for r in applied] == ["mint.s.1"]
+    assert dropped == ["mint.old.2"]
+    assert json.loads((tmp_path / "net" / "done" / "mint.s.1.json").read_text())["ok"] is True
+    assert sorted(p.name for p in requests.iterdir()) == ["half.json"]  # 쓰는 중일 수 있어 둔다
+
+
+def test_a_plain_user_asks_through_the_task_and_waits_for_the_answer(tmp_path, monkeypatch):
+    (tmp_path / "net" / "req").mkdir(parents=True)
+    done = tmp_path / "net" / "done"
+    done.mkdir()
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        answer = {"ok": False, "reason": "firewall disabled"}
+        (done / "mint.s.1.json").write_text(json.dumps(answer))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(agent, "_elevated", lambda: False)
+    monkeypatch.setattr(subprocess, "run", run)
+    assert agent.net_ask(str(tmp_path), ask_for(), wait=2) == "firewall disabled"
+    assert calls == [["schtasks", "/Run", "/TN", agent.NET_TASK]]
+    assert json.loads((tmp_path / "net" / "req" / "mint.s.1.json").read_text())["pid"] == 1
+    assert agent.net_ask(str(tmp_path / "x"), ask_for()) == "no helper"  # 설치가 만든 작업이 없다
+
+
+def test_an_elevated_launcher_applies_the_rule_itself(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(agent, "_elevated", lambda: True)
+    monkeypatch.setattr(agent, "net_apply", lambda folder, request: seen.append("apply") or None)
+    monkeypatch.setattr(agent, "net_drop", lambda folder, profile: seen.append("drop"))
+    assert agent.net_ask(str(tmp_path), ask_for()) is None
+    assert agent.net_ask(str(tmp_path), {"op": "drop", "profile": "mint.s.1"}) is None
+    assert agent.net_ask(str(tmp_path), {"op": "drop", "profile": "bad"}) == "bad request"
+    assert seen == ["apply", "drop"]
+
+
+def test_revoking_a_container_drops_its_firewall_rules_too(monkeypatch):
+    seen = []
+    monkeypatch.setattr(agent, "net_ask", lambda folder, request: seen.append(request))
+    monkeypatch.setattr(agent, "_icacls", lambda args: True)
+    agent._revoke({"profile": "mint.s.1", "sid": "S-1-15-2-9", "paths": [], "net": True})
+    agent._revoke({"profile": "mint.s.2", "sid": "S-1-15-2-9", "paths": []})
+    assert seen == [{"op": "drop", "profile": "mint.s.1"}]
 
 
 # --- 실제 격리(Windows에서만) ---------------------------------------------------------------
@@ -392,3 +565,70 @@ def test_the_pipe_relay_forwards_both_ways_and_taps_the_list(tmp_path, monkeypat
     assert sink.getvalue() == reply  # 서버 -> 하네스
     saved = json.loads((tmp_path / "tools" / "srv.json").read_text())
     assert [t["name"] for t in saved["tools"]] == ["t"]
+
+
+@windows_only
+def test_an_interactive_session_keeps_the_default_desktop():
+    import ctypes
+
+    session = ctypes.c_ulong()
+    ctypes.windll.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(session))
+    if session.value == 0:
+        pytest.skip("session 0 creates its own desktop")
+    assert agent.private_desktop("S-1-15-2-1") is None
+
+
+def test_reconcile_also_deletes_profiles_whose_record_is_gone(tmp_path, monkeypatch):
+    gone = []
+    monkeypatch.setattr(agent, "stale_profiles", lambda: ["mint.s.7"])
+    monkeypatch.setattr(agent, "_revoke", lambda record: gone.append(record))
+    agent.reconcile_appcontainers(str(tmp_path))  # 기록 폴더가 없어도 정리한다
+    assert gone == [{"profile": "mint.s.7"}]
+
+
+@windows_only
+def test_stale_profiles_lists_only_profiles_of_finished_launchers():
+    assert all(agent.PROFILE_NAME.match(name) for name in agent.stale_profiles())
+    live = f"mint.s.{os.getpid()}"
+    assert live not in agent.stale_profiles()
+
+
+@windows_only
+def test_permission_changes_take_turns_across_threads():
+    import threading
+
+    order = []
+    release = threading.Event()
+
+    def first():
+        with agent._acl_lock():
+            order.append("first in")
+            release.wait(5)
+            order.append("first out")
+
+    def second():
+        with agent._acl_lock():
+            order.append("second in")
+
+    one = threading.Thread(target=first)
+    one.start()
+    while "first in" not in order:
+        time.sleep(0.01)
+    two = threading.Thread(target=second)
+    two.start()
+    time.sleep(0.3)
+    assert "second in" not in order  # 앞선 변경이 끝나기 전에는 들어가지 못한다
+    release.set()
+    one.join(10)
+    two.join(10)
+    assert order == ["first in", "first out", "second in"]
+
+
+def test_new_addresses_are_added_to_the_allowed_set_never_dropped():
+    old = [{"ip": ALLOWED, "ports": [443]}, {"ip": OTHER, "ports": [80]}]
+    new = [
+        {"ip": ALLOWED, "ports": [8443]}, {"ip": DOC, "ports": None}, {"ip": OTHER, "ports": None},
+    ]
+    got = {item["ip"]: item["ports"] for item in agent.merge_allow(old, new)}
+    assert got == {ALLOWED: [443, 8443], OTHER: None, DOC: None}
+    assert {i["ip"] for i in agent.merge_allow(old, [])} == {ALLOWED, OTHER}

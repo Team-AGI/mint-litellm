@@ -49,7 +49,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 KIT = Path(__file__).resolve().parent
 MANAGED_DIR = "/etc/claude-code"
@@ -83,6 +85,11 @@ SHIM = "mint"
 MAX_PENDING = 256
 UNIT = "mint-report"
 TASK_NAME = "MINT Endpoint Report"
+SYNC_TASK_NAME = "MINT Endpoint Sync"  # Windows 관리형: 사용자 권한으로 Codex 설정을 맞추는 작업
+SYNC_INTERVAL_MINUTES = 10
+NET_TASK_NAME = "MINT Endpoint Net"  # Windows 관리형: 호스트 허용 방화벽 규칙을 만드는 SYSTEM 작업
+NET_DIR = "net"
+NET_GROUP = "MINT sandbox "
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -493,6 +500,37 @@ def classify_windows(rows, token_sid, container_sid) -> dict[str, str]:
     return found
 
 
+def win_start_table() -> dict[int, str]:
+    """Windows: 실행 중인 모든 프로세스의 (PID -> 시작 시각 표지)를 한 번에 읽는다.
+
+    기록마다 PowerShell을 부르면 실행기 기록이 쌓였을 때 보고가 몇 분씩 걸린다."""
+    out = capture([
+        "powershell", "-NoProfile", "-Command",
+        "Get-Process | ForEach-Object { try { "
+        '"$($_.Id) $($_.StartTime.ToFileTimeUtc())" } catch {} }',
+    ])  # fmt: skip
+    table: dict[int, str] = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0].isdigit():
+            table[int(parts[0])] = parts[1]
+    return table
+
+
+def net_filtered(programs: Path, windows: bool, start_of=None) -> set[str]:
+    """Windows: 호스트 허용 방화벽 규칙이 걸려 있고 그 실행기가 아직 도는 서버 이름들."""
+    found: set[str] = set()
+    folder = programs / NET_DIR / "rules"
+    for path in sorted(folder.glob("*.json")) if windows and folder.is_dir() else []:
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+            if (start_of or proc_start)(int(record["pid"]), windows) == str(record["start"]):
+                found.add(str(record["server"]))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return found
+
+
 def windows_sandbox_status() -> dict[str, str]:
     """운영체제가 보는 서버별 격리 상태(기록 파일을 믿지 않는다). 조회하지 못하면 빈 값."""
     try:
@@ -507,6 +545,8 @@ def with_sandbox(
     windows: bool,
     read_records: bool = True,
     observed: dict[str, str] | None = None,
+    filtered: set[str] | None = None,
+    start_of=None,
 ) -> list[dict]:
     """프로세스 항목에 서버별 격리 상태를 더한다(실행기가 남긴 기록 중 아직 살아 있는 것만).
 
@@ -516,11 +556,13 @@ def with_sandbox(
     (관리자 계정 보고기는 사용자 프로필의 기록을 읽지 않는다: ``read_records``).
     호스트 허용 목록 서버는 실행기가 센 거절 수 ``egress_refused``도 더하고, Windows에서 그 목록을
     거르지 못한 채 도는 서버는 ``egress_unfiltered``를 더한다(관리자 계정 보고기는 기록을 읽지
-    않으므로 이 값을 내지 못한다).
+    않으므로 이 값을 내지 못한다). 방화벽 규칙이 걸린 서버(``filtered``: 설치 폴더의 규칙 기록,
+    또는 실행기 기록)는 ``egress_filtered``를 더한다.
     """
     seen: dict[str, str] = {}
     refused: dict[str, int] = {}
     unfiltered: set[str] = set()
+    firewalled: set[str] = set(filtered or ())
     folder = home / STATE_REL / LAUNCHED
     for path in sorted(folder.glob("*.json")) if read_records and folder.is_dir() else []:
         try:
@@ -530,12 +572,14 @@ def with_sandbox(
         except (OSError, ValueError, KeyError, TypeError):
             continue
         if status in ("bwrap", "appcontainer", "none") and start:
-            if proc_start(pid, windows) == start:
+            if (start_of or proc_start)(pid, windows) == start:
                 seen[server] = "none" if "none" in (status, seen.get(server)) else status
                 if isinstance(record.get("egress_refused"), int) and record["egress_refused"] >= 0:
                     refused[server] = refused.get(server, 0) + record["egress_refused"]
                 if record.get("egress_unfiltered") is True:
                     unfiltered.add(server)
+                if record.get("egress_filtered") is True:
+                    firewalled.add(server)
     for item in processes:
         status = (
             (observed or {}).get(item["server"])
@@ -548,6 +592,8 @@ def with_sandbox(
             item["egress_refused"] = refused[item["server"]]
         if item["server"] in unfiltered:  # Windows: 호스트 허용 목록을 거르지 못함
             item["egress_unfiltered"] = True
+        elif item["server"] in firewalled:  # Windows: 방화벽 규칙이 호스트 허용 목록을 집행함
+            item["egress_filtered"] = True
     return processes
 
 
@@ -1459,6 +1505,8 @@ class Kit:
             command += ["--home", str(self.home).replace("\\", "/"), "--user", self.account.name]
         if self.windows:
             self.schedule_task(state, command)
+            self.schedule_sync_task(state, python, tool)
+            self.schedule_net_task(state, python)
         else:
             self.schedule_timer(state, command)
 
@@ -1572,6 +1620,84 @@ class Kit:
         ])  # fmt: skip
         if made:
             state["task"] = TASK_NAME
+
+    def schedule_sync_task(self, state: dict, python: str, tool: str) -> None:
+        """Windows 관리형 Codex: SYSTEM 보고기가 고치지 못하는 사용자 ``config.toml``의 서버 정의를
+        설치한 사용자 권한으로 주기적으로(그리고 보고기가 서버 목록을 바꾼 직후) 맞추는 작업."""
+        if (
+            self.root is not None or self.dry_run or not self.managed
+            or "codex" not in self.harnesses
+        ):
+            return
+        gui = python[:-len("python.exe")] + "pythonw.exe" if python.lower().endswith(
+            "python.exe") else python  # fmt: skip
+        if gui != python and not Path(gui).exists():
+            gui = python
+        line = subprocess.list2cmdline(
+            [gui, "-I", "-B", tool, "sync", "--kit", self.logical_programs]
+        )
+        made = capture([
+            "schtasks", "/Create", "/TN", SYNC_TASK_NAME, "/SC", "MINUTE",
+            "/MO", str(SYNC_INTERVAL_MINUTES), "/TR", line, "/RU", self.account.name, "/IT", "/F",
+        ])  # fmt: skip
+        if made:
+            state["sync_task"] = SYNC_TASK_NAME
+
+    def schedule_net_task(self, state: dict, python: str) -> None:
+        """Windows 관리형: 서버 실행기가 호스트 허용 방화벽 규칙을 요청할 SYSTEM 작업을 등록한다.
+
+        요청 폴더는 일반 사용자가 파일을 만들기만 할 수 있고(읽지도 지우지도 못한다), 작업은 사용자
+        누구나 실행할 수 있다. 작업은 요청을 검증해 ``mint.`` AppContainer 프로필에만 규칙을 건다.
+        한 시간마다도 돌아 실행기가 죽어 남은 규칙을 지운다.
+        """
+        if self.root is not None or self.dry_run or not self.managed:
+            return
+        requests = self.programs / NET_DIR / "req"
+        requests.mkdir(parents=True, exist_ok=True)
+        capture([
+            "icacls", str(requests), "/inheritance:r", "/grant:r",
+            "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F", "*S-1-5-32-545:(WD)",
+        ])  # fmt: skip
+        agent = str(self.programs / AGENT)
+        arguments = subprocess.list2cmdline(["-I", "-B", agent, "netpolicy", "--contracts", "none"])
+        start = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        xml = f"""<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <SecurityDescriptor>D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;BU)</SecurityDescriptor>
+  </RegistrationInfo>
+  <Triggers>
+    <TimeTrigger>
+      <Repetition><Interval>PT1H</Interval></Repetition>
+      <StartBoundary>{start}</StartBoundary>
+      <Enabled>true</Enabled>
+    </TimeTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>Queue</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT10M</ExecutionTimeLimit>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author">
+    <Exec><Command>{escape(python)}</Command><Arguments>{escape(arguments)}</Arguments></Exec>
+  </Actions>
+</Task>
+"""
+        with tempfile.TemporaryDirectory() as scratch:
+            definition = Path(scratch) / "net.xml"
+            definition.write_bytes(xml.encode("utf-16"))  # 서명(BOM)이 붙는다
+            made = capture(
+                ["schtasks", "/Create", "/TN", NET_TASK_NAME, "/XML", str(definition), "/F"]
+            )
+        if made:
+            state["net_task"] = NET_TASK_NAME
 
     def install_managed(self, state: dict, mcp: dict, hooks: dict) -> None:
         settings = {"allowManagedHooksOnly": True, "hooks": hooks}
@@ -1720,6 +1846,7 @@ class Kit:
         if not state:
             return {"mode": "none"}
         left = []
+        self.clean_servers()  # 실행기 파일을 지우기 전에: 서버를 끄고 AppContainer 항목을 정리한다
         if state.get("timer") == "system" and self.root is None:
             capture(["systemctl", "disable", "--now", f"{UNIT}.timer"])
         elif self.user_timer(state):
@@ -1739,13 +1866,13 @@ class Kit:
                 write_atomic(path, Path(backup).read_bytes(), 0o644)
         for link in state.get("links", []):
             Path(link).unlink(missing_ok=True)
-        if state.get("task") and self.root is None:
-            capture(["schtasks", "/Delete", "/TN", state["task"], "/F"])
+        for key in ("task", "sync_task", "net_task"):
+            if state.get(key) and self.root is None:
+                capture(["schtasks", "/Delete", "/TN", state[key], "/F"])
         if state.get("mode") == "user":
             self.uninstall_user(state)
         if "codex_config_sha" in state:
             self.uninstall_codex_config(state)
-        self.clean_servers()
         shutil.rmtree(self.programs, ignore_errors=True)
         shutil.rmtree(self.home / STATE_REL, ignore_errors=True)
         extra = [self.codex_managed_dir.parent] if self.windows else []
@@ -1770,10 +1897,21 @@ class Kit:
             pass
         agent = self.programs / AGENT
         if self.windows and agent.exists():
-            time.sleep(1)  # 끈 실행기가 정리를 끝낼 틈을 준다
+            try:  # 기록이 없거나 어긋난 실행기도 명령줄로 찾아 끈다.
+                if self.stop_by_command(None):
+                    time.sleep(2)  # 끈 실행기가 정리를 끝낼 틈을 준다
+            except OSError:
+                pass
+            time.sleep(1)
             capture([
                 sys.executable, "-I", "-B", str(agent), "reconcile", "--contracts", "none",
                 "--state-dir", str(self.home / STATE_REL),
+            ])  # fmt: skip
+        if self.windows and self.managed and not self.dry_run:
+            capture([  # 서버 격리용 방화벽 규칙이 남아 있으면 모두 지운다
+                "powershell", "-NoProfile", "-Command",
+                f"Get-NetFirewallRule | Where-Object {{ $_.Group -like '{NET_GROUP}*' }} "
+                "| Remove-NetFirewallRule",
             ])  # fmt: skip
 
     def sync_codex_block(self, state: dict, write: bool = True) -> dict:
@@ -1866,9 +2004,12 @@ class Kit:
 
     def read_inventory(self) -> dict:
         try:
+            table = win_start_table() if self.windows else None
+            start_of = (lambda pid, windows: table.get(pid)) if table is not None else None
             processes = with_sandbox(
                 scan_processes(self.windows), self.home, self.windows, not self.system_mode,
                 windows_sandbox_status() if self.windows else None,
+                net_filtered(self.programs, self.windows, start_of), start_of,
             )
             extra = {"profile": False} if self.system_mode else {}
             autostart = scan_autostart(self.home, self.windows, self.account.name, **extra)
@@ -2077,19 +2218,38 @@ class Kit:
                 removed.append({"kind": "process", "server": server, "target": None})
         return removed
 
-    def stop_by_command(self, retired: set[str]) -> list[dict]:
+    def stop_by_command(self, retired: set[str] | None) -> list[dict]:
         """프로필을 읽지 않는 SYSTEM 보고기: 이 묶음의 실행기로 폐기 서버를 돌리는 프로세스를 끈다.
 
         명령줄이 이 설치 폴더의 실행기로 ``run --server 이름``인 프로세스만 대상이다(자식 포함).
+        ``retired``가 None이면 이 묶음의 서버를 모두(제거할 때) 끈다.
         """
         agent = f"{self.logical_programs}/{AGENT}".replace("\\", "/").lower()
         removed = []
-        for pid, _, command in process_entries(self.windows):
+        rows = process_entries(self.windows)
+        for pid, _, command in rows:
             server = server_of(command)
-            if server in retired and agent in command.replace("\\", "/").lower():
-                if self.kill(pid):
-                    removed.append({"kind": "process", "server": server, "target": None})
+            if server and (retired is None or server in retired) and agent in (
+                command.replace("\\", "/").lower()
+            ):
+                if self.windows:
+                    self.end_launcher(pid, rows)
+                elif not self.kill(pid):
+                    continue
+                removed.append({"kind": "process", "server": server, "target": None})
         return removed
+
+    def end_launcher(self, pid: int, rows: list[tuple[int, int, str]]) -> None:
+        """Windows: 서버(실행기의 자식)를 먼저 끄고 실행기가 AppContainer 항목을 지우고 끝나기를
+        잠깐 기다린다. 그래도 남아 있으면 실행기를 끈다(남은 항목은 다음 정리 때 지워진다)."""
+        for child, parent, _ in rows:
+            if parent == pid:
+                self.kill(child)
+        for _ in range(20):
+            time.sleep(0.5)
+            if pid not in {row[0] for row in process_entries(True)}:
+                return
+        self.kill(pid)
 
     def kill(self, pid: int) -> bool:
         if self.windows:
@@ -2354,6 +2514,8 @@ def report_installed(
         changed = bool(kit.refresh(state, desired, names)) or changed
     if changed:
         kit.report(state, "installed")  # 지우거나 더한 것을 곧바로 알린다.
+        if system and state.get("sync_task"):
+            capture(["schtasks", "/Run", "/TN", state["sync_task"]])  # 사용자 Codex 설정을 맞춘다
     return 0
 
 

@@ -421,3 +421,18 @@ def test_a_hosts_contract_server_in_an_appcontainer_is_unfiltered_without_the_fl
     assert not found("appcontainer", "none") and not found("appcontainer", "any")
     assert not found("bwrap", "hosts") and not found("unsupported", "hosts")
     assert key in found("none", "hosts", egress_unfiltered=True)
+
+
+def test_a_hosts_server_with_a_firewall_rule_is_not_reported_as_unfiltered():
+    item = {"server": "s", "count": 1, "sandbox": "appcontainer", "egress_filtered": True}
+    wanted = endpoint_posture.findings(
+        [{**row("managed"), "processes": [item]}], {"s": "approved"},
+        contracts={"s": {"network": "hosts"}},
+    )  # fmt: skip
+    assert "endpoint_egress_unfiltered:mint-kit-a:s" not in wanted
+    flagged = {**item, "egress_unfiltered": True}  # 단말이 못 걸었다고 하면 그대로 알린다
+    wanted = endpoint_posture.findings(
+        [{**row("managed"), "processes": [flagged]}], {"s": "approved"},
+        contracts={"s": {"network": "hosts"}},
+    )  # fmt: skip
+    assert "endpoint_egress_unfiltered:mint-kit-a:s" in wanted

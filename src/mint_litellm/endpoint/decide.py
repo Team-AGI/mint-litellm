@@ -90,6 +90,8 @@ class ProcessItem(BaseModel):
     egress_refused: int | None = Field(default=None, ge=0, le=10**9)
     # Windows에서 호스트 허용 목록을 거르지 못한 채 실행 중이면 참. 이전 묶음은 안 보낸다.
     egress_unfiltered: bool | None = None
+    # Windows에서 방화벽 규칙이 호스트 허용 목록을 집행하고 있으면 참. 이전 묶음은 안 보낸다.
+    egress_filtered: bool | None = None
 
 
 class OutsideProcessItem(BaseModel):

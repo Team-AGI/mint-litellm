@@ -91,3 +91,14 @@ def test_the_inventory_fits_what_the_server_accepts():
     }
     parsed = ReportBody.model_validate(body)
     assert parsed.processes[0].server == "srv-1" and parsed.autostart[0].kind == "cron"
+
+
+def test_the_windows_start_table_is_read_in_one_call(monkeypatch):
+    calls = []
+
+    def fake(command):
+        calls.append(command)
+        return "4 133\n8 144\nnoise\n"
+
+    monkeypatch.setattr(kit, "capture", fake)
+    assert kit.win_start_table() == {4: "133", 8: "144"} and len(calls) == 1

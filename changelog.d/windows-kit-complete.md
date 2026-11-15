@@ -1,0 +1,1 @@
+- Windows 단말 묶음 완성: 세션 0에서 시작한 서버의 TLS 초기화 실패를 전용 창 스테이션으로 고치고, `network: hosts`를 서버 SID에만 거는 방화벽 차단 규칙으로 집행하며(관리형은 SYSTEM 작업 `MINT Endpoint Net`), 새로 승인한 서버를 Codex에 사용자 권한 예약 작업으로 자동 반영하고, 폐기·제거 때 서버를 먼저 끄고 AppContainer 항목·방화벽 규칙을 지운다.

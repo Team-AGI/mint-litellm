@@ -1201,16 +1201,15 @@ def bwrap_ready(bwrap: str) -> bool:
 
 
 # --- 서버 격리(Windows AppContainer) --------------------------------------------------------
-# 서버를 시작할 때마다 AppContainer 프로필을 만들고(이름에 실행기 PID가 든다), 그 SID에
-# 선언한 경로와
-# 실행 파일 폴더·패키지 실행기 캐시의 접근 권한(ACE)을 더한 뒤 서버를 시작한다. 서버가 끝나면
-# ACE와 프로필을 지우고, 실행기가 죽어 남은 것은 다음 시작 때 정리한다. 서버는 작업 개체에
+# 서버를 시작할 때마다 AppContainer 프로필을 만들고(이름에 실행기 PID가 든다), 그 SID에 선언한
+# 경로와 실행 파일 폴더·패키지 실행기 캐시의 접근 권한(ACE)을 더한 뒤 서버를 시작한다. 서버가
+# 끝나면 ACE와 프로필을 지우고, 실행기가 죽어 남은 것은 다음 시작 때 정리한다. 서버는 작업 개체에
 # 들어가므로 실행기가 끝나면 함께 끝난다. 네트워크는 ``none``이면 기능이 없고, ``hosts``이면
-# ``internetClient``만(호스트 거름 없음: 기록과 출력에 ``egress_unfiltered``), 그 밖에는
-# ``internetClient``·
-# ``privateNetworkClientServer``를 준다. 한계: AppContainer의 루프백(localhost) 차단은 기본값이고
-# 이 실행기는 시스템 설정을 바꾸지 않으므로, 선언이 ``any``여도 같은 단말의 로컬 수신기에는 닿지
-# 못한다. 호스트별 거름은 하지 않는다.
+# ``internetClient``에 방화벽 규칙을 더해(아래 「호스트 허용 목록 집행」) 선언한 호스트로만 나가게
+# 하며(규칙을 못 걸면 거름 없음: 기록과 출력에 ``egress_unfiltered``), 그 밖에는
+# ``internetClient``·``privateNetworkClientServer``를 준다. 한계: AppContainer의 루프백(localhost)
+# 차단은 기본값이고 이 실행기는 시스템 설정을 바꾸지 않으므로, 선언이 ``any``여도 같은 단말의 로컬
+# 수신기에는 닿지 못한다.
 WIN_SYSTEM_ENV = ("SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432")
 WIN_CAPS = {"internetClient": "S-1-15-3-1", "privateNetworkClientServer": "S-1-15-3-3"}
 WIN_RUNNER_CACHES = {
@@ -1224,9 +1223,14 @@ WIN_RUNNER_CACHES = {
     "pipx": (".local/pipx", "AppData/Local/pipx"),
 }  # fmt: skip
 ACL_TRACK = "appcontainer"
-EGRESS_UNFILTERED_LINE = (
-    "mint-egress unfiltered: Windows에서는 허용 호스트 목록을 집행하지 못해 인터넷 전체에 열려 있음"
+APPCONTAINER_MAPPINGS = (
+    r"Software\Classes\Local Settings\Software\Microsoft\Windows"
+    r"\CurrentVersion\AppContainer\Mappings"
 )
+EGRESS_UNFILTERED_LINE = (
+    "mint-egress unfiltered: 허용 호스트 목록을 집행하지 못해 인터넷 전체에 열려 있음"
+)
+EGRESS_FILTERED_LINE = "mint-egress firewall: 선언한 호스트 밖 주소는 방화벽이 막음"
 ALREADY_EXISTS = 0x800700B7
 WIN_RANK = {"R": 0, "RX": 1, "M": 2}
 
@@ -1238,8 +1242,8 @@ class SandboxUnavailable(Exception):
 def win_capabilities(contract: Mapping[str, Any]) -> list[str]:
     """계약의 네트워크 선언에서 AppContainer 기능 SID. ``none``이면 없다.
 
-    ``hosts``는 AppContainer가 실행기의 루프백 중계에 닿지 못하고 호스트별 거름도 없으므로,
-    사설망 기능 없이 ``internetClient``만 준다(거름 없음. 실행은 ``egress_unfiltered``로 알린다).
+    ``hosts``는 AppContainer가 실행기의 루프백 중계에 닿지 못하므로 사설망 기능 없이
+    ``internetClient``만 주고, 선언한 호스트 밖은 방화벽 규칙이 막는다(못 걸면 거름 없음).
     """
     mode = network_mode(contract)
     if mode == "none":
@@ -1333,9 +1337,46 @@ def icacls_args(path: str, sid: str, mode: str | None, directory: bool) -> list[
     return ["icacls", path, "/grant", f"*{sid}:{flags}({mode})", "/Q"]
 
 
+ACL_MUTEX = "Global\\MintAppContainerAcl"
+
+
+class _acl_lock:  # noqa: N801 (with 문에 쓰는 이름 있는 뮤텍스)
+    """접근 권한(ACE) 변경을 단말 전체에서 한 번에 하나씩 하게 한다.
+
+    같은 폴더의 권한을 두 실행기가 동시에 고치면 한쪽의 변경이 덮어써져 서버가 파일을 못 읽는다
+    (하니스가 서버 여러 개를 한꺼번에 시작할 때 생긴다). 뮤텍스를 못 만들면 잠그지 않는다.
+    """
+
+    def __enter__(self) -> None:
+        self.handle = None
+        if os.name != "nt":
+            return
+        import ctypes
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateMutexW.restype = ctypes.c_void_p
+        k32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+        k32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        handle = k32.CreateMutexW(None, 0, ACL_MUTEX)
+        if handle:
+            k32.WaitForSingleObject(handle, 120_000)  # 버려진 뮤텍스(0x80)도 얻은 것으로 본다
+            self.handle = handle
+
+    def __exit__(self, *exc: object) -> None:
+        if self.handle:
+            import ctypes
+
+            k32 = ctypes.WinDLL("kernel32")
+            k32.ReleaseMutex.argtypes = [ctypes.c_void_p]
+            k32.CloseHandle.argtypes = [ctypes.c_void_p]
+            k32.ReleaseMutex(self.handle)
+            k32.CloseHandle(self.handle)
+
+
 def _icacls(args: Sequence[str]) -> bool:
     try:
-        return subprocess.run(args, capture_output=True, timeout=300).returncode == 0
+        with _acl_lock():
+            return subprocess.run(args, capture_output=True, timeout=300).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
 
@@ -1434,6 +1475,79 @@ def _win_proc_start(pid: int) -> str | None:
         k32.CloseHandle(handle)
 
 
+def private_desktop(sid: str) -> tuple[str, list[Any]] | None:
+    """세션 0(원격 셸·서비스)에서 AppContainer가 쓸 전용 창 스테이션·데스크톱(이름, 닫을 핸들).
+
+    세션 0에서 시작한 AppContainer는 부모의 창 스테이션에 닿지 못해 user32를 쓰는 라이브러리
+    (OpenSSL·ctypes·ssl)의 초기화가 실패한다. 이 SID와 실행 계정만 쓰는 스테이션을 만들어
+    서버가 그 데스크톱에서 시작하게 한다. 대화형 세션(1 이상)은 기본 데스크톱을 쓰므로 None.
+    만들지 못해도 None(기본 동작)이다.
+    """
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes as w
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    sessions = w.DWORD()
+    if not k32.ProcessIdToSessionId(os.getpid(), ctypes.byref(sessions)) or sessions.value:
+        return None
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    adv = ctypes.WinDLL("advapi32", use_last_error=True)
+    vp = ctypes.c_void_p
+
+    class Attrs(ctypes.Structure):
+        _fields_ = [("n", w.DWORD), ("sd", vp), ("inherit", w.BOOL)]
+
+    user32.CreateWindowStationW.restype = vp
+    user32.CreateWindowStationW.argtypes = [w.LPCWSTR, w.DWORD, w.DWORD, vp]
+    user32.CreateDesktopW.restype = vp
+    user32.CreateDesktopW.argtypes = [w.LPCWSTR, w.LPCWSTR, vp, w.DWORD, w.DWORD, vp]
+    user32.GetProcessWindowStation.restype = vp
+    user32.SetProcessWindowStation.argtypes = [vp]
+    user32.CloseWindowStation.argtypes = [vp]
+    user32.CloseDesktop.argtypes = [vp]
+    adv.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [w.LPCWSTR, w.DWORD, vp, vp]
+    descriptor = vp()
+    # 소유자(만든 실행기)·SYSTEM·이 AppContainer만 모든 권한을 가진다.
+    sddl = f"D:(A;;GA;;;OW)(A;;GA;;;SY)(A;;GA;;;{sid})"
+    if not adv.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        sddl, 1, ctypes.byref(descriptor), None
+    ):
+        return None
+    attrs = Attrs(ctypes.sizeof(Attrs), descriptor, False)
+    name = f"mint-ws-{os.getpid()}"
+    station = desktop = None
+    previous = user32.GetProcessWindowStation()
+    try:
+        station = user32.CreateWindowStationW(name, 0, 0x10000000, ctypes.byref(attrs))
+        if station and user32.SetProcessWindowStation(station):
+            desktop = user32.CreateDesktopW("mint", None, None, 0, 0x10000000, ctypes.byref(attrs))
+    finally:
+        if previous:
+            user32.SetProcessWindowStation(previous)
+        k32.LocalFree.argtypes = [vp]
+        k32.LocalFree(descriptor)
+    if desktop:
+        return name + "\\mint", [desktop, station]
+    if station:
+        user32.CloseWindowStation(station)
+    return None
+
+
+def _close_private_desktop(handles: Sequence[Any]) -> None:
+    if os.name != "nt" or not handles:
+        return
+    import ctypes
+
+    user32 = ctypes.WinDLL("user32")
+    user32.CloseDesktop.argtypes = [ctypes.c_void_p]
+    user32.CloseWindowStation.argtypes = [ctypes.c_void_p]
+    desktop, station = handles
+    user32.CloseDesktop(desktop)
+    user32.CloseWindowStation(station)
+
+
 def appcontainer_ready() -> bool:
     """이 단말에서 AppContainer API를 쓸 수 있는가(Windows 8 이상)."""
     try:
@@ -1448,6 +1562,8 @@ def _track_dir(state_dir: str | None) -> str | None:
 
 
 def _revoke(record: Mapping[str, Any]) -> None:
+    if record.get("net") and PROFILE_NAME.match(str(record.get("profile"))):
+        net_ask(KIT_DIR, {"op": "drop", "profile": record["profile"]})
     for path in record.get("paths") or ():
         _icacls(icacls_args(path, record["sid"], None, False))
     if record.get("profile") and os.name == "nt":
@@ -1457,12 +1573,43 @@ def _revoke(record: Mapping[str, Any]) -> None:
             pass
 
 
+def stale_profiles() -> list[str]:
+    """이 계정에 남은 ``mint.`` AppContainer 프로필 중 이름 끝의 PID(실행기)가 이미 끝난 것."""
+    if os.name != "nt":
+        return []
+    import winreg
+
+    names: list[str] = []
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, APPCONTAINER_MAPPINGS) as root:
+            index = 0
+            while True:
+                try:
+                    sid = winreg.EnumKey(root, index)
+                except OSError:
+                    break
+                index += 1
+                try:
+                    with winreg.OpenKey(root, sid) as key:
+                        moniker = str(winreg.QueryValueEx(key, "Moniker")[0])
+                except OSError:
+                    continue
+                if PROFILE_NAME.match(moniker):
+                    pid = int(moniker.rsplit(".", 1)[1])
+                    if _win_proc_start(pid) is None:
+                        names.append(moniker)
+    except OSError:
+        pass
+    return names
+
+
 def reconcile_appcontainers(state_dir: str | None) -> None:
-    """실행기가 죽어 남은 AppContainer 항목(ACE·프로필)을 지운다. 살아 있는 실행기의 것은 둔다."""
+    """실행기가 죽어 남은 AppContainer 항목(ACE·프로필)을 지운다. 살아 있는 실행기의 것은 둔다.
+
+    기록이 남지 않은 프로필(기록 폴더가 지워진 경우)도 실행기가 끝났으면 지운다.
+    """
     folder = _track_dir(state_dir)
-    if not folder or not os.path.isdir(folder):
-        return
-    for name in os.listdir(folder):
+    for name in os.listdir(folder) if folder and os.path.isdir(folder) else []:
         path = os.path.join(folder, name)
         try:
             with open(path, encoding="utf-8") as handle:
@@ -1473,6 +1620,343 @@ def reconcile_appcontainers(state_dir: str | None) -> None:
             os.unlink(path)
         except (OSError, ValueError, KeyError, TypeError):
             continue
+    for profile in stale_profiles():
+        _revoke({"profile": profile})
+
+
+# --- 호스트 허용 목록 집행(Windows 방화벽) -----------------------------------------------------
+# AppContainer는 호스트별로 거를 수 없으므로 서버의 패키지 SID에만 걸리는 나가는 차단 규칙을 둔다:
+# 선언한 호스트가 시작 때 풀린 주소(와 포트)를 뺀 모든 주소로의 접속을 막는다(방화벽은 차단 규칙이
+# 허용 규칙보다 앞선다). 이름 해석은 DNS 클라이언트 서비스가 하므로 서버는 이름을 풀 수 있다.
+# 규칙은 관리자만 만들 수 있어, 관리형 설치가 등록한 SYSTEM 예약 작업(``netpolicy``)이 요청 폴더의
+# 요청 파일을 읽어 만든다. 요청은 AppContainer 프로필 이름과 허용 주소뿐이고 SID는 작업이 이름에서
+# 직접 구한다(``mint.`` 프로필만). 한계: 주소는 시작 때 풀리므로 그 뒤 바뀐 주소(회전하는 CDN)로는
+# 접속이 거절될 수 있고, ``*.도메인`` 항목은 풀 수 없어 거르지 않는다(경보로 알린다). 방화벽이 꺼진
+# 단말·작업이 없는 설치(사용자 수준)도 거르지 못한다.
+NET_TASK = "MINT Endpoint Net"
+NET_DIR = "net"
+NET_GROUP = "MINT sandbox "
+NET_WAIT = 30.0
+NET_ADDRESSES_MAX = 256
+HOSTS_POLL = 1.0  # 서버가 도는 동안 허용 호스트 이름을 다시 푸는 간격(초)
+PROFILE_NAME = re.compile(r"^mint\.[A-Za-z0-9_-]{1,32}\.[0-9]{1,10}$")
+SERVER_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
+
+def egress_allow_list(
+    entries: Sequence[str], resolve: Callable[[str, int], list[str]] = default_resolve
+) -> list[dict] | None:
+    """선언한 호스트를 허용할 ``{"ip", "ports"}`` 목록으로 푼다(포트 None은 모든 포트).
+
+    ``*.도메인`` 항목이 있으면 풀 수 없어 None이다. 풀리지 않는 이름과 공인 주소가 아닌 주소는
+    허용하지 않는다(Linux 중계와 같다).
+    """
+    found: dict[str, set[int] | None] = {}
+    for entry in entries:
+        host, port = split_entry(str(entry))
+        if host.startswith("*."):
+            return None
+        literal = _literal(host)
+        try:
+            addresses = [str(literal)] if literal else resolve(host, port or 443)
+        except OSError:
+            continue
+        for text in addresses:
+            ip = _literal(text.split("%")[0])
+            if ip is None or not (ip.is_global or ip == literal):
+                continue
+            key = str(ip)
+            if port is None:
+                found[key] = None
+            elif found.get(key, set()) is not None:
+                found.setdefault(key, set()).add(port)
+    return [{"ip": ip, "ports": sorted(p) if p else None} for ip, p in sorted(found.items())]
+
+
+def merge_allow(old: list[dict], new: list[dict]) -> list[dict]:
+    """허용 주소 목록의 합집합(포트 None은 모든 포트). 주소가 한쪽에만 있어도 남는다."""
+    merged: dict[str, set[int] | None] = {}
+    for item in [*old, *new]:
+        ports = item["ports"]
+        if item["ip"] not in merged:
+            merged[item["ip"]] = None if ports is None else set(ports)
+        elif merged[item["ip"]] is not None:
+            merged[item["ip"]] = None if ports is None else merged[item["ip"]] | set(ports)
+    return [{"ip": ip, "ports": sorted(p) if p is not None else None}
+            for ip, p in sorted(merged.items())]  # fmt: skip
+
+
+def address_gaps(addresses: Sequence[str]) -> list[str]:
+    """주소 묶음(IPv4·IPv6 섞임)을 뺀 나머지 전체를 ``시작-끝`` 범위 목록으로."""
+    out = []
+
+    def span(cls, low: int, high: int) -> str:
+        return str(cls(low)) if low == high else f"{cls(low)}-{cls(high)}"
+
+    for top, cls in ((2**32 - 1, ipaddress.IPv4Address), (2**128 - 1, ipaddress.IPv6Address)):
+        points = sorted({
+            int(ip) for ip in map(ipaddress.ip_address, addresses)
+            if isinstance(ip, ipaddress.IPv4Address) == (cls is ipaddress.IPv4Address)
+        })
+        low = 0
+        for point in points:
+            if point > low:
+                out.append(span(cls, low, point - 1))
+            low = point + 1
+        if low <= top:
+            out.append(span(cls, low, top))
+    return out
+
+
+def port_gaps(ports: Sequence[int]) -> str:
+    """1~65535 중 ``ports``를 뺀 나머지를 ``시작-끝,…`` 글자로."""
+    out, low = [], 1
+    for port in sorted(set(ports)):
+        if port > low:
+            out.append(f"{low}-{port - 1}")
+        low = port + 1
+    if low <= 65535:
+        out.append(f"{low}-65535")
+    return ",".join(out)
+
+
+def net_rules(name: str, allow: Sequence[Mapping[str, Any]]) -> list[tuple[str, str, int, str]]:
+    """프로필의 차단 규칙 목록 ``(이름, 원격 주소, 프로토콜, 원격 포트)``(프로토콜 0은 모두)."""
+    group = NET_GROUP + name
+    rules = [(f"{group} a", ",".join(address_gaps([i["ip"] for i in allow])), 0, "")]
+    bound: dict[tuple, list[str]] = {}
+    for item in allow:
+        if item["ports"] is not None:
+            bound.setdefault(tuple(item["ports"]), []).append(item["ip"])
+    for number, (ports, ips) in enumerate(sorted(bound.items())):
+        for proto in (6, 17):  # 허용 주소라도 선언한 포트 밖으로는 나가지 못한다(TCP·UDP)
+            rules.append((f"{group} {number}/{proto}", ",".join(ips), proto, port_gaps(ports)))
+    return rules
+
+
+def net_script(sid: str, name: str, allow: Sequence[Mapping[str, Any]]) -> str:
+    """차단 규칙을 만들거나(이미 있으면 주소를 바꾸는) PowerShell(방화벽 COM 개체: 빨리 돈다).
+
+    방화벽이 꺼져 있으면 3, 새로 만들다 실패하면 이번에 만든 규칙만 지우고 4로 끝난다.
+    입력은 ``net_request``가 검증한 값(주소·숫자)이라 글자 그대로 넣어도 안전하다.
+    """
+    rules = net_rules(name, allow)
+    adds = "\n".join(f"  Block '{n}' '{addr}' {proto} '{ports}'" for n, addr, proto, ports in rules)
+    return (
+        "$ErrorActionPreference = 'Stop'\n"
+        "$p = New-Object -ComObject HNetCfg.FwPolicy2\n"
+        "if (-not ($p.FirewallEnabled(1) -and $p.FirewallEnabled(2) -and $p.FirewallEnabled(4)))"
+        " { exit 3 }\n"
+        "$added = @()\n"
+        "function Block($rule, $addr, $proto, $ports) {\n"
+        "  $r = $null\n"
+        "  try { $r = $p.Rules.Item($rule) } catch { }\n"
+        "  if ($r) {\n"
+        "    $r.RemoteAddresses = $addr\n"
+        "    if ($proto -ne 0) { $r.RemotePorts = $ports }\n"
+        "    return\n"
+        "  }\n"
+        "  $r = New-Object -ComObject HNetCfg.FWRule\n"
+        f"  $r.Name = $rule; $r.Grouping = '{NET_GROUP + name}'; $r.Direction = 2; $r.Action = 0\n"
+        f"  $r.LocalAppPackageId = '{sid}'; $r.RemoteAddresses = $addr\n"
+        "  if ($proto -ne 0) { $r.Protocol = $proto; $r.RemotePorts = $ports }\n"
+        "  $r.Enabled = $true\n"
+        "  $p.Rules.Add($r)\n"
+        "  $script:added += $rule\n"
+        "}\n"
+        f"try {{\n{adds}\n}} catch {{\n"
+        "  $ErrorActionPreference = 'SilentlyContinue'\n"
+        "  foreach ($n in $added) { $p.Rules.Remove($n) }\n"
+        "  exit 4\n}\n"
+    )
+
+
+def net_request(raw: Any) -> dict[str, Any] | None:
+    """요청 파일의 내용을 검증해 돌려준다(틀리면 None). 사용자가 쓴 파일이므로 모두 의심한다."""
+    if not isinstance(raw, dict) or not PROFILE_NAME.match(str(raw.get("profile"))):
+        return None
+    try:
+        if raw.get("op") == "drop":
+            return {"op": "drop", "profile": raw["profile"]}
+        allow = []
+        for item in raw["allow"][:NET_ADDRESSES_MAX]:
+            ip = str(ipaddress.ip_address(item["ip"]))
+            ports = item.get("ports")
+            if ports is not None:
+                ports = sorted({int(p) for p in ports})[:64]
+                if not ports or ports[0] < 1 or ports[-1] > 65535:
+                    return None
+            allow.append({"ip": ip, "ports": ports})
+        server, start = str(raw["server"]), str(raw["start"])
+        if raw.get("op") != "allow" or not SERVER_NAME.match(server) or not start.isdigit():
+            return None
+        return {"op": "allow", "profile": raw["profile"], "allow": allow, "server": server,
+                "pid": int(raw["pid"]), "start": start}  # fmt: skip
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
+def _powershell(script: str, timeout: float = 120) -> int:
+    root = os.environ.get("SystemRoot", r"C:\Windows")
+    exe = os.path.join(root, r"System32\WindowsPowerShell\v1.0\powershell.exe")
+    try:
+        return subprocess.run(
+            [exe, "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, stdin=subprocess.DEVNULL, timeout=timeout,
+        ).returncode  # fmt: skip
+    except (OSError, subprocess.SubprocessError):
+        return 1
+
+
+def container_sid(profile: str) -> str | None:
+    """프로필 이름에서 AppContainer SID 글자를 구한다(프로필이 없어도 이름에서 정해진다)."""
+    try:
+        ctypes, k32, adv, userenv, _types = _win_api()
+    except SandboxUnavailable:
+        return None
+    sid, text = ctypes.c_void_p(), ctypes.c_void_p()
+    if userenv.DeriveAppContainerSidFromAppContainerName(profile, ctypes.byref(sid)) != 0:
+        return None
+    try:
+        converted = adv.ConvertSidToStringSidW(sid, ctypes.byref(text))
+        return ctypes.wstring_at(text) if converted else None
+    finally:
+        if text:
+            k32.LocalFree(text)
+
+
+def net_drop(folder: str, profile: str) -> None:
+    """프로필의 규칙과 기록을 지운다(없어도 된다)."""
+    group = NET_GROUP + profile
+    _powershell(
+        "$p = New-Object -ComObject HNetCfg.FwPolicy2\n"
+        f"$names = @(foreach ($r in $p.Rules) {{ if ($r.Grouping -eq '{group}') {{ $r.Name }} }})\n"
+        "foreach ($n in $names) { $p.Rules.Remove($n) }\n"
+    )
+    try:
+        os.unlink(os.path.join(folder, NET_DIR, "rules", profile + ".json"))
+    except OSError:
+        pass
+
+
+def net_apply(folder: str, request: Mapping[str, Any]) -> str | None:
+    """요청대로 규칙을 만들고 기록한다. 돌려주는 값은 실패 사유(성공이면 None)."""
+    sid = container_sid(request["profile"])
+    if not sid:
+        return "profile sid"
+    rules = os.path.join(folder, NET_DIR, "rules")
+    record_path = os.path.join(rules, request["profile"] + ".json")
+    code = _powershell(net_script(sid, request["profile"], request["allow"]))
+    if code:
+        return "firewall disabled" if code == 3 else "rule failed"
+    os.makedirs(rules, exist_ok=True)
+    record = {k: request[k] for k in ("profile", "server", "pid", "start")}
+    with open(record_path, "w", encoding="utf-8") as handle:
+        json.dump(record, handle)
+    return None
+
+
+def net_sweep(folder: str) -> None:
+    """실행기가 끝난(또는 죽은) 서버의 규칙을 지운다."""
+    rules = os.path.join(folder, NET_DIR, "rules")
+    for name in os.listdir(rules) if os.path.isdir(rules) else []:
+        try:
+            with open(os.path.join(rules, name), encoding="utf-8") as handle:
+                record = json.load(handle)
+            if proc_start(int(record["pid"])) != record["start"]:
+                net_drop(folder, str(record["profile"]))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+
+
+def net_serve(folder: str) -> None:
+    """SYSTEM 예약 작업의 일: 요청 폴더의 요청을 처리하고 결과를 남긴 뒤 낡은 규칙을 지운다."""
+    requests = os.path.join(folder, NET_DIR, "req")
+    done = os.path.join(folder, NET_DIR, "done")
+    os.makedirs(done, exist_ok=True)
+    for name in sorted(os.listdir(requests)) if os.path.isdir(requests) else []:
+        path = os.path.join(requests, name)
+        if not name.endswith(".json"):
+            continue
+        try:
+            with open(path, encoding="utf-8") as handle:
+                request = net_request(json.load(handle))
+            os.unlink(path)
+        except ValueError:  # 쓰는 중이거나 깨진 파일: 오래된 것만 지운다
+            try:
+                if time.time() - os.path.getmtime(path) > 60:
+                    os.unlink(path)
+            except OSError:
+                pass
+            continue
+        except OSError:
+            continue
+        if request is None:
+            continue
+        failed = None
+        if request["op"] == "drop":
+            net_drop(folder, request["profile"])
+        else:
+            failed = net_apply(folder, request)
+        with open(os.path.join(done, request["profile"] + ".json"), "w", encoding="utf-8") as out:
+            json.dump({"ok": failed is None, "reason": failed}, out)
+    net_sweep(folder)
+    for name in os.listdir(done):  # 결과 파일은 한 시간만 둔다
+        try:
+            if time.time() - os.path.getmtime(os.path.join(done, name)) > 3600:
+                os.unlink(os.path.join(done, name))
+        except OSError:
+            pass
+
+
+def _elevated() -> bool:
+    try:
+        return bool(__import__("ctypes").windll.shell32.IsUserAnAdmin())
+    except (AttributeError, OSError):
+        return False
+
+
+def net_ask(folder: str, request: dict[str, Any], wait: float = NET_WAIT) -> str | None:
+    """규칙 요청을 보내고 결과를 기다린다(관리자 권한이면 직접 한다). 돌려주는 값은 실패 사유."""
+    if _elevated():
+        parsed = net_request(request)
+        if parsed is None:
+            return "bad request"
+        if parsed["op"] == "drop":
+            net_drop(folder, parsed["profile"])
+            return None
+        return net_apply(folder, parsed)
+    requests = os.path.join(folder, NET_DIR, "req")
+    if not os.path.isdir(requests):
+        return "no helper"
+    name = request["profile"]
+    path = os.path.join(requests, name + ".json")
+    result = os.path.join(folder, NET_DIR, "done", name + ".json")
+    try:
+        os.unlink(result)
+    except OSError:
+        pass
+    try:
+        with open(path, "w", encoding="utf-8") as handle:  # 요청 폴더는 만들기만 할 수 있다
+            json.dump(request, handle)
+        started = subprocess.run(
+            ["schtasks", "/Run", "/TN", NET_TASK], capture_output=True, timeout=15
+        ).returncode
+    except (OSError, subprocess.SubprocessError):
+        return "no helper"
+    if started:
+        return "no helper"
+    if request["op"] == "drop":
+        return None
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        try:
+            with open(result, encoding="utf-8") as handle:
+                answer = json.load(handle)
+            return None if answer.get("ok") is True else str(answer.get("reason") or "failed")
+        except (OSError, ValueError):
+            time.sleep(0.25)
+    return "timeout"
 
 
 class AppContainerRun:
@@ -1486,6 +1970,9 @@ class AppContainerRun:
         self.tap: ToolListTap | None = None
         self.parent_fds: tuple[int, int] | None = None  # (서버 입력에 쓰는 쪽, 서버 출력을 읽는 쪽)
         self.child_fds: list[int] = []  # 서버에 넘길 파이프 끝(시작한 뒤 이쪽에서 닫는다)
+        self.desktop: list[Any] = []  # 세션 0에서 만든 전용 데스크톱·창 스테이션 핸들
+        self.hosts_request: dict[str, Any] = {}
+        self.watch_stop = threading.Event()  # 호스트 주소 갱신을 멈추는 신호
 
     @classmethod
     def prepare(
@@ -1525,11 +2012,39 @@ class AppContainerRun:
                 granted = _icacls(icacls_args(path, self.record["sid"], mode, os.path.isdir(path)))
                 if declared and not granted:
                     raise SandboxUnavailable(f"cannot grant access to {path}")
+                if not granted:  # 소유자만 권한을 줄 수 있어, 서버가 이 폴더를 못 읽을 수 있다
+                    sys.stderr.write(f"mint-sandbox: no access grant for {path}" + chr(10))
             self._start(approved, argv, env, sid)
         except BaseException:
             self.close()
             raise
         return self
+
+    def limit_hosts(self, server: str, entries: Sequence[str]) -> str | None:
+        """``network: hosts``: 선언한 호스트 밖으로 못 나가게 방화벽 규칙을 건다(서버를 풀기 전).
+
+        돌려주는 값은 걸지 못한 사유(성공이면 None). 못 걸면 서버는 인터넷 전체에 열려 실행된다.
+        걸었으면 서버가 도는 동안 이름을 다시 풀어, 새로 나온 주소(회전하는 CDN)를 규칙에 더한다.
+        """
+        allow = egress_allow_list(entries)
+        if allow is None:
+            return "wildcard host"
+        self.record["net"] = True  # 규칙을 건 뒤 실행기가 죽어도 다음 정리가 지운다
+        self._save()
+        self.hosts_request = {"op": "allow", "profile": self.record["profile"], "server": server,
+                              "pid": os.getpid(), "start": self.record["start"]}  # fmt: skip
+        failed = net_ask(KIT_DIR, {**self.hosts_request, "allow": allow})
+        if failed is None:
+            threading.Thread(target=self._watch_hosts, args=(entries, allow), daemon=True).start()
+        return failed
+
+    def _watch_hosts(self, entries: Sequence[str], allow: list[dict]) -> None:
+        while not self.watch_stop.wait(HOSTS_POLL):
+            found = egress_allow_list(entries)
+            merged = merge_allow(allow, found or [])[:NET_ADDRESSES_MAX]
+            if merged != allow:
+                allow = merged
+                net_ask(KIT_DIR, {**self.hosts_request, "allow": allow})
 
     def _save(self) -> None:
         if self.track:
@@ -1584,6 +2099,9 @@ class AppContainerRun:
             info.cb = ctypes.sizeof(StartupInfo)
             info.dwFlags = 0x100  # STARTF_USESTDHANDLES
             info.hStdInput, info.hStdOutput, info.hStdError = handles
+            made = private_desktop(self.record["sid"])
+            if made:
+                info.lpDesktop, self.desktop = made[0], made[1]
             info.lpAttributeList = ctypes.cast(buffer, ctypes.c_void_p)
             block = {str(k): str(v) for k, v in env.items()}
             temp = self._temp_dir()
@@ -1687,6 +2205,7 @@ class AppContainerRun:
         return thread
 
     def close(self) -> None:
+        self.watch_stop.set()
         self._close_fds(self.child_fds)
         if self.parent_fds:
             self._close_fds(self.parent_fds)
@@ -1697,6 +2216,8 @@ class AppContainerRun:
                 if handle:
                     self.api[1].CloseHandle(handle)
             self.thread = self.process = self.job = None
+        _close_private_desktop(self.desktop)
+        self.desktop = []
         _revoke(self.record)
         if self.track:
             try:
@@ -2011,8 +2532,13 @@ def run_server(
         if wrapped is not None and hosts:
             extra = {"egress_refused": 0}
         elif box is not None and network_mode(approved) == "hosts":
-            extra = {"egress_unfiltered": True}
-            sys.stderr.write(EGRESS_UNFILTERED_LINE + "\n")
+            why = box.limit_hosts(server, approved.get("allowed_hosts") or [])
+            if why is None:
+                extra = {"egress_filtered": True}
+                sys.stderr.write(EGRESS_FILTERED_LINE + "\n")
+            else:
+                extra = {"egress_unfiltered": True}
+                sys.stderr.write(f"{EGRESS_UNFILTERED_LINE} ({why})\n")
         record = record_launch(state_dir, server, status, extra) if state_dir is not None else None
         if box is not None:
             os.close(fd)
@@ -2088,7 +2614,7 @@ def _give_up(code: int, message: str) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
-    commands = ["pre", "post", "post-failure", "run", "serve", "notify", "reconcile"]
+    commands = ["pre", "post", "post-failure", "run", "serve", "notify", "reconcile", "netpolicy"]
     parser.add_argument("command", choices=commands)
     parser.add_argument("--url")
     parser.add_argument("--key-file")
@@ -2125,6 +2651,11 @@ def main(argv: list[str] | None = None) -> None:
                 )
         except BaseException:  # 알림은 어떤 경우에도 조용히 끝난다.
             pass
+        return
+    if args.command == "netpolicy":
+        # SYSTEM 예약 작업: 서버의 호스트 허용 방화벽 규칙을 만들고 낡은 규칙을 지운다(Windows).
+        if os.name == "nt":
+            net_serve(KIT_DIR)
         return
     if args.command == "reconcile":
         # 제거·폐기 뒤 남은 AppContainer 항목(프로필·고아 ACE)을 지운다(Windows).
