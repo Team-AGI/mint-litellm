@@ -8,8 +8,13 @@
 import psycopg
 
 from mint_litellm.control.db.connection import fetchall
-from mint_litellm.control.litellm_write import LiteLLMSync
-from mint_litellm.control.sync_state import permission_of
+from mint_litellm.control.litellm_write import LiteLLMHttpError, LiteLLMSync
+from mint_litellm.control.sync_state import (
+    permission_of,
+    raise_target_missing,
+    target_gone,
+    target_ref,
+)
 
 Permission = tuple[list[str], dict[str, list[str]]]
 
@@ -70,7 +75,16 @@ def sync_kit_keys(conn: psycopg.Connection, instance_id: str, client: LiteLLMSyn
             k: sorted(v) for k, v in have_tools.items()
         } == tools:
             continue
-        client.update_key_permission(row["mcp_key_token"], servers, tools)
+        try:
+            client.update_key_permission(row["mcp_key_token"], servers, tools)
+        except LiteLLMHttpError as error:
+            if error.status == 404 and target_gone(client, "key", row["mcp_key_token"], error):
+                # 지워진 키 하나가 다른 키의 동기화를 막지 않는다
+                raise_target_missing(
+                    conn, instance_id, target_ref("key", row["mcp_key_token"]), "write"
+                )
+                continue
+            raise
         changed += 1
     return changed
 

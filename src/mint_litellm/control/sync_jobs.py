@@ -41,11 +41,14 @@ from mint_litellm.control.sync_state import (
     load_rows,
     make_plan,
     mark_observed,
+    missing_key,
     permission_of,
     pin_satisfied,
     present,
+    raise_target_missing,
     server_scope,
     split_ref,
+    target_gone,
     target_ref,
     upsert_grant,
     withdraw_grant,
@@ -100,6 +103,23 @@ def _reachable(handler: Callable[[JobContext], None]) -> Callable[[JobContext], 
 
 def _read(client: LiteLLMSync, kind: str, target_id: str) -> dict | None:
     return client.get_key(target_id) if kind == "key" else client.get_team(target_id)
+
+
+def _missing_alert(conn: psycopg.Connection, instance_id: str, ref: str) -> dict | None:
+    """대상이 LiteLLM에 없다는 열린 경보의 주제. 없으면 None."""
+    row = fetchone(
+        conn,
+        "SELECT subject FROM mint.alerts WHERE instance_id = %s AND dedup_key = %s"
+        " AND status <> 'resolved'",
+        (instance_id, missing_key(ref)),
+    )
+    return None if row is None else row["subject"]
+
+
+def _target_missing(ctx: JobContext, ref: str, via: str) -> None:
+    """키·팀이 LiteLLM에서 지워졌다: 재시도하지 않고 작업을 ``target_missing``으로 끝낸다."""
+    raise_target_missing(ctx.conn, ctx.instance_id, ref, via)
+    ctx.outcome = "target_missing"
 
 
 def _event(
@@ -217,12 +237,9 @@ def sync_target(ctx: JobContext) -> None:
     client = _client(ctx)
     ctx.checkpoint()
     current = _read(client, kind, target_id)
-    gone_key = f"sync_divergence:target:{ref}"
     if current is None:
-        raise_alert(conn, inst, kind="sync_divergence", severity="high", dedup_key=gone_key,
-                    subject={"target": ref, "reason": "target_missing"})
+        _target_missing(ctx, ref, "read")
         return
-    resolve_alert(conn, inst, gone_key)
     desired = desired_for_target(conn, inst, kind, target_id)
     rows = load_rows(conn, inst, kind, target_id)
     before = permission_of(current)
@@ -240,6 +257,11 @@ def sync_target(ctx: JobContext) -> None:
                         dedup_key=f"sync_divergence:forbidden:{ref}",
                         subject={"target": ref, "reason": "forbidden", "team_id": team})
             raise PermanentFailure("litellm_forbidden") from None
+        except LiteLLMHttpError as error:
+            if error.status == 404 and target_gone(client, kind, target_id, error):
+                _target_missing(ctx, ref, "write")
+                return
+            raise
         resolve_alert(conn, inst, f"sync_divergence:forbidden:{ref}")
         changed_fields = _foreign_changes(
             current, response if kind == "key" else (response or {}).get("data")
@@ -250,6 +272,7 @@ def sync_target(ctx: JobContext) -> None:
                         subject={"target": ref, "fields": changed_fields})
         else:
             resolve_alert(conn, inst, key)
+    resolve_alert(conn, inst, missing_key(ref))
     reread = _read(client, kind, target_id)
     after = permission_of(reread)
     unconfirmed = _record(ctx, kind, target_id, plan, before, after, response is not None)
@@ -953,13 +976,16 @@ def _reconcile_target(
 ) -> None:
     conn, inst = ctx.conn, ctx.instance_id
     ref = target_ref(kind, target_id)
-    gone_key = f"sync_divergence:target:{ref}"
+    known = _missing_alert(conn, inst, ref)
     current = _read(client, kind, target_id)
     if current is None:
-        raise_alert(conn, inst, kind="sync_divergence", severity="high", dedup_key=gone_key,
-                    subject={"target": ref, "reason": "target_missing"})
+        if known is None:
+            raise_target_missing(conn, inst, ref, "read")
         return
-    resolve_alert(conn, inst, gone_key)
+    if known is not None:
+        if known.get("via") != "read":
+            return  # 쓰기 404로 확인된 대상: 새 승인이 동기화를 등록할 때까지 다시 맞추지 않는다
+        resolve_alert(conn, inst, missing_key(ref))  # 다시 나타났다
     desired = desired_for_target(conn, inst, kind, target_id)
     rows = load_rows(conn, inst, kind, target_id)
     servers, tools = permission_of(current)

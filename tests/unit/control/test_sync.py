@@ -14,11 +14,12 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo  # noqa: E402
 from mint_litellm.control import approvals as approvals_domain  # noqa: E402
 from mint_litellm.control import jobs, sync_state  # noqa: E402
 from mint_litellm.control import relations as relations_domain  # noqa: E402
+from mint_litellm.control import todo as todo_module  # noqa: E402
 from mint_litellm.control.db.connection import fetchall, fetchone  # noqa: E402
 from mint_litellm.control.db.roles import LOGIN_ROLES  # noqa: E402
 from mint_litellm.control.errors import ControlError  # noqa: E402
 from mint_litellm.control.litellm_write import LiteLLMSync  # noqa: E402
-from mint_litellm.control.services import base  # noqa: E402
+from mint_litellm.control.services import base, reads  # noqa: E402
 from mint_litellm.control.services import sync as sync_service  # noqa: E402
 from mint_litellm.control.stage2_config import Stage2Settings  # noqa: E402
 from mint_litellm.control.sync_state import Desired, make_plan  # noqa: E402
@@ -379,9 +380,118 @@ def test_a_missing_target_raises_an_alert_instead_of_failing(admin, fake, worker
     add_approval(admin, "key", "gone")
     enqueue(admin, "sync_target", "key:gone")
     drain(worker)
-    [alert] = alerts(admin, "sync_divergence")
-    assert alert["subject"]["reason"] == "target_missing"
+    [alert] = alerts(admin, "sync_target_missing")
+    assert alert["subject"]["target"] == "key:gone" and alert["subject"]["via"] == "read"
+    assert alerts(admin, "sync_divergence") == []
     assert job_rows(admin)[0]["status"] == "done"
+
+
+def _delete_before_write(fake, kind="key", target="k1"):
+    """읽은 뒤 쓰기 전에 LiteLLM에서 대상이 지워졌다(쓰기가 404)."""
+
+    def gone(method, path, body):
+        (fake.keys if kind == "key" else fake.teams).pop(target, None)
+
+    fake.before_write = gone
+
+
+def test_a_write_404_for_a_deleted_key_ends_the_job_done_with_one_alert(admin, fake, worker):
+    key_world(admin, fake)
+    _delete_before_write(fake)
+    enqueue(admin, "sync_target", "key:k1")
+    drain(worker)
+    [job] = job_rows(admin, "sync_target")
+    assert (job["status"], job["last_error_code"]) == ("done", "target_missing")
+    [alert] = alerts(admin, "sync_target_missing")
+    assert alert["subject"]["via"] == "write" and alert["dedup_key"] == "sync_target_missing:key:k1"
+    # 같은 대상을 다시 맞추려 해도 경보는 한 건이고 작업은 실패하지 않는다
+    enqueue(admin, "sync_target", "key:k1")
+    drain(worker)
+    assert len(alerts(admin, "sync_target_missing")) == 1
+    assert {j["status"] for j in job_rows(admin, "sync_target")} == {"done"}
+
+
+def test_a_write_404_for_a_deleted_team_is_handled_the_same_way(admin, fake, worker):
+    add_server(admin)
+    fake.add_server("srv-1")
+    fake.add_team("t1")
+    add_approval(admin, "team", "t1")
+    _delete_before_write(fake, "team", "t1")
+    enqueue(admin, "sync_target", "team:t1")
+    drain(worker)
+    assert job_rows(admin, "sync_target")[0]["last_error_code"] == "target_missing"
+    [alert] = alerts(admin, "sync_target_missing")
+    assert alert["subject"]["target_id"] == "t1"
+
+
+def test_reconcile_does_not_requeue_a_target_known_to_be_missing_until_a_new_sync(
+    admin, fake, worker
+):
+    key_world(admin, fake)
+    fake.before_write = None
+    fake.keys.pop("k1")
+    reconcile(admin)
+    drain(worker)
+    [alert] = alerts(admin, "sync_target_missing")
+    fake.add_key("k1")  # 대상이 다시 나타났다
+    reconcile(admin)
+    drain(worker)
+    assert alerts(admin, "sync_target_missing")[0]["status"] == "resolved"
+    assert alert["id"] == alerts(admin, "sync_target_missing")[0]["id"]
+    assert fake.permission("key", "k1") == (["srv-1"], {"srv-1": ["a", "b"]})
+
+
+def test_reconcile_leaves_a_write_confirmed_missing_target_alone(admin, fake, worker):
+    key_world(admin, fake)
+    _delete_before_write(fake)
+    enqueue(admin, "sync_target", "key:k1")
+    drain(worker)
+    fake.before_write = None
+    fake.add_key("k1")  # 읽기는 되지만 쓰기 404로 확인된 대상은 새 동기화 전까지 다시 맞추지 않는다
+    before = len(job_rows(admin, "sync_target"))
+    reconcile(admin)
+    drain(worker)
+    assert len(job_rows(admin, "sync_target")) == before
+    assert alerts(admin, "sync_target_missing")[0]["status"] != "resolved"
+    enqueue(admin, "sync_target", "key:k1")  # 새 승인이 등록하는 동기화는 성공해 경보를 닫는다
+    drain(worker)
+    assert alerts(admin, "sync_target_missing")[0]["status"] == "resolved"
+
+
+def test_a_404_that_is_not_about_the_target_keeps_failing_as_before(admin, fake, worker):
+    key_world(admin, fake)
+    fake.fail_writes["/key/update"] = 404  # 대상은 읽히는데 쓰기 경로만 404(경로·판본 문제)
+    enqueue(admin, "sync_target", "key:k1")
+    drain(worker)
+    [job] = job_rows(admin, "sync_target")
+    assert job["status"] == "pending" and job["last_error_code"] == "litellm_http_404"
+    assert alerts(admin, "sync_target_missing") == []
+
+
+def test_status_counts_only_targets_whose_latest_job_failed(admin):
+    def job(kind, ref, status, age):
+        row = fetchone(
+            admin,
+            "INSERT INTO mint.jobs (id, instance_id, kind, target_ref, created_at)"
+            " VALUES (gen_random_uuid(), %s, %s, %s, now() - %s::interval) RETURNING id",
+            (INSTANCE, kind, ref, age),
+        )
+        if status != "pending":
+            admin.execute(
+                "UPDATE mint.jobs SET status = 'running', lease_owner = 'w',"
+                " lease_until = now() + interval '1 minute' WHERE id = %s", (row["id"],))
+            admin.execute("UPDATE mint.jobs SET status = %s, last_error_code = 'E' WHERE id = %s",
+                          (status, row["id"]))
+
+    job("sync_target", "key:a", "failed", "3 hours")
+    job("sync_target", "key:a", "failed", "2 hours")  # 같은 대상의 최신 실패 하나만 센다
+    job("sync_target", "key:b", "failed", "3 hours")
+    job("sync_target", "key:b", "done", "1 hour")  # 이후 성공했다
+    job("server_finalize", "srv-1", "failed", "3 hours")
+    job("server_finalize", "srv-1", "pending", "1 hour")  # 다시 시도 중이다
+    todo = [t["what"] for t in todo_module.collect(admin, INSTANCE)]
+    assert [t for t in todo if "실패한 작업" in t] == ["실패한 작업 sync_target 1건(오류 코드 E)"]
+    assert reads.overview(admin, INSTANCE)["jobs_failed"] == 1
 
 
 def test_a_read_back_that_disagrees_raises_an_alert_and_a_later_match_resolves_it(
