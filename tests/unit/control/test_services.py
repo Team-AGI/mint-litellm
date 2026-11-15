@@ -389,5 +389,5 @@ def test_every_state_changing_command_has_a_service():
     assert set(cli.HANDLERS) - stateful == {
         "check", "status", "ledger list", "alert list", "sync status", "intake list",
         "intake show", "contract show", "contract diff", "doctor", "policy status",
-        "org suggest", "org domain",
+        "org suggest", "org domain", "user password-reset",
     }
