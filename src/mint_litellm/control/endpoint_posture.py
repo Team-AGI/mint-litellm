@@ -25,9 +25,9 @@
 - 보고한 서버가 허용 호스트 밖 접속을 거절당한 적이 있으면(``egress_refused``가 0보다 큼)
   ``endpoint_egress_refused``. 실행 중인 프로세스가 끝나면 기록이 사라져 닫힌다.
 - 보고한 서버가 허용 호스트 목록을 거르지 못한 채(Windows, ``egress_unfiltered``, 또는 승인 계약이
-  ``network: hosts``인 서버가 ``appcontainer``로 실행 중) 실행 중이면
-  ``endpoint_egress_unfiltered``. 선언한 호스트 제한이 집행되지 않는다는 뜻이며 프로세스가 끝나면
-  닫힌다.
+  ``network: hosts``인 서버가 방화벽 규칙(``egress_filtered``) 없이 ``appcontainer``로 실행 중)
+  실행 중이면 ``endpoint_egress_unfiltered``. 선언한 호스트 제한이 집행되지 않는다는 뜻이며
+  프로세스가 끝나면 닫힌다.
 
 - 묶음 실행기 밖에서 직접 도는 MCP 서버 패키지(``outside_processes``, 패키지 식별자만)는 서버
   계약의 패키지와 이름으로 맞춰 본다. 폐기된 서버의 패키지만 해당하면 ``endpoint_outside_retired``
@@ -162,7 +162,8 @@ def findings(
                 )  # fmt: skip
         for item in row.get("processes") or ():
             hosts = (contracts or {}).get(item["server"], {}).get("network") == "hosts"
-            if item.get("egress_unfiltered") or (hosts and item.get("sandbox") == "appcontainer"):
+            unfiltered = hosts and item.get("sandbox") == "appcontainer"
+            if item.get("egress_unfiltered") or (unfiltered and not item.get("egress_filtered")):
                 kind = AlertKind.ENDPOINT_EGRESS_UNFILTERED.value
                 wanted[f"{kind}:{row['key_alias']}:{item['server']}"] = (
                     kind, "medium", {**who, "server_id": item["server"]}

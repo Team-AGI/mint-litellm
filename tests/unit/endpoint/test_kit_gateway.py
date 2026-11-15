@@ -339,3 +339,138 @@ def test_uninstall_unloads_the_profile_even_when_the_state_lost_its_name(tmp_pat
     calls.clear()
     kit.unload_apparmor({"files": {}})
     assert calls == []
+
+
+def test_a_windows_managed_install_registers_the_user_sync_and_the_firewall_tasks(
+    tmp_path, reports, monkeypatch
+):
+    kit = windows_managed(tmp_path, monkeypatch)
+    kit.root = None  # 실제 설치처럼 시스템 경로를 쓰는 배치(명령은 모두 가로챈다)
+    calls = []
+    monkeypatch.setattr(kit_module, "capture", lambda command: calls.append(command) or "SUCCESS")
+    kit.programs = tmp_path / "programs"
+    state = {"files": {}}
+    kit.schedule_sync_task(state, "C:/Python312/python.exe", "C:/MintEndpoint/mint_kit.py")
+    (sync,) = calls
+    assert sync[:4] == ["schtasks", "/Create", "/TN", kit_module.SYNC_TASK_NAME]
+    assert sync[sync.index("/RU") + 1] == kit.account.name and "/IT" in sync  # 사용자 권한
+    assert sync[sync.index("/TR") + 1].endswith(f'mint_kit.py sync --kit "{kit.logical_programs}"')
+    assert state["sync_task"] == kit_module.SYNC_TASK_NAME
+    calls.clear()
+    kit.schedule_net_task(state, "C:/Python312/python.exe")
+    acl, create = calls
+    assert acl[0] == "icacls" and acl[-1] == "*S-1-5-32-545:(WD)"  # 사용자는 요청 파일만 만든다
+    assert create[:4] == ["schtasks", "/Create", "/TN", kit_module.NET_TASK_NAME]
+    assert state["net_task"] == kit_module.NET_TASK_NAME
+    assert (kit.programs / "net" / "req").is_dir()
+
+
+def test_the_sync_task_is_only_for_a_managed_windows_install_with_codex(
+    tmp_path, reports, monkeypatch
+):
+    kit = windows_managed(tmp_path, monkeypatch)
+    kit.root = None
+    calls = []
+    monkeypatch.setattr(kit_module, "capture", lambda command: calls.append(command) or "SUCCESS")
+    kit.harnesses = ["claude"]
+    kit.schedule_sync_task({}, "python.exe", "mint_kit.py")
+    kit.harnesses = ["claude", "codex"]
+    kit.managed = False
+    kit.schedule_sync_task({}, "python.exe", "mint_kit.py")
+    kit.schedule_net_task({}, "python.exe")
+    assert calls == []
+
+
+def test_the_system_reporter_runs_the_user_sync_right_after_the_server_list_changes(
+    tmp_path, reports, monkeypatch
+):
+    kit = windows_managed(tmp_path, monkeypatch)
+    state = kit.install()
+    state["sync_task"] = kit_module.SYNC_TASK_NAME
+    kit.save_state(state)
+    ran = []
+    monkeypatch.setattr(kit_module, "capture", lambda command: ran.append(command) or "ok")
+    monkeypatch.setattr(kit_module, "windows_system", lambda: True)
+    monkeypatch.setattr(kit_module, "untrusted_run", lambda *a, **k: None)
+    monkeypatch.setattr(kit_module.Kit, "remediate", lambda self, state, names: [{"kind": "x"}])
+    answer = {"retired": ["srv-1"], "desired": []}
+    monkeypatch.setattr(kit_module.Kit, "report", lambda self, s, a: setattr(self, "answer", answer)
+                        or True)
+    kit_module.report_installed(kit.programs, home=kit.home, user=kit.account.name)
+    assert ["schtasks", "/Run", "/TN", kit_module.SYNC_TASK_NAME] in ran
+
+
+def test_uninstall_deletes_the_sync_and_firewall_tasks_and_the_rules(
+    tmp_path, reports, monkeypatch
+):
+    kit = windows_managed(tmp_path, monkeypatch)
+    state = kit.install()
+    state.update(task="T1", sync_task="T2", net_task="T3")
+    kit.save_state(state)
+    kit.root = None
+    seen = []
+    monkeypatch.setattr(kit_module, "capture", lambda command: seen.append(command) or "")
+    monkeypatch.setattr(kit_module.Kit, "stop_launched", lambda self, names: [])
+    monkeypatch.setattr(kit_module.Kit, "stop_by_command", lambda self, names: [])
+    kit.clean_servers()
+    deleted = [c[3] for c in seen if c[:2] == ["schtasks", "/Delete"]]
+    assert deleted == []  # 작업 삭제는 uninstall 본문이 한다
+    assert any("Remove-NetFirewallRule" in " ".join(c) and "MINT sandbox" in " ".join(c)
+               for c in seen)  # fmt: skip
+
+
+def test_stopping_a_windows_launcher_ends_its_server_first_and_waits_for_its_cleanup(
+    tmp_path, reports, monkeypatch
+):
+    kit = windows_managed(tmp_path, monkeypatch)
+    kit.install()
+    kit.system_mode = True
+    agent_path = r"C:\Program Files\MintEndpoint\mint_agent.py"
+    rows = [
+        (10, 1, f'python "{agent_path}" run --contracts c.json --server gone'),
+        (20, 10, "python.exe srv.py"),  # 실행기가 띄운 서버
+        (30, 1, f'python "{agent_path}" run --contracts c.json --server live'),
+    ]
+    alive = [list(rows), [rows[2]]]  # 서버가 끝나자 실행기도 스스로 끝난다
+    monkeypatch.setattr(kit_module, "process_entries", lambda windows: alive[0] if len(alive) > 1
+                        else alive[-1])
+    killed = []
+
+    def kill(pid):
+        killed.append(pid)
+        if pid == 20:
+            alive.pop(0)
+        return True
+
+    monkeypatch.setattr(kit, "kill", kill)
+    monkeypatch.setattr(kit_module.time, "sleep", lambda s: None)
+    assert kit.stop_by_command({"gone"}) == [{"kind": "process", "server": "gone", "target": None}]
+    assert killed == [20]  # 실행기는 정리를 마치고 스스로 끝났으므로 끄지 않는다
+
+
+def test_a_firewall_filtered_server_is_reported_as_filtered(tmp_path, monkeypatch):
+    programs = tmp_path / "MintEndpoint"
+    rules = programs / "net" / "rules"
+    rules.mkdir(parents=True)
+    for name, pid in (("mint.s.1", 1), ("mint.t.2", 2)):
+        record = {"profile": name, "server": name.split(".")[1], "pid": pid, "start": "5"}
+        (rules / f"{name}.json").write_text(json.dumps(record))
+    monkeypatch.setattr(kit_module, "proc_start", lambda pid, windows: "5" if pid == 1 else "9")
+    assert kit_module.net_filtered(programs, True) == {"s"}  # 끝난 실행기의 기록은 세지 않는다
+    assert kit_module.net_filtered(programs, False) == set()
+    items = [{"server": "s", "count": 1}, {"server": "t", "count": 1}]
+    got = kit_module.with_sandbox(items, tmp_path, True, False, None, {"s"})
+    assert [i.get("egress_filtered") for i in got] == [True, None]
+
+
+def test_uninstall_cleans_up_the_servers_while_the_launcher_file_still_exists(
+    tmp_path, reports, monkeypatch
+):
+    kit = windows_managed(tmp_path, monkeypatch)
+    kit.install()
+    seen = []
+    launcher = kit.programs / "mint_agent.py"
+    clean = lambda self: seen.append(launcher.exists())  # noqa: E731
+    monkeypatch.setattr(kit_module.Kit, "clean_servers", clean)
+    kit.uninstall()
+    assert seen == [True]  # 실행기 파일이 지워진 뒤에는 정리 명령을 부를 수 없다
