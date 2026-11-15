@@ -267,7 +267,12 @@ def servers_page(request: Request, actor: StaffActor, error=None, status=200, fo
     form = form or {}
     opened = form.get("target") or request.query_params.get("open")
     ctx = {
-        "rows": rows, "tab": tab, "records": records,
+        "rows": rows,
+        "tab": tab,
+        "records": records,
+        "pending_calls": sum(r["view"] == "pending" for r in my_approvals(actor))
+        if not rows
+        else 0,
         "need": sum(r["state"] == "none" for r in rows),
         "expiring": sum(r["expiring"] for r in rows),
         "selected": next((r for r in rows if r["ref"] == opened), None) if opened else None,

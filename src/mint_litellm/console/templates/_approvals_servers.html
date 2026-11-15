@@ -2,7 +2,7 @@
 {% if queue %}
 <table><thead><tr><th>서버</th><th>조직</th><th>팀</th><th>목적</th><th>전송</th><th>등록자</th><th></th></tr></thead><tbody>
 {% for q in queue %}<tr>
-<td><a href="/servers/{{ q.server_id | urlencode }}">{{ q.server_id }}</a></td>
+<td><a href="/servers/{{ q.server_id | urlencode }}">{{ q.server_name }}</a>{% if q.server_url %}<br>{{ q.server_url }}{% endif %}<br><span class="muted">{{ m.ident(q.server_id) }}</span> <button type="button" class="copy" data-copy="{{ q.server_id }}">복사</button></td>
 <td>{{ q.org_name | blank }}</td><td>{{ q.team_id | blank }}</td><td>{{ q.purpose | blank }}</td>
 <td>{{ L.pick(L.TRANSPORT, q.transport) }}</td><td>{{ q.registered_by | who }}</td>
 <td>{% if q.relation_id and can(actor, 'approve') %}<a class="button" href="/approvals/review/{{ q.relation_id }}">검토</a>{% endif %}</td>

@@ -1,5 +1,6 @@
 """시작하기 화면: 점검표와 알림 시험 전송."""
 
+import os
 import uuid
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
@@ -41,7 +42,12 @@ def send_test(config) -> bool:
 
 def setup_page(request: Request, actor: Actor, error=None, status=200):
     items = setup_state.steps(actor)
-    ctx = {"items": items, "pending": setup_state.pending(items), "error": error}
+    ctx = {
+        "items": items,
+        "pending": setup_state.pending(items),
+        "error": error,
+        "litellm_ui_url": os.getenv("MINT_LITELLM_UI_URL", ""),
+    }
     return render(request, "setup.html", ctx, actor=actor, status=status)
 
 

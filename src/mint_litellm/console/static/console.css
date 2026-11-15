@@ -272,3 +272,7 @@ dialog.confirm .actions { justify-content: flex-end; }
 
 .cmd { display: flex; gap: var(--s2); align-items: center; margin: var(--s2) 0; }
 .cmd .cmd-text { flex: 1; padding: var(--s2); background: var(--bg-subtle); border-radius: 4px; font-family: monospace; overflow-wrap: anywhere; }
+
+@media (min-width: 768px) { .mobile-menu { display: contents; } .mobile-menu > summary { display: none; } .mobile-menu:not([open]) > .menu { display: block; } }
+@media (max-width: 767px) { .mobile-menu > summary { cursor: pointer; } .sidebar .mobile-menu:not([open]) > .menu { display: none; } }
+@media (min-width: 768px) { .mobile-menu::details-content { content-visibility: visible; } }

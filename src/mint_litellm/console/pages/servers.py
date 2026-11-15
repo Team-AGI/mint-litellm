@@ -8,9 +8,9 @@ from fastapi import APIRouter, Depends, Form, Request
 
 from mint_litellm.console import api, compare, labels
 from mint_litellm.console.core import Actor, page_actor, require_csrf
-from mint_litellm.console.pages.common import act
+from mint_litellm.console.pages.common import act, server_display
 from mint_litellm.console.templating import render
-from mint_litellm.control.errors import AdminCode, AdminError
+from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import contracts as contract_service
 from mint_litellm.control.services import evidence as evidence_service
 from mint_litellm.control.services import intakes as intake_service
@@ -271,6 +271,7 @@ STALL = timedelta(hours=24)
 def intakes_page(request: Request, actor: Actor, error=None, status=200):
     wanted = request.query_params.get("status") or ""
     rows = intake_service.list_intakes(actor.ctx)
+    server_display(actor, rows)
     rows.sort(key=lambda r: (r["created_at"], str(r["id"])))  # 오래된 것 먼저
     now = datetime.now(UTC)
     for r in rows:
@@ -310,7 +311,9 @@ def intakes(request: Request, actor: Actor = Depends(page_actor)):
 INTAKE_TABS = (("overview", "검사 결과"), ("info", "신청 내용"), ("evidence", "증빙"))
 
 
-def intake_progress(intake: dict, lacking: list[str]) -> list[tuple[str, str]]:
+def intake_progress(
+    intake: dict, lacking: list[str], checks: list[dict] | None = None
+) -> list[tuple[str, str]]:
     """진행 표시 4단계(접수·검사·증빙·결정)를 (심각도, 이름)으로."""
     st = intake["status"]
     checked = {
@@ -319,7 +322,12 @@ def intake_progress(intake: dict, lacking: list[str]) -> list[tuple[str, str]]:
         "checking": ("wait", "검사 중"),
         "indeterminate": ("wait", "검사 판별 불가"),
     }.get(st, ("ok", "검사 통과"))
-    if st in ("received", "checking", "failed"):
+    if st == "decided":
+        if any(c["result"] == "fail" for c in checks or []):
+            checked = ("error", "검사 실패")
+        elif not checks or any(c["result"] == "indeterminate" for c in checks):
+            checked = ("wait", "검사 판별 불가")
+    if st in ("received", "checking", "failed") or checked[0] == "error":
         proof = ("off", "증빙")
     else:
         proof = ("error", f"증빙 {len(lacking)}건 부족") if lacking else ("ok", "증빙 충족")
@@ -333,11 +341,23 @@ def intake_progress(intake: dict, lacking: list[str]) -> list[tuple[str, str]]:
 
 
 def intake_page(
-    request: Request, actor: Actor, intake_id: str, error=None, status=200, tab: str | None = None
+    request: Request,
+    actor: Actor,
+    intake_id: str,
+    error=None,
+    status=200,
+    tab: str | None = None,
+    decision_form: dict | None = None,
 ):
     info = intake_service.show(actor.ctx, intake_id)
     now = datetime.now(UTC)
     intake, checks, tools = info["intake"], info["checks"], info["tool_contracts"]
+    try:
+        entry = actor.litellm().get_server(intake["server_id"]) or {}
+    except ControlError:
+        entry = {}
+    candidate = intake_service.deployment_candidate(actor.conn, actor.instance, intake["server_id"])
+    server_name = entry.get("server_name") or entry.get("alias") or intake["server_id"]
     tab = tab or request.query_params.get("tab", "")
     tab = tab if tab in dict(INTAKE_TABS) else "overview"
     stale = any(
@@ -367,6 +387,8 @@ def intake_page(
         next_step = None
     ctx = {
         "i": intake,
+        "server_name": server_name,
+        "server_url": candidate["url"] if candidate else entry.get("url"),
         "checks": checks,
         "tools": tools,
         "stale": stale,
@@ -383,7 +405,9 @@ def intake_page(
         "tabs": [
             (key, label, len(lacking) if key == "evidence" else 0) for key, label in INTAKE_TABS
         ],
-        "progress": intake_progress(intake, lacking),
+        "progress": intake_progress(intake, lacking, checks),
+        "decision_form": decision_form or {},
+        "provider_blocked": any(c["reason_code"] == "PROVIDER_NOT_ALLOWED" for c in checks),
         "passed": sum(1 for c in checks if c["result"] == "pass"),
         "failed": sum(1 for c in checks if c["result"] == "fail"),
         "risk": risk,
@@ -408,7 +432,13 @@ def intake_new_page(
     resources: list[str] | None = None,
 ):
     rows = list(resources or [])
+    try:
+        servers = actor.litellm().list_servers()
+    except ControlError:
+        servers = []
     ctx = {
+        "available_servers": servers,
+        "available_ids": [r.get("server_id") or r.get("id") for r in servers],
         "f": {**NEW_DEFAULTS, **{k: v for k, v in form.items() if v not in (None, "")}},
         "grades": intake_service.DATA_GRADES,
         "error": error,
@@ -433,6 +463,7 @@ def intake_new_step(
     go: str = Form(""),
     resource: list[str] = Form([]),
     server_id: str = Form(""),
+    server_url: str = Form(""),
     provider: str = Form(""),
     owner_user_id: str = Form(""),
     purpose: str = Form(""),
@@ -446,6 +477,7 @@ def intake_new_step(
     """신청 등록의 단계 이동·자원 행 추가. 값은 숨은 입력으로 이어 받고 아무것도 저장하지 않는다."""
     form = {
         "server_id": server_id,
+        "server_url": server_url,
         "provider": provider,
         "owner_user_id": owner_user_id,
         "purpose": purpose,
@@ -464,6 +496,7 @@ def intake_new_step(
 def create_intake(
     request: Request,
     server_id: str = Form(...),
+    server_url: str = Form(""),
     provider: str = Form(...),
     owner_user_id: str = Form(...),
     purpose: str = Form(...),
@@ -478,6 +511,7 @@ def create_intake(
 ):
     form = {
         "server_id": server_id,
+        "server_url": server_url,
         "provider": provider,
         "owner_user_id": owner_user_id,
         "purpose": purpose,
@@ -494,10 +528,15 @@ def create_intake(
             if resource
             else json.loads(allowed_resources or "[]")
         )
+        if server_url.strip():
+            entry = actor.litellm().get_server(server_id.strip()) or {}
+            if entry.get("url") and entry["url"] != server_url.strip():
+                raise ControlError("입력한 서버 주소가 등록된 주소와 다릅니다. 주소를 확인하세요.")
         intake_service.create(
             actor.ctx,
             actor.litellm(),
             server_id.strip(),
+            url=server_url.strip() or None,
             purpose=purpose,
             data_grade=data_grade,
             allowed_resources=resources,
@@ -517,7 +556,21 @@ def create_intake(
         "intake_created",
         "/intakes",
         lambda **kw: intake_new_page(
-            request, actor, form, step=len(NEW_STEPS), resources=resource, **kw
+            request,
+            actor,
+            form,
+            step=1 if "--url" in str(kw.get("error", "")) else len(NEW_STEPS),
+            resources=resource,
+            **{
+                **kw,
+                "error": (
+                    "서버 주소를 입력하세요."
+                    if "--url" in str(kw.get("error", ""))
+                    else "기본 조직을 설정하도록 담당자에게 요청하세요."
+                    if "--org" in str(kw.get("error", ""))
+                    else kw.get("error")
+                ),
+            },
         ),
     )
 
@@ -622,7 +675,18 @@ def decide_intake(
         action,
         ok,
         f"/intakes/{intake_id}",
-        lambda **kw: intake_page(request, actor, intake_id, **kw),
+        lambda **kw: intake_page(
+            request,
+            actor,
+            intake_id,
+            decision_form={
+                "reason": reason,
+                "valid_days": valid_days,
+                "scope_type": scope_type,
+                "scope_id": scope_id,
+            },
+            **kw,
+        ),
     )
 
 

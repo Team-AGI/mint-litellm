@@ -226,3 +226,21 @@ def test_the_page_renders_a_printable_document_with_downloads(seeded, admin):
 def test_no_listed_policy_is_left_without_its_rule(world):
     rows = section(report(world), "정책")["tables"][0]["rows"]
     assert rows and all(row[2] != "—" for row in rows)
+
+
+def test_policy_version_status_is_plain_text_in_all_report_formats():
+    changes = audit_report._changes(
+        {},
+        [
+            {
+                "id": "v1",
+                "status": "active",
+                "activated_at": datetime.now(UTC),
+                "activated_by": "admin",
+            }
+        ],
+        "Asia/Seoul",
+    )
+    status = changes["tables"][0]["rows"][0][1]
+    assert status == "적용 중" and isinstance(status, str)
+    assert "Status(" not in json.dumps(changes, ensure_ascii=False)
