@@ -16,6 +16,8 @@
 그 사이 바뀐 것으로 보이면 경고한다.
 """
 
+import hashlib
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -412,10 +414,26 @@ def reject(
     return {"id": str(row["id"]), "status": "rejected"}
 
 
+# 관리자가 바꾸는 필드만 본다. LiteLLM은 거부된 호출에도 updated_at·사용량을 갱신하므로 쓰지 않는다.
+MARKED_FIELDS = (
+    "blocked", "key_alias", "user_id", "team_id", "models", "max_budget", "expires",
+    "tpm_limit", "rpm_limit", "allowed_routes", "object_permission_id", "metadata",
+    "members_with_roles",
+)
+
+
+def block_marker(state: dict | None) -> str | None:
+    """차단을 확인한 순간의 대상 지문(관리 필드의 해시)."""
+    if state is None:
+        return None
+    picked = {k: state.get(k) for k in MARKED_FIELDS}
+    return hashlib.sha256(json.dumps(picked, sort_keys=True, default=str).encode()).hexdigest()
+
+
 def changed_since_block(row: dict, current: dict) -> bool:
     """차단을 확인한 뒤 LiteLLM 객체가 바뀐 것으로 보이는가. 표지가 없으면 바뀐 것으로 본다."""
     marker = row["marker_updated_at"]
-    return marker is None or str(current.get("updated_at")) != marker
+    return marker is None or block_marker(current) != marker
 
 
 def request_unblock(
@@ -500,13 +518,13 @@ def apply(job: JobContext) -> None:
         if before is None:
             error = "target_missing"
         elif (before.get("blocked") is True) == blocking:
-            marker = before.get("updated_at")  # 이미 원하는 상태: 호출하지 않는다
+            marker = block_marker(before)  # 이미 원하는 상태: 호출하지 않는다
         else:
             client.set_blocked(scope, target, blocking)
             after = _state_of(client, scope, row)
             if after is None or (after.get("blocked") is True) != blocking:
                 error = "not_confirmed"
-            marker = (after or {}).get("updated_at")
+            marker = block_marker(after)
         already = before is not None and (before.get("blocked") is True) == blocking
     except LiteLLMUnreachable:
         raise

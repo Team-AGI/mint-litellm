@@ -201,7 +201,7 @@ def test_approval_blocks_once_and_confirms_by_reading_back(conn, fake):
     assert fake.writes()[0][2] == {"key": "tok2"}
     done = proposals(conn)[0]
     assert (done["status"], done["mint_blocked"], done["decided_by"]) == ("applied", True, "carol")
-    assert done["marker_updated_at"] == fake.keys["tok2"]["updated_at"]
+    assert done["marker_updated_at"] == key_block.block_marker(fake.keys["tok2"])
     kinds = [r["kind"] for r in fetchall(conn, "SELECT kind FROM mint.events WHERE kind LIKE"
                                          " 'key_block_%%' ORDER BY inserted_at")]
     assert kinds == ["key_block_proposed", "key_block_approved", "key_block_applied"]
@@ -300,8 +300,10 @@ def test_unblock_is_admin_only_and_never_automatic(conn, fake):
 
 def test_unblock_warns_when_the_key_changed_after_our_block(conn, fake):
     pid = blocked_proposal(conn, fake)
-    fake.keys["tok2"]["updated_at"] = "someone-else"  # 다른 관리자가 건드렸다
     ctx = make_ctx(conn)
+    fake.keys["tok2"].update(updated_at="later", spend=1.5)  # 막힌 키로 부른 호출도 이 값을 바꾼다
+    assert not key_block.changed_since_block(proposals(conn)[0], fake.keys["tok2"])
+    fake.keys["tok2"]["models"] = ["someone-else"]  # 다른 관리자가 건드렸다
     with pytest.raises(AdminError) as warned:
         key_block.request_unblock(ctx, reader(fake), pid, reason="확인")
     assert "바뀐 것으로 보입니다" in str(warned.value)
