@@ -8,6 +8,7 @@ from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
 
 from mint_litellm.console.core import STATUS, Actor
+from mint_litellm.control.db.connection import fetchall
 from mint_litellm.control.errors import AdminError, ControlError
 
 Rebuild = Callable[..., Response]
@@ -44,3 +45,30 @@ def see_other(
     """구 경로의 화면 요청을 새 경로로 옮긴다. 요청에 붙은 나머지 쿼리는 그대로 이어 붙인다."""
     rest = {k: v for k, v in request.query_params.items() if k not in params and k not in drop}
     return RedirectResponse(f"{path}?{urlencode({**params, **rest})}", status_code=303)
+
+
+def server_display(actor: Actor, rows: list[dict]) -> None:
+    """등록된 이름과 계약 주소를 화면의 서버 행에 붙인다."""
+    if not rows:
+        return
+    try:
+        entries = actor.litellm().list_servers()
+    except ControlError:
+        entries = []
+    names = {
+        e.get("server_id") or e.get("id"): e.get("server_name") or e.get("alias") for e in entries
+    }
+    addresses = {
+        r["server_id"]: r["url"]
+        for r in fetchall(
+            actor.conn,
+            "SELECT DISTINCT ON (server_id) server_id, url FROM mint.deployment_contracts "
+            "WHERE instance_id = %s AND status IN ('candidate', 'approved') "
+            "ORDER BY server_id, (status = 'candidate') DESC, id DESC",
+            (actor.instance,),
+        )
+    }
+    for row in rows:
+        sid = row["server_id"]
+        row["server_name"] = names.get(sid) or sid
+        row["server_url"] = addresses.get(sid)

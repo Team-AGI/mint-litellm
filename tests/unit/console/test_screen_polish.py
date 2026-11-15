@@ -417,3 +417,10 @@ def test_shell_macros_render():
     assert 'data-chart="' in str(ui.chart("donut", {"items": []}))
     assert "aria-current" in str(ui.tabs([("a", "가", 2)], "a", "/x"))
     assert "value" in str(ui.kpi("라벨", "1", href="/x", trend=[1, 2]))
+
+
+def test_navigation_collapses_and_approval_tabs_precede_metrics(world):
+    client = world.session_client("admin")
+    html = client.get("/approvals").text
+    assert '<details class="mobile-menu">' in html
+    assert html.index('class="tabs"') < html.index("응답 대기 호출")

@@ -7,6 +7,7 @@
   {{ m.kpi('동의 필요', need, level='wait' if need) }}
   {{ m.kpi('만료 임박(7일)', expiring, level='wait' if expiring) }}
 </div>
+{% if need %}<p>동의가 필요한 서버가 {{ need }}개 있습니다. 서버 이름을 눌러 동의를 확인하세요.</p>{% endif %}
 {{ m.tabs([('servers', '서버', none), ('records', '내 기록', none)], tab, '/staff') }}
 {% if tab == 'records' %}
 {% if records %}
@@ -23,7 +24,7 @@
 <td>{{ m.badge(L.CONSENT_STATE, r.state) }}{% if r.expiring %} · <span class="nowrap">{{ r.consent_until | when }}</span>{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
-{% else %}{{ m.empty('쓸 수 있는 서버가 없습니다', '/staff/confirmations', '내 요청') }}{% endif %}
+{% else %}{% if pending_calls %}<p>처리 대기 중인 호출 승인 요청이 {{ pending_calls }}건 있습니다. <a href="/staff/confirmations?tab=mine">요청 상태 확인</a></p>{% endif %}{{ m.empty('쓸 수 있는 서버가 없습니다', '/staff/confirmations', '내 요청 확인') }}<p>담당자에게 서버 접근을 요청하세요. 내 요청에서 처리 상태를 확인하세요.</p>{% endif %}
 {% if selected %}{% call m.drawer(selected.server_id, '/staff', has_input=selected.can_consent) %}
 <dl class="detail">
   <dt>조직</dt><dd>{{ selected.org_name }}</dd>

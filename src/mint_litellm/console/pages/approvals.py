@@ -8,7 +8,7 @@ from fastapi.responses import Response
 
 from mint_litellm.console import api, labels
 from mint_litellm.console.core import Actor, page_actor, require_csrf
-from mint_litellm.console.pages.common import act, lines, page_number, see_other
+from mint_litellm.console.pages.common import act, lines, page_number, see_other, server_display
 from mint_litellm.console.templating import render
 from mint_litellm.control import dormant, key_block
 from mint_litellm.control.approvals import DEFAULT_CALL_WINDOW
@@ -89,6 +89,8 @@ def approvals_page(request: Request, actor: Actor, error=None, status=200, tab=N
     asked = query.get("sla", "")
     sla = int(asked) if asked.isdigit() and int(asked) in SLA_MINUTES else SLOW_SECONDS // 60
     queue = reads.queue(actor.conn, actor.instance)
+    if tab == "servers":
+        server_display(actor, queue)
     renewal = renewal_service.candidates(actor.conn, actor.instance)
     rules = reads.call_approval_rules(actor.conn, actor.instance)
     blocks = key_block.listing(actor.conn, actor.instance) if tab == "blocks" else []
@@ -178,6 +180,7 @@ def approval_form_page(
     relation = reads.relation(actor.conn, actor.instance, relation_id)
     if relation is None:
         raise AdminError(AdminCode.NOT_FOUND, "이용 관계가 없습니다.")
+    server_display(actor, [relation])
     high = reads.high_risk_tools(actor.conn, actor.instance, relation["server_id"])
     form = {
         "relation": relation,

@@ -72,7 +72,7 @@ def test_the_new_intake_form_is_prefilled_and_escapes_what_it_shows(world):
         "/intakes/new", params={"server_id": "docs", "provider": '"><script>x</script>',
                                 "purpose": "설정에서 발견"},
     ).text
-    assert 'name="server_id" value="docs"' in html and "<script>x" not in html
+    assert '<option value="docs" selected>' in html and "<script>x" not in html
     assert "설정에서 발견" in html and "신청 등록" in html
 
 

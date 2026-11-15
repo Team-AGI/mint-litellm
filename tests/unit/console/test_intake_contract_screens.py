@@ -35,8 +35,18 @@ def bearer(role: str) -> dict:
     return {"Authorization": f"Bearer {TOKENS[role]}"}
 
 
-def add_intake(world, *, requested_by="human-9", status="passed", result="pass",
-               server="srv-wait", stale=False, reason="X_CODE") -> str:
+def add_intake(
+    world,
+    *,
+    requested_by="human-9",
+    status="passed",
+    result="pass",
+    server="srv-wait",
+    stale=False,
+    reason="X_CODE",
+    with_evidence=True,
+    url_blocked=False,
+) -> str:
     intake_id = str(uuid.uuid4())
     world.query(
         "INSERT INTO mint.intakes (id, instance_id, org_id, server_id, source, purpose, data_grade,"
@@ -49,14 +59,26 @@ def add_intake(world, *, requested_by="human-9", status="passed", result="pass",
         world.query("UPDATE mint.intakes SET status = %s WHERE id = %s", status, intake_id)
     for name in CHECKS:
         age = "26 hours" if stale and name == "connection" else "1 minute"
-        outcome = result if name == "supply_chain" else "pass"
+        outcome = (
+            "fail"
+            if url_blocked and name == "url_guard"
+            else (result if name == "supply_chain" else "pass")
+        )
         world.query(
             "INSERT INTO mint.intake_checks (id, instance_id, intake_id, \"check\", attempt,"
             " result, reason_code, method, evidence_sha256, evidence_valid_until, ran_at)"
             " VALUES (%s, %s, %s, %s, 1, %s, %s, 'm', %s, now() + interval '5 days',"
             " now() - interval '" + age + "')",
-            uuid.uuid4(), INSTANCE, intake_id, name, outcome,
-            "URL_QUERY" if name == "url_guard" and reason == "URL_QUERY" else "X_CODE", HEX)
+            uuid.uuid4(),
+            INSTANCE,
+            intake_id,
+            name,
+            outcome,
+            "PROVIDER_NOT_ALLOWED"
+            if url_blocked and name == "url_guard"
+            else ("URL_QUERY" if name == "url_guard" and reason == "URL_QUERY" else "X_CODE"),
+            HEX,
+        )
     world.query(
         "INSERT INTO mint.tool_contracts (id, instance_id, server_id, credential_scope, tool,"
         " canonical_text, sha256, pin_sha256, risk_grade, action_type, source, status)"
@@ -66,8 +88,13 @@ def add_intake(world, *, requested_by="human-9", status="passed", result="pass",
         "INSERT INTO mint.deployment_contracts (id, instance_id, server_id, canonical_text, sha256,"
         " url, url_sha256, transport, auth_type, status) VALUES (%s, %s, %s, 'x', %s,"
         " 'http://c.example', %s, 'http', 'none', 'candidate')",
-        uuid.uuid4(), INSTANCE, server, HEX, HEX)
-    if status != "received":
+        uuid.uuid4(),
+        INSTANCE,
+        server,
+        HEX,
+        HEX,
+    )
+    if status != "received" and with_evidence:
         world.query(
             "INSERT INTO mint.policy_evidence (id, instance_id, kind, subject_kind, subject_id,"
             " summary, attached_by, valid_until) SELECT gen_random_uuid(), %s, k, 'intake', %s,"
@@ -549,3 +576,142 @@ def test_approving_an_intake_in_the_console_checks_litellm_permission(world, lit
     response = decide(world, intake, decision="approve")
     assert response.status_code == 200, response.text
     assert litellm_permission == [("user", "human-9")]
+
+
+def test_intake_selection_and_address_are_carried_to_creation(world, monkeypatch):
+    seen = {}
+    admin_api = world.config.litellm_admin
+    monkeypatch.setattr(
+        admin_api, "list_servers", lambda: [{"server_id": "docs", "server_name": "문서 서버"}]
+    )
+    monkeypatch.setattr(
+        "mint_litellm.console.pages.servers.intake_service.create",
+        lambda *args, **kw: seen.update(kw),
+    )
+    client = world.session_client("admin")
+    html = client.get("/intakes/new").text
+    assert "문서 서버" in html and 'value="docs"' in html and 'name="server_url"' in html
+    response = client.post(
+        "/intakes",
+        data={
+            "csrf": world.csrf(client),
+            "server_id": "docs",
+            "server_url": "https://example.com/mcp",
+            "provider": "제공자",
+            "owner_user_id": "human-9",
+            "purpose": "검색",
+            "data_grade": "internal",
+            "credential_notice": "안내",
+            "revocation_record": "기록",
+            "audit_access_days": "30",
+            "data_return_terms": "삭제",
+        },
+    )
+    assert response.status_code == 303
+    assert seen["url"] == "https://example.com/mcp"
+
+
+def test_approval_missing_evidence_and_failed_decision_keep_inputs(world):
+    intake = add_intake(world, with_evidence=False)
+    client = world.session_client("approver")
+    html = client.get(f"/intakes/{intake}").text
+    assert 'class="primary" disabled' in html and "필수 증빙 부족" in html
+    assert 'href="?tab=evidence"' in html
+    response = client.post(
+        f"/intakes/{intake}/decision",
+        data={
+            "csrf": world.csrf(client),
+            "state_version": version(world, intake),
+            "decision": "approve",
+            "reason": "보존할 사유",
+            "valid_days": "1",
+            "scope_type": "user",
+            "scope_id": "human-9",
+        },
+    )
+    assert response.status_code != 303
+    assert 'name="valid_days" value="1"' in response.text and "보존할 사유" in response.text
+
+
+def test_decided_failed_check_does_not_show_passed_progress(world):
+    intake = add_intake(world, url_blocked=True)
+    world.query(
+        "UPDATE mint.intakes SET status = 'decided', decision = 'rejected', "
+        "decided_by = 'admin', decided_at = now() WHERE id = %s",
+        intake,
+    )
+    html = world.session_client("admin").get(f"/intakes/{intake}").text
+    assert "검사 실패" in html and "제공자 허용" in html and "다시 신청" in html
+
+
+def test_missing_registry_address_returns_to_first_step_with_saved_values(world, monkeypatch):
+    from mint_litellm.control.errors import ControlError
+
+    def missing(*args, **kwargs):
+        raise ControlError("제어 평면 키에 URL이 없습니다. --url로 지정하십시오.")
+
+    monkeypatch.setattr("mint_litellm.console.pages.servers.intake_service.create", missing)
+    client = world.session_client("admin")
+    response = client.post(
+        "/intakes",
+        data={
+            "csrf": world.csrf(client),
+            "server_id": "docs",
+            "provider": "공급자",
+            "owner_user_id": "human-9",
+            "purpose": "검색",
+            "data_grade": "internal",
+            "resource": "문서",
+            "credential_notice": "안내",
+            "revocation_record": "기록",
+            "audit_access_days": "30",
+            "data_return_terms": "삭제",
+        },
+    )
+    assert response.status_code == 400
+    assert "서버 주소를 입력하세요" in response.text and "--url" not in response.text
+    assert 'value="공급자"' in response.text and "검색" in response.text
+
+
+def test_intake_and_approval_pages_prioritize_server_name_and_address(world, monkeypatch):
+    intake = add_intake(world)
+    monkeypatch.setattr(
+        world.config.litellm_admin,
+        "list_servers",
+        lambda: [{"server_id": "srv-wait", "server_name": "문서 서버"}],
+    )
+    client = world.session_client("admin")
+    relation = world.query("SELECT id FROM mint.usage_relations WHERE server_id = 'srv-wait'")[0][0]
+    for path in ("/intakes", "/approvals?tab=servers", f"/approvals/review/{relation}"):
+        html = client.get(path).text
+        assert "문서 서버" in html and "http://c.example" in html
+        assert 'data-copy="srv-wait"' in html
+    assert str(intake) in client.get("/intakes").text
+
+
+def test_intake_rejects_address_different_from_registry(world, monkeypatch):
+    monkeypatch.setattr(
+        world.config.litellm_admin,
+        "get_server",
+        lambda server_id: {"url": "https://real.example/mcp"},
+    )
+    client = world.session_client("admin")
+    response = client.post(
+        "/intakes",
+        data={
+            "csrf": world.csrf(client),
+            "server_id": "docs",
+            "server_url": "https://wrong.example/mcp",
+            "provider": "제공자",
+            "owner_user_id": "human-9",
+            "purpose": "검색",
+            "data_grade": "internal",
+            "credential_notice": "안내",
+            "revocation_record": "기록",
+            "audit_access_days": "30",
+            "data_return_terms": "삭제",
+        },
+    )
+    assert response.status_code == 400
+    assert "입력한 서버 주소가 등록된 주소와 다릅니다" in response.text
+    assert world.query("SELECT count(*) FROM mint.intakes")[0][0] == 0

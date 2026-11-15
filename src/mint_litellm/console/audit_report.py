@@ -158,7 +158,7 @@ def _changes(counts: dict[str, int], versions: list[dict], zone: str) -> dict:
     rows = [
         [
             v["id"],
-            labels.pick(labels.POLICY_VERSION, v["status"]),
+            labels.status(labels.POLICY_VERSION, v["status"]).text,
             local_time(v["activated_at"], zone),
             labels.actor(v["activated_by"]),
         ]

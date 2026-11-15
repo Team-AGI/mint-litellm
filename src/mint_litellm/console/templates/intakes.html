@@ -17,7 +17,7 @@
 {% if rows %}
 <table class="clickable"><thead><tr><th>서버</th><th>출처</th><th>진행</th><th>결정</th><th>신청자</th><th>접수 시각</th><th>경과</th></tr></thead><tbody>
 {% for r in rows %}<tr>
-<td><a href="/intakes/{{ r.id }}">{{ r.server_id }}</a></td>
+<td><a href="/intakes/{{ r.id }}">{{ r.server_name }}</a>{% if r.server_url %}<br>{{ r.server_url }}{% endif %}<br><span class="muted">{{ m.ident(r.server_id) }}</span> <button type="button" class="copy" data-copy="{{ r.server_id }}">복사</button></td>
 <td>{{ L.pick(L.SOURCE, r.source) }}</td>
 <td>{{ m.badge(L.INTAKE, r.status) }}</td>
 <td>{% if r.decision %}{{ m.badge(L.DECISION, r.decision) }}{% else %}—{% endif %}</td>

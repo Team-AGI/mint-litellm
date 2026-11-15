@@ -2,10 +2,12 @@
 {% block title %}신청 상세 · MINT{% endblock %}
 {% block page_class %}wide{% endblock %}
 {% block body %}
-<h1>{{ i.server_id }} {{ m.badge(L.INTAKE, i.status) }}</h1>
+<h1>{{ server_name }} {{ m.badge(L.INTAKE, i.status) }}</h1>
+{% if server_url %}<p>{{ server_url }}</p>{% endif %}<p>서버 식별자 {{ m.ident(i.server_id) }} <button type="button" class="copy" data-copy="{{ i.server_id }}">복사</button></p>
 <ol class="steps" aria-label="진행 단계">{% for level, text in progress %}<li class="{{ level }}"><span class="icon" aria-hidden="true">{{ ICONS[level] }}</span>{{ text }}</li>{% endfor %}</ol>
 {% if stale and i.status in ('passed', 'indeterminate') %}<div class="banner error" role="alert">연결·도구 정의 증거가 24시간을 넘었습니다</div>{% endif %}
-{% if lacking and (i.status == 'indeterminate' or i.decision == 'exception') %}<div class="banner error" role="alert">증빙 누락: {{ lacking | join(', ') }}</div>{% endif %}
+{% if lacking and (i.status == 'indeterminate' or i.decision == 'exception') %}<div class="banner error" role="alert">증빙 누락: {{ lacking | join }}</div>{% endif %}
+{% if provider_blocked %}<div class="banner error">제공자가 허용되지 않았습니다. <a href="/access?tab=allowlists">제공자 허용</a> 후 <a href="/intakes/new?server_id={{ i.server_id | urlencode }}">다시 신청</a>하세요.</div>{% endif %}
 {% if next_step %}<div class="effect">다음 행동: {% if next_step == '증빙 첨부' %}<a href="?tab=evidence">{{ next_step }}</a>{% else %}{{ next_step }}{% endif %}</div>{% endif %}
 <div class="cards">
   {{ m.kpi('검사 통과', passed ~ ' / ' ~ (checks | length), level='danger' if failed else ('wait' if passed != (checks | length) else none)) }}
@@ -76,18 +78,21 @@
 <form method="post" action="/intakes/{{ i.id }}/decision" class="form" id="decision">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ i.state_version }}">
   <div class="row">
-    <label>대상 구분<select name="scope_type"><option value="user">사용자</option><option value="key">키</option><option value="team">팀</option></select></label>
-    <label>대상 식별자<input name="scope_id" value="{{ i.owner_user_id or '' }}"></label>
-    <label>유효 기간(일)<input type="number" name="valid_days" value="{{ strict_days if i.status == 'indeterminate' else days }}" min="1" max="{{ max_exception_days if i.status == 'indeterminate' else 365 }}"></label>
+    <label>대상 구분<select name="scope_type"><option value="user"{% if decision_form.scope_type == "user" %} selected{% endif %}>사용자</option><option value="key"{% if decision_form.scope_type == "key" %} selected{% endif %}>키</option><option value="team"{% if decision_form.scope_type == "team" %} selected{% endif %}>팀</option></select></label>
+    <label>대상 식별자<input name="scope_id" value="{{ decision_form.scope_id if decision_form.scope_id is defined else (i.owner_user_id or '') }}"></label>
+    <label>유효 기간(일)<input type="number" name="valid_days" value="{{ decision_form.valid_days if decision_form.valid_days is not none and decision_form.valid_days is defined else (strict_days if i.status == 'indeterminate' else days) }}" min="1" max="{{ max_exception_days if i.status == 'indeterminate' else 365 }}"></label>
   </div>
-  <label>{{ '사유(필수)' if i.status == 'indeterminate' else '사유' }}<textarea name="reason"{% if i.status == 'indeterminate' %} required{% endif %}></textarea></label>
+  <label>{{ '사유(필수)' if i.status == 'indeterminate' else '사유' }}<textarea name="reason"{% if i.status == 'indeterminate' %} required{% endif %}>{{ decision_form.reason or "" }}</textarea></label>
   {% if i.status == 'indeterminate' %}<label>두 번째 승인자 토큰<input type="password" name="second_approver_token" autocomplete="off"></label>{% endif %}
   <input type="hidden" name="decision" value="{{ 'except' if i.status == 'indeterminate' else 'approve' }}">
 </form>
 <div class="actions">
   {% set verb = '예외 승인' if i.status == 'indeterminate' else '승인' %}
-  {{ m.confirm_submit('decide-approve', verb, '신청 ' ~ verb, i.server_id ~ ' 신청을 ' ~ verb ~ '합니다. 이용 관계와 승인 대기 항목이 만들어집니다.', 'decision', verb, danger=false, trigger_class='primary') }}
-  {% call m.confirm_dialog('decide-reject', '거절', '신청 거절', i.server_id ~ ' 신청을 거절합니다. 입력한 사유가 신청 기록에 남습니다.', '/intakes/' ~ i.id ~ '/decision', actor, '거절') %}
+  {% if lacking and i.status == "indeterminate" %}<p>부족한 증빙: {{ lacking | join }}. <a href="?tab=evidence">증빙 첨부</a> · 예외 승인 시 누락이 기록됩니다.</p>{% endif %}
+  {% if (lacking and i.status == "passed") or stale %}<button type="button" class="primary" disabled>{{ verb }}</button><p>승인할 수 없습니다: {% if lacking %}필수 증빙 부족 ({{ lacking | join }}). <a href="?tab=evidence">증빙 첨부</a>{% endif %}{% if stale %} 재검사하세요.{% endif %}</p>{% else %}
+  {{ m.confirm_submit('decide-approve', verb, '신청 ' ~ verb, server_name ~ ' 신청을 ' ~ verb ~ '합니다. 이용 관계와 승인 대기 항목이 만들어집니다.', 'decision', verb, danger=false, trigger_class='primary') }}
+  {% endif %}
+  {% call m.confirm_dialog('decide-reject', '거절', '신청 거절', server_name ~ ' 신청을 거절합니다. 입력한 사유가 신청 기록에 남습니다.', '/intakes/' ~ i.id ~ '/decision', actor, '거절') %}
   <input type="hidden" name="state_version" value="{{ i.state_version }}"><input type="hidden" name="decision" value="reject">
   <label>거절 사유<textarea name="reason" required maxlength="500"></textarea></label>
   {% endcall %}

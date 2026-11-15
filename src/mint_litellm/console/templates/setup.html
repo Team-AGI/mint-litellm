@@ -2,6 +2,13 @@
 {% block title %}시작하기 · MINT{% endblock %}
 {% block body %}
 <h1>시작하기</h1>
+<ol>
+<li>LiteLLM에서 서버 등록 {% if litellm_ui_url %}<a class="button" href="{{ litellm_ui_url }}">서버 등록 화면</a>{% else %}<span>관리자에게 서버 등록 화면 주소를 문의하세요.</span>{% endif %}</li>
+<li>MINT 신청 <a class="button" href="/intakes/new">신청 등록</a></li>
+<li>검사·증빙 <a class="button" href="/intakes">신청 확인</a></li>
+<li>도입 승인 <a class="button" href="/intakes">도입 검토</a></li>
+<li>이용 승인 <a class="button" href="/approvals?tab=servers">이용 승인</a></li>
+</ol>
 <div class="cards">
   {{ m.kpi('남은 필수 항목', pending, none, none, 'wait' if pending else none) }}
   </div>
@@ -9,7 +16,7 @@
 {% for i in items %}<tr id="step-{{ i.key }}">
 <td>{{ i.title }}{% if i.optional %} <span class="muted">(선택)</span>{% endif %}</td>
 <td>{{ m.status_badge(i.status) }}</td>
-<td>{{ i.line }}{% if i.commands and actor.role == 'admin' and i.status.text != '완료' %}{% for os, cmd in i.commands %}
+<td>{{ i.line }}{% if i.key == "approval" and "알림 주소 미설정" in i.line %} <a href="/admin">운영자에게 알림 주소 설정 요청</a>{% endif %}{% if i.commands and actor.role == 'admin' and i.status.text != '완료' %}{% for os, cmd in i.commands %}
 <div class="filters"><span class="muted">{{ os }}</span> <button type="button" class="copy" data-copy="{{ cmd }}" title="명령 복사">{{ os }} 명령 복사</button></div>{% endfor %}{% endif %}</td>
 <td class="nowrap">{% if i.status.text == '완료' and not i.optional %}{% elif i.post %}<form method="post" action="{{ i.post }}" hx-boost="false">{{ m.csrf(actor) }}<button type="submit" class="primary">{{ i.action }}</button></form>
 {% elif i.href %}<a class="button" href="{{ i.href }}">{{ i.action }}</a>{% endif %}</td>
