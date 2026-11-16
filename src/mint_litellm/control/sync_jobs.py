@@ -405,10 +405,14 @@ class CredentialsRemain(ControlError):
     code = "server_credentials_remain"
 
 
-class EvidenceMissing(ControlError):
-    """서버 계정·문서 공유 권한 회수 확인(access_revocation)이 아직 없다. 붙이면 다시 시도한다."""
+class EvidenceMissing(WaitForOperator):
+    """서버 계정·문서 공유 권한 회수 확인(access_revocation)이 아직 없다. 붙이면 다시 시도한다.
+
+    사람의 증빙을 기다리는 상태라 시도로 세지 않는다(작업 실패 경보 없이 ``evidence_missing``만).
+    """
 
     code = "server_evidence_missing"
+    delay = 900
 
 
 @_reachable

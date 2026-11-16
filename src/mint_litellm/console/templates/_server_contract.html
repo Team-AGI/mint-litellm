@@ -49,7 +49,7 @@
 {% if s.exec_drift %}
 <h2>실행 계약 변경</h2>
 <table><thead><tr><th>구분</th><th>판정</th><th>더해진 항목</th><th>빠진 항목</th></tr></thead><tbody>
-{% for axis in ['file', 'exec', 'network'] %}{% set r = s.exec_drift.axes[axis] %}<tr><td>{{ L.AXIS[axis] }}</td><td>{{ L.AXIS_VERDICT[r.verdict] }}</td><td>{{ r.added | join(', ') | blank }}</td><td>{{ r.removed | join(', ') | blank }}</td></tr>{% endfor %}
+{% for axis in ['file', 'exec', 'network'] %}{% set r = s.exec_drift.axes[axis] %}<tr><td>{{ L.AXIS[axis] }}</td><td>{{ L.AXIS_VERDICT[r.verdict] }}</td><td>{{ r.added | join }}</td><td>{{ r.removed | join }}</td></tr>{% endfor %}
 </tbody></table>
 {% endif %}
 

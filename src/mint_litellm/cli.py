@@ -1361,6 +1361,31 @@ def _add_arguments(parser: argparse.ArgumentParser, name: str) -> None:
             parser.add_argument(*flags, **kwargs)
 
 
+# argparse의 사용자 메시지를 한국어로(argparse는 호출할 때마다 모듈의 ``_``로 번역한다).
+_ARGPARSE_KO = {
+    "usage: ": "사용법: ",
+    "%(prog)s: error: %(message)s\n": "%(prog)s: 오류: %(message)s\n",
+    "argument %(argument_name)s: %(message)s": "인자 %(argument_name)s: %(message)s",
+    "the following arguments are required: %s": "필수 인자가 빠졌습니다: %s",
+    "unrecognized arguments: %s": "알 수 없는 인자입니다: %s",
+    "invalid choice: %(value)r (choose from %(choices)s)":
+        "쓸 수 없는 값 %(value)r(가능한 값: %(choices)s)",
+    "invalid %(type)s value: %(value)r": "%(type)s 형식이 아닌 값: %(value)r",
+    "expected one argument": "값이 하나 필요합니다",
+    "expected at least one argument": "값이 하나 이상 필요합니다",
+    "expected at most one argument": "값은 하나까지입니다",
+    "ambiguous option: %(option)s could match %(matches)s":
+        "모호한 옵션 %(option)s(후보: %(matches)s)",
+    "not allowed with argument %s": "%s 인자와 함께 쓸 수 없습니다",
+    "one of the arguments %s is required": "%s 중 하나가 필요합니다",
+    "positional arguments": "위치 인자",
+    "options": "옵션",
+    "show this help message and exit": "이 도움말을 보이고 끝냅니다",
+    " (default: %(default)s)": " (기본값: %(default)s)",
+}
+argparse._ = lambda message: _ARGPARSE_KO.get(message, message)
+
+
 def build_parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog=PROGRAM, description="MINT 운영자 명령줄 도구")
     root.add_argument("--token-file", help="운영자 토큰 파일(기본: MINT_OPERATOR_TOKEN)")
@@ -1559,6 +1584,17 @@ def main(argv: Sequence[str] | None = None, environ: dict[str, str] | None = Non
         return error.exit_code
     except psycopg.Error as error:
         print(f"데이터베이스 오류: {error}", file=sys.stderr)
+        return 1
+    except FileNotFoundError as error:
+        print(f"파일이 없습니다: {error.filename}", file=sys.stderr)
+        return 1
+    except OSError as error:
+        name = error.filename or ""
+        print(f"파일을 다룰 수 없습니다: {name} ({error.strerror})", file=sys.stderr)
+        return 1
+    except json.JSONDecodeError as error:
+        where = f"{error.lineno}번째 줄 {error.colno}번째 글자"
+        print(f"JSON 형식이 아닙니다: {where}", file=sys.stderr)
         return 1
     return 0
 

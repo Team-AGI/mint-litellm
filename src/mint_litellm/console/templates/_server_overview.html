@@ -6,7 +6,7 @@
   <dt>마지막 관측</dt><dd>{{ s.last_observed_at | when }}</dd>
   {% if s.identity_kind == 'stdio' %}<dt>실행 계약</dt><dd>{{ m.copy_hash(s.exec_contract_sha256) }}</dd>
   {% else %}<dt>주소</dt><dd>{{ m.copy_hash(s.url_sha256) }}</dd>{% endif %}
-  {% if s.identity_kind == 'stdio' %}<dt>네트워크</dt><dd>{% if s.network == 'none' %}차단{% elif s.network == 'hosts' %}허용 호스트만: {{ s.allowed_hosts | join(', ') }}{% else %}제한 없음{% endif %}</dd>{% endif %}
+  {% if s.identity_kind == 'stdio' %}<dt>네트워크</dt><dd>{% if s.network == 'none' %}차단{% elif s.network == 'hosts' %}허용 호스트만: {{ s.allowed_hosts | join }}{% else %}제한 없음{% endif %}</dd>{% endif %}
 </dl>
 {% if s.identity_kind == 'stdio' %}
 <h2>파일 접근</h2>

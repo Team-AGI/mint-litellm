@@ -285,6 +285,13 @@ def check_scope_and_permission(
         target, label = litellm.get_user(scope_id), "사용자"
     if target is None:
         raise ControlError(f"LiteLLM에서 {label} {scope_id}을(를) 찾을 수 없습니다.")
+    # 승인자 자신이 쓰는 범위(본인 사용자·본인 키)는 요청자가 누구로 적혀 있든 다른 사람이 승인한다.
+    beneficiary = scope_id if scope_type == "user" else target.get("user_id")
+    mine = ctx.operator.user_id and beneficiary == ctx.operator.user_id
+    if scope_type in ("user", "key") and mine:
+        raise separation_of_duties(
+            f"승인자 자신이 쓰는 {label}에는 승인할 수 없습니다. 다른 승인자가 승인해야 합니다."
+        )
     _require_scope_in_relation(ctx, relation, scope_type, scope_id, target)
     local = fetchone(
         ctx.conn,
