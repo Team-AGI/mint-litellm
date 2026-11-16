@@ -649,9 +649,16 @@ def codex_servers(mcp: dict) -> str:
     )
 
 
+# 판정 대상: MCP 도구와 하네스 내장 도구. Codex는 셸(Bash)과 apply_patch(파일 편집)에만 훅이
+# 걸리고 웹 검색 같은 호스팅 도구에는 걸리지 않는다.
+CLAUDE_MATCHER = "mcp__.*|Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|WebFetch|WebSearch"
+CODEX_MATCHER = "^(mcp__.*|Bash|apply_patch)$"
+
+
 def codex_hooks(commands: dict) -> str:
     return "".join(
-        f'{NL}[[hooks.{event}]]{NL}matcher = "^mcp__"{NL}{NL}[[hooks.{event}.hooks]]{NL}'
+        f"{NL}[[hooks.{event}]]{NL}matcher = {toml(CODEX_MATCHER)}{NL}{NL}"
+        f'[[hooks.{event}.hooks]]{NL}'
         f'type = "command"{NL}command = {toml(line)}{NL}timeout = {timeout}{NL}'
         for event, (line, timeout) in commands.items()
     )
@@ -1283,19 +1290,20 @@ class Kit:
         write_atomic(path, data, mode, owner)
         state["files"][logical] = sha256_bytes(data)
 
-    def hook_common(self, contracts: str) -> list[str]:
+    def hook_common(self, contracts: str, harness: str) -> list[str]:
         common = [
             "--url", self.config["decide_url"],
             "--key-file", f"~/{KEY_REL}",
             "--contracts", contracts,
             "--state-dir", f"~/{STATE_REL}",
+            "--harness", harness,
         ]  # fmt: skip
         if self.config.get("ca_pem"):
             common += ["--ca-file", f"{self.logical_programs}/ca.pem"]
         return common
 
     def hook_commands(self, python: str, agent: str, contracts: str) -> dict:
-        common = self.hook_common(contracts)
+        common = self.hook_common(contracts, "claude")
         before = {
             "type": "command", "command": python, "args": [agent, "pre", *common],
             "timeout": 3, "onFailure": "block",
@@ -1305,11 +1313,13 @@ class Kit:
         }  # fmt: skip
         failed = {**after, "args": [agent, "post-failure", *common]}
         hooks = {"PreToolUse": before, "PostToolUse": after, "PostToolUseFailure": failed}
-        return {event: [{"matcher": "mcp__.*", "hooks": [hook]}] for event, hook in hooks.items()}
+        return {
+            event: [{"matcher": CLAUDE_MATCHER, "hooks": [hook]}] for event, hook in hooks.items()
+        }
 
     def codex_hook_commands(self, python: str, agent: str, contracts: str) -> dict:
         """Codex에는 실패 호출 훅이 없다. 보고되지 않은 호출은 MINT가 결과 미확인으로 남긴다."""
-        common = self.hook_common(contracts)
+        common = self.hook_common(contracts, "codex")
         return {
             "PreToolUse": (self.shell_line([python, agent, "pre", *common]), 3),
             "PostToolUse": (self.shell_line([python, agent, "post", *common]), 5),

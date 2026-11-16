@@ -198,7 +198,8 @@ def test_a_managed_codex_install_limits_servers_and_hooks_every_call(tmp_path, r
     assert hooks["managed_dir"] == "/usr/local/lib/mint-endpoint"
     assert set(hooks) == {"managed_dir", "PreToolUse", "PostToolUse"}
     before = hooks["PreToolUse"][0]
-    assert before["matcher"] == "^mcp__" and before["hooks"][0]["timeout"] == 3
+    assert before["matcher"] == "^(mcp__.*|Bash|apply_patch)$"
+    assert before["hooks"][0]["timeout"] == 3
     line = before["hooks"][0]["command"]
     assert "/usr/local/lib/mint-endpoint/mint_agent.py pre --url https://mint.test" in line
     servers = tomllib.loads((codex / "managed_config.toml").read_text(encoding="utf-8"))

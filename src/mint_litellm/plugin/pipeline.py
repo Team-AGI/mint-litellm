@@ -70,6 +70,7 @@ from mint_litellm.types.decision import (
     apply_record_failure,
     conclude,
     entries_from_results,
+    is_builtin_server,
     relation_state_result,
     server_state_result,
 )
@@ -250,7 +251,9 @@ def state_results(
     if principal.org_id is None:
         return [StageResult.stop(Reason.ORG_BOUNDARY)]
     server = snapshot.server
-    results = []
+    results: list[StageResult] = []
+    if is_builtin_server(resolved.server_id):
+        return results  # 가상 서버: 등록·계약 상태가 없다
     state = server_state_result(server.status if server is not None else None)
     if state.status is not StageStatus.PASS:
         results.append(state)
@@ -292,6 +295,9 @@ def denial_and_approval(
         )
         if applies:
             return ApprovalSelection([StageResult.stop(Reason.DENIED)], None)
+
+    if is_builtin_server(resolved.server_id):
+        return ApprovalSelection([], None)  # 승인 없이 기본 허용(관측), 거부만 막는다
 
     matched = [
         a
