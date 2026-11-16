@@ -89,6 +89,7 @@ KEY_BLOCK_ERROR = {
     "target_missing": "대상을 찾을 수 없음",
     "not_confirmed": "차단을 확인하지 못함",
     "route_forbidden": "제어 키에 차단 경로 권한 없음",
+    "released_externally": "MINT 밖에서 차단이 풀림",
 }
 CALL_APPROVAL_RULE = {
     "active": Status("사용 중", "ok"),

@@ -1,6 +1,7 @@
 """권한 동기화 조회와 재개 서비스."""
 
 from mint_litellm.control import sync_state
+from mint_litellm.control.alerts import resolve as resolve_alert
 from mint_litellm.control.context import Context
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import ControlError, not_found
@@ -48,6 +49,7 @@ def resume(ctx: Context, grant_id: str, *, expected_version: int | None = None) 
         {"target_type": row["target_type"], "target_id": row["target_id"], "item": row["item"],
          "server_id": row["server_id"], "action": "resume"},
     )
+    resolve_alert(ctx.conn, ctx.instance_id, f"sync_divergence:held:{grant_id}")
     if row["target_type"] in sync_state.SYNC_SCOPES:
         enqueue_job(ctx, "sync_target", sync_state.target_ref(row["target_type"], row["target_id"]))
     else:

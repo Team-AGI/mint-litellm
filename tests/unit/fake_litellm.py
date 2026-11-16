@@ -32,6 +32,7 @@ class FakeLiteLLM:
         self.after_write = None  # 쓰기를 처리한 뒤 부르는 함수(응답 직후 덮어쓰는 흉내)
         self.ignore_block = False  # 차단·해제 호출이 성공해도 상태를 바꾸지 않는 흉내
         self.ignore_allow_all_keys = False  # 서버 수정이 allow_all_keys 끄기를 무시하는 흉내
+        self.ghosts: dict[str, dict] = {}  # 지운 뒤에도 /key/info가 돌려주는 키(캐시 흉내)
         self.generated: list[dict] = []  # /key/generate 본문
         self.fail_writes: dict[str, int] = {}  # 경로 -> 강제로 낼 상태 코드
         self.credentials: dict[str, list[dict]] = {}  # 서버 -> [{user_id, credential_type}]
@@ -113,10 +114,11 @@ class FakeLiteLLM:
             if forced is not None:
                 return forced, {"error": "forced"}
         if method == "GET" and path == "/key/info":
-            key = self.keys.get(params.get("key", ""))
+            key = self.keys.get(params.get("key", "")) or self.ghosts.get(params.get("key", ""))
             return (200, {"key": key["key"], "info": copy.deepcopy(key)}) if key else (404, {})
         if method == "GET" and path == "/key/list":
-            return 200, {"keys": [copy.deepcopy(k) for k in self.keys.values()],
+            return 200, {"keys": [copy.deepcopy(k) for k in self.keys.values()
+                                  if params.get("key_hash") in (None, k["key"])],
                          "total_pages": 1}
         if method == "GET" and path == "/team/info":
             team = self.teams.get(params.get("team_id", ""))
