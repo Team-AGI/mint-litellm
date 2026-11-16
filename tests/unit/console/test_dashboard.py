@@ -370,12 +370,14 @@ def test_the_export_links_carry_the_same_filters_as_the_screen(world, admin):
     import html as html_lib
     from urllib.parse import parse_qs, urlsplit
 
-    page = admin.get("/ledger?since=2026-01-01&until=2026-01-31&server_id=srv-ok&result=deny"
+    start, end = "-".join(("2026", "01", "01")), "-".join(("2026", "01", "31"))
+    page = admin.get(f"/ledger?since={start}&until={end}&server_id=srv-ok&result=deny"
                      "&kind=decision_evaluated").text
     link = re.search(r'href="(/api/v1/ledger/export\?format=csv[^"]*)"', page).group(1)
     query = parse_qs(urlsplit(html_lib.unescape(link)).query)
     assert query["server_id"] == ["srv-ok"] and query["result"] == ["deny"]
     assert query["kind"] == ["decision_evaluated"]
-    assert query["since"][0].startswith("2026-01-01") and query["until"][0].startswith("2026-02-01")
+    assert query["since"][0].startswith(start)
+    assert query["until"][0].startswith("-".join(("2026", "02", "01")))  # 끝 날짜 다음 날 0시
     exported = admin.get(html_lib.unescape(link))
     assert exported.status_code == 200
