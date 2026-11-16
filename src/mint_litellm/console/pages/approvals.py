@@ -475,7 +475,7 @@ def decide_calls(
             raise ControlError("선택한 요청이 없습니다.")
         one_shot = {
             str(r["id"]) for r in reads.call_approvals(actor.conn, actor.instance, status="pending")
-            if r["action_type"] in ONE_SHOT_ACTIONS
+            if r["action_type"] in ONE_SHOT_ACTIONS or not r["action_type"]
         }
         failed = []
         for item in ids:
@@ -548,11 +548,16 @@ def add_allowlist(
     actor: Actor = Depends(page_actor),
 ):
     now = datetime.now(UTC)
+
+    def action():
+        api.check_days(valid_days)
+        allowlist_service.add(
+            actor.ctx, kind, value, now, now + timedelta(days=valid_days), None, note or None
+        )
+
     return act(
         actor,
-        lambda: allowlist_service.add(
-            actor.ctx, kind, value, now, now + timedelta(days=valid_days), None, note or None
-        ),
+        action,
         "allowlist_added", "/access?tab=allowlists",
         lambda **kw: access_page(request, actor, tab="allowlists", **kw),
     )

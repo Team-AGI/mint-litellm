@@ -6,8 +6,9 @@ from urllib.parse import urlencode
 
 from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
+from pydantic import ValidationError
 
-from mint_litellm.console.core import STATUS, Actor
+from mint_litellm.console.core import STATUS, Actor, invalid_fields, screen_message
 from mint_litellm.control.db.connection import fetchall
 from mint_litellm.control.errors import AdminError, ControlError
 
@@ -32,7 +33,11 @@ def act(
     except ControlError as error:
         actor.conn.rollback()
         status = STATUS[error.code] if isinstance(error, AdminError) else 400
-        return rebuild(error=str(error), status=status)
+        return rebuild(error=screen_message(str(error)), status=status)
+    except ValidationError as error:  # 항목 이름을 화면의 한글 이름으로 알린다
+        actor.conn.rollback()
+        fields = invalid_fields(error.errors())
+        return rebuild(error=f"입력 값을 확인하십시오: {fields}", status=400)
     except ValueError:  # 선택 목록에 없는 값 등 잘못된 폼 값
         actor.conn.rollback()
         return rebuild(error="입력 값이 올바르지 않습니다.", status=400)

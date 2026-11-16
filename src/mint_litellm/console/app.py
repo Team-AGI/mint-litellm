@@ -30,6 +30,7 @@ from mint_litellm.console.core import (
     config_of,
     db,
     error_response,
+    invalid_fields,
     login_redirect,
     read_cookie,
     require_csrf,
@@ -114,12 +115,17 @@ def create_app(
 
     @app.exception_handler(RequestValidationError)
     def invalid_request(request: Request, error: RequestValidationError):
-        fields = ", ".join(".".join(str(p) for p in e["loc"][1:]) or "본문" for e in error.errors())
+        locs = [{**e, "loc": e["loc"][1:]} for e in error.errors()]
+        if request.url.path.startswith("/api/"):  # 프로그램 호출자에게는 필드 이름 그대로
+            fields = ", ".join(".".join(map(str, e["loc"])) or "본문" for e in locs)
+            message = f"요청 값이 올바르지 않습니다: {fields}"
+        else:
+            message = f"입력 값을 확인하십시오: {invalid_fields(locs)}"
         return error_reply(
             request, 400,
             {
                 "code": "MINT-ADMIN-INVALID-INPUT",
-                "message": f"요청 값이 올바르지 않습니다: {fields}",
+                "message": message,
                 "reference": request.state.request_id,
             },
         )
@@ -139,6 +145,13 @@ def create_app(
             return error_reply(
                 request, 404,
                 {"code": "MINT-ADMIN-NOT-FOUND", "message": "대상을 찾을 수 없습니다.",
+                 "reference": request.state.request_id},
+            )
+        if isinstance(error, (psycopg.errors.DataError, psycopg.errors.CheckViolation)):
+            # 범위·형식을 벗어난 입력이 DB 제약에 걸린 경우는 장애가 아니라 잘못된 입력이다
+            return error_reply(
+                request, 400,
+                {"code": "MINT-ADMIN-INVALID-INPUT", "message": "입력 값이 올바르지 않습니다.",
                  "reference": request.state.request_id},
             )
         return error_reply(

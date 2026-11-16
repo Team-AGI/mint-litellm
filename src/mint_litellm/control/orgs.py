@@ -1,5 +1,7 @@
 """조직과 팀·사용자 바인딩."""
 
+import re
+
 from mint_litellm.control.context import Context
 from mint_litellm.control.db.connection import fetchone
 from mint_litellm.control.errors import ControlError, not_found
@@ -7,8 +9,17 @@ from mint_litellm.types.events import EventKind
 from mint_litellm.types.identity import SubjectType
 from mint_litellm.types.ids import new_uuid7
 
+ORG_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+
 
 def add(ctx: Context, org_id: str, name: str) -> None:
+    if not ORG_ID.fullmatch(org_id):
+        raise ControlError(
+            "조직 식별자는 영문자·숫자로 시작하고 영문자·숫자·점·밑줄·하이픈만 쓰는 "
+            "128자 이하여야 합니다."
+        )
+    if not 1 <= len(name) <= 256:
+        raise ControlError("조직 이름은 1자 이상 256자 이하여야 합니다.")
     if fetchone(
         ctx.conn,
         "SELECT 1 AS x FROM mint.orgs WHERE instance_id = %s AND org_id = %s",
