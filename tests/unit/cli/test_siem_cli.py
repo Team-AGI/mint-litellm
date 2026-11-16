@@ -28,7 +28,7 @@ def test_add_list_remove_keep_the_secret_out_of_the_database(mint):
         "--endpoint",
         "https://s.test:8088",
         "--token-env",
-        "SPLUNK_TOKEN",
+        "MINT_SIEM_SPLUNK_TOKEN",
         "--index",
         "mint",
         token=token,
@@ -47,7 +47,7 @@ def test_add_list_remove_keep_the_secret_out_of_the_database(mint):
             "SELECT endpoint, secret_ref, options FROM mint.siem_targets"
         ).fetchone()
         kinds = [r[0] for r in conn.execute("SELECT kind FROM mint.events ORDER BY inserted_at")]
-    assert endpoint.endswith("/services/collector/event") and ref == "env:SPLUNK_TOKEN"
+    assert endpoint.endswith("/services/collector/event") and ref == "env:MINT_SIEM_SPLUNK_TOKEN"
     assert options == {"index": "mint"} and "siem_target_added" in kinds
     code, _, err = mint.run(
         "siem", "add", "main", "--kind", "cef", "--endpoint", "tcp://s.test:514", token=token
