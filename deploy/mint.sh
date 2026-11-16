@@ -368,7 +368,7 @@ cmd_backup() {
         [ -s "$dir/$file" ] || { rm -rf "$dir"; fail "백업의 $file이 비어 있어 폴더를 지웠습니다."; }
     done
     BACKUP_DIR="$dir"
-    echo "백업: $dir (mint.sql, litellm.sql, mint.tar.gz, litellm.config.yaml; 비밀값은 포함하지 않습니다)"
+    echo "백업: $dir (mint.sql, litellm.sql, mint.tar.gz, litellm.config.yaml; 기록에 민감한 값이 포함될 수 있으므로 안전하게 보관하십시오)"
 }
 
 # 업그레이드 단계. "설명|함수" 순서가 곧 실행 순서이며 --dry-run은 이 표만 보인다.

@@ -33,6 +33,27 @@ def test_get_server_user_key_team_lookups(litellm):
     assert litellm.get_key("unknown-key") is None
 
 
+def test_user_permission_is_hydrated_from_v2_when_v1_returns_only_id(stub, litellm):
+    body = fixture("user_info")
+    body["user_info"].update(object_permission_id="perm-1", object_permission=None)
+    stub.set("/user/info", body, user_id="human-1")
+    permission = {"object_permission_id": "perm-1", "mcp_servers": ["everything"]}
+    stub.set(
+        "/v2/user/info", {"user_id": "human-1", "object_permission": permission}, user_id="human-1"
+    )
+    assert litellm.get_user("human-1")["object_permission"] == permission
+    stub.set(
+        "/v2/user/info",
+        {
+            "user_id": "human-1",
+            "object_permission": {"object_permission_id": "other", "mcp_servers": ["everything"]},
+        },
+        user_id="human-1",
+    )
+    with pytest.raises(LiteLLMError, match="권한 상세"):
+        litellm.get_user("human-1")
+
+
 def test_every_request_is_a_get_with_the_control_key_only(stub, litellm):
     litellm.list_servers()
     litellm.list_teams()

@@ -122,7 +122,23 @@ class LiteLLMAdmin:
     def get_user(self, user_id: str) -> dict | None:
         """``user_info`` 객체. 사용자가 없으면 None."""
         body = self._ok("/user/info", {"user_id": user_id}, missing_ok=True, key="user_info")
-        return None if body is None else body["user_info"]
+        if body is None:
+            return None
+        user = body["user_info"]
+        permission_id = user.get("object_permission_id")
+        if permission_id and not user.get("object_permission"):
+            detail = self._ok("/v2/user/info", {"user_id": user_id})
+            permission = detail.get("object_permission")
+            if (
+                detail.get("user_id") != user_id
+                or not isinstance(permission, dict)
+                or permission.get("object_permission_id") != permission_id
+            ):
+                raise LiteLLMError(
+                    "LiteLLM 사용자 권한 상세를 확인할 수 없습니다. 다시 확인하십시오."
+                )
+            user["object_permission"] = permission
+        return user
 
     def get_key(self, key_id: str) -> dict | None:
         body = self._ok("/key/info", {"key": key_id}, missing_ok=True, key="info")

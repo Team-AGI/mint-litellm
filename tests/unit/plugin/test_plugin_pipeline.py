@@ -125,7 +125,7 @@ class TestErrorReference:
     def test_the_error_body_names_no_user_server_tool_or_argument(self, tmp_path):
         _, outcome, req = self.blocked(tmp_path)
         body = json.loads(outcome.error.detail())
-        assert set(body) == {"code", "dispatch_state", "retry_safe", "reference"}
+        assert set(body) == {"code", "dispatch_state", "retry_safe", "reference", "guidance"}
         text = outcome.error.detail()
         for secret in ("u1", "t1", "org1", "srv-1", "search", "mslearn", KEY):
             assert secret not in text.replace(str(req.invocation_id), "")

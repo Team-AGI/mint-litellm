@@ -107,6 +107,11 @@ def collect(
         "servers": servers,
         "enforcement": enforcement_states(ctx),
         "alerts": alerts,
+        "open_alert_count": fetchone(
+            ctx.conn,
+            "SELECT count(*) AS n FROM mint.alerts WHERE instance_id = %s AND status = 'open'",
+            (ctx.instance_id,),
+        )["n"],
         "todo": todo.collect(ctx.conn, ctx.instance_id),
         "observations": {name: observations.get(name, "확인 불가") for name in OBSERVATION_ITEMS},
     }
@@ -249,7 +254,8 @@ def render(info: dict[str, Any]) -> str:
         _compat_line(info.get("litellm_compat")),
         *_degraded_lines(info.get("litellm_compat")),
         "서버: " + (", ".join(f"{k} {v}" for k, v in sorted(info["servers"].items())) or "없음"),
-        "경보: " + ("없음" if not info["alerts"] else ""),
+        f"열린 경보: {info.get('open_alert_count', 0)}건",
+        "상태 점검 경고: " + ("없음" if not info["alerts"] else ""),
     ]
     for alert in info["alerts"]:
         detail = {k: v for k, v in alert.items() if k != "kind"}

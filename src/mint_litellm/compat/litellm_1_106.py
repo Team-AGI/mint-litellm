@@ -495,6 +495,31 @@ def logging_details(logging_obj: Any) -> dict[str, Any] | None:
     return details if isinstance(details, dict) else None
 
 
+def mask_logged_mcp_arguments(logging_obj: Any, mask: Callable[[str], str]) -> None:
+    """지출 기록에 복사될 MCP 인자 사본의 문자열에 ``mask``를 적용한다.
+
+    LiteLLM은 ``model_call_details["mcp_tool_call_metadata"]["arguments"]``를 가림 설정과
+    상관없이 지출 기록에 그대로 저장한다. 값을 새 객체로 바꿔 넣으므로 실제 호출에 쓰는 인자는
+    그대로다.
+    """
+    details = logging_details(logging_obj)
+    meta = details.get("mcp_tool_call_metadata") if details is not None else None
+    if isinstance(meta, dict) and meta.get("arguments") is not None:
+        meta["arguments"] = _masked_copy(meta["arguments"], mask, 0)
+
+
+def _masked_copy(value: Any, mask: Callable[[str], str], depth: int) -> Any:
+    if depth > 20:
+        return "[MASKED:depth]"
+    if isinstance(value, str):
+        return mask(value)
+    if isinstance(value, Mapping):
+        return {k: _masked_copy(v, mask, depth + 1) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_masked_copy(v, mask, depth + 1) for v in value]
+    return value
+
+
 def failure_exception(kwargs: Mapping[str, Any]) -> BaseException | None:
     exc = kwargs.get("exception")
     return exc if isinstance(exc, BaseException) else None

@@ -37,6 +37,9 @@ def test_list_show_and_reject_with_a_short_id(mint):
     assert (row["id"], row["status"], row["signal"]) == (proposal, "proposed", "repeated_denials")
     code, out, err = mint.run("key-block", "show", proposal[-8:], "--json", token=token)
     assert code == 0 and json.loads(out)["evidence"]["denials"] == 12
+    code, out, err = mint.run("key-block", "show", proposal[-8:], token=token)
+    assert code == 0, err
+    assert "None" not in out and "증거 denials: 12" in out and "{'" not in out
     code, _, err = mint.run("key-block", "reject", proposal[-8:], "--reason", "오탐", token=token)
     assert code == 0, err
     code, out, _ = mint.run("key-block", "list", "--status", "rejected", "--json", token=token)

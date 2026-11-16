@@ -23,6 +23,7 @@ CONTROL_PLANE_ALLOWED_ROUTES: tuple[str, ...] = (
     "/key/info",
     "/team/info",
     "/user/info",
+    "/v2/user/info",
     "/key/list",
     "/team/list",
     "/user/list",

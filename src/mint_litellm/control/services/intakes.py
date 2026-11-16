@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from mint_litellm.control import alerts, intake_checks
-from mint_litellm.control.approvals import _derive_org, check_scope_and_permission
+from mint_litellm.control.approvals import _derive_org, build_conditions, check_scope_and_permission
 from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import (
@@ -910,6 +910,7 @@ def decide(
     scope_type: str | None = None,
     scope_id: str | None = None,
     team_id: str | None = None,
+    allowed_hosts: list[str] | None = None,
     second: Operator | None = None,
     expected_version: int | None = None,
     litellm: Callable[[], Any] | None = None,
@@ -954,8 +955,20 @@ def decide(
                 raise ControlError(
                     f"예외 승인의 유효 기간은 {EXCEPTION_MAX_DAYS}일을 넘을 수 없습니다."
                 )
-        return _approve(ctx, row, decision, reason, valid_until, scope_type, scope_id, team_id,
-                        second_info, checks, litellm)
+        return _approve(
+            ctx,
+            row,
+            decision,
+            reason,
+            valid_until,
+            scope_type,
+            scope_id,
+            team_id,
+            second_info,
+            checks,
+            litellm,
+            allowed_hosts,
+        )
 
 
 def _reject(ctx: Context, row: dict) -> dict:
@@ -973,6 +986,7 @@ def _approve(
     scope_type: str | None, scope_id: str | None, team_id: str | None, second_info: dict | None,
     checks: list[dict],
     litellm: Callable[[], Any] | None = None,
+    allowed_hosts: list[str] | None = None,
 ) -> dict:
     server_id = row["server_id"]
     scope_type = scope_type or "user"
@@ -1060,9 +1074,18 @@ def _approve(
             scope_type, scope_id,
         )
     high = sorted(t["tool"] for t in tools if t["risk_grade"] in ("high", "critical"))
-    conditions = {"high_risk_tools": high} if high else {}
-    basis = {"text": reason or "수용검증 통과", "intake_id": str(row["id"]),
-             "allowlist_ids": allowlist_ids}
+    conditions = build_conditions(
+        high_risk_tools=high,
+        business_hours_only=False,
+        business_hours=None,
+        require_consent=None,
+        allowed_hosts=allowed_hosts,
+    )
+    basis = {
+        "text": reason or "수용검증 통과",
+        "intake_id": str(row["id"]),
+        "allowlist_ids": allowlist_ids,
+    }
     if second_info:
         basis["second_approver"] = second_info["name"]
     if lacking:

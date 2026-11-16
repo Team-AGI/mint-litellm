@@ -35,6 +35,54 @@ OUTPUT_GUIDANCE = (
     "결과가 정책에 막혔다고 알리십시오."
 )
 
+# 사유별 설명을 빠짐없이 유지한다. 공통 조치는 호출을 다시 실행하기 전에 관리자에게 확인하는 것이다.
+REASON_EXPLANATIONS = {
+    Reason.SERVER_UNREGISTERED: "등록되지 않은 서버의 호출이 막혔습니다",
+    Reason.SERVER_NOT_APPROVED: "승인되지 않은 서버의 호출이 막혔습니다",
+    Reason.APPROVAL_ABSENT: "이 서버에 대한 승인이 없어 호출이 막혔습니다",
+    Reason.TOOL_NOT_IN_APPROVAL: "승인 범위에 없는 도구의 호출이 막혔습니다",
+    Reason.POLICY_DETECT: "호출이 정책에 막혔습니다",
+    Reason.CONTRACT_DRIFT: "서버 계약과 실제 상태가 달라 호출이 막혔습니다",
+    Reason.OUTPUT_SCAN: "결과 검사 정책에 따라 호출이 막혔습니다",
+    Reason.SERVER_REJECTED: "거부된 서버의 호출이 막혔습니다",
+    Reason.SERVER_SUSPENDED: "중지된 서버의 호출이 막혔습니다",
+    Reason.SERVER_TERMINATED: "폐기된 서버의 호출이 막혔습니다",
+    Reason.RELATION_TERMINATED: "종료된 이용 관계의 호출이 막혔습니다",
+    Reason.DENIED: "명시적 거부에 따라 호출이 막혔습니다",
+    Reason.APPROVAL_REVOKED: "철회된 승인에 따른 호출이 막혔습니다",
+    Reason.APPROVAL_EXPIRED: "승인이 만료되어 호출이 막혔습니다",
+    Reason.APPROVAL_RECERT_REQUIRED: "승인 재확인이 필요해 호출이 막혔습니다",
+    Reason.CALL_APPROVAL_REQUIRED: "호출별 승인이 필요합니다",
+    Reason.CALL_APPROVAL_STALE: "호출별 승인을 다시 확인해야 합니다",
+    Reason.CALL_APPROVAL_DENIED: "호출별 승인이 거부되었습니다",
+    Reason.CONSENT_REQUIRED: "동의가 필요해 호출이 막혔습니다",
+    Reason.CONSENT_EXPIRED: "동의가 만료되어 호출이 막혔습니다",
+    Reason.CONSENT_REVOKED: "동의가 철회되어 호출이 막혔습니다",
+    Reason.ALLOWLIST_EXPIRED: "허용 목록이 만료되어 호출이 막혔습니다",
+    Reason.SERVER_IDENTITY_MISMATCH: "서버 식별 정보가 달라 호출이 막혔습니다",
+    Reason.SERVER_IDENTITY_AMBIGUOUS: "서버 식별 정보가 모호해 호출이 막혔습니다",
+    Reason.SERVER_UNRESOLVED: "서버를 식별하지 못해 호출이 막혔습니다",
+    Reason.MASTER_KEY_FORBIDDEN: "마스터 키로 도구 호출을 할 수 없습니다",
+    Reason.EXTERNAL_MCP_FORBIDDEN: "외부 MCP 호출이 허용되지 않습니다",
+    Reason.REALTIME_FORBIDDEN: "실시간 호출이 허용되지 않습니다",
+    Reason.CODE_EXECUTION_FORBIDDEN: "코드 실행이 허용되지 않습니다",
+    Reason.TOKEN_FORWARD_FORBIDDEN: "토큰 전달이 허용되지 않습니다",
+    Reason.RESOLVED_ADDRESS_FORBIDDEN: "서버 주소가 허용되지 않습니다",
+    Reason.TOKEN_AUDIENCE_MISMATCH: "토큰의 대상이 맞지 않습니다",
+    Reason.TOKEN_SCOPE_EXCEEDED: "토큰의 권한 범위가 허용 범위를 넘었습니다",
+    Reason.UNSUPPORTED: "지원하지 않는 호출이 막혔습니다",
+    Reason.SCHEMA_ERROR: "요청 형식 오류로 호출이 막혔습니다",
+    Reason.POLICY_VERSION_MISMATCH: "정책 버전이 달라 호출이 막혔습니다",
+    Reason.DEPENDENCY_FAILURE: "필요한 서비스에 연결하지 못했습니다",
+    Reason.AUDIT_FAILURE: "감사 기록을 남기지 못해 호출이 막혔습니다",
+    Reason.ORG_BOUNDARY: "조직 경계를 벗어난 호출이 막혔습니다",
+    Reason.ANONYMOUS: "사용자를 식별하지 못해 호출이 막혔습니다",
+    Reason.ENFORCEMENT_UNVERIFIED: "정책 적용 상태가 확인되지 않아 호출이 막혔습니다",
+    Reason.CANCELLED: "호출이 취소되었습니다",
+    Reason.CONFIRMATION_REQUIRED: "본인 확인이 필요합니다",
+    Reason.CONFIRMATION_STALE: "본인 확인을 다시 해야 합니다",
+}
+
 
 class DispatchState(StrEnum):
     NOT_DISPATCHED = "not_dispatched"
@@ -136,6 +184,8 @@ def error_for_reason(
             dispatch_state=DispatchState.NOT_DISPATCHED,
             retry_safe=True,
             reference=reference,
+            guidance="필요한 서비스에 연결하지 못했습니다. 관리자에게 "
+            "서비스 상태 확인을 요청하십시오.",
         )
     if family is Reason.CANCELLED:
         return cancelled_error(reference, dispatched=False)
@@ -157,7 +207,13 @@ def error_for_reason(
         Reason.CALL_APPROVAL_DENIED: DENIAL_GUIDANCE,
         Reason.CONFIRMATION_REQUIRED: CONFIRMATION_GUIDANCE,
         Reason.CONFIRMATION_STALE: CONFIRMATION_GUIDANCE,
-    }.get(family)
+        Reason.MASTER_KEY_FORBIDDEN: (
+            "마스터 키로 도구를 호출할 수 없습니다. 관리자에게 "
+            "본인에게 발급된 일반 키를 요청하십시오."
+        ),
+    }.get(family) or (
+        REASON_EXPLANATIONS[family] + ". 관리자에게 해당 설정과 승인 범위 확인을 요청하십시오."
+    )
     return MintError(
         code=error_code(reason_code),
         dispatch_state=DispatchState.NOT_DISPATCHED,
@@ -186,6 +242,11 @@ def cancelled_error(reference: str, *, dispatched: bool) -> MintError:
         ),
         retry_safe=not dispatched,
         reference=reference,
+        guidance=(
+            "호출이 취소되었습니다. 관리자에게 취소 사유를 확인하십시오."
+            if not dispatched
+            else "호출이 취소되었으나 실행 여부를 확인하십시오."
+        ),
     )
 
 

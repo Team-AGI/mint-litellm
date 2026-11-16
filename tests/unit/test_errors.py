@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from mint_litellm.types.errors import (
     BLOCK_STATUS_CODE,
+    REASON_EXPLANATIONS,
     Dependency,
     DispatchState,
     MintError,
@@ -42,6 +43,7 @@ def test_error_code_rejects_unknown_reasons():
 
 
 def test_every_reason_maps_to_a_pre_dispatch_error():
+    assert set(REASON_EXPLANATIONS) == set(Reason)
     for reason in Reason:
         if reason is Reason.DEPENDENCY_FAILURE:
             continue
@@ -54,6 +56,7 @@ def test_every_reason_maps_to_a_pre_dispatch_error():
             reason in (Reason.CANCELLED, Reason.CALL_APPROVAL_REQUIRED, Reason.CALL_APPROVAL_STALE)
         )
         assert err.reference == REF
+        assert err.guidance
 
 
 def test_a_cancel_before_dispatch_is_the_same_error_from_either_constructor():
@@ -70,6 +73,7 @@ def test_dependency_failure_is_retry_safe_before_dispatch(dependency, code):
     assert err.code == code
     assert err.dispatch_state is DispatchState.NOT_DISPATCHED
     assert err.retry_safe is True
+    assert err.guidance and "관리자" in err.guidance
 
 
 def test_dependency_failure_requires_the_component():
@@ -123,12 +127,14 @@ def test_block_response_is_a_403_with_a_json_string_detail():
     assert block.status_code == BLOCK_STATUS_CODE == 403
     assert isinstance(block.detail, str)
     parsed = json.loads(block.detail)
-    assert list(parsed) == ["code", "dispatch_state", "retry_safe", "reference"]
+    assert list(parsed) == ["code", "dispatch_state", "retry_safe", "reference", "guidance"]
     assert parsed == {
         "code": "MINT-DENIED",
         "dispatch_state": "not_dispatched",
         "retry_safe": False,
         "reference": REF,
+        "guidance": REASON_EXPLANATIONS[Reason.DENIED]
+        + ". 관리자에게 해당 설정과 승인 범위 확인을 요청하십시오.",
     }
 
 
@@ -150,7 +156,7 @@ def test_a_call_approval_wait_tells_the_agent_to_ask_again_after_approval(reason
     assert "승인된 뒤 같은 작업을 다시 요청하십시오" in json.loads(err.detail())["guidance"]
     assert MintError.from_detail(err.detail()) == err
     # 다른 차단에는 안내 문구가 없다.
-    assert "guidance" not in json.loads(error_for_reason("CONSENT_REQUIRED", REF).detail())
+    assert "동의" in json.loads(error_for_reason("CONSENT_REQUIRED", REF).detail())["guidance"]
 
 
 def test_a_policy_detection_error_names_the_rule_without_leaking_values():

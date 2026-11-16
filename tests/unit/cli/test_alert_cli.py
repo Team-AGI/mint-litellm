@@ -42,6 +42,14 @@ def test_list_ack_and_resolve_follow_the_status_path(mint):
     assert code == 1 and "이미 해결된" in err
 
 
+def test_status_counts_open_alerts_separately_from_health_warnings(mint):
+    token = bootstrap(mint)
+    raise_alert(mint)
+    code, out, err = mint.run("status", token=token)
+    assert code == 0, err
+    assert "열린 경보: 1건" in out and "상태 점검 경고:" in out
+
+
 def test_ack_and_resolve_write_the_events_once(mint):
     token = bootstrap(mint)
     alert_id = raise_alert(mint)

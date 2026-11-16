@@ -678,6 +678,11 @@ def _done(call: Callable[..., Any], *names: str) -> Handler:
     return handler
 
 
+def _call_extend(run: Run) -> None:
+    call_approval_service.extend(run.context(), run.args.call_approval_id)
+    run.say(f"호출 승인을 연장했습니다: {run.args.call_approval_id}")
+
+
 def _denial(run: Run) -> None:
     a = run.args
     _created(
@@ -894,8 +899,16 @@ def _intake_decide(decision: str) -> Handler:
     def handler(run: Run) -> None:
         a = run.args
         result = intake_service.decide(
-            run.context(), a.intake_id, decision, reason=a.reason, valid_until=a.valid_until,
-            scope_type=a.scope, scope_id=a.scope_id, team_id=a.team, second=_second(run),
+            run.context(),
+            a.intake_id,
+            decision,
+            reason=a.reason,
+            valid_until=a.valid_until,
+            scope_type=a.scope,
+            scope_id=a.scope_id,
+            team_id=a.team,
+            allowed_hosts=a.allowed_host,
+            second=_second(run),
             litellm=None if decision == "reject" else run.litellm,
         )
         run.data["id"] = str(result["id"])
@@ -953,7 +966,7 @@ HANDLERS: dict[str, Handler] = {
         r.context(), r.args.call_approval_id, reason=r.args.reason
     ),
     "call-approval cancel": _done(call_approval_service.cancel, "call_approval_id"),
-    "call-approval extend": _done(call_approval_service.extend, "call_approval_id"),
+    "call-approval extend": _call_extend,
     "consent add": _consent_add,
     "consent revoke": _done(consent_service.revoke, "consent_id"),
     "call-approval-rule add": _rule_add,
@@ -1285,6 +1298,7 @@ _DECISION = [
     _a("--scope", choices=["key", "user", "team"], help="승인 범위(기본: 책임자 사용자)"),
     _a("--scope-id", help="승인 범위의 식별자(기본: 책임자)"),
     _a("--team", help="이용 관계의 팀"),
+    _a("--allowed-host", action="append", help="승인 목적지 호스트(반복 가능)"),
     _SECOND,
 ]
 
