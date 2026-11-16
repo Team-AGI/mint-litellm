@@ -2070,6 +2070,8 @@ class Kit:
         trust = self.hook_trust(state) if installed else None
         if trust:
             payload["hook_trust"] = trust
+        if not self.config.get("key"):
+            return False  # 키를 모르면 보고하지 않는다(설치·제거 자체는 그대로).
         url = self.config["decide_url"].rstrip("/") + REPORT_PATH
         ca_pem = self.config.get("ca_pem")
         if not ca_pem:
@@ -2684,6 +2686,12 @@ def main(argv: list[str] | None = None) -> int:
                 "검토해 신뢰해야 호출 전 판정이 시작됩니다(`mint check`로 확인)."
             )
         return 0
+    if not kit.config.get("key"):
+        # 설치된 복사본(`mint uninstall`)의 kit.json에는 키가 없다. 지우기 전에 키 파일에서 읽는다.
+        try:
+            kit.config["key"] = (kit.home / KEY_REL).read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
     result = kit.uninstall()
     reported = kit.report({"mode": result.get("mode")}, "removed")
     kept = result.get("kept") or []
