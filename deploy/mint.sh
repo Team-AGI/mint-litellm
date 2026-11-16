@@ -132,6 +132,8 @@ load_control_key() {
 }
 
 # 콘솔·작업 실행기는 compose env_file로 이 파일의 키를 받는다(docker compose를 직접 실행해도 들어간다).
+# .env의 MINT_* 운영 설정도 함께 싣는다. settings.env(비밀이 아닌 설정)는 플러그인·작업 실행기·콘솔이,
+# services.env(키와 비밀 설정 포함)는 작업 실행기·콘솔만 받는다. DB 비밀번호·운영자 토큰은 넣지 않는다.
 write_service_env() {
     local dir control kit
     dir="$(env_value MINT_SECRETS_DIR)"
@@ -140,8 +142,15 @@ write_service_env() {
     [ -n "$control" ] || control="$(head -n 1 "$dir/control.key" 2>/dev/null || true)"
     kit="$(env_value MINT_KIT_ISSUER_KEY)"
     [ -n "$kit" ] || kit="$(head -n 1 "$dir/kit_issuer.key" 2>/dev/null || true)"
-    (umask 077 && printf 'MINT_LITELLM_KEY=%s\nMINT_KIT_ISSUER_KEY=%s\n' "$control" "$kit" \
-        > "$dir/services.env")
+    local settings
+    settings="$(grep -E '^MINT_[A-Z0-9_]+=' .env 2>/dev/null \
+        | grep -vE '^MINT_(OPERATOR_TOKEN|LITELLM_KEY|KIT_ISSUER_KEY|[A-Z0-9_]*DB_PASSWORD)=' || true)"
+    (umask 077 && {
+        printf 'MINT_LITELLM_KEY=%s\nMINT_KIT_ISSUER_KEY=%s\n' "$control" "$kit"
+        [ -z "$settings" ] || printf '%s\n' "$settings"
+    } > "$dir/services.env")
+    (umask 077 && { printf '%s\n' "$settings" | grep -vE '^MINT_[A-Z0-9_]*(_KEY|_KEY_PREVIOUS|_SECRET|_BOT_TOKEN)=' \
+        || true; } > "$dir/settings.env")
 }
 
 ensure_control_key() {
@@ -194,6 +203,15 @@ ensure_generated() {
             append_env "$name" "$(random_secret)"
         fi
     done
+    # 설치 묶음이 단말에서 부르는 판정 주소. 비어 있으면 묶음이 컨테이너 안 주소를 적어 단말에서 쓸 수 없다.
+    if [ -z "$(env_value MINT_ENDPOINT_PUBLIC_URL)" ]; then
+        local lite_origin
+        lite_origin="$(env_value MINT_LITELLM_UI_URL | sed -nE 's#^(https?://[^/:]+).*#\1#p')"
+        if [ -n "$lite_origin" ]; then
+            sed -i '/^MINT_ENDPOINT_PUBLIC_URL=/d' .env
+            append_env MINT_ENDPOINT_PUBLIC_URL "${lite_origin}:$(env_value MINT_LITELLM_PORT)"
+        fi
+    fi
     # 알림·거절 오류의 화면 링크에 쓰는 콘솔 주소. 비어 있으면 LiteLLM 화면 주소의 호스트와 콘솔 포트로 정한다.
     if [ -z "$(env_value MINT_CONSOLE_URL)" ]; then
         local ui origin
@@ -319,12 +337,38 @@ cmd_status() {
 }
 
 # 첫 관리자를 만들어 토큰을 비밀 폴더에 두고(이후 mint.sh 명령이 자동으로 씁니다) 기본 정책을 적용한다.
+# 첫 관리자가 될 LiteLLM 사용자가 없으면 관리자 역할로 만든다(LiteLLM 화면의 마스터 키 로그인은 막혀 있어
+# 운영자가 따로 만들 길이 없다). 이미 있으면 그대로 둔다.
+ensure_litellm_admin() {
+    env "LITELLM_MASTER_KEY=$(env_value LITELLM_MASTER_KEY)" "MINT_NEW_ADMIN=$1" \
+        "${COMPOSE[@]}" run --rm --no-deps -T -e LITELLM_MASTER_KEY -e MINT_NEW_ADMIN \
+        --entrypoint python control -c '
+import json, os, sys, urllib.error, urllib.parse, urllib.request
+base, user = "http://litellm:4000", os.environ["MINT_NEW_ADMIN"]
+headers = {"Authorization": "Bearer " + os.environ["LITELLM_MASTER_KEY"], "Content-Type": "application/json"}
+def call(path, body=None):
+    request = urllib.request.Request(base + path, None if body is None else json.dumps(body).encode(),
+                                     headers, method="GET" if body is None else "POST")
+    with urllib.request.urlopen(request, timeout=20) as reply:
+        return json.loads(reply.read() or b"{}")
+try:
+    call("/user/info?" + urllib.parse.urlencode({"user_id": user}))
+    sys.exit(0)
+except urllib.error.HTTPError as error:
+    if error.code not in (400, 404):
+        sys.exit(1)
+call("/user/new", {"user_id": user, "user_role": "proxy_admin", "auto_create_key": False})
+print("LiteLLM 사용자 " + user + "을(를) 관리자 역할로 만들었습니다.")
+'
+}
+
 cmd_bootstrap() {
     require_env
     [ "$#" -eq 2 ] || fail "사용법: ./mint.sh bootstrap <이름> <LiteLLM 사용자 식별자>"
     local file reply token pattern
     file="$(env_value MINT_SECRETS_DIR)/operator.token"
     [ ! -e "$file" ] || fail "$file이 이미 있습니다. 첫 관리자는 한 번만 만들 수 있습니다."
+    ensure_litellm_admin "$2" || fail "LiteLLM 사용자 $2을(를) 만들지 못했습니다. LiteLLM이 떠 있는지 ./mint.sh status로 확인하십시오."
     reply="$("${COMPOSE[@]}" run --rm -T ${MINT_LITELLM_KEY:+-e MINT_LITELLM_KEY} control --json \
         operator bootstrap --name "$1" --user-id "$2")" || fail "첫 관리자를 만들지 못했습니다."
     pattern='"token": *"([A-Za-z0-9_-]+)"'

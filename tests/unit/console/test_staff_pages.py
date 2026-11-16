@@ -773,6 +773,11 @@ def test_without_key_issuance_or_approved_servers_there_is_no_kit(sworld):
     sworld.app.state.config = dataclasses.replace(
         sworld.config, kit_issuer=KitIssuer(), endpoint_routes=True
     )
+    unreachable = download(client)  # 단말이 부를 주소가 없으면 묶음을 내주지 않는다
+    assert unreachable.status_code == 503 and "MINT_ENDPOINT_PUBLIC_URL" in unreachable.text
+    sworld.app.state.config = dataclasses.replace(
+        sworld.app.state.config, endpoint_url="https://mint.test"
+    )
     empty = download(client)  # 승인된 로컬 서버가 없어도 게이트웨이 항목·키만으로 묶음을 받는다.
     assert empty.status_code == 200 and empty.headers["content-type"] == "application/gzip"
 

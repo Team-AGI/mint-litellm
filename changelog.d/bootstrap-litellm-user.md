@@ -1,0 +1,1 @@
+- `./mint.sh bootstrap`이 첫 관리자가 될 LiteLLM 사용자가 없으면 관리자 역할로 만듭니다.
