@@ -842,9 +842,11 @@ def test_the_my_requests_screen_shows_only_own_requests_in_korean_with_the_outco
     page = client.get("/staff/confirmations?tab=mine")
     assert page.status_code == 200
     assert "their_tool" not in page.text
-    for text in ("waiting_tool", "대기", "승인", "남은", "50회 남음", "거부", "다시 요청하세요"):
+    for text in ("waiting_tool", "대기", "승인", "남은", "50회 남음", "거부", "승인 후 다시 요청"):
         assert text in page.text
     assert "범위 밖" not in page.text  # 처리자·사유는 행을 열었을 때만
+    timed_out = client.get(f"/staff/confirmations?tab=mine&open={waiting}").text
+    assert "같은 작업을 다시 요청하세요" in timed_out
     assert "자동 규칙" in client.get(f"/staff/confirmations?tab=mine&open={auto}").text
     drawer = client.get(f"/staff/confirmations?tab=mine&open={denied}").text
     for text in ("거부 사유", "범위 밖", "kim", "a@example.com"):
