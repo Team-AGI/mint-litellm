@@ -194,7 +194,7 @@ def test_drift_to_candidates_to_reapproval_clears_the_block(
         candidates = fetch(
             "SELECT id, tool FROM mint.tool_contracts WHERE status = 'candidate' ORDER BY tool"
         )
-        assert [c["tool"] for c in candidates] == ["echo", "mutable", "slow"]
+        assert [c["tool"] for c in candidates] == ["echo", "leak", "mutable", "slow"]
 
         # 다른 사용자가 후보 전체를 재승인하면 작업 실행기의 재pin으로 끝난다.
         with psycopg.connect(url) as conn:

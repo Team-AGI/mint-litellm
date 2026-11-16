@@ -74,9 +74,10 @@ def test_tools_list_records_one_event_per_tool_and_one_upstream_list_per_server(
             return (await session.list_tools()).tools
 
     tools = run(listing())
-    assert len(tools) == 6
+    assert len(tools) == 6  # 승인된 도구 3개 × 서버 2
+    # 판정은 상류가 낸 도구마다 하나(승인 밖 leak 포함, 서버당 4개). LiteLLM은 그 뒤 승인 밖 도구를 거른다.
     support.wait_until(
-        lambda: world.count_since(since, "discovery_evaluated") == len(tools), what="discovery"
+        lambda: world.count_since(since, "discovery_evaluated") == 8, what="discovery"
     )
     for server in ("a", "b"):
         lists = [r for r in proxy_log.rows(rpc="tools/list") if r["path"].startswith(f"/{server}/")]

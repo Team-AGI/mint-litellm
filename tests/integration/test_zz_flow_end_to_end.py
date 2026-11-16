@@ -34,7 +34,7 @@ INSTANCE = "integration"
 UPSTREAM_URL = "http://counting-proxy:8080/a/mcp"
 OBSERVE_SECONDS = 20
 BURST = 8
-TOOLS = ["echo", "mutable", "slow"]
+TOOLS = ["echo", "leak", "mutable", "slow"]  # 시험 서버 도구 전체(leak은 결과 통제 시험용)
 READY_AT_LEAST = {"url_guard", "connection", "definitions", "description_scan", "risk_grade"}
 
 
