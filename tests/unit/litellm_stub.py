@@ -67,6 +67,9 @@ class StubLiteLLM:
         second_user = fixture("user_info")
         second_user["user_id"] = second_user["user_info"]["user_id"] = "human-2"
         self.set("/user/info", second_user, user_id="human-2")
+        third_user = json.loads(json.dumps(second_user))  # 키 주인이 아닌 승인자용
+        third_user["user_id"] = third_user["user_info"]["user_id"] = "human-3"
+        self.set("/user/info", third_user, user_id="human-3")
         self.set("/user/info", fixture("user_not_found"), 404, user_id="nobody")
         self.set("/key/info", fixture("key_info"), key=GOOD_KEY)
         self.set("/key/info", {"key": ALIAS_KEY, "info": key_entry("k-alias")}, key=ALIAS_KEY)
