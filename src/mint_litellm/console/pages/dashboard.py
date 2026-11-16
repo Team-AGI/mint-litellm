@@ -395,6 +395,14 @@ def ledger(
     }
     params = {**query, "range": picked}
     qs = urlencode({k: v for k, v in params.items() if v})
+    # 내보내기는 화면과 같은 조건(해석된 시작·끝 시각 포함)으로 받는다.
+    exported = {
+        "since": None if unbounded else start.isoformat(),
+        "until": finish.isoformat() if finish else None,
+        "kind": kind, "actor": actor_name, "server_id": server_id, "result": result,
+        "ref": ref, "invocation": invocation_id,
+    }
+    export_qs = urlencode({k: v for k, v in exported.items() if v})
     # 시간대 차트는 지금까지의 같은 길이 기간이다. 날짜를 직접 정했으면 그 날짜부터 지금까지다.
     if picked:
         hours = dashboard_reads.hours_of(picked)
@@ -432,6 +440,7 @@ def ledger(
         "servers": [s["server_id"] for s in reads.servers(actor.conn, actor.instance)],
         "error": error,
         "qs": qs,
+        "export_qs": export_qs,
         "range": current,
         "ranges": choices("/ledger", params, "range", RANGES, current),
         "results": choices(

@@ -364,3 +364,18 @@ def test_policy_detections_get_operator_names_in_the_block_donut():
     assert items == {
         "인자 속 비밀": 5, "허용 목적지 밖 URL": 4, "정책 탐지": 1, "계약 변경": 3,
     }
+
+
+def test_the_export_links_carry_the_same_filters_as_the_screen(world, admin):
+    import html as html_lib
+    from urllib.parse import parse_qs, urlsplit
+
+    page = admin.get("/ledger?since=2026-01-01&until=2026-01-31&server_id=srv-ok&result=deny"
+                     "&kind=decision_evaluated").text
+    link = re.search(r'href="(/api/v1/ledger/export\?format=csv[^"]*)"', page).group(1)
+    query = parse_qs(urlsplit(html_lib.unescape(link)).query)
+    assert query["server_id"] == ["srv-ok"] and query["result"] == ["deny"]
+    assert query["kind"] == ["decision_evaluated"]
+    assert query["since"][0].startswith("2026-01-01") and query["until"][0].startswith("2026-02-01")
+    exported = admin.get(html_lib.unescape(link))
+    assert exported.status_code == 200
