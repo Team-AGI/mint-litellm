@@ -28,7 +28,7 @@
 | `mint-litellm backup restore` | `admin` | `<파일>`로 `mint` 스키마를 되돌린다. 마이그레이션 수준·인스턴스가 다르면 거부하고 `--yes`가 필요하다. 관리 권한 접속은 `MINT_RESTORE_DATABASE_URL`. | - | `backup_restored` |
 | `mint-litellm config export` | `admin` | 비밀 없이 서버 정의·승인·규칙·거부·허용 목록·조직·운영자 역할·모드 설정을 `<파일>`(JSON)로 내보낸다. | - | `config_exported` |
 | `mint-litellm config import` | `admin` | 내보낸 설정을 자연 키로 되풀이해도 같게 가져온다. 서버·운영자·승인은 가져오지 않고 할 일로 알린다. `--dry-run`은 차이만 보인다. | - | `config_imported` |
-| `mint-litellm siem add` | `admin` | SIEM 전달 대상을 추가한다. `--kind`는 `syslog`·`cef`(syslog 위 CEF)·`hec`(Splunk)·`elastic`·`otlp`, `--endpoint`는 syslog·cef가 `tls://호스트:포트`·`tcp://…`·`udp://…`, 나머지가 `http(s)://…`이다. 토큰은 `--token-env <MINT_SIEM_으로 시작하는 환경 변수 이름>`이나 `--token-file </run/secrets 아래 경로>`로 읽을 곳만 적고(작업 실행기가 보낼 때 읽으며 저장하지 않는다. 다른 이름·경로는 거부해 실행기의 다른 비밀이 대상 주소로 나가지 않게 한다), `--index`·`--ca-file`·`--framing octet|newline`을 줄 수 있다. 기본은 지금부터의 사건을 보내고 `--from-start`는 처음부터 보낸다. | - | `siem_target_added` |
+| `mint-litellm siem add` | `admin` | SIEM 전달 대상을 추가한다. `--kind`는 `syslog`·`cef`(syslog 위 CEF)·`hec`(Splunk)·`elastic`·`otlp`, `--endpoint`는 syslog·cef가 `tls://호스트:포트`·`tcp://…`·`udp://…`, 나머지가 `http(s)://…`이다. 토큰은 `--token-env <MINT_SIEM_으로 시작하는 환경 변수 이름>`이나 `--secret-file </run/secrets 아래 경로>`로 읽을 곳만 적고(작업 실행기가 보낼 때 읽으며 저장하지 않는다. 다른 이름·경로는 거부해 실행기의 다른 비밀이 대상 주소로 나가지 않게 한다), `--index`·`--ca-file`·`--framing octet|newline`을 줄 수 있다. 기본은 지금부터의 사건을 보내고 `--from-start`는 처음부터 보낸다. | - | `siem_target_added` |
 | `mint-litellm siem list` | `admin` | 대상별 종류·주소(접속 지점만)·상태·밀린 사건 수·보낸 수·마지막 전달 시각을 보인다. | - | - |
 | `mint-litellm siem remove` | `admin` | 대상을 제거한다. | - | `siem_target_removed` |
 | `mint-litellm siem test` | `admin` | 대상에 시험 메시지를 보내도록 요청하고 작업 실행기의 결과를 기다린다(`--no-wait`는 요청만). | - | - |

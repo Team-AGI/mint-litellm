@@ -399,6 +399,12 @@ def approve(
     return {"id": str(row["id"]), "status": "approved"}
 
 
+def _not_own_key(ctx: Context, row: dict, what: str) -> None:
+    """자기 키에 대한 제안은 승인뿐 아니라 거절·해제도 다른 사람이 한다."""
+    if row.get("user_id") and row["user_id"] == ctx.operator.user_id:
+        raise separation_of_duties(f"자기 키의 차단 제안은 {what}할 수 없습니다.")
+
+
 def reject(
     ctx: Context, proposal_id: str, *, reason: str = "", expected_version: int | None = None
 ) -> dict:
@@ -409,6 +415,7 @@ def reject(
     if row["status"] != "proposed":
         raise conflict(f"이미 {row['status']} 상태인 제안은 거절할 수 없습니다.")
     _check_version(row, expected_version)
+    _not_own_key(ctx, row, "거절")
     with ctx.conn.transaction():
         _decide(ctx, row, "rejected", EventKind.KEY_BLOCK_REJECTED, reason)
     return {"id": str(row["id"]), "status": "rejected"}
@@ -450,6 +457,7 @@ def request_unblock(
     if row["status"] != "applied" or not row["mint_blocked"]:
         raise conflict("MINT가 제안해 차단한 대상만 여기서 해제할 수 있습니다.")
     _check_version(row, expected_version)
+    _not_own_key(ctx, row, "해제")
     current = _state_of(litellm, row["scope"], row)
     if current is None:
         raise stale_evidence("LiteLLM에서 차단 대상을 찾을 수 없습니다.")

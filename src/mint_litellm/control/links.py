@@ -41,7 +41,9 @@ def make(key: bytes, kind: str, ref: str, *, ttl: int = DEFAULT_TTL_SECONDS,
 def parse(key: bytes, token: str, *, now: int | None = None) -> tuple[str, str] | None:
     """서명이 맞고 기한 안이면 (종류, 항목)을, 아니면 None을 돌려준다."""
     payload, _, mac = token.partition(".")
-    if not payload or not hmac.compare_digest(_mac(key, payload.encode("ascii", "ignore")), mac):
+    if not payload or not token.isascii():  # compare_digest는 비ASCII 문자열에 예외를 낸다
+        return None
+    if not hmac.compare_digest(_mac(key, payload.encode("ascii")), mac):
         return None
     try:
         padded = payload + "=" * (-len(payload) % 4)

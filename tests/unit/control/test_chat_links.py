@@ -179,3 +179,12 @@ def test_chat_messages_carry_the_tool_action_and_preview_of_an_approval_request(
     facts = teams["attachments"][0]["content"]["body"][2]["facts"]
     assert {"title": "인자", "value": "path=/tmp/a"} in facts
     assert {"title": "도구", "value": "read"} in facts
+
+
+def test_a_token_with_non_ascii_characters_is_rejected_quietly():
+    from mint_litellm.control import links
+
+    key = b"k" * 32
+    payload = links.make(key, "call", "x").partition(".")[0]
+    assert links.parse(key, payload + ".서명") is None
+    assert links.parse(key, "가나다.abc") is None
