@@ -32,7 +32,12 @@ from mint_litellm.compat.litellm_1_106 import HookData
 from mint_litellm.endpoint.routes import DECIDE_PATH, OUTCOMES_PATH, REPORT_PATH, RESULT_PATH
 from mint_litellm.plugin.pipeline import CallRequest, build_request, evaluate_request
 from mint_litellm.plugin.result import observe_response, observe_unknown_outcome
-from mint_litellm.types.decision import OperationType
+from mint_litellm.types.decision import (
+    BUILTIN_EXEC_SHA256,
+    OperationType,
+    ResolvedServer,
+    is_builtin_server,
+)
 from mint_litellm.types.exec_contract import ExecContract
 from mint_litellm.types.identity import Principal
 
@@ -54,8 +59,15 @@ class DecideBody(BaseModel):
     server: str = Field(min_length=1, max_length=128)
     tool: str = Field(min_length=1, max_length=128)
     arguments: dict[str, Any] = Field(default_factory=dict)
-    contract: ExecContract
+    # 내장 도구(가상 서버 builtin:*)는 실행 계약이 없고, 그 밖의 서버는 반드시 있다.
+    contract: ExecContract | None = None
     tool_use_id: str | None = Field(default=None, max_length=128)
+
+    @model_validator(mode="after")
+    def _contract_fits_server(self) -> DecideBody:
+        if is_builtin_server(self.server) != (self.contract is None):
+            raise ValueError("contract is required exactly for registered servers")
+        return self
 
 
 class ResultBody(BaseModel):
@@ -239,6 +251,15 @@ def local_request(
             logging_obj=None,
         )
 
+    resolved = (
+        ResolvedServer(
+            server_id=body.server, identity_kind="stdio", exec_contract_sha256=BUILTIN_EXEC_SHA256,
+            exec_contract_version=1, transport="builtin", auth_type="none",
+            candidates_with_same_name=1,
+        )
+        if body.contract is None
+        else body.contract.resolved(body.server)
+    )
     return build_request(
         {},
         auth,
@@ -246,7 +267,7 @@ def local_request(
         instance_id=instance_id,
         hook_parser=parse,
         # 서버 행과의 대조는 판정 단계의 상태 검사가 한다(등록 안 됨·종류 다름·계약 다름 모두 차단).
-        resolver=lambda _hook: body.contract.resolved(body.server),
+        resolver=lambda _hook: resolved,
         principal_factory=principal_factory,
     )
 

@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from plugin_helpers import (
     KEY,
     call_approval,
+    denial,
     evaluator,
     harness,
     server_row,
@@ -286,3 +287,47 @@ def test_outcomes_are_asked_for_the_user_of_the_key_only(tmp_path):
     assert post(client, "/mint/v1/endpoint/outcomes", {"user_id": "u2"}).status_code == 422
     assert post(client, "/mint/v1/endpoint/outcomes", {}, headers={}).status_code == 401
     assert [u for u, _ in FakeDatabase.outcome_calls[-2:]] == ["u1", "u2"]
+
+
+def builtin_body(**override):
+    data = {"server": "builtin:claude", "tool": "Bash", "arguments": {"command": "ls"},
+            "tool_use_id": "toolu_b"}
+    return data | override
+
+
+def test_a_built_in_tool_is_allowed_and_recorded_under_the_virtual_server(tmp_path):
+    client, h = build(tmp_path, snapshot(server=None, approvals=()))
+    answer = post(client, "/mint/v1/decide", builtin_body()).json()
+    assert answer["decision"] == "allow"
+    (event,) = h.store.of_kind("decision_evaluated")
+    assert event.payload["resolved_server_id"] == "builtin:claude"
+    assert event.payload["tool"] == "Bash"
+    report = {"reference": answer["reference"], "outcome": "success", "size_bytes": 3}
+    assert post(client, "/mint/v1/result", report).json() == {"recorded": True}
+
+
+def test_an_admin_denial_by_tool_name_blocks_one_built_in_tool_only(tmp_path):
+    deny = denial(scope_type="org", scope_id="org1", tools=("Bash",))
+    client, _ = build(tmp_path, snapshot(server=None, approvals=(), denials=(deny,)))
+    blocked = post(client, "/mint/v1/decide", builtin_body()).json()
+    assert blocked["decision"] == "deny"
+    assert post(client, "/mint/v1/decide", builtin_body(tool="Edit")).json()["decision"] == "allow"
+
+
+def test_a_built_in_tool_the_policy_marks_risky_waits_for_a_call_approval(tmp_path):
+    client, _ = build(
+        tmp_path, snapshot(server=None, approvals=()),
+        evaluate=evaluator("RequireApproval", obligations=REQUIRE),
+    )
+    answer = post(client, "/mint/v1/decide", builtin_body()).json()
+    assert answer["decision"] == "deny"
+    assert answer["error"]["code"] == "MINT-CALL-APPROVAL-REQUIRED"
+
+
+def test_the_contract_is_required_for_registered_servers_and_forbidden_for_built_ins(tmp_path):
+    client, _ = build(tmp_path)
+    assert post(client, "/mint/v1/decide", builtin_body(server="srv-1")).status_code == 422
+    no_contract = {k: v for k, v in body().items() if k != "contract"}
+    assert post(client, "/mint/v1/decide", no_contract).status_code == 422
+    forged = builtin_body(contract=CONTRACT.model_dump(mode="json"))
+    assert post(client, "/mint/v1/decide", forged).status_code == 422

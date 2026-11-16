@@ -508,6 +508,36 @@ def clean_pending(directory: str, now: float | None = None) -> None:
             pass
 
 
+# 판정 대상인 하네스 내장 도구 이름(Claude Code·Codex). 목록 밖의 이름은 이 훅의 대상이 아니다.
+BUILTIN_TOOLS = frozenset({
+    "Bash", "PowerShell", "Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch",
+    "apply_patch",
+})
+# 서버의 인자 검사는 문자열 4KiB·전체 64KiB를 넘으면 모두 걸린 것으로 본다. 파일 쓰기·패치는 이를
+# 쉽게 넘으므로 앞부분만 보낸다(뒷부분은 검사되지 않는다).
+BUILTIN_STRING_BYTES = 4000
+BUILTIN_TOTAL_BYTES = 48000
+
+
+def shrink_arguments(value: Any, limit: int = BUILTIN_STRING_BYTES) -> Any:
+    if isinstance(value, str):
+        raw = value.encode("utf-8")
+        return value if len(raw) <= limit else raw[:limit].decode("utf-8", "ignore")
+    if isinstance(value, list):
+        return [shrink_arguments(item, limit) for item in value]
+    if isinstance(value, dict):
+        return {k: shrink_arguments(v, limit) for k, v in value.items()}
+    return value
+
+
+def builtin_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    for limit in (BUILTIN_STRING_BYTES, 1000, 200):
+        small = shrink_arguments(arguments, limit)
+        if len(json.dumps(small, ensure_ascii=False).encode("utf-8")) <= BUILTIN_TOTAL_BYTES:
+            return small
+    raise Refuse("built-in tool arguments are too large to judge")
+
+
 def decide(
     event: Mapping[str, Any],
     *,
@@ -518,27 +548,41 @@ def decide(
     post: Post,
     http_timeout: float = HTTP_TIMEOUT,
     on_pending: Callable[[], None] | None = None,
+    harness: str = "claude",
 ) -> None:
     """허용이면 조용히 돌아오고, 그 밖에는 ``Refuse``를 던진다. 승인 요청이 열려 막히면
     ``on_pending``을 먼저 부른다."""
     name = event.get("tool_name")
-    if not isinstance(name, str) or not name.startswith("mcp__"):
-        return  # MCP 호출이 아니면 이 훅의 대상이 아니다.
-    known = known_servers(contracts)
-    if is_gateway_call(event, known, gateway_servers(contracts)):
+    if not isinstance(name, str):
         return
-    server, tool = server_and_tool(event, known)
-    arguments = event.get("tool_input")
-    if not isinstance(arguments, dict):
-        raise Refuse("tool arguments are not an object")
     tool_use_id = event.get("tool_use_id")
-    payload = {
-        "server": server,
-        "tool": tool,
-        "arguments": arguments,
-        "contract": observed_contract(load_contract(contracts, server)),
-        "tool_use_id": tool_use_id,
-    }
+    arguments = event.get("tool_input")
+    if name in BUILTIN_TOOLS:
+        # 내장 도구: 가상 서버 builtin:<하네스> 아래 도구 이름 그대로 판정한다(실행 계약 없음).
+        if not isinstance(arguments, dict):
+            raise Refuse("tool arguments are not an object")
+        payload = {
+            "server": f"builtin:{harness}",
+            "tool": name,
+            "arguments": builtin_arguments(arguments),
+            "tool_use_id": tool_use_id,
+        }
+    elif name.startswith("mcp__"):
+        known = known_servers(contracts)
+        if is_gateway_call(event, known, gateway_servers(contracts)):
+            return
+        server, tool = server_and_tool(event, known)
+        if not isinstance(arguments, dict):
+            raise Refuse("tool arguments are not an object")
+        payload = {
+            "server": server,
+            "tool": tool,
+            "arguments": arguments,
+            "contract": observed_contract(load_contract(contracts, server)),
+            "tool_use_id": tool_use_id,
+        }
+    else:
+        return  # 판정 대상이 아닌 도구
     answer = _call(post, url, DECIDE_PATH, key, payload, http_timeout)
     if answer.get("decision") not in {"allow", "deny"}:
         raise Refuse("decision service sent an unreadable answer")
@@ -2631,6 +2675,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--state-dir")
     parser.add_argument("--ca-file")
     parser.add_argument("--server")
+    parser.add_argument("--harness", choices=["claude", "codex"], default="claude")
     parser.add_argument("--no-keepalive", action="store_true")
     parser.add_argument("--idle", type=float, default=BROKER_IDLE)
     parser.add_argument("--http-timeout", type=float, default=HTTP_TIMEOUT)
@@ -2718,6 +2763,7 @@ def main(argv: list[str] | None = None) -> None:
                 event, url=args.url, key=key, contracts=os.path.expanduser(args.contracts),
                 state_dir=state_dir, post=post, http_timeout=args.http_timeout,
                 on_pending=lambda: notify_enabled(state_dir) and kick_notify(notify_args),
+                harness=args.harness,
             )
         else:
             report_result(

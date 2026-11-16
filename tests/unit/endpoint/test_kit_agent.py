@@ -141,7 +141,7 @@ def test_a_server_that_is_not_approved_is_blocked_without_a_request(world):
 
 def test_calls_that_are_not_mcp_tools_pass_without_a_request(world):
     wire = Wire()
-    decide(world, wire, tool_name="Bash")
+    decide(world, wire, tool_name="Read")
     assert wire.requests == []
 
 
@@ -290,7 +290,7 @@ def test_the_command_line_hook_blocks_on_bad_input_and_an_unreachable_service(wo
     )  # fmt: skip
     assert run_agent("pre", *base, stdin="not json").returncode == 2
     assert run_agent("pre", *base, stdin=json.dumps(event())).returncode == 2
-    assert run_agent("pre", *base, stdin=json.dumps(event(tool_name="Bash"))).returncode == 0
+    assert run_agent("pre", *base, stdin=json.dumps(event(tool_name="Read"))).returncode == 0
     # 호출 뒤 훅은 어떤 경우에도 호출을 막지 않는다.
     assert run_agent("post", *base, stdin="not json").returncode == 0
     assert run_agent("post-failure", *base, stdin=json.dumps(event())).returncode == 0
@@ -361,7 +361,7 @@ def test_a_local_server_named_like_the_gateway_is_still_decided_locally(world):
 def test_the_hook_reads_utf8_input_whatever_the_console_encoding(world):
     key = world.tmp / "key"
     key.write_text("sk-k")
-    body = json.dumps(event(tool_name="Bash", tool_input={"q": "한글 검색"}), ensure_ascii=False)
+    body = json.dumps(event(tool_name="Read", tool_input={"q": "한글 검색"}), ensure_ascii=False)
     done = subprocess.run(
         [sys.executable, str(KIT / "mint_agent.py"), "pre", "--url", "http://localhost:9",
          "--key-file", str(key), "--contracts", world.listing, "--state-dir", world.state],
@@ -476,3 +476,35 @@ def test_hook_streams_are_read_and_written_as_utf8_whatever_the_locale_code_page
     stream.write("정책 위반")
     stream.flush()
     assert stream.buffer.getvalue().decode("utf-8") == "정책 위반"
+
+
+def test_a_built_in_tool_is_judged_under_the_virtual_server_without_a_contract(world):
+    wire = Wire()
+    decide(world, wire, tool_name="Bash", tool_input={"command": "ls"}, mcp_server=None)
+    ((_, _, body),) = wire.requests
+    assert (body["server"], body["tool"]) == ("builtin:claude", "Bash")
+    assert "contract" not in body and body["arguments"] == {"command": "ls"}
+    codex = Wire()
+    agent.decide(
+        event(tool_name="apply_patch", tool_input={"command": "*** Begin Patch"}),
+        url="https://mint.test", key="sk-k", contracts=world.listing, state_dir=world.state,
+        post=codex, harness="codex",
+    )
+    assert codex.requests[0][2]["server"] == "builtin:codex"
+
+
+def test_a_big_file_write_is_cut_to_what_the_server_can_judge_and_a_blocked_one_refuses(world):
+    wire = Wire()
+    big = "가" * 5000
+    decide(world, wire, tool_name="Write", tool_input={"file_path": "/a", "content": big})
+    sent = wire.requests[0][2]["arguments"]
+    assert sent["file_path"] == "/a" and len(sent["content"].encode()) <= 4000
+    deny = {"decision": "deny", "reference": "r", "error": {"code": "MINT-DENIED"}}
+    with pytest.raises(agent.Refuse, match="MINT-DENIED"):
+        decide(world, Wire(deny), tool_name="Bash", tool_input={"command": "rm -rf /"})
+
+
+def test_tools_outside_the_judged_list_are_ignored(world):
+    wire = Wire()
+    decide(world, wire, tool_name="Read", tool_input={"file_path": "/a"})
+    assert wire.requests == []

@@ -395,6 +395,16 @@ def normalize_auth_type(value: str | Enum | None) -> str:
 
 
 IdentityKind = Literal["remote", "stdio"]
+
+# 하네스 내장 도구(셸·파일 편집·웹)는 서버 행 없이 가상 서버 아래에서 판정한다. 서버 행·계약·승인이
+# 없으므로 거부와 정책·호출별 승인만 적용되고, 기본은 허용하고 기록한다.
+BUILTIN_PREFIX = "builtin:"
+BUILTIN_HARNESSES = ("claude", "codex")
+BUILTIN_EXEC_SHA256 = hashlib.sha256(b"mint-builtin-tools-v1").hexdigest()
+
+
+def is_builtin_server(server_id: str) -> bool:
+    return server_id in {BUILTIN_PREFIX + name for name in BUILTIN_HARNESSES}
 """서버를 식별하는 방식. 원격(URL)과 로컬 실행(stdio)이며, 값은 DB의 CHECK 목록과 함께 늘린다."""
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
