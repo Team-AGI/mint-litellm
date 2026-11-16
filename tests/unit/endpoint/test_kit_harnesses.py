@@ -115,7 +115,7 @@ def test_grok_non_mcp_tools_pass_and_mcp_names_are_judged(tmp_path):
     listing = tmp_path / "c.json"
     listing.write_text(json.dumps({"servers": {}}))
     kwargs = {"url": "https://m", "key": "k", "contracts": str(listing), "state_dir": str(tmp_path),
-              "post": wire}  # fmt: skip
+              "post": wire, "harness": "grok"}  # fmt: skip
     agent.decide(agent.adapt_event("grok-pre", {"toolName": "Bash", "toolInput": {}}), **kwargs)
     assert wire.sent == []
     with pytest.raises(agent.Refuse):

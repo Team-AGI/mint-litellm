@@ -1951,7 +1951,8 @@ class Kit:
 
     def hook_line(self, python: str, agent: str, command: str, contracts: str) -> str:
         """Cursor·Grok가 셸로 실행하는 훅 한 줄(Windows 셸 종류는 공식 문서에 없어 cmd 규칙)."""
-        parts = [python, agent, command, *self.hook_common(contracts)]
+        harness = command.removesuffix("-pre")  # cursor-pre -> cursor, grok-pre -> grok
+        parts = [python, agent, command, *self.hook_common(contracts, harness)]
         return subprocess.list2cmdline(parts) if self.windows else shlex.join(parts)
 
     def own_new_dirs(self, path: Path) -> None:

@@ -810,7 +810,7 @@ def test_the_download_follows_the_chosen_system_and_tool(kits):
     client = logged_in(kits)
     agent = {"user-agent": "Mozilla/5.0 (Windows NT 10.0)"}
     page = client.get("/staff/endpoint", headers=agent).text
-    assert 'value="windows" selected' in page and "Claude Code + Codex" in page
+    assert 'value="windows" selected' in page and "모든 도구" in page
     response = client.post(
         "/staff/endpoint/kit", data={"csrf": csrf(client), "platform": "windows", "harness": "all"}
     )
@@ -819,7 +819,8 @@ def test_the_download_follows_the_chosen_system_and_tool(kits):
     with zipfile.ZipFile(io.BytesIO(response.content)) as bundle:
         config = json.loads(bundle.read("mint-kit/kit.json"))
         assert "mint-kit/install.ps1" in bundle.namelist()
-    assert config["harnesses"] == ["claude", "codex"] and list(config["servers"]) == ["local-1"]
+    assert config["harnesses"] == ["claude", "codex", "cursor", "grok"]
+    assert list(config["servers"]) == ["local-1"]
     for bad in ({"platform": "macos"}, {"harness": "vim"}):
         refused = client.post("/staff/endpoint/kit", data={"csrf": csrf(client), **bad})
         assert refused.status_code == 400

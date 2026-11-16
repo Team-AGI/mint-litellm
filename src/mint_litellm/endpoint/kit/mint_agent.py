@@ -560,6 +560,8 @@ def decide(
         return
     tool_use_id = event.get("tool_use_id")
     arguments = event.get("tool_input")
+    if name in BUILTIN_TOOLS and harness not in ("claude", "codex"):
+        return  # Cursor·Grok는 MCP 호출만 판정한다(내장 도구 가상 서버는 claude·codex뿐)
     if name in BUILTIN_TOOLS:
         # 내장 도구: 가상 서버 builtin:<하네스> 아래 도구 이름 그대로 판정한다(실행 계약 없음).
         if not isinstance(arguments, dict):
@@ -2700,7 +2702,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--state-dir")
     parser.add_argument("--ca-file")
     parser.add_argument("--server")
-    parser.add_argument("--harness", choices=["claude", "codex"], default="claude")
+    parser.add_argument(
+        "--harness", choices=["claude", "codex", "cursor", "grok"], default="claude"
+    )
     parser.add_argument("--no-keepalive", action="store_true")
     parser.add_argument("--idle", type=float, default=BROKER_IDLE)
     parser.add_argument("--http-timeout", type=float, default=HTTP_TIMEOUT)
