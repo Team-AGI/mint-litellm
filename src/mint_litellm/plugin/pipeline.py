@@ -773,9 +773,16 @@ def build_policy_input(
     if action_type is not None:
         tool_doc["action_type"] = action_type
 
-    if selected is None:
-        approval: dict[str, Any] = {"present": False}
+    if selected is None and is_builtin_server(resolved.server_id):
+        # 하네스 내장 도구는 승인 행 없이 기본으로 허용한다(관리자 거부·호출별 승인 지정이 통제).
+        # 승인 없음으로 넘기면 정책의 승인 범위 규칙(R1)이 모든 내장 도구 호출을 막는다.
+        approval: dict[str, Any] = {"present": True, "id": resolved.server_id,
+                                    "class": "standard", "scope_type": "org",
+                                    "expires_in_days": 0, "conditions": {}}
         consent: dict[str, Any] = {"status": "not_applicable", "source": None}
+    elif selected is None:
+        approval = {"present": False}
+        consent = {"status": "not_applicable", "source": None}
     else:
         approval = {
             "present": True,

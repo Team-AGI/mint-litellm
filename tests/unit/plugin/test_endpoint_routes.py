@@ -346,3 +346,6 @@ def test_a_built_in_tool_reaches_the_policy_as_an_approved_server_with_its_fixed
     assert server["exec_approved_sha256"] == server["exec_contract_sha256"]
     # 이름 추정(셸 = 실행 = 고위험)으로 셸마다 호출별 승인을 요구하지 않는다
     assert "risk_grade" not in calls[-1]["tool"] and server["contract_status"] == "none"
+    # 승인 행 없이 기본 허용: 승인 없음(R1)으로 막히지 않게 정책 형식에 맞는 기본 승인을 넘긴다
+    approval = calls[-1]["approval"]
+    assert approval["present"] is True and approval["class"] == "standard"
