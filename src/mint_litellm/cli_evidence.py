@@ -72,7 +72,8 @@ def _attach(run) -> None:
         valid_until=a.valid_until, not_applicable=a.not_applicable,
     )
     run.data["id"] = evidence_id
-    run.say(evidence_id)
+    label = evidence_service.KINDS[a.kind].label
+    run.say(f"{label} 증빙을 {a.subject_id}에 붙였습니다. 식별자: {evidence_id}")
 
 
 def _show(run) -> None:

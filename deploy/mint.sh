@@ -225,10 +225,20 @@ ensure_generated() {
     chmod 600 .env
 }
 
+# 서명 키는 base64url(디코딩하면 32바이트 이상)이어야 한다. 잘못된 값이면 LiteLLM이 트레이스백으로 죽으므로 먼저 막는다.
+check_hmac_keys() {
+    local name value
+    for name in MINT_EXPORT_HMAC_KEY MINT_EXPORT_HMAC_KEY_PREVIOUS MINT_WEBHOOK_HMAC_KEY; do
+        value="$(env_value "$name")"
+        [ -z "$value" ] || [[ "$value" =~ ^[A-Za-z0-9_-]{43,}={0,2}$ ]] || fail "$name 형식이 올바르지 않습니다. 디코딩하면 32바이트 이상인 base64url 문자열이어야 합니다. 비워 두면 새로 만들며, 직접 만들려면 head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=' 로 만드십시오."
+    done
+}
+
 require_env() {
     [ -f .env ] || fail ".env가 없습니다. .env.example을 복사해 값을 채우십시오."
     ensure_secrets
     ensure_generated
+    check_hmac_keys
     load_control_key
     load_operator_token
 }
@@ -274,6 +284,20 @@ cli_save_token() {
     echo "토큰을 $path에 저장했습니다. 이 파일을 --token-file로 주면 인증됩니다."
 }
 
+# --key-file <호스트 경로>는 컨테이너에서 읽을 수 없으므로(소유자 전용 파일) 표준 입력으로 넘긴다.
+cli_key_file() {
+    local path="" arg skip=0 args=()
+    for arg in "$@"; do
+        if [ "$skip" -eq 1 ]; then path="$arg"; skip=0
+        elif [ "$arg" = "--key-file" ]; then skip=1
+        elif [[ "$arg" == --key-file=* ]]; then path="${arg#--key-file=}"
+        else args+=("$arg"); fi
+    done
+    [ "$skip" -eq 0 ] && [ -n "$path" ] || fail "--key-file에는 키 파일의 경로가 필요합니다."
+    [ -r "$path" ] || fail "키 파일을 읽을 수 없습니다: $path"
+    "${COMPOSE[@]}" run --rm -T ${MINT_LITELLM_KEY:+-e MINT_LITELLM_KEY} control "${args[@]}" --key-file /dev/stdin < "$path"
+}
+
 # 정책 엔진은 번들 파일이 있어야 기동한다. 파일이 없으면 저장소의 기본 정책으로 첫 번들을 게시하고,
 # 판본 등록과 활성화는 policy activate가 수행한다.
 ensure_bundle() {
@@ -297,6 +321,15 @@ fix_volume_owners() {
         -c 'chgrp -R 65532 /app/config && chmod -R g+rX /app/config'
 }
 
+# LiteLLM은 처음 뜰 때 40~60초 걸린다. 준비될 때까지 기다리고, 실패하면 최근 로그와 함께 멈춘다.
+wait_litellm() {
+    echo "LiteLLM이 준비될 때까지 기다립니다(처음에는 40~60초 걸립니다)."
+    "${COMPOSE[@]}" up -d --wait litellm >/dev/null 2>&1 && return 0
+    echo "LiteLLM이 준비되지 않았습니다. 최근 로그:" >&2
+    "${COMPOSE[@]}" logs --tail 20 litellm >&2 || true
+    fail "원인을 고친 뒤 ./mint.sh up을 다시 실행하십시오(전체 로그: docker compose logs litellm)."
+}
+
 cmd_up() {
     require_env
     mkdir -p config
@@ -308,6 +341,7 @@ cmd_up() {
         --fix-config /app/config/litellm.config.yaml >/dev/null
     ensure_bundle
     "${COMPOSE[@]}" up -d opa litellm
+    wait_litellm
     ensure_kit_issuer_key
     ensure_control_key
     "${COMPOSE[@]}" --profile worker up -d worker
@@ -429,6 +463,7 @@ cmd_backup() {
     done
     BACKUP_DIR="$dir"
     echo "백업: $dir (mint.sql, litellm.sql, mint.tar.gz, litellm.config.yaml; 기록에 민감한 값이 포함될 수 있으므로 안전하게 보관하십시오)"
+    echo "이 백업에는 .env와 비밀 폴더($(env_value MINT_SECRETS_DIR))가 들어 있지 않습니다. 두 곳도 따로 안전하게 보관하십시오."
 }
 
 # 업그레이드 단계. "설명|함수" 순서가 곧 실행 순서이며 --dry-run은 이 표만 보인다.
@@ -556,6 +591,7 @@ case "${1:-}" in
     cli) shift; require_env
         case " $* " in
             *" --save-token"*) cli_save_token "$@" ;;
+            *" --key-file"*) cli_key_file "$@" ;;
             *" password-reset"*) env "MINT_LITELLM_ADMIN_KEY=$(env_value LITELLM_MASTER_KEY)"                 "${COMPOSE[@]}" run --rm -e MINT_LITELLM_ADMIN_KEY ${MINT_LITELLM_KEY:+-e MINT_LITELLM_KEY} control "$@" ;;
             *) cli "$@" ;;
         esac ;;

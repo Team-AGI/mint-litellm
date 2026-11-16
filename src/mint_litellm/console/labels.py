@@ -307,6 +307,12 @@ ALLOWLIST_KIND = {
     "egress_target": "외부 전송 대상",
     "registry_source": "레지스트리 출처",
 }
+ALLOWLIST_KIND_HELP = {
+    "provider": "서버를 운영하는 업체의 호스트 주소",
+    "auth_server": "OAuth 인증 서버의 발급자 주소",
+    "egress_target": "공개 주소가 아니어도 연결을 허용할 내부 대상",
+    "registry_source": "패키지를 받아 올 레지스트리",
+}
 TRANSPORT = {"http": "HTTP", "sse": "SSE", "streamable_http": "스트리밍 HTTP", "stdio": "로컬 실행"}
 AUTH_TYPE = {
     "none": "없음",
