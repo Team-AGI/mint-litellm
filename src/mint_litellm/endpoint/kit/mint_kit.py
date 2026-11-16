@@ -664,12 +664,18 @@ def codex_identities(mcp: dict) -> str:
     )
 
 
+# 게이트웨이는 승인을 기다리는 호출을 최대 300초(MINT_APPROVAL_HOLD_SECONDS 상한) 붙잡는다.
+# 하네스의 도구 시간 제한이 그보다 짧으면 승인되기 전에 하네스가 호출을 끊는다.
+TOOL_WAIT_SECONDS = 330
+
+
 def codex_gateway_server(gateway: dict) -> str:
     """Codex의 게이트웨이 서버 표(주소와, 사용자에 결속된 MCP 전용 키를 담은 인증 머리글)."""
     bearer = toml("Bearer " + gateway["key"])
     return (
         f"{NL}[mcp_servers.{toml(gateway['name'])}]{NL}url = {toml(gateway['url'])}{NL}"
         f"http_headers = {{ Authorization = {bearer} }}{NL}"
+        f"tool_timeout_sec = {TOOL_WAIT_SECONDS}{NL}"
     )
 
 
@@ -1726,6 +1732,7 @@ class Kit:
                 "type": "http", "url": gateway["url"],
                 "headers": {"Authorization": "Bearer " + gateway["key"]},
             }
+            settings["env"] = {"MCP_TOOL_TIMEOUT": str(TOOL_WAIT_SECONDS * 1000)}
         self.write_tracked(
             state,
             self.managed_dir / "managed-mcp.json",
