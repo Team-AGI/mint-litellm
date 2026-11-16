@@ -66,7 +66,7 @@
 {% else %}<div class="empty"><h3>백업·이전 기록이 없습니다</h3></div>{% endif %}
 <h2>SIEM 전달</h2>
 {{ m.copy_cmd('mint-litellm siem add 이름 --kind syslog --endpoint tls://호스트:6514') }}
-{{ m.copy_cmd('mint-litellm siem add 이름 --kind hec --endpoint https://호스트:8088 --token-env 토큰변수') }}
+{{ m.copy_cmd('mint-litellm siem add 이름 --kind hec --endpoint https://호스트:8088 --token-env MINT_SIEM_HEC_TOKEN') }}
 {% if siem %}
 <table><thead><tr><th>이름</th><th>종류</th><th>주소</th><th>상태</th><th>마지막 전달</th><th class="num">밀린 사건</th><th class="num">보낸 사건</th><th>마지막 시험</th><th></th></tr></thead><tbody>
 {% for s in siem %}{% set st = 'error' if s.failing_since else ('ok' if s.last_delivered_at else 'wait') %}<tr><td>{{ s.name }}</td><td>{{ L.pick(L.SIEM_KIND, s.kind) }}</td><td>{{ s.address }}</td>

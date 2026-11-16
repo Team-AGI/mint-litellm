@@ -13,6 +13,8 @@
 import json
 import logging
 import os
+import posixpath
+import re
 import socket
 import ssl
 import time
@@ -442,9 +444,34 @@ def error_code(error: BaseException) -> str:
     return type(error).__name__[:60]
 
 
+# 토큰은 SIEM 전용 이름·폴더에서만 읽는다(아무 환경 변수·파일을 고르면 실행기의 다른 비밀을
+# 대상 주소로 보낼 수 있다).
+SECRET_ENV = re.compile(r"MINT_SIEM_[A-Z0-9_]{1,64}")
+SECRET_DIR = "/run/secrets"
+
+
+def check_secret_ref(ref: str | None) -> None:
+    """``env:MINT_SIEM_*`` 또는 ``file:/run/secrets/…``만 허용한다. 아니면 ``ControlError``."""
+    if not ref:
+        return
+    kind, _, value = ref.partition(":")
+    if kind == "env" and SECRET_ENV.fullmatch(value):
+        return
+    # ponytail: 경로 글자만 정규화해 본다. /run/secrets 안의 링크는 그 폴더를 꾸리는 관리자 몫이다.
+    if kind == "file" and posixpath.normpath(value).startswith(SECRET_DIR + "/"):
+        return
+    raise ControlError(
+        "토큰은 MINT_SIEM_으로 시작하는 환경 변수나 /run/secrets 아래 파일에서만 읽습니다."
+    )
+
+
 def read_secret(ref: str | None, environ: dict[str, str] | None = None) -> str | None:
     if not ref:
         return None
+    try:
+        check_secret_ref(ref)
+    except ControlError:
+        raise SendError(SECRET_MISSING) from None
     kind, _, value = ref.partition(":")
     try:
         if kind == "env":
@@ -718,6 +745,7 @@ def add(
 ) -> None:
     if kind in ("syslog", "cef") and secret_ref:
         raise ControlError("syslog·CEF 대상에는 토큰을 쓰지 않습니다.")
+    check_secret_ref(secret_ref)
     endpoint = normalize_endpoint(kind, endpoint)
     try:
         conn.execute(

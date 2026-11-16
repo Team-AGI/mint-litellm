@@ -34,7 +34,7 @@ from mint_litellm.console.core import (
 from mint_litellm.console.oidc import login_context
 from mint_litellm.console.pages.common import see_other
 from mint_litellm.console.templating import render
-from mint_litellm.control import endpoint_kits, links
+from mint_litellm.control import endpoint_kits, kit_key_sync, links
 from mint_litellm.control.db.connection import connect
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.litellm_admin import LiteLLMError
@@ -484,8 +484,11 @@ def endpoint_kit(
             "MINT_ENDPOINT_ROUTES=true로 켠 뒤 다시 시도하세요.", 503,
         )
     # 승인된 로컬 서버가 없어도 게이트웨이 항목과 키만으로 의미가 있어 묶음을 낸다.
-    contracts = endpoint_kits.approved_contracts(sctx.control, sctx.instance_id)
     team_id = sctx.team_ids[0] if sctx.team_ids else None
+    # 묶음에는 이 직원에게 승인된 로컬 서버만 넣는다(다른 직원의 서버 계약이 새지 않게).
+    mine = kit_key_sync.local_servers_for(sctx.control, sctx.instance_id, actor.user_id, team_id)
+    every = endpoint_kits.approved_contracts(sctx.control, sctx.instance_id)
+    contracts = {name: contract for name, contract in every.items() if name in mine}
     try:
         key = endpoint_kits.issue_key(
             sctx.control, config.kit_issuer, sctx.instance_id, user_id=actor.user_id,

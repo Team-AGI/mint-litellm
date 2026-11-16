@@ -652,7 +652,7 @@ def kits(sworld):
 
     from ctl_fixtures import make_ctx
 
-    from mint_litellm.control import servers
+    from mint_litellm.control import relations, servers
     from mint_litellm.types.exec_contract import ExecContract
 
     contract = ExecContract(
@@ -661,6 +661,8 @@ def kits(sworld):
     with psycopg.connect(sworld.admin_url) as admin:
         servers.register_local(make_ctx(admin), "local-1", contract)
         admin.execute("UPDATE mint.servers SET status = 'approved' WHERE server_id = 'local-1'")
+        relations.add(make_ctx(admin), "acme", "local-1", "ops", None)
+    add_approval(sworld, "user", STAFFER, tools=("read_file",), server_id="local-1")
     issuer = KitIssuer()
     sworld.stub.own(CONSOLE, STAFFER, team_id="team-a")  # 세션의 첫 팀이 키에 걸린다.
     sworld.app.state.config = dataclasses.replace(
@@ -702,6 +704,11 @@ def test_the_download_hands_out_a_kit_with_the_users_own_key_and_the_approved_se
     ((stored_token, owner, stored_alias),) = kits.query(
         "SELECT key_token, user_id, key_alias FROM mint.endpoint_installs")
     assert (stored_token, owner, stored_alias) == (token_of(config["key"]), STAFFER, alias)
+
+
+def test_a_kit_carries_only_the_local_servers_approved_for_that_staff_member(kits):
+    assert list(unpack(download(logged_in(kits)))["servers"]) == ["local-1"]
+    assert list(unpack(download(logged_in(kits, OTHER_KEY)))["servers"]) == []
 
 
 def test_a_second_download_replaces_the_first_key_and_other_users_are_untouched(kits):
@@ -920,3 +927,12 @@ def test_empty_staff_page_shows_pending_call_requests(sworld, monkeypatch):
     html = logged_in(sworld).get("/staff").text
     assert "처리 대기 중인 호출 승인 요청이 1건" in html
     assert "/staff/confirmations?tab=mine" in html
+
+
+def test_parallel_requests_of_one_staff_session_do_not_deadlock(sworld):
+    import concurrent.futures
+
+    client = logged_in(sworld)
+    with concurrent.futures.ThreadPoolExecutor(8) as pool:
+        codes = list(pool.map(lambda _: client.get("/staff").status_code, range(16)))
+    assert codes == [200] * 16
