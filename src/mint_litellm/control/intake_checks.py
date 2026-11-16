@@ -4,9 +4,13 @@
 증거의 ``inputs``에는 지문·크기·개수만 넣는다(원문을 저장하지 않는다).
 """
 
+import base64
+import binascii
 import hashlib
 import ipaddress
 import json
+import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
@@ -381,22 +385,61 @@ def _strings(value: Any) -> list[str]:
     return found
 
 
+# 번들 표지에 더해 늘 찾는 한국어 지시문(번들을 바꾸면 정책 판본 절차를 거쳐야 해 코드에 둔다).
+BUILTIN_MARKERS = (
+    "이전 지시를 무시", "이전 지시 무시", "앞의 지시를 무시", "위의 지시를 무시",
+    "사용자에게 알리지 마", "사용자에게 말하지 마", "시스템 프롬프트",
+)
+# 화면에 보이지 않는 문자: 제로폭·방향 제어·단어 결합자·BOM·유니코드 태그 문자.
+_HIDDEN = re.compile("[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff\U000e0000-\U000e007f]")
+# 라틴 글자로 보이는 키릴·그리스 글자(지시문을 표지 검색에서 숨기는 데 쓰인다).
+_CONFUSABLE = str.maketrans("аеорсухіјѕԁɡАВЕКМНОРСТХΑΒΕΗΙΚΜΝΟΡΤΧΥΖ",
+                            "aeopcyxijsdgABEKMHOPCTXABEHIKMNOPTXYZ")
+_BASE64 = re.compile(r"[A-Za-z0-9+/]{16,}={0,2}")
+
+
+def _normalized(text: str) -> str:
+    text = unicodedata.normalize("NFKC", _HIDDEN.sub("", text)).translate(_CONFUSABLE)
+    return " ".join(text.split()).casefold()
+
+
+def _decoded(text: str) -> list[str]:
+    """base64로 보이는 조각을 풀어 사람이 읽을 수 있는 글이면 돌려준다."""
+    found = []
+    for chunk in _BASE64.findall(text)[:50]:
+        try:
+            plain = base64.b64decode(chunk + "=" * (-len(chunk) % 4), validate=True).decode()
+        except (binascii.Error, UnicodeDecodeError):
+            continue
+        if plain.isprintable():
+            found.append(plain)
+    return found
+
+
 def description_scan(defs: list[dict] | None, data: PolicyData | None) -> Outcome:
-    """도구 정의 전체(이름·설명·스키마·annotations)의 문자열에서 번들의 고정 표지를 찾는다."""
+    """도구 정의 전체(이름·설명·스키마·annotations)의 문자열에서 지시문 표지를 찾는다.
+
+    숨김 문자를 지우고 NFKC·동형 문자를 정규화한 글과 base64를 푼 글에서 번들 표지와 기본
+    한국어 표지를 찾고, 숨김 문자가 있는 것 자체도 표지로 센다.
+    """
     method = "scan:description_markers"
     if data is None:
         return _done("description_scan",
                      Outcome("indeterminate", "POLICY_DATA_UNAVAILABLE", method))
     if not defs:
         return _done("description_scan", Outcome("indeterminate", "NO_DEFINITIONS", method))
-    hits = 0
-    scanned = 0
+    markers = [_normalized(m) for m in (*data.markers, *BUILTIN_MARKERS)]
+    hits = hidden = scanned = 0
     for d in defs:
         # 이름·설명·입력/출력 스키마·annotations의 모든 문자열(도구 정의 전체)
-        text = "\n".join(_strings(d)).casefold()
-        scanned += len(text)
-        hits += sum(1 for m in data.markers if m.casefold() in text)
-    inputs = {"tools": len(defs), "chars": scanned, "hits": hits, "markers_sha256": data.sha256}
+        raw = "\n".join(_strings(d))
+        scanned += len(raw)
+        hidden += len(_HIDDEN.findall(raw))
+        texts = [_normalized(raw), *(_normalized(t) for t in _decoded(raw))]
+        hits += sum(1 for m in markers if any(m in t for t in texts))
+    hits += 1 if hidden else 0
+    inputs = {"tools": len(defs), "chars": scanned, "hits": hits, "hidden_chars": hidden,
+              "markers_sha256": data.sha256}
     if hits:
         return _done("description_scan", Outcome("fail", "MARKER_HIT", method, inputs))
     return _done("description_scan", Outcome("pass", None, method, inputs))
