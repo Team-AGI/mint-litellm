@@ -475,7 +475,7 @@ def decide_calls(
             raise ControlError("선택한 요청이 없습니다.")
         one_shot = {
             str(r["id"]) for r in reads.call_approvals(actor.conn, actor.instance, status="pending")
-            if r["action_type"] in ONE_SHOT_ACTIONS or not r["action_type"]
+            if r["action_type"] in ONE_SHOT_ACTIONS
         }
         failed = []
         for item in ids:

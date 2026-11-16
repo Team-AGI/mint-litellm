@@ -28,7 +28,7 @@
 <td class="nowrap">{{ c.requested_at | when if c.requested_at else '—' }}{% if c.status == 'pending' and c.age_seconds is not none %}<br>{{ c.age_seconds | span }} 경과{% endif %}</td>
 <td class="nowrap">{% if c.window_minutes %}{{ c.window_minutes }}분{% if c.status == 'approved' %} · 남은 {{ c.remaining_seconds | span }}{% endif %}{% elif c.status == 'pending' %}—{% else %}1회{% endif %}</td>
 <td>{{ m.badge(L.CALL_APPROVAL, c.status) }}{% if c.status == 'pending' and c.hold_timed_out_at %}<br><span class="muted">대기 시간 초과 — 호출자는 응답 받음</span>{% endif %}</td>
-<td>{% if c.status == 'pending' and can(actor, 'call-approval approve') %}<form method="post" action="/call-approvals/{{ c.id }}/approve">{{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ c.state_version }}"><input type="hidden" name="window_minutes" value="{{ 0 if (c.action_type in one_shot or not c.action_type) else 30 }}"><button type="submit">{{ '1회 승인' if (c.action_type in one_shot or not c.action_type) else '30분 승인' }}</button></form>{% endif %}</td>
+<td>{% if c.status == 'pending' and can(actor, 'call-approval approve') %}<form method="post" action="/call-approvals/{{ c.id }}/approve">{{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ c.state_version }}"><input type="hidden" name="window_minutes" value="{{ 0 if c.action_type in one_shot else 30 }}"><button type="submit">{{ '1회 승인' if c.action_type in one_shot else '30분 승인' }}</button></form>{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
 {{ m.pager('/approvals?tab=calls', page, rows | length) }}
@@ -57,8 +57,8 @@
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ c.state_version }}">
   {% if c.status == 'pending' %}
   <span class="segments" role="group" aria-label="사용 기간">
-    <label class="segment"><input type="radio" name="window_minutes" value="0"{% if (c.action_type in one_shot or not c.action_type) %} checked{% endif %}>1회</label>
-    {% if not (c.action_type in one_shot or not c.action_type) %}<label class="segment"><input type="radio" name="window_minutes" value="10">10분</label>
+    <label class="segment"><input type="radio" name="window_minutes" value="0"{% if c.action_type in one_shot %} checked{% endif %}>1회</label>
+    {% if c.action_type not in one_shot %}<label class="segment"><input type="radio" name="window_minutes" value="10">10분</label>
     <label class="segment"><input type="radio" name="window_minutes" value="30" checked>30분</label>{% endif %}
   </span>
   {% if c.requested_by and c.requested_by == actor.session.user_id %}<label>두 번째 승인자 토큰<input type="password" name="second_approver_token" autocomplete="off"></label>{% endif %}
