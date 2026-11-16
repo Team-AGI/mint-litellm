@@ -344,3 +344,5 @@ def test_a_built_in_tool_reaches_the_policy_as_an_approved_server_with_its_fixed
     # 로컬 서버 규칙(승인된 실행 계약 없음·불일치)에 걸리지 않도록 고정 계약을 승인본으로 둔다
     assert server["status"] == "approved"
     assert server["exec_approved_sha256"] == server["exec_contract_sha256"]
+    # 이름 추정(셸 = 실행 = 고위험)으로 셸마다 호출별 승인을 요구하지 않는다
+    assert "risk_grade" not in calls[-1]["tool"] and server["contract_status"] == "none"

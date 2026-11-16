@@ -506,11 +506,15 @@ def observed_contract(snapshot: Snapshot, tool: str) -> ToolContractRow | None:
 
 
 def tool_traits(
-    snapshot: Snapshot, tool: str, arguments: Mapping[str, Any]
+    snapshot: Snapshot, tool: str, arguments: Mapping[str, Any], *, builtin: bool = False
 ) -> tuple[str | None, str | None, bool]:
     """(행위 유형, 위험 등급, 임시 계약 여부). 승인된 계약이 있으면 그 값, 계약 관리 서버가 아니면
     관측한 도구 목록의 승인본·임시 계약, 그것도 없으면 도구 이름·인자로 추정한 값(임시 계약).
     계약 관리 서버인데 승인된 계약이 없으면 값이 없다. 임시 계약은 승인 규칙을 넓히지 않는다."""
+    if builtin:
+        # 하네스 내장 도구는 이름 추정(셸 = 실행 = 고위험)을 쓰지 않는다. 그대로 두면 셸을 쓸 때마다
+        # 호출별 승인을 요구한다. 위험한 내장 도구는 관리자가 거부·MINT_HIGH_RISK_TOOLS로 고른다.
+        return None, None, False
     contract = current_contract(snapshot, tool)
     if contract is not None:
         return contract.action_type, contract.risk_grade, False
@@ -755,7 +759,9 @@ def build_policy_input(
         server_doc["status"] = "approved"
         server_doc["exec_approved_sha256"] = resolved.exec_contract_sha256
     managed = server is not None and server.contract_status == "managed"
-    action_type, risk_grade, provisional = tool_traits(snapshot, tool, arguments)
+    action_type, risk_grade, provisional = tool_traits(
+        snapshot, tool, arguments, builtin=is_builtin_server(resolved.server_id)
+    )
     server_doc["contract_status"] = (
         "managed" if managed else "provisional" if provisional else "none"
     )
@@ -1001,7 +1007,8 @@ def match_call_approval(
             Reason.CALL_APPROVAL_REQUIRED, detail="arguments cannot be fingerprinted"
         ), None
 
-    one_shot_only = tool_traits(snapshot, tool, arguments)[0] in ONE_SHOT_ACTIONS
+    builtin = is_builtin_server(resolved.server_id)
+    one_shot_only = tool_traits(snapshot, tool, arguments, builtin=builtin)[0] in ONE_SHOT_ACTIONS
 
     def same_call(row: CallApprovalRow) -> bool:
         # 기간 승인은 인자 지문을 풀고 나머지 결속은 그대로 둔다. 1회 승인과 삭제·외부 전송·자격
