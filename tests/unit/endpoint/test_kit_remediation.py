@@ -364,3 +364,11 @@ def test_a_launcher_that_cannot_record_still_starts_the_server(world, tmp_path):
     started = Exec()
     agent.run_server("srv-1", world.listing, {}, execve=started, state_dir=str(blocked))
     assert len(started.calls) == 1
+
+
+def test_a_removal_report_without_the_key_is_skipped_instead_of_crashing(folder, tmp_path):
+    from test_kit_install import make_kit
+
+    kit = make_kit(folder, tmp_path, managed=False)
+    kit.config.pop("key", None)  # 설치된 복사본의 kit.json에는 키가 없다
+    assert kit.report({"mode": "none"}, "removed") is False

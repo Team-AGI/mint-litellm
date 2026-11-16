@@ -188,12 +188,22 @@ random_secret() {
 
 ensure_generated() {
     local name
-    for name in MINT_EXPORT_HMAC_KEY MINT_WORKER_DB_PASSWORD MINT_STAFF_DB_PASSWORD; do
+    for name in MINT_EXPORT_HMAC_KEY MINT_WEBHOOK_HMAC_KEY MINT_WORKER_DB_PASSWORD MINT_STAFF_DB_PASSWORD; do
         if [ -z "$(env_value "$name")" ]; then
             sed -i "/^${name}=/d" .env
             append_env "$name" "$(random_secret)"
         fi
     done
+    # 알림·거절 오류의 화면 링크에 쓰는 콘솔 주소. 비어 있으면 LiteLLM 화면 주소의 호스트와 콘솔 포트로 정한다.
+    if [ -z "$(env_value MINT_CONSOLE_URL)" ]; then
+        local ui origin
+        ui="$(env_value MINT_LITELLM_UI_URL)"
+        origin="$(printf '%s' "$ui" | sed -nE 's#^(https?://[^/:]+).*#\1#p')"
+        if [ -n "$origin" ]; then
+            sed -i '/^MINT_CONSOLE_URL=/d' .env
+            append_env MINT_CONSOLE_URL "${origin}:$(env_value MINT_CONSOLE_PORT)"
+        fi
+    fi
     chmod 600 .env
 }
 
