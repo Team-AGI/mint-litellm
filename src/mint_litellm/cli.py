@@ -1151,7 +1151,8 @@ ARGUMENTS: dict[str, list[Any]] = {
            "observe(기록만)"),
         _a("--allow-input-secret", action="append",
            help="인자에서 비밀을 찾아도 이 승인의 도구에 한해 허용할 탐지 종류(반복 가능). "
-           "기본은 인자에 비밀이 있으면 막는다"),
+           "기본은 인자에 비밀이 있으면 막는다(계약 관리 서버. 그 밖의 서버는 "
+           "MINT_SCAN_UNMANAGED=enforce일 때만 막는다)"),
         _a("--allow-token-forward", action="store_true",
            help="호출자 토큰을 업스트림에 그대로 전달하는 서버(true_passthrough·oauth_delegate)의 "
            "호출을 이 승인에서 허용한다. 기본은 막는다"),
