@@ -241,11 +241,20 @@ def db(request: Request) -> Iterator[psycopg.Connection]:
         yield conn
 
 
+def _token_only(request: Request) -> bool:
+    """운영자 토큰만으로 인증하는 요청인가(세션 쿠키가 함께 오면 쿠키 요청으로 보고 검사한다).
+
+    화면 경로는 Authorization 헤더를 보지 않고 쿠키로 인증하므로, 헤더가 있다는 것만으로 출처·CSRF
+    검사를 건너뛰면 쿠키 세션에 가짜 헤더를 붙여 검사를 피할 수 있다.
+    """
+    if not request.headers.get("authorization", "").lower().startswith("bearer "):
+        return False
+    return not (read_cookie(request, COOKIE) or read_cookie(request, STAFF_COOKIE))
+
+
 def require_origin(request: Request) -> None:
     """변경 요청은 같은 출처에서 와야 한다(Fetch Metadata가 있으면 그것을, 없으면 Origin을 본다)."""
-    if request.method not in UNSAFE:
-        return
-    if request.headers.get("authorization", "").lower().startswith("bearer "):
+    if request.method not in UNSAFE or _token_only(request):
         return
     site = request.headers.get("sec-fetch-site")
     origin = request.headers.get("origin")
@@ -262,9 +271,7 @@ def require_origin(request: Request) -> None:
 async def require_csrf(request: Request) -> None:
     """세션 쿠키로 인증한 변경 요청은 CSRF 토큰(헤더 또는 폼 필드)과 출처가 맞아야 한다."""
     require_origin(request)
-    if request.method not in UNSAFE:
-        return
-    if request.headers.get("authorization", "").lower().startswith("bearer "):
+    if request.method not in UNSAFE or _token_only(request):
         return
     cookie = read_cookie(request, STAFF_COOKIE if is_staff_path(request) else COOKIE)
     if not cookie:

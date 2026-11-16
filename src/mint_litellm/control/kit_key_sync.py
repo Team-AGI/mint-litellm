@@ -23,8 +23,10 @@ SELECT a.server_id, a.tools FROM mint.approvals a
 JOIN mint.servers s ON s.instance_id = a.instance_id AND s.server_id = a.server_id
 WHERE a.instance_id = %(iid)s AND a.status = 'active'
   AND a.valid_from <= now() AND a.valid_until > now()
-  AND s.identity_kind = 'remote' AND s.status = 'approved'
-  AND ((a.scope_type = 'key' AND a.scope_id = %(key)s)
+  AND s.identity_kind = %(kind)s AND s.status = 'approved'
+  AND ((a.scope_type = 'key' AND (a.scope_id = %(key)s OR a.scope_id IN (
+        SELECT key_token FROM mint.endpoint_installs WHERE instance_id = %(iid)s
+          AND user_id = %(user)s AND revoked_at IS NULL)))
     OR (a.scope_type = 'user' AND a.scope_id = %(user)s)
     OR (a.scope_type = 'team' AND a.scope_id = %(team)s)
     OR (a.scope_type = 'org' AND a.scope_id IN (
@@ -45,12 +47,22 @@ def desired_permission(
     tools: dict[str, set[str]] = {}
     for row in fetchall(
         conn, _APPLICABLE,
-        {"iid": instance_id, "key": key_token, "user": user_id, "team": team_id or ""},
+        {"iid": instance_id, "key": key_token, "user": user_id, "team": team_id or "",
+         "kind": "remote"},
     ):
         if row["server_id"] not in servers:
             servers.append(row["server_id"])
         tools.setdefault(row["server_id"], set()).update(row["tools"] or ())
     return servers, {s: sorted(t) for s, t in tools.items() if t}
+
+
+def local_servers_for(
+    conn: psycopg.Connection, instance_id: str, user_id: str, team_id: str | None
+) -> set[str]:
+    """그 사용자에게 적용되는 활성 승인이 있는 로컬(stdio) 서버(설치 묶음에 넣을 서버)."""
+    rows = fetchall(conn, _APPLICABLE, {"iid": instance_id, "key": "", "user": user_id,
+                                        "team": team_id or "", "kind": "stdio"})
+    return {r["server_id"] for r in rows}
 
 
 def sync_kit_keys(conn: psycopg.Connection, instance_id: str, client: LiteLLMSync) -> int:
