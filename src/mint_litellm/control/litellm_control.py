@@ -91,6 +91,16 @@ class LiteLLMControl(LiteLLMSync):
         body = self._ok("/v1/mcp/server/submissions", key="items", shape=list)
         return [item for item in body["items"] if isinstance(item, dict)]
 
+    def provision_staff_server(self, server_id: str, url: str, transport: str,
+                               intake_id: str, url_sha256: str) -> dict:
+        """주소 검사를 통과한 신청만 비공개로 등록한다. 사용 승인은 만들지 않는다."""
+        return self._write("POST", "/v1/mcp/server", {
+            "server_id": server_id, "server_name": server_id, "url": url,
+            "transport": transport, "auth_type": "none", "allow_all_keys": False,
+            "rpm": 600, "max_concurrent_requests": 8, "timeout": 30,
+            "mcp_info": {"mint_intake_id": intake_id, "mint_url_sha256": url_sha256},
+        })
+
     def _post(
         self, path: str, spec: dict, max_bytes: int | None, seconds: float | None = None
     ) -> dict:

@@ -213,7 +213,7 @@ CHECK = {
     "termination_readiness": "종료 준비",
     "supply_chain": "공급망",
 }
-SOURCE = {"submission": "제출", "operator": "운영자 등록"}
+SOURCE = {"submission": "제출", "operator": "운영자 등록", "staff": "직원 신청"}
 DATA_GRADE = {"public": "공개", "internal": "내부", "confidential": "기밀", "restricted": "제한"}
 RISK = {"low": "낮음", "medium": "보통", "high": "높음", "critical": "심각"}
 ACTION = {
@@ -225,6 +225,7 @@ ACTION = {
     "credential_access": "자격 접근",
 }
 CHECK_REASON = {
+    "REGISTRY_ID_CONFLICT": "서버 식별자가 다른 등록과 충돌하거나 비공개 상태를 확인하지 못함",
     "ALL_KEYS_NOT_CLOSED": "모든 키 허용을 끄지 못함",
     "APPROVE_REFUSED": "승인 거부됨",
     "COLLECTION_FAILED": "정의 수집 실패",

@@ -206,6 +206,27 @@ def _oauth2_flow(client: Any, server_id: str) -> str | None:
     return _oauth2_flow_read(client, server_id, frozenset({"approved", "pending_review"}))[0]
 
 
+class StaffRegistryConflict(ControlError):
+    """다른 등록이나 열린 등록을 도입 검증 대상으로 재사용하지 않는다."""
+
+
+def _staff_registry(client: Any, row: dict, contract: dict | None) -> None:
+    """직원 신청의 재시도는 이 신청이 만든 비공개 서버만 재사용한다."""
+    if contract is None:
+        raise ControlError("직원 신청의 배포 계약이 없습니다.")
+    expected = {"mint_intake_id": str(row["id"]), "mint_url_sha256": contract["url_sha256"]}
+    entry = client.get_server(row["server_id"])
+    if entry is None:
+        client.provision_staff_server(row["server_id"], contract["url"], contract["transport"],
+                                      str(row["id"]), contract["url_sha256"])
+        entry = client.get_server(row["server_id"])
+    if (entry is None or not isinstance(entry.get("mcp_info"), dict)
+            or any(entry["mcp_info"].get(k) != v for k, v in expected.items())
+            or entry.get("allow_all_keys") is not False):
+        raise StaffRegistryConflict("도입 신청과 다른 서버 등록이 있거나 "
+                                    "비공개 상태를 확인하지 못했습니다.")
+
+
 def _run_checks(
     job: JobContext, ctx: Context, row: dict, attempt: int, mode: str, persist: bool
 ) -> bool:
@@ -259,9 +280,13 @@ def _run_checks(
             blocked = None
             if name == "connection":
                 try:
+                    if mode == "staff" and row.get("staff_registry_required"):
+                        _staff_registry(client, row, contract)
                     blocked = _gate(job, client, server_id, mode)
                 except AllKeysNotClosed:
                     blocked, halt = "ALL_KEYS_NOT_CLOSED", True
+                except StaffRegistryConflict:
+                    blocked, halt = "REGISTRY_ID_CONFLICT", True
             if mode == "registry":
                 probe["server_id"] = server_id
             if blocked:

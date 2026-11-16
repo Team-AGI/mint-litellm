@@ -29,6 +29,7 @@ _SERVER = r"/v1/mcp/server/[^/]+"
 WRITE_ROUTES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
     (method, re.compile(pattern))
     for method, pattern in (
+        ("POST", r"/v1/mcp/server"),
         ("PUT", r"/v1/mcp/server"),  # 본문은 allow_all_keys 끄기와 호출 한도뿐이다(check_write)
         ("POST", r"/key/update"),
         ("POST", r"/team/update"),
@@ -78,6 +79,22 @@ def check_write(method: str, path: str, body: Any) -> None:
     """보내기 전에 경로와 본문이 허용 범위인지 확인한다. 아니면 ``WriteRefused``."""
     if not any(m == method and pattern.fullmatch(path) for m, pattern in WRITE_ROUTES):
         raise WriteRefused(f"허용되지 않은 LiteLLM 쓰기 경로입니다: {method} {path}")
+    if path == "/v1/mcp/server" and method == "POST":
+        fields = {"server_id", "server_name", "url", "transport", "auth_type",
+                  "allow_all_keys", "rpm", "max_concurrent_requests", "timeout", "mcp_info"}
+        if (not isinstance(body, dict) or set(body) != fields
+                or not isinstance(body["server_id"], str)
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", body["server_id"])
+                or body["server_name"] != body["server_id"]
+                or not isinstance(body["url"], str) or not body["url"].startswith(("https://", "http://"))
+                or body["transport"] not in ("http", "sse") or body["auth_type"] != "none"
+                or body["allow_all_keys"] is not False
+                or body["rpm"] != 600 or body["max_concurrent_requests"] != 8
+                or body["timeout"] != 30
+                or not isinstance(body["mcp_info"], dict)
+                or set(body["mcp_info"]) != {"mint_intake_id", "mint_url_sha256"}):
+            raise WriteRefused("직원 도입 검증용 비공개 HTTP/SSE 서버만 등록할 수 있습니다.")
+        return
     if path == "/v1/mcp/server":
         if (
             not isinstance(body, dict)
