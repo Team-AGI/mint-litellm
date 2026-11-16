@@ -59,15 +59,21 @@ def post(path, body):
         return json.loads(reply.read() or b"{}")
 
 
+deadline = time.time() + 120
 if os.environ["KEY_KIND"] == "control-refresh":
     # 이미 있는 제어 키의 허용 경로를 이 판본의 목록으로 맞춘다(새 기능의 경로가 빠지지 않게).
-    try:
-        post("/key/update", {"key": os.environ["EXISTING_KEY"], "allowed_routes": routes})
-    except (urllib.error.HTTPError, OSError):
-        sys.exit(1)
-    sys.exit(0)
+    # 업그레이드는 LiteLLM을 막 다시 띄운 직후라 응답할 때까지 기다린다.
+    while True:
+        try:
+            post("/key/update", {"key": os.environ["EXISTING_KEY"], "allowed_routes": routes})
+            sys.exit(0)
+        except urllib.error.HTTPError:
+            sys.exit(1)
+        except OSError:
+            if time.time() > deadline:
+                sys.exit(1)
+            time.sleep(3)
 
-deadline = time.time() + 120
 while True:
     try:
         try:
