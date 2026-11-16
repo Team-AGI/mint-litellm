@@ -477,7 +477,13 @@ def _call(post: Post, base: str, path: str, key: str, payload: dict, timeout: fl
     except (OSError, ValueError) as exc:
         raise Refuse(f"decision service is unreachable ({type(exc).__name__})") from exc
     if status != 200:
-        raise Refuse(f"decision service refused the request (HTTP {status}{_refusal_code(raw)})")
+        hint = (
+            " MINT 키가 해제되었거나 교체되었습니다. 직원 화면에서 설치 묶음을 다시 받으세요."
+            if status == 401 else ""
+        )
+        raise Refuse(
+            f"decision service refused the request (HTTP {status}{_refusal_code(raw)}).{hint}"
+        )
     try:
         answer = json.loads(raw) if len(raw) <= MAX_RESPONSE else None
     except ValueError:

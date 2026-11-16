@@ -119,6 +119,7 @@ CONSENT = {
 CONSENT_STATE = {
     "active": Status("동의함", "ok"),
     "none": Status("동의 필요", "wait"),
+    "free": Status("동의 불필요", "off"),
 }
 RELATION = {
     "active": Status("이용 중", "ok"),

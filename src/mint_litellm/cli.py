@@ -669,11 +669,14 @@ def _server_register_local(run: Run) -> None:
     for hint in network_hints(contract):
         print(hint, file=sys.stderr)
     server_service.register_local(run.context(), run.args.server_id, contract)
+    run.say(f"로컬 서버를 등록했습니다: {run.args.server_id}")
 
 
-def _done(call: Callable[..., Any], *names: str) -> Handler:
+def _done(call: Callable[..., Any], *names: str, said: str | None = None) -> Handler:
     def handler(run: Run) -> None:
         call(run.context(), *[getattr(run.args, n) for n in names])
+        if said:
+            run.say(said.format(**vars(run.args)))
 
     return handler
 
@@ -945,7 +948,9 @@ HANDLERS: dict[str, Handler] = {
     "alert resolve": _done(alert_service.resolve, "alert_id"),
     "server suspend": _done(server_service.suspend, "server_id"),
     "server resume": _done(server_service.resume, "server_id"),
-    "server terminate": _done(server_service.terminate, "server_id"),
+    "server terminate": _done(
+        server_service.terminate, "server_id", said="서버 종료를 시작했습니다: {server_id}"
+    ),
     "relation add": lambda r: _created(
         r, relation_service.add(r.context(), r.args.org, r.args.server, r.args.purpose,
                                 r.args.team)
@@ -970,7 +975,9 @@ HANDLERS: dict[str, Handler] = {
     "consent add": _consent_add,
     "consent revoke": _done(consent_service.revoke, "consent_id"),
     "call-approval-rule add": _rule_add,
-    "call-approval-rule disable": _done(call_approval_rule_service.disable, "rule_id"),
+    "call-approval-rule disable": _done(
+        call_approval_rule_service.disable, "rule_id", said="호출 승인 규칙을 껐습니다: {rule_id}"
+    ),
     "allowlist add": _allowlist_add,
     "allowlist lift": _done(allowlist_service.lift, "allowlist_id"),
     "org add": lambda r: org_service.add(r.context(), r.args.org_id, r.args.name),
