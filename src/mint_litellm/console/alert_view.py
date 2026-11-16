@@ -68,7 +68,9 @@ VALUE = {
     "reason": {
         "control_key_not_set": "제어 키 미설정", "forbidden": "권한 없음", "held": "보류됨",
         "not_active": "활성 상태 아님", "not_completed_within_one_hour": "한 시간 안에 끝나지 않음",
-        "pin_mismatch": "고정 도구 불일치", "readback_mismatch": "다시 읽은 값 불일치",
+        "block_released": "MINT가 건 키 차단이 풀림", "pin_mismatch": "고정 도구 불일치",
+        "server_replaced": "서버 주소가 승인값과 다름",
+        "unapproved_server": "승인 없는 서버 추가", "readback_mismatch": "다시 읽은 값 불일치",
         "reapproval_conflict": "재승인 충돌", "registry_missing": "레지스트리에 없음",
         "target_missing": "대상이 삭제됨", "unpin_failed": "고정 해제 실패",
     },
@@ -145,7 +147,11 @@ def summary(kind: str, subject: dict[str, Any]) -> str:
         return labels.pick(labels.ALERT_KIND, kind)
     known = {k: v for k, v in (subject or {}).items() if v not in (None, "")}
     values = defaultdict(lambda: "—", known)
+    if kind == "sync_divergence" and "server_id" not in known:
+        text = "LiteLLM 설정이 MINT와 다릅니다."
     out = text.format_map(values)
+    if kind == "sync_divergence" and known.get("key_alias"):
+        out += f" (키 {known['key_alias']})"
     path = (subject or {}).get("path") if kind.startswith("package_vuln") else None
     return f"{out} (의존 경로: {path})" if path else out
 

@@ -54,6 +54,7 @@ from mint_litellm.control.sync_state import (
     withdraw_grant,
 )
 from mint_litellm.types.canonical import canonical_text, pin_sha256, sha256
+from mint_litellm.types.decision import normalize_auth_type, url_sha256
 from mint_litellm.types.events import EventKind
 from mint_litellm.types.ids import new_uuid7
 
@@ -102,7 +103,11 @@ def _reachable(handler: Callable[[JobContext], None]) -> Callable[[JobContext], 
 
 
 def _read(client: LiteLLMSync, kind: str, target_id: str) -> dict | None:
-    return client.get_key(target_id) if kind == "key" else client.get_team(target_id)
+    if kind == "team":
+        return client.get_team(target_id)
+    info = client.get_key(target_id)
+    # 지운 키도 /key/info가 정보를 돌려줄 수 있어(캐시) 목록으로 한 번 더 확인한다
+    return info if info is not None and client.key_listed(info.get("token") or target_id) else None
 
 
 def _missing_alert(conn: psycopg.Connection, instance_id: str, ref: str) -> dict | None:
@@ -957,7 +962,8 @@ def _wanted(row: dict, desired: Any) -> bool:
 
 
 def _count_missing(
-    ctx: JobContext, kind: str, target_id: str, row: dict, window_seconds: int
+    ctx: JobContext, kind: str, target_id: str, row: dict, window_seconds: int,
+    key_alias: str | None = None,
 ) -> bool:
     """외부 삭제 한 번을 센다. 한 시간 창 안의 두 번째면 보류하고 참을 돌려준다."""
     conn, inst = ctx.conn, ctx.instance_id
@@ -969,10 +975,35 @@ def _count_missing(
                    "server_id": row["server_id"], "missing_count": updated["missing_count"],
                    "window_seconds": window_seconds}
         _event(conn, inst, EventKind.SYNC_HELD, updated, payload)
+        if key_alias:
+            payload["key_alias"] = key_alias
         raise_alert(conn, inst, kind="sync_divergence", severity="high",
                     dedup_key=f"sync_divergence:held:{row['id']}",
                     subject={**payload, "reason": "held"})
     return True
+
+
+def _flag_unapproved(
+    conn: psycopg.Connection, inst: str, ref: str, current: dict, servers: list[str],
+    desired: Any, rows: list[dict],
+) -> None:
+    """승인도 MINT 소유 항목도 아닌 서버가 키·팀에 직접 더해졌으면 경보를 연다(호출은 막힌다)."""
+    owned = {r["server_id"] for r in rows if r["item"] == "mcp_server"}
+    extra = {s for s in servers if s not in desired.servers and s not in owned}
+    for server_id in sorted(extra):
+        raise_alert(conn, inst, kind="sync_divergence", severity="medium",
+                    dedup_key=f"sync_divergence:unapproved:{ref}:{server_id}",
+                    subject={"reason": "unapproved_server", "target": ref, "server_id": server_id,
+                             "key_alias": current.get("key_alias")})
+    for alert in fetchall(
+        conn,
+        "SELECT dedup_key, subject->>'server_id' AS server_id FROM mint.alerts WHERE"
+        " instance_id = %s AND kind = 'sync_divergence' AND status <> 'resolved'"
+        " AND subject->>'reason' = 'unapproved_server' AND subject->>'target' = %s",
+        (inst, ref),
+    ):
+        if alert["server_id"] not in extra:
+            resolve_alert(conn, inst, alert["dedup_key"])
 
 
 def _reconcile_target(
@@ -993,13 +1024,15 @@ def _reconcile_target(
     desired = desired_for_target(conn, inst, kind, target_id)
     rows = load_rows(conn, inst, kind, target_id)
     servers, tools = permission_of(current)
+    _flag_unapproved(conn, inst, ref, current, servers, desired, rows)
     regrant = False
     for row in rows:
         # 반영되어 있던 항목이 없어진 순간만 외부 삭제 한 번으로 센다(이미 없다고 본 것은 다시 세지
         # 않는다. 복구 작업이 다시 보면 반영됨으로 돌아온다).
         if row["observed"] is not True or row["held"] or not _missing(row, desired, servers, tools):
             continue
-        if not _count_missing(ctx, kind, target_id, row, window_seconds):
+        if not _count_missing(ctx, kind, target_id, row, window_seconds,
+                                 current.get("key_alias")):
             regrant = True
     # 반영 직후 확인이 늦어 ``observed=false``로 남은 행: 항목이 이미 LiteLLM에 있으면 바로잡는다
     fixed = False
@@ -1098,6 +1131,39 @@ def _is_local(conn: psycopg.Connection, instance_id: str, server_id: str) -> boo
     ) is not None
 
 
+def _check_identity(ctx: JobContext, server_id: str, server: dict) -> None:
+    """LiteLLM의 주소·전송·인증이 승인값과 다르면 경보(서버 교체)를 열고, 승인값으로 돌아온
+    항목은 계약 변경 잠금에서 푼다. 응답에 주소가 없으면(가려진 응답) 비교하지 않는다."""
+    conn, inst = ctx.conn, ctx.instance_id
+    row = fetchone(
+        conn,
+        "SELECT url_sha256, transport, auth_type, deployment_drift, deployment_drift_fields"
+        " FROM mint.servers WHERE instance_id = %s AND server_id = %s AND identity_kind = 'remote'"
+        " AND status NOT IN ('rejected', 'terminating', 'terminated')",
+        (inst, server_id),
+    )
+    if row is None or not server.get("url"):
+        return
+    now = {"url_sha256": url_sha256(server["url"]), "transport": server.get("transport"),
+           "auth_type": normalize_auth_type(server.get("auth_type"))}
+    differing = [f for f, v in now.items() if v is not None and v != row[f]]
+    key = f"sync_divergence:identity:{server_id}"
+    if differing:
+        raise_alert(conn, inst, kind="sync_divergence", severity="high", dedup_key=key,
+                    subject={"server_id": server_id, "reason": "server_replaced",
+                             "fields": differing})
+    else:
+        resolve_alert(conn, inst, key)
+    fields = list(row["deployment_drift_fields"] or ())
+    left = [f for f in fields if f not in now or f in differing]
+    if row["deployment_drift"] and len(left) < len(fields):
+        conn.execute(
+            "UPDATE mint.servers SET deployment_drift = %s, deployment_drift_fields = %s"
+            " WHERE instance_id = %s AND server_id = %s",
+            (bool(left), left or None, inst, server_id),
+        )
+
+
 def _reconcile_server(ctx: JobContext, client: LiteLLMSync, server_id: str) -> None:
     conn, inst = ctx.conn, ctx.instance_id
     key = f"sync_divergence:server:{server_id}"
@@ -1107,6 +1173,7 @@ def _reconcile_server(ctx: JobContext, client: LiteLLMSync, server_id: str) -> N
             raise_alert(conn, inst, kind="sync_divergence", severity="high", dedup_key=key,
                         subject={"server_id": server_id, "reason": "registry_missing"})
         return
+    _check_identity(ctx, server_id, server)
     _close_allow_all_keys(ctx, client, server_id, server)
     fill_call_limits(ctx, client, server_id, server)
     status = server.get("approval_status")

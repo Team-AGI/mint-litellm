@@ -344,3 +344,26 @@ def test_a_verify_key_is_never_proposed_for_blocking(conn, fake):
              sensitive_findings={"private_key": 1})
     scan(conn, fake)
     assert not [p for p in proposals(conn) if p["key_token"] == "tok-verify"]
+
+
+def test_a_block_released_outside_mint_opens_an_alert_and_is_not_blocked_again(conn, fake):
+    row = secret_proposal(conn, fake)
+    key_block.approve(approver(conn), reader(fake), str(row["id"]))
+    apply(conn, fake, row["id"], "block")
+    scan(conn, fake)
+    assert fetchall(conn, "SELECT 1 FROM mint.alerts WHERE kind = 'sync_divergence'") == []
+    fake.keys["tok2"]["blocked"] = False  # 다른 관리자가 LiteLLM에서 직접 해제
+    writes = len(fake.writes())
+    scan(conn, fake)
+    scan(conn, fake)
+    (alert,) = fetchall(conn, "SELECT * FROM mint.alerts WHERE kind = 'sync_divergence'")
+    assert (alert["severity"], alert["subject"]["reason"], alert["subject"]["key_alias"]) == (
+        "high", "block_released", "bob-key")
+    assert len(fake.writes()) == writes  # 자동으로 다시 차단하지 않는다
+    done = proposals(conn)[0]
+    assert (done["status"], done["last_error"]) == ("applied", "released_externally")
+    fake.keys["tok2"]["blocked"] = True
+    scan(conn, fake)
+    assert fetchone(conn, "SELECT status FROM mint.alerts WHERE kind = 'sync_divergence'")[
+        "status"] == "resolved"
+    assert proposals(conn)[0]["last_error"] is None

@@ -299,10 +299,41 @@ def _expire(conn: psycopg.Connection, instance: str) -> None:
             )
 
 
+def _watch_released(job: JobContext) -> None:
+    """MINT가 건 차단이 LiteLLM에서 외부로 풀렸으면 경보를 연다(다시 차단하지 않는다)."""
+    conn, instance = job.conn, job.instance_id
+    for row in fetchall(
+        conn,
+        "SELECT * FROM mint.key_block_proposals WHERE instance_id = %s AND status = 'applied'"
+        " AND mint_blocked",
+        (instance,),
+    ):
+        try:
+            state = _state_of(job.litellm, row["scope"], row)
+        except LiteLLMError:
+            continue
+        key = f"sync_divergence:key_block_released:{row['id']}"
+        released = state is not None and state.get("blocked") is not True
+        with conn.transaction():
+            conn.execute(
+                "UPDATE mint.key_block_proposals SET last_error = %s WHERE instance_id = %s"
+                " AND id = %s", ("released_externally" if released else None, instance, row["id"]),
+            )
+            if not released:
+                alerts.resolve(conn, instance, key)
+                continue
+            alerts.raise_alert(
+                conn, instance, kind="sync_divergence", severity="high", dedup_key=key,
+                subject={"reason": "block_released", "key_alias": row["key_alias"],
+                         "scope": row["scope"], "proposal_id": str(row["id"])},
+            )
+
+
 def run(job: JobContext) -> None:
     _expire(job.conn, job.instance_id)
     if job.litellm is None:
         return  # 키가 LiteLLM에 있는지 확인할 수 없으면 제안하지 않는다
+    _watch_released(job)
     cache: dict = {}
     for found in candidates(job.conn, job.instance_id).values():
         _propose(job, found, cache)

@@ -1248,3 +1248,118 @@ def test_without_access_revocation_evidence_the_server_stays_terminating_with_an
     assert server_status(admin) == "terminated"
     assert [a["status"] for a in alerts(admin, "evidence_missing")] == ["resolved"]
 
+
+
+# --- 동기화 결함 수정(sy-05~sy-12) -------------------------------------------------
+
+
+def test_a_key_deleted_in_litellm_is_reported_even_if_key_info_still_answers(
+    admin, fake, worker
+):
+    key_world(admin, fake)
+    fake.ghosts["k1"] = fake.keys.pop("k1")  # /key/info는 캐시로 계속 답한다
+    reconcile(admin)
+    drain(worker)
+    [alert] = alerts(admin, "sync_target_missing")
+    assert alert["subject"]["target"] == "key:k1"
+
+
+def test_resume_closes_the_held_alert(admin, fake, worker):
+    synced_key(admin, fake, worker)
+    for _ in range(2):
+        delete_server_from_key(fake)
+        reconcile(admin)
+        drain(worker)
+    [alert] = alerts(admin, "sync_divergence")
+    assert alert["status"] != "resolved"
+    held = grant(admin, "mcp_server")
+    sync_service.resume(make_ctx(admin), str(held["id"]))
+    assert alerts(admin, "sync_divergence")[0]["status"] == "resolved"
+
+
+def test_a_held_alert_names_the_key_alias(admin, fake, worker):
+    key_world(admin, fake, key_alias="sy-key1")
+    enqueue(admin, "sync_target", "key:k1")
+    drain(worker)
+    for _ in range(2):
+        delete_server_from_key(fake)
+        reconcile(admin)
+        drain(worker)
+    assert alerts(admin, "sync_divergence")[0]["subject"]["key_alias"] == "sy-key1"
+
+
+def test_a_server_added_straight_to_a_key_raises_an_alert_until_it_is_removed(
+    admin, fake, worker
+):
+    synced_key(admin, fake, worker)
+    fake.keys["k1"]["object_permission"]["mcp_servers"].append("rogue")
+    reconcile(admin)
+    drain(worker)
+    [alert] = alerts(admin, "sync_divergence")
+    assert alert["subject"]["reason"] == "unapproved_server"
+    assert alert["subject"]["server_id"] == "rogue" and alert["severity"] == "medium"
+    fake.keys["k1"]["object_permission"]["mcp_servers"].remove("rogue")
+    reconcile(admin)
+    drain(worker)
+    assert alerts(admin, "sync_divergence")[0]["status"] == "resolved"
+
+
+def identity_world(admin, fake, **drift):
+    add_server(admin, status="approved")
+    fake.add_server("srv-1")
+    fake.servers["srv-1"].update(url="https://good.example/mcp", transport="http")
+    admin.execute("UPDATE mint.servers SET url_sha256 = %s, transport = 'http',"
+                  " identity_kind = 'remote' WHERE server_id = 'srv-1'",
+                  (sync_url_hash("https://good.example/mcp"),))
+    add_approval(admin, "user", "u1")
+
+
+def sync_url_hash(url):
+    from mint_litellm.types.decision import url_sha256
+    return url_sha256(url)
+
+
+def test_a_server_replaced_behind_the_same_name_raises_an_alert_and_a_restore_clears_it(
+    admin, fake, worker
+):
+    identity_world(admin, fake)
+    reconcile(admin)
+    drain(worker)
+    assert alerts(admin, "sync_divergence") == []
+    fake.servers["srv-1"]["url"] = "https://evil.example/mcp"
+    reconcile(admin)
+    drain(worker)
+    [alert] = alerts(admin, "sync_divergence")
+    assert alert["subject"]["reason"] == "server_replaced"
+    assert alert["subject"]["fields"] == ["url_sha256"]
+    fake.servers["srv-1"]["url"] = "https://good.example/mcp"
+    reconcile(admin)
+    drain(worker)
+    assert alerts(admin, "sync_divergence")[0]["status"] == "resolved"
+
+
+def test_a_restored_url_lifts_the_url_lock_but_keeps_other_locks(admin, fake, worker):
+    identity_world(admin, fake)
+    admin.execute("UPDATE mint.servers SET deployment_drift = true, deployment_drift_fields ="
+                  " ARRAY['url_sha256', 'pin_reapproval'] WHERE server_id = 'srv-1'")
+    reconcile(admin)
+    drain(worker)
+    server = fetchone(admin, "SELECT deployment_drift, deployment_drift_fields FROM mint.servers"
+                             " WHERE server_id = 'srv-1'")
+    assert server["deployment_drift"] is True
+    assert server["deployment_drift_fields"] == ["pin_reapproval"]
+    admin.execute("UPDATE mint.servers SET deployment_drift_fields = ARRAY['url_sha256']"
+                  " WHERE server_id = 'srv-1'")
+    reconcile(admin)
+    drain(worker)
+    server = fetchone(admin, "SELECT deployment_drift, deployment_drift_fields FROM mint.servers"
+                             " WHERE server_id = 'srv-1'")
+    assert server["deployment_drift"] is False and server["deployment_drift_fields"] is None
+    # 주소가 아직 다르면 잠금은 그대로다
+    fake.servers["srv-1"]["url"] = "https://evil.example/mcp"
+    admin.execute("UPDATE mint.servers SET deployment_drift = true, deployment_drift_fields ="
+                  " ARRAY['url_sha256'] WHERE server_id = 'srv-1'")
+    reconcile(admin)
+    drain(worker)
+    assert fetchone(admin, "SELECT deployment_drift FROM mint.servers"
+                           " WHERE server_id = 'srv-1'")["deployment_drift"] is True
