@@ -26,7 +26,7 @@
 <td>{% if c.target or c.action %}{% if c.target %}{{ c.target | masked(64) }}{% endif %}{% if c.action %} · {{ c.action | masked(64) }}{% endif %}{% elif c.display %}{% for k, v in c.display.items() %}{% if loop.index <= 3 %}<div><span class="muted">{{ k | masked(24) }}</span> {{ v | masked(48) }}</div>{% endif %}{% endfor %}{% else %}—{% endif %}</td>
 <td>{{ L.pick(L.PRINCIPAL, c.principal_type) }} {{ c.principal_id }}</td>
 <td class="nowrap">{{ c.requested_at | when if c.requested_at else '—' }}{% if c.status == 'pending' and c.age_seconds is not none %}<br>{{ c.age_seconds | span }} 경과{% endif %}</td>
-<td class="nowrap">{% if c.window_minutes %}{{ c.window_minutes }}분{% if c.status == 'approved' %} · 남은 {{ c.remaining_seconds | span }}{% endif %}{% else %}1회{% endif %}</td>
+<td class="nowrap">{% if c.window_minutes %}{{ c.window_minutes }}분{% if c.status == 'approved' %} · 남은 {{ c.remaining_seconds | span }}{% endif %}{% elif c.status == 'pending' %}—{% else %}1회{% endif %}</td>
 <td>{{ m.badge(L.CALL_APPROVAL, c.status) }}{% if c.status == 'pending' and c.hold_timed_out_at %}<br><span class="muted">대기 시간 초과 — 호출자는 응답 받음</span>{% endif %}</td>
 <td>{% if c.status == 'pending' and can(actor, 'call-approval approve') %}<form method="post" action="/call-approvals/{{ c.id }}/approve">{{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ c.state_version }}"><input type="hidden" name="window_minutes" value="{{ 0 if c.action_type in one_shot else 30 }}"><button type="submit">{{ '1회 승인' if c.action_type in one_shot else '30분 승인' }}</button></form>{% endif %}</td>
 </tr>{% endfor %}
@@ -70,7 +70,7 @@
   {% endif %}
   <div class="actions">
     {% if c.can_extend %}<button type="submit" formaction="/call-approvals/{{ c.id }}/extend">{{ c.window_minutes }}분 연장</button>{% endif %}
-    {{ m.confirm_submit('decide-cancel', '요청 취소', '요청 취소', '결정 없이 요청을 거둡니다. 거부 기록은 남지 않습니다.', 'decide', '요청 취소', '/call-approvals/' ~ c.id ~ '/cancel') }}
+    {% if actor.role == 'admin' or (c.requested_by and c.requested_by == actor.session.user_id) %}{{ m.confirm_submit('decide-cancel', '요청 취소', '요청 취소', '결정 없이 요청을 거둡니다. 거부 기록은 남지 않습니다.', 'decide', '요청 취소', '/call-approvals/' ~ c.id ~ '/cancel') }}{% endif %}
   </div>
 </form>
 {% if can(actor, 'call-approval-rule add') and c.action_type in ('read', 'write') %}<p><a class="button" href="/approvals?tab=rules&amp;new=1&amp;rule_org={{ c.org_id | urlencode }}&amp;rule_server={{ c.server_id | urlencode }}&amp;rule_tool={{ c.tool | urlencode }}&amp;rule_class={{ c.action_type }}">이 조건으로 규칙 만들기</a></p>{% endif %}

@@ -10,6 +10,7 @@ from typing import Any
 import psycopg
 
 from mint_litellm.control.db.connection import fetchall, fetchone
+from mint_litellm.control.services.reads import LEDGER_ACTOR
 
 # 기간 이름 → 시간 수
 HOURS = {"1h": 1, "24h": 24, "7d": 168, "30d": 720}
@@ -26,6 +27,24 @@ _BUCKET = (
 _REASON = "COALESCE(payload->'stop'->>'reason_code', payload->'findings'->0->>'reason_code', '')"
 
 
+def _filter_sql(actor=None, server_id=None, result=None, invocation_id=None) -> tuple[str, list]:
+    """호출 기록 화면의 조건을 카드·차트 집계에도 같게 건다(인자가 없으면 조건 없음)."""
+    sql, params = "", []
+    if actor:
+        sql += f" AND {LEDGER_ACTOR} = %s"
+        params.append(actor)
+    if server_id:
+        sql += " AND (payload->>'resolved_server_id' = %s OR payload->>'server_id' = %s)"
+        params += [server_id, server_id]
+    if result:  # 차단은 deny와 stop 두 값으로 기록된다
+        sql += " AND payload->>'enforced_action' = ANY(%s)"
+        params.append(["deny", "stop"] if result == "deny" else [result])
+    if invocation_id:
+        sql += " AND invocation_id = %s"
+        params.append(invocation_id)
+    return sql, params
+
+
 def hours_of(range_name: str) -> int:
     return HOURS.get(range_name, HOURS[DEFAULT_RANGE])
 
@@ -40,11 +59,13 @@ def unit_of(hours: int) -> tuple[str, int, str]:
 
 
 def decision_series(
-    conn: psycopg.Connection, instance: str, hours: int, time_zone: str = "UTC", shift: int = 0
+    conn: psycopg.Connection, instance: str, hours: int, time_zone: str = "UTC", shift: int = 0,
+    **filters: Any,
 ) -> dict[str, Any]:
     """칸마다 결정 갈래별 건수. ``shift``시간 앞선 같은 길이의 기간을 읽으면 직전 기간이 된다."""
     unit, steps, fmt = unit_of(hours)
     anchor = "(now() - make_interval(hours => %s))"
+    extra, extra_params = _filter_sql(**filters)
     rows = fetchall(
         conn,
         "SELECT to_char(g, %s) AS label, to_char(g, 'YYYY-MM-DD') AS day,"
@@ -54,11 +75,12 @@ def decision_series(
         f" date_trunc('{unit}', {anchor} AT TIME ZONE %s::text), interval '1 {unit}') g"
         f" LEFT JOIN (SELECT date_trunc('{unit}', inserted_at AT TIME ZONE %s::text) AS b,"
         f" {_BUCKET} AS bucket FROM mint.events WHERE instance_id = %s"
-        " AND kind = 'decision_evaluated'"
+        " AND kind = 'decision_evaluated'" + extra +
         f" AND inserted_at >= {anchor} - make_interval(hours => %s) - interval '1 {unit}'"
         f" AND inserted_at < {anchor} + interval '1 {unit}') e ON e.b = g"
         " GROUP BY g ORDER BY g",
-        (fmt, shift, time_zone, steps, shift, time_zone, time_zone, instance, shift, hours, shift),
+        (fmt, shift, time_zone, steps, shift, time_zone, time_zone, instance, *extra_params, shift,
+         hours, shift),
     )
     return {
         "unit": unit,
@@ -70,16 +92,17 @@ def decision_series(
 
 
 def block_reasons(
-    conn: psycopg.Connection, instance: str, hours: int, limit: int = 30
+    conn: psycopg.Connection, instance: str, hours: int, limit: int = 30, **filters: Any
 ) -> list[dict[str, Any]]:
     """차단된 호출의 사유별 건수(상위 ``limit``)."""
+    extra, extra_params = _filter_sql(**filters)
     return fetchall(
         conn,
         f"SELECT code, count(*) AS n FROM (SELECT {_REASON} AS code, {_BUCKET} AS bucket"
-        " FROM mint.events WHERE instance_id = %s AND kind = 'decision_evaluated'"
+        " FROM mint.events WHERE instance_id = %s AND kind = 'decision_evaluated'" + extra +
         " AND inserted_at >= now() - make_interval(hours => %s)) t"
         " WHERE bucket = 'block' GROUP BY 1 ORDER BY n DESC, code LIMIT %s",
-        (instance, hours, limit),
+        (instance, *extra_params, hours, limit),
     )
 
 
@@ -213,7 +236,7 @@ def event(conn: psycopg.Connection, instance: str, event_id: str) -> dict[str, A
     """호출 기록 한 건과 판정 내용(사유·정책·판정 시간)."""
     row = fetchone(
         conn,
-        "SELECT event_id, inserted_at, kind, actor, invocation_id, payload,"
+        f"SELECT event_id, inserted_at, kind, {LEDGER_ACTOR} AS actor, invocation_id, payload,"
         " COALESCE(payload->>'resolved_server_id', payload->>'server_id') AS server_id,"
         " payload->>'tool' AS tool, payload->>'enforced_action' AS result,"
         f" payload->>'outcome' AS outcome, {_BUCKET} AS bucket, {_REASON} AS reason,"

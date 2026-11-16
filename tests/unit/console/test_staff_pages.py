@@ -327,6 +327,7 @@ def test_a_different_key_confirms_the_request(sworld):
     client = logged_in(sworld, CONSOLE)
     response = decide(client, cid, "confirm")
     assert response.status_code == 303 and "ok=staff_confirmed" in response.headers["location"]
+    assert response.headers["location"].count("?") == 1  # 물음표를 두 번 쓰지 않는다
     assert status_of(sworld, cid) == "confirmed"
     row = sworld.query("SELECT confirmed_by_user_id, confirmed_by_key_token"
                        " FROM mint.self_confirmations WHERE id = %s", cid)[0]

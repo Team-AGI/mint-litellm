@@ -6,6 +6,7 @@ from urllib.parse import quote
 
 from mint_litellm.console import labels
 from mint_litellm.console.templating import local_time
+from mint_litellm.control.services import evidence as evidence_service
 
 KEY = {
     "server_id": "서버", "tool": "도구", "calls": "최근 호출 수", "window_seconds": "관측 구간(초)",
@@ -44,6 +45,9 @@ AXIS = {"file": "파일 접근", "exec": "실행", "network": "네트워크"}
 # 값이 코드인 항목의 표시명
 VALUE = {
     "hook_trust": {"untrusted": "훅 미신뢰(Codex가 훅을 신뢰하기 전에는 실행되지 않음)"},
+    "label": {k: e.label for k, e in evidence_service.KINDS.items()},
+    "evidence": {k: e.label for k, e in evidence_service.KINDS.items()},
+    "subject_kind": {"server": "서버", "intake": "신청", "relation": "이용 관계"},
     "state": {"due": "기한 임박", "overdue": "기한 초과", "missing": "없음", "expired": "만료",
               "expiring": "만료 임박"},
     "source": {"approvals": "승인", "call_approvals": "호출별 승인", "intakes": "신청",

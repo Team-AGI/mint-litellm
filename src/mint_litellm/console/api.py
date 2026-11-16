@@ -47,6 +47,7 @@ router = APIRouter(dependencies=[Depends(require_csrf)])
 STANDARD_DAYS = 90
 STRICT_DAYS = 30  # 높음·심각 도구를 포함한 승인과 예외 승인의 기본 기간
 EXCEPTION_MAX_DAYS = 90
+MAX_VALID_DAYS = 3650  # 유효 기간(일) 입력의 상한. 넘으면 날짜 계산이 넘치거나 DB가 거절한다
 CALL_APPROVAL_DEFAULT_HOURS = 24
 CALL_APPROVAL_MAX_DAYS = 7
 
@@ -58,12 +59,16 @@ def approval_days(approval_class: str, tools: list[str], high_risk: list[str]) -
     return STANDARD_DAYS
 
 
+def check_days(days: int) -> None:
+    if not 1 <= days <= MAX_VALID_DAYS:
+        raise ControlError(f"유효 기간은 1일 이상 {MAX_VALID_DAYS}일 이하여야 합니다.")
+
+
 def window(
     valid_days: int | None, approval_class: str, default_days: int
 ) -> tuple[datetime, datetime]:
     days = default_days if valid_days is None else valid_days
-    if days < 1:
-        raise ControlError("유효 기간은 1일 이상이어야 합니다.")
+    check_days(days)
     if approval_class == "exception" and days > EXCEPTION_MAX_DAYS:
         raise ControlError(f"예외 승인의 유효 기간은 {EXCEPTION_MAX_DAYS}일을 넘을 수 없습니다.")
     now = datetime.now(UTC)
@@ -146,7 +151,7 @@ class ApprovalBody(Versioned):
     approval_class: Literal["standard", "exception"] = Field("standard", alias="class")
     basis: str
     requested_by: str
-    valid_days: int | None = None
+    valid_days: int | None = Field(None, ge=1, le=MAX_VALID_DAYS)
     allowlist_ids: list[str] = []
     second_approver_token: str | None = None
     allowed_hosts: list[str] = []
@@ -474,7 +479,7 @@ class EvidenceBody(BaseModel):
     summary: str
     ref: str | None = None
     sha256: str | None = None
-    valid_days: int | None = Field(None, ge=1)
+    valid_days: int | None = Field(None, ge=1, le=MAX_VALID_DAYS)
     not_applicable: bool = False
 
 
@@ -734,8 +739,7 @@ class ReapproveBody(Versioned):
 def intake_days(decision: str, valid_days: int | None, strict: bool) -> int:
     """신청 승인의 기본 기간(일): 일반 90, 높음·심각 도구를 포함하거나 예외이면 30."""
     days = valid_days or (STRICT_DAYS if decision == "except" or strict else STANDARD_DAYS)
-    if days < 1:
-        raise ControlError("유효 기간은 1일 이상이어야 합니다.")
+    check_days(days)
     if decision == "except" and days > EXCEPTION_MAX_DAYS:
         raise ControlError(f"예외 승인의 유효 기간은 {EXCEPTION_MAX_DAYS}일을 넘을 수 없습니다.")
     return days

@@ -13,7 +13,7 @@
 <table><thead><tr><th>서버</th><th>도구</th><th>목적</th><th>표시 값</th><th>만료</th><th>상태</th><th></th></tr></thead><tbody>
 {% for c in waiting %}<tr>
 <td>{{ c.server_id }}</td><td>{{ c.tool }}</td><td>{{ c.purpose }}</td>
-<td>{% if c.display %}<dl class="detail">{% for k, v in c.display.items() %}<dt>{{ k }}</dt><dd>{{ v | clip }}</dd>{% endfor %}</dl>{% else %}—{% endif %}</td>
+<td>{% if c.display %}<dl class="detail">{% for k, v in c.display.items() %}<dt>{{ {'keys': '입력 항목', 'sizes': '크기'}.get(k, k) }}</dt><dd>{{ v | clip }}</dd>{% endfor %}</dl>{% else %}—{% endif %}</td>
 <td class="nowrap">{{ c.expires_at | when }}</td><td>{{ m.badge(L.SELF_CONFIRMATION, c.view) }}</td>
 <td>
 <form method="post" class="actions" id="staff-{{ c.id }}">

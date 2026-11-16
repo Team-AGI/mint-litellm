@@ -180,6 +180,8 @@ EVIDENCE_GATE = {
     "finish": "이용 관계 종료 완료",
     "periodic": "주기 확인",
     "retire": "서버 종료",
+    "unpinned": "버전 미고정 패키지 사용",
+    "exception": "예외 승인",
 }
 ENFORCEMENT = {
     "enforcement_verified": Status("정상", "ok"),

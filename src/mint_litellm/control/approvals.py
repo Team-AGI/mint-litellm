@@ -9,7 +9,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from mint_litellm.control import operators, sync_state
 from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import fetchall, fetchone
-from mint_litellm.control.errors import ControlError, forbidden, not_found, separation_of_duties
+from mint_litellm.control.errors import (
+    ControlError,
+    conflict,
+    forbidden,
+    not_found,
+    separation_of_duties,
+)
 from mint_litellm.control.litellm_admin import LiteLLMAdmin
 from mint_litellm.control.services import base
 from mint_litellm.types.canonical import credential_scope
@@ -404,6 +410,19 @@ def approve(
         if not found:
             raise ControlError(f"유효한 허용 목록 항목이 아닙니다: {ref}")
     require_package_acceptance(ctx, relation["server_id"])
+    twin = fetchone(
+        ctx.conn,
+        "SELECT 1 AS x FROM mint.approvals WHERE instance_id = %s AND server_id = %s"
+        " AND scope_type = %s AND scope_id = %s AND class = %s AND status IN ('pending', 'active')"
+        " AND valid_until > now() AND basis->>'intake_id' IS NOT NULL"
+        " AND tools <@ %s::text[] AND tools @> %s::text[] LIMIT 1",
+        (ctx.instance_id, relation["server_id"], scope_type, scope_id, approval_class,
+         tools, tools),
+    )
+    if twin:
+        raise conflict(
+            f"서버 {relation['server_id']}에 신청 승인으로 만든 같은 대상의 승인이 이미 있습니다."
+        )
     second_info = operators.require_distinct_person(ctx.operator, requested_by, second, "승인")
     check_scope_and_permission(ctx, litellm, relation, scope_type, scope_id)
     approval_id = new_uuid7()
