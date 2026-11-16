@@ -398,6 +398,7 @@ ALERT_KIND = {
     "server_address_internal": "서버 주소 내부 대역",
     "result_unenforced": "결과를 막지 못함",
     "key_block_proposed": "키 차단 제안",
+    "defense_verify_failed": "방어 검증 실패",
     "token_audience_mismatch": "토큰 대상 불일치",
     "token_scope_exceeded": "토큰 범위 초과",
     "config_plaintext_secret": "설정의 평문 비밀",
@@ -536,6 +537,7 @@ EVENT_KIND = {
     "key_block_failed": "LiteLLM 차단 실패",
     "key_block_unblock_requested": "키 차단 해제 요청",
     "key_block_unblocked": "키 차단 해제",
+    "defense_verify_run": "방어 검증 실행",
     "event_partition_exported": "원장 월 구간 내보냄",
     "event_partition_dropped": "원장 월 구간 삭제",
 }

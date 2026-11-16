@@ -336,3 +336,11 @@ def blocked_proposal_of(conn, fake, row):
     key_block.approve(approver(conn), reader(fake), str(row["id"]))
     apply(conn, fake, row["id"], "block")
     return str(row["id"])
+
+
+def test_a_verify_key_is_never_proposed_for_blocking(conn, fake):
+    fake.add_key("tok-verify", user_id="verifier", key_alias="mint-verify-run")
+    response(conn, decision(conn, "tok-verify", enforced="allow", policy=()),
+             sensitive_findings={"private_key": 1})
+    scan(conn, fake)
+    assert not [p for p in proposals(conn) if p["key_token"] == "tok-verify"]
