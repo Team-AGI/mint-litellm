@@ -20,7 +20,12 @@ from typing import Any
 
 from mint_litellm.compat import capabilities
 from mint_litellm.plugin.resolve_guard import host_of
-from mint_litellm.types.decision import ResolvedServer, normalize_auth_type, url_sha256
+from mint_litellm.types.decision import (
+    ResolvedServer,
+    is_builtin_server,
+    normalize_auth_type,
+    url_sha256,
+)
 from mint_litellm.types.identity import Principal, classify_principal
 from mint_litellm.types.reason_codes import Reason
 from mint_litellm.types.reuse_policy import (
@@ -255,6 +260,10 @@ def _audiences(server: Any) -> tuple[str, ...]:
 
 
 def _to_resolved(server: Any, candidates: int) -> ResolvedServer:
+    if is_builtin_server(str(getattr(server, "server_id", ""))):
+        # 하네스 내장 도구용 가상 서버 이름은 단말 경로만 쓴다. 레지스트리 서버가 이 이름이면
+        # 승인 검사를 건너뛰게 되므로 막는다.
+        raise ServerResolutionError(Reason.UNSUPPORTED, "reserved_server_id")
     if not getattr(server, "url", None):
         # 레지스트리의 로컬 실행(stdio)·OpenAPI 서버는 URL 해시도 실행 계약도 만들 수 없어 막는다.
         # 승인된 로컬 서버는 레지스트리가 아니라 MINT 표에서 ``ExecContract.resolved``로 해석한다.

@@ -330,6 +330,13 @@ class TestServerResolution:
         assert raised.value.reason is Reason.UNSUPPORTED
         assert raised.value.detail == "server_without_url"
 
+    def test_a_registry_server_named_like_a_builtin_tool_server_is_refused(self):
+        manager = Manager([server(server_id="builtin:claude")])
+        with pytest.raises(ServerResolutionError) as raised:
+            compat.resolve_server(compat.parse_hook_data(synthesized()), manager=manager)
+        assert raised.value.reason is Reason.UNSUPPORTED
+        assert raised.value.detail == "reserved_server_id"
+
     def test_listing_a_server_without_a_url_is_unsupported_too(self):
         with pytest.raises(ServerResolutionError) as raised:
             compat.resolve_listed_server(
