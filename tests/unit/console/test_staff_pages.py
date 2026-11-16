@@ -722,6 +722,15 @@ def test_a_second_download_replaces_the_first_key_and_other_users_are_untouched(
     assert rows == [(STAFFER, True), (OTHER, False), (STAFFER, False)]
 
 
+def test_downloading_the_kit_again_asks_for_confirmation(kits):
+    client = logged_in(kits)
+    assert "kit-confirm" not in client.get("/staff/endpoint").text
+    download(client)
+    page = client.get("/staff/endpoint").text
+    assert 'data-dialog-open="kit-confirm"' in page and "다른 단말의 연결이 끊깁니다" in page
+    assert 'form="kit-form"' in page
+
+
 def test_the_page_shows_the_managed_and_the_unmanaged_state_in_korean(kits):
     client = logged_in(kits)
     download(client)
@@ -902,8 +911,15 @@ def test_the_menu_has_three_staff_screens_and_a_badge_for_requests_to_confirm(sw
     assert 'aria-current="page"' in page and "본인 확인 대기" in page and "내 승인 요청" in page
 
 
+def test_a_server_without_a_consent_requirement_is_not_shown_as_needing_consent(sworld):
+    add_approval(sworld, "user", STAFFER, tools=("t1",))
+    page = logged_in(sworld).get("/staff").text
+    assert "동의 불필요" in page and "동의가 필요한 서버가" not in page
+
+
 def test_the_my_servers_screen_shows_consent_state_and_opens_the_consent_form(sworld):
     add_approval(sworld, "user", STAFFER, tools=("t1",))
+    sworld.query("UPDATE mint.servers SET data_grade = 'confidential' WHERE server_id = 'srv-ok'")
     client = logged_in(sworld)
     page = client.get("/staff").text
     assert "동의 필요" in page and "내 기록" in page and "/staff/consents" not in page

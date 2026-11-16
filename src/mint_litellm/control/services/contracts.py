@@ -66,6 +66,8 @@ def approve_provisional(
     실행(``exec``) 유형은 도구 계약의 행위 분류에 없어 옮기지 않고 임시 계약으로 남긴다. 신청·수용
     검증을 거치는 원격 서버의 재승인과 달리 운영자가 관측 목록을 보고 직접 승인한다.
     """
+    from mint_litellm.control.contract_observe import _observe
+
     require_role(ctx, "contract reapprove")
     with transact(ctx):
         server = fetchone(
@@ -122,6 +124,9 @@ def approve_provisional(
                 "UPDATE mint.tool_contracts SET status='approved' WHERE id=%s RETURNING version",
                 (contract_id,),
             )["version"]
+            # 승인한 정의를 곧바로 관측본으로도 남겨 다음 주기 전에 「삭제」로 보이지 않게 한다.
+            _observe(ctx, server_id, "tool", "server", row["tool"], contract_id, value,
+                     is_drift=False)
             ctx.emit(
                 EventKind.CONTRACT_APPROVED, contract_id, version,
                 {"server_id": server_id, "tool": row["tool"], "risk_grade": row["risk_grade"],

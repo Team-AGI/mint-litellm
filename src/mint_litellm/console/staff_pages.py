@@ -254,7 +254,8 @@ def servers_page(request: Request, actor: StaffActor, error=None, status=200, fo
         row["ref"] = f"{key[0]}|{key[1]}"
         row["consents"] = by_server.get(key, [])
         active = [c for c in row["consents"] if c["view"] == "active"]
-        row["state"] = "active" if active else "none"
+        required = row.get("consent_required", True)
+        row["state"] = "active" if active else ("none" if required else "free")
         row["consent_until"] = max((c["valid_until"] for c in active), default=None)
         row["expiring"] = bool(active) and row["consent_until"] < now + EXPIRING
         row["can_consent"] = key in can_consent

@@ -75,6 +75,11 @@ REPORTER_KEY = "reporter.key"  # Windows 관리형: SYSTEM 보고기가 읽는 �
 RETIRED_FILE = "retired.json"  # 마지막 보고 응답의 폐기 서버 목록(실행기가 읽는다)
 LAUNCHED = "launched"  # 실행기가 띄운 서버 프로세스의 기록
 TOOLS_DIR = "tools"  # 실행기가 본 서버별 도구 목록(이름·설명·입력 정의)
+KEY_REJECTED = "key_rejected"  # 서버가 키를 거절(401·403)했다는 표시. check가 문제로 보인다.
+KEY_REJECTED_TEXT = (
+    "MINT 키가 해제되었거나 교체되었습니다. 직원 화면에서 설치 묶음을 다시 받아 설치하세요."
+)
+last_http_error: list[int] = []  # 마지막 보고가 받은 HTTP 오류 코드(없으면 빈 목록)
 TOOLS_SENT = "tools_sent.json"  # 서버 -> 마지막으로 보고한 목록의 해시
 MAX_TOOL_LISTS = 4  # 보고 한 번에 싣는 서버 수(나머지는 다음 보고)
 SYSTEMD_DIR = "/etc/systemd/system"
@@ -120,6 +125,7 @@ def post(url: str, key: str, payload: dict, ca_file: str | None) -> dict | None:
     """보고를 보내고 응답 본문(JSON 객체)을 돌려준다. 닿지 못했거나 거절되면 None."""
     import ssl
 
+    last_http_error.clear()
     request = urllib.request.Request(
         url,
         data=json.dumps(payload).encode(),
@@ -137,8 +143,9 @@ def post(url: str, key: str, payload: dict, ca_file: str | None) -> dict | None:
                 answer = None
             return answer if isinstance(answer, dict) else {"recorded": True}
     except urllib.error.HTTPError as error:
-        if error.code == 403:
-            sys.stderr.write("MINT 키가 만료되었습니다. 설치 묶음 재발급을 요청하세요." + NL)
+        last_http_error[:] = [error.code]
+        if error.code in (401, 403):
+            sys.stderr.write(KEY_REJECTED_TEXT + NL)
         return None
     except OSError:
         return None
@@ -1481,6 +1488,8 @@ class Kit:
         if self.owner is not None:
             os.chown(key_path.parent, *self.owner)
         write_atomic(self.state_file, json.dumps(state, indent=1).encode(), 0o644)
+        for stale in (TOOLS_SENT, KEY_REJECTED):  # 새 키로 도구 목록을 다시 보고하게 한다
+            (self.home / STATE_REL / stale).unlink(missing_ok=True)
         return state
 
     def install_reporter(self, state: dict, python: str) -> None:
@@ -2130,6 +2139,8 @@ class Kit:
                 "Codex가 MINT 훅을 아직 신뢰하지 않아 호출 전 판정이 실행되지 않습니다. "
                 "Codex에서 훅을 검토해 신뢰하세요."
             )
+        if any((d / KEY_REJECTED).exists() for d in (self.home / STATE_REL, self.programs)):
+            problems.append(KEY_REJECTED_TEXT)
         if state.get("mode") == "user":
             problems.append("사용자 수준 설치라 관리되지 않습니다. 관리자 권한으로 재설치하세요.")
         return {**state, "problems": problems, "hook_trust": trust}, problems
@@ -2526,9 +2537,13 @@ def report_installed(
     kit.config["key"] = key
     kit.run_as_user = run
     kit.system_mode = system
+    marker = stamp.parent / KEY_REJECTED
     if not kit.report(state, "installed"):
         run(lambda: stamp.unlink(missing_ok=True))  # 닿지 못했으면 다음 기회에 다시 보낸다.
+        if set(last_http_error) & {401, 403}:
+            run(lambda: marker.write_text("1"))
         return 1
+    run(lambda: marker.unlink(missing_ok=True))
     retired = kit.answer.get("retired")
     names: list[str] = []
     changed = False

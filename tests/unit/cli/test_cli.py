@@ -879,3 +879,19 @@ def test_init_fix_config_adds_the_missing_modes_once_and_refuses_what_it_cannot_
     )
     code, _, err = mint.run("init", "--fix-config", str(config))
     assert code == 1 and "직접 고친 뒤" in err
+
+
+def test_register_local_and_terminate_print_a_result_line(mint):
+    boss = bootstrap(mint)
+    path = mint.tmp / "contract.json"
+    path.write_text(json.dumps({"executable": "/usr/bin/node", "argv": ["/opt/srv/index.js"],
+                                "executable_sha256": "ab" * 32}), encoding="utf-8")
+    code, out, err = mint.run("server", "register-local", "local-1", "--contract", str(path),
+                              token=boss)
+    assert code == 0, err
+    assert "로컬 서버를 등록했습니다: local-1" in out
+    with psycopg.connect(mint.env["MINT_DATABASE_URL"]) as conn:
+        conn.execute("UPDATE mint.servers SET status = 'approved' WHERE server_id = 'local-1'")
+    code, out, err = mint.run("server", "terminate", "local-1", token=boss)
+    assert code == 0, err
+    assert "서버 종료를 시작했습니다: local-1" in out
