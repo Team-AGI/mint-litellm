@@ -275,6 +275,13 @@ def grant_consent(
         raise ControlError(f"동의 유효 기간은 최대 {sctx.consent_max_days}일입니다.")
     _active_session(sctx, session_id_hash)
     _check_consent_target(sctx, org_id, server_id, team_ids)
+    if any(
+        c["org_id"] == org_id and c["server_id"] == server_id and not c["revoked_at"]
+        and c["valid_until"] > now and c["purpose"] == purpose.strip()
+        and c["data_scope"] == data_scope
+        for c in list_consents(sctx)
+    ):
+        raise ControlError("같은 목적·범위의 동의가 이미 있습니다.")
     consent_id = new_uuid7()
     with _staff_transaction(sctx, session_id_hash) as conn:
         conn.execute(

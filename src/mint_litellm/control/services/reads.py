@@ -173,6 +173,9 @@ def queue(conn: psycopg.Connection, instance: str) -> list[dict]:
         " AND r.server_id = s.server_id AND r.status = 'active'"
         " LEFT JOIN mint.orgs o ON o.instance_id = r.instance_id AND o.org_id = r.org_id"
         " WHERE s.instance_id = %s AND s.status = 'awaiting_approval'"
+        # 신청 승인으로 이미 승인이 만들어진 이용 관계는 대기열에서 뺀다(중복 승인 방지)
+        " AND NOT EXISTS (SELECT 1 FROM mint.approvals a WHERE a.instance_id = r.instance_id"
+        " AND a.relation_id = r.id AND a.status IN ('pending', 'active'))"
         " ORDER BY s.id, r.id",
         (instance,),
     )
@@ -498,12 +501,15 @@ def ledger(
     page: int = 1,
     limit: int | None = None,
     invocation_id: str | None = None,
+    peek: bool = False,
 ) -> list[dict]:
+    """``peek``이면 한 쪽보다 한 행 더 읽어 다음 쪽이 있는지 알 수 있게 한다."""
     where, params = _ledger_where(
         instance, since=since, until=until, kind=kind, actor=actor, server_id=server_id,
         result=result, ref=ref, invocation_id=invocation_id,
     )
     size, offset = (limit, 0) if limit is not None else _page(page)
+    size += peek
     return fetchall(
         conn,
         f"SELECT event_id, inserted_at, kind, source_key, {LEDGER_ACTOR} AS actor,"

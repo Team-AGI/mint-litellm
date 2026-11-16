@@ -37,7 +37,7 @@ def act(
     except ValidationError as error:  # 항목 이름을 화면의 한글 이름으로 알린다
         actor.conn.rollback()
         fields = invalid_fields(error.errors())
-        return rebuild(error=f"입력 값을 확인하십시오: {fields}", status=400)
+        return rebuild(error=f"입력 값이 올바르지 않습니다: {fields}", status=400)
     except ValueError:  # 선택 목록에 없는 값 등 잘못된 폼 값
         actor.conn.rollback()
         return rebuild(error="입력 값이 올바르지 않습니다.", status=400)

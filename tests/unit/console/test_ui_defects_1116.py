@@ -31,10 +31,8 @@ def pending_call(world, requested_by="human-7") -> str:
     ("ui org 2", "공백 식별자"), ("ui-hangul-한", "한글 식별자"), ("ok-org", "가" * 600),
 ])
 def test_org_input_is_refused_as_a_bad_request_not_a_database_failure(world, admin, org_id, name):
-    response = form_post(world, admin, "/orgs", org_id=org_id, name=name, headers=HTML) \
-        if False else admin.post(
-            "/orgs", data={"csrf": world.csrf(admin), "org_id": org_id, "name": name},
-            headers=HTML)
+    response = admin.post(
+        "/orgs", data={"csrf": world.csrf(admin), "org_id": org_id, "name": name}, headers=HTML)
     assert response.status_code == 400 and "데이터베이스" not in response.text
     assert world.query("SELECT count(*) FROM mint.orgs WHERE org_id = %s", org_id)[0][0] == 0
 
@@ -46,7 +44,7 @@ def test_a_huge_validity_period_is_a_form_error_not_a_server_error(world, admin)
         data={"csrf": world.csrf(admin), "kind": "vuln_exception", "summary": "확인",
               "valid_days": "99999999"})
     assert response.status_code == 400
-    assert "3650일 이하" in response.text or "입력 값을 확인" in response.text
+    assert "3650일 이하" in response.text or "입력 값이 올바르지" in response.text
 
 
 # UI-004: 영문 필드명·명령줄 옵션이 화면에 나오지 않는다
@@ -68,12 +66,11 @@ def test_a_missing_form_value_names_the_field_in_korean(world, admin):
     assert "범위 대상" in response.text
 
 
-# UI-007: 행위를 모르는 요청의 기본은 1회
-def test_a_call_without_an_action_class_defaults_to_one_time_approval(world, admin):
+# UI-007: 사용 기간 열과 단추가 서로 맞는다(대기 중에는 기간 미정)
+def test_the_pending_call_row_does_not_claim_a_period_the_button_contradicts(world, admin):
     call_id = pending_call(world)
     html = admin.get(f"/approvals?tab=calls&focus={call_id}").text
-    assert "1회 승인" in html and "30분 승인" not in html
-    assert re.search(r'name="window_minutes" value="0" checked', html)
+    assert "30분 승인" in html and "1회</td>" not in html
 
 
 # UI-008: 취소 단추는 요청자 본인과 관리자에게만
@@ -122,7 +119,7 @@ def test_the_decision_panel_shows_no_buttons_to_the_requester(world, admin):
     from mint_litellm.console import templating  # noqa: F401  (템플릿 로드 확인)
 
     source = open("src/mint_litellm/console/templates/intake_detail.html", encoding="utf-8").read()
-    assert "actor.session.user_id == i.requested_by" in source
+    assert "actor.session.user_id != i.requested_by" in source
     css = open("src/mint_litellm/console/static/console.css", encoding="utf-8").read()
     assert "flex-wrap: wrap" in css and ".actions button" in css
 
@@ -133,3 +130,79 @@ def test_layout_rules_keep_fields_donuts_and_tables_inside_the_screen():
     js = open("src/mint_litellm/console/static/console.js", encoding="utf-8").read()
     assert ".drawer-body .form input" in css and "overflow-wrap: anywhere" in css
     assert 'radius: ["42%", "68%"]' in js
+
+
+# --- 2차 점검(UI2) ---------------------------------------------------------------------
+
+
+def test_the_ledger_cards_and_charts_follow_the_filters(world, admin):
+    from .test_dashboard import decision
+
+    decision(world, server="srv-ok", enforced="allow")
+    decision(world, server="srv-ok", enforced="deny", outcome="blocked")
+    decision(world, server="srv-wait", enforced="deny", outcome="blocked")
+    html = admin.get("/ledger?range=24h").text
+    assert re.search(r"호출 수</div>\s*<div class=\"value\">3<", html)
+    html = admin.get("/ledger?range=24h&server_id=srv-ok&result=deny").text
+    assert re.search(r"호출 수</div>\s*<div class=\"value\">1<", html)
+
+
+def test_a_bad_reference_empties_the_ledger_table(world, admin):
+    from .test_dashboard import decision
+
+    decision(world)
+    page = admin.get("/ledger?ref=nope", headers=HTML)
+    assert page.status_code == 400 and "판정 참조 형식" in page.text
+    assert "조건에 맞는 기록이 없습니다" in page.text
+
+
+def test_the_ledger_has_no_next_page_when_the_last_page_is_exactly_full(world, admin):
+    from mint_litellm.control.services import reads
+
+    from .test_dashboard import decision
+
+    for _ in range(reads.PAGE_SIZE):
+        decision(world, server="srv-full")
+    assert "page=2" not in admin.get("/ledger?range=24h&server_id=srv-full").text
+    decision(world, server="srv-full")
+    assert "page=2" in admin.get("/ledger?range=24h&server_id=srv-full").text
+
+
+def test_an_exception_approval_needs_a_reason_and_is_not_granted_twice(world, admin):
+    world.with_control_key()
+    relation = world.query("SELECT id FROM mint.usage_relations WHERE server_id = 'srv-wait'")[0][0]
+    version = world.query("SELECT state_version FROM mint.usage_relations")[0][0]
+    form = {"csrf": world.csrf(admin), "relation_id": relation, "state_version": version,
+            "scope_type": "user", "scope_id": "human-7", "tools": "echo", "class": "exception",
+            "requested_by": "human-7", "basis": ""}
+    refused = admin.post("/approvals", data=form, headers=HTML)
+    assert refused.status_code == 400 and "승인 사유" in refused.text
+    assert world.query("SELECT count(*) FROM mint.approvals WHERE class = 'exception'")[0][0] == 0
+
+
+def test_the_approval_queue_leaves_out_relations_that_already_have_an_approval(world, admin):
+    relation = world.query("SELECT id FROM mint.usage_relations WHERE server_id = 'srv-wait'")[0][0]
+    assert "/approvals/review/" in admin.get("/approvals?tab=servers").text
+    world.query(
+        "INSERT INTO mint.approvals (id, instance_id, org_id, relation_id, class, server_id, tools,"
+        " scope_type, scope_id, valid_from, valid_until, conditions, basis, granted_by,"
+        " requested_by, status) VALUES (gen_random_uuid(), %s, 'acme', %s, 'standard', 'srv-wait',"
+        " ARRAY['echo'], 'user', 'human-7', now(), now() + interval '30 days', '{}'::jsonb,"
+        " '{}'::jsonb, 'admin', 'human-7', 'pending')", INSTANCE, relation)
+    assert "/approvals/review/" not in admin.get("/approvals?tab=servers").text
+
+
+def test_contract_changes_are_not_shown_as_deleted_before_anything_is_observed():
+    from mint_litellm.console import compare
+
+    info = {"tools": [{"status": "approved", "credential_scope": "", "tool": "t", "drift": "none",
+                       "canonical_text": "{}"}], "observations": [], "deployments": []}
+    assert compare.changes(info) == []
+
+
+def test_page_values_and_messages_have_no_raw_codes():
+    from mint_litellm.console.templating import clip
+
+    assert clip({"a": 1, "b": 2}) == "a: 1, b: 2" and clip(["x", "y"]) == "x, y"
+    assert "object_permission" not in screen_message(
+        "키의 object_permission.mcp_servers에 srv를 추가하십시오.")

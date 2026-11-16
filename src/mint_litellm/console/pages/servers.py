@@ -419,7 +419,13 @@ def intake_page(
 
 
 INTAKE_FIELDS = ("server_id", "provider", "owner_user_id", "purpose")
-NO_ADDRESS = "서버 URL이 응답되지 않습니다"
+NO_ADDRESS = ("서버 URL이 응답되지 않습니다", "서버 주소로")  # 화면용 문구로 바뀐 뒤의 오류 문구
+
+
+def no_address(error) -> bool:
+    return any(part in str(error or "") for part in NO_ADDRESS)
+
+
 NEW_STEPS = ("대상", "데이터", "종료 준비")
 NEW_DEFAULTS = {"data_grade": "internal", "audit_access_days": "90"}
 
@@ -590,13 +596,13 @@ def create_intake(
             request,
             actor,
             form,
-            step=1 if NO_ADDRESS in str(kw.get("error", "")) else len(NEW_STEPS),
+            step=1 if no_address(kw.get("error")) else len(NEW_STEPS),
             resources=resource,
             **{
                 **kw,
                 "error": (
                     "서버 주소를 입력하세요."
-                    if NO_ADDRESS in str(kw.get("error", ""))
+                    if no_address(kw.get("error"))
                     else "기본 조직을 설정하도록 담당자에게 요청하세요."
                     if "--org" in str(kw.get("error", ""))
                     else kw.get("error")

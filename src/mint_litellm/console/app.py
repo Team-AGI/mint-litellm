@@ -120,7 +120,7 @@ def create_app(
             fields = ", ".join(".".join(map(str, e["loc"])) or "본문" for e in locs)
             message = f"요청 값이 올바르지 않습니다: {fields}"
         else:
-            message = f"입력 값을 확인하십시오: {invalid_fields(locs)}"
+            message = f"입력 값이 올바르지 않습니다: {invalid_fields(locs)}"
         return error_reply(
             request, 400,
             {

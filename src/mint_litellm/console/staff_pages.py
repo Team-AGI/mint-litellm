@@ -124,7 +124,7 @@ def act(
         )
     except psycopg.errors.CheckViolation:
         return rebuild(error="이미 처리되었거나 만료된 요청입니다.", status=409)
-    return RedirectResponse(f"{back}?ok={ok}", status_code=303)
+    return RedirectResponse(f"{back}{'&' if '?' in back else '?'}ok={ok}", status_code=303)
 
 
 def staff_render(

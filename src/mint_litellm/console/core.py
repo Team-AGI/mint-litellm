@@ -49,7 +49,7 @@ FIELD_LABELS = {
     "name": "이름", "class": "구분", "requested_by": "신청자", "state_version": "화면 상태",
     "max_result_bytes": "결과 크기 상한", "max_result_items": "결과 항목 수 상한",
     "second_approver_token": "두 번째 승인자 토큰", "allowed_hosts": "허용 호스트",
-    "window_minutes": "사용 기간",
+    "window_minutes": "사용 기간", "purpose": "목적", "data_scope": "자료 범위",
 }
 # 명령줄 옵션 이름이 화면에 그대로 나오지 않게 하는 화면용 이름과 역할 이름.
 OPTION_LABELS = {
@@ -93,6 +93,7 @@ def screen_message(message: str) -> str:
         "토큰을 --second-approver로 함께 제시하십시오",
         "토큰을 「두 번째 승인자 토큰」 칸에 함께 입력하십시오",
     )
+    message = message.replace("object_permission.mcp_servers", "MCP 서버 권한")
     message = _OPTION.sub(option, message)
     message = _SERVER_STATE.sub(
         lambda m: f"서버 {m.group(1)}는 {SERVER[m.group(2)].text} 상태라 "
