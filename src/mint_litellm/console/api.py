@@ -11,6 +11,7 @@ import io
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
@@ -391,11 +392,13 @@ def export_ledger(
     server_id: str | None = None,
     result: str | None = None,
     ref: str | None = None,
+    invocation: UUID | None = None,
     actor: Actor = Depends(api_actor),
 ):
     rows = reads.ledger(
         actor.conn, actor.instance, since=since, until=until, kind=kind, actor=actor_name,
         server_id=server_id, result=result, ref=ref, limit=reads.EXPORT_LIMIT,
+        invocation_id=str(invocation) if invocation else None,
     )
     if format == "json":
         return Response(
