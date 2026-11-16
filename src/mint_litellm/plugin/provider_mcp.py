@@ -1,7 +1,8 @@
 """모델 요청에 담긴 공급자 쪽 MCP 판정.
 
-``type="mcp"`` 객체(``tools[]``든 ``extra_body``·``input``·``session`` 안이든)와 비어 있지 않은
-``mcp_servers``는 공급자가 외부 서버를 직접 호출하게 하므로 MINT의 서버 판정을 거치지 않는다.
+``MCP_TYPES`` 형식의 객체(``tools[]``든 ``extra_body``·``input``·``session`` 안이든)와
+비어 있지 않은 ``mcp_servers``는 공급자가 외부 서버를 직접 호출하게 하므로 MINT의 서버 판정을
+거치지 않는다.
 요청 본문 전체의 구조화 객체를 재귀로 본다. 문자열은 문자열 ``extra_body``만 JSON으로 풀어 같은
 검사를 하고(메시지 본문 텍스트나 ``metadata`` 등 다른 문자열은 풀지 않는다), 문자열로 들어온
 ``tools``·``mcp_servers``·``session``은 지원하지 않는 형식으로 막는다. 깊이·크기 상한을 넘는
@@ -22,6 +23,10 @@ MAX_NODES = 100_000
 MAX_JSON_CHARS = 1_000_000
 PASS_THROUGH = "pass_through_endpoint"
 GATEWAY = "litellm_proxy"
+
+# 공급자가 외부 MCP 서버를 직접 부르게 하는 도구 형식: OpenAI·xAI·Azure(`mcp`),
+# Gemini Interactions(`mcp_server`), Anthropic(`mcp_toolset`), Mistral(`connector`).
+MCP_TYPES = frozenset({"mcp", "mcp_server", "mcp_toolset", "connector"})
 
 TOOLS = "tools"
 SERVERS = "mcp_servers"
@@ -64,7 +69,7 @@ def external_mcp(data: Any, call_type: Any = None) -> str | None:
         if depth > MAX_DEPTH or nodes > MAX_NODES:
             raise _Found(LIMIT)
         if isinstance(value, Mapping):
-            if value.get("type") == "mcp" and id(value) not in allowed:
+            if value.get("type") in MCP_TYPES and id(value) not in allowed:
                 raise _Found(TOOLS)
             if value.get("mcp_servers"):
                 raise _Found(SERVERS)
