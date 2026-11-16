@@ -32,7 +32,7 @@ from mint_litellm.console.core import (
     too_many_attempts,
 )
 from mint_litellm.console.oidc import login_context
-from mint_litellm.console.pages.common import see_other
+from mint_litellm.console.pages.common import see_other, server_names
 from mint_litellm.console.templating import render
 from mint_litellm.control import endpoint_kits, kit_key_sync, links
 from mint_litellm.control.db.connection import connect
@@ -224,6 +224,14 @@ def logout(request: Request, actor: StaffActor = Depends(staff_actor)) -> Respon
 # --- 11 내 서버(동의 포함) --------------------------------------------------------------------
 
 
+def name_servers(actor: StaffActor, *groups: list[dict]) -> None:
+    """행의 ``server_name``에 LiteLLM 별칭을 넣는다(없으면 식별자)."""
+    names = server_names(actor.config.litellm_admin)
+    for rows in groups:
+        for row in rows:
+            row["server_name"] = names.get(row["server_id"]) or row["server_id"]
+
+
 def event_label(row: dict) -> str:
     payload = row.get("payload") or {}
     if payload.get("kind") == "confirmation" and row["kind"] in labels.CONFIRMATION_EVENT:
@@ -259,6 +267,7 @@ def servers_page(request: Request, actor: StaffActor, error=None, status=200, fo
         row["consent_until"] = max((c["valid_until"] for c in active), default=None)
         row["expiring"] = bool(active) and row["consent_until"] < now + EXPIRING
         row["can_consent"] = key in can_consent
+    name_servers(actor, rows)
     tab = "records" if request.query_params.get("tab") == "records" else "servers"
     records = [
         {"at": e["inserted_at"], "label": event_label(e)}
@@ -356,6 +365,7 @@ def requests_page(request: Request, actor: StaffActor, error=None, status=200, t
     waiting = [r for r in rows if r["view"] in ("pending", "confirmed")]
     history = [r for r in rows if r["view"] not in ("pending", "confirmed")][:RECENT_RECORDS]
     mine = my_approvals(actor)
+    name_servers(actor, waiting, history, mine)
     now = datetime.now(UTC)
     pending = [r for r in waiting if r["view"] == "pending"]
     opened = request.query_params.get("open")

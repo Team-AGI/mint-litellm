@@ -52,17 +52,25 @@ def see_other(
     return RedirectResponse(f"{path}?{urlencode({**params, **rest})}", status_code=303)
 
 
+def server_names(admin: Any) -> dict:
+    """LiteLLM에 등록된 서버 식별자별 별칭. 읽지 못하면 비어 있다."""
+    try:
+        entries = admin.list_servers() if admin else []
+    except ControlError:
+        entries = []
+    return {
+        e.get("server_id") or e.get("id"): e.get("server_name") or e.get("alias") for e in entries
+    }
+
+
 def server_display(actor: Actor, rows: list[dict]) -> None:
     """등록된 이름과 계약 주소를 화면의 서버 행에 붙인다."""
     if not rows:
         return
     try:
-        entries = actor.litellm().list_servers()
-    except ControlError:
-        entries = []
-    names = {
-        e.get("server_id") or e.get("id"): e.get("server_name") or e.get("alias") for e in entries
-    }
+        names = server_names(actor.litellm())
+    except ControlError:  # 이 콘솔에 읽기 키가 없다
+        names = {}
     addresses = {
         r["server_id"]: r["url"]
         for r in fetchall(

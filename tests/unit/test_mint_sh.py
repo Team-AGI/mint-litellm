@@ -480,3 +480,43 @@ def test_the_compose_file_turns_the_endpoint_routes_on_for_the_gateway_and_the_c
     compose = (SCRIPT.parent / "compose.yaml").read_text(encoding="utf-8")
     # 콘솔이 발급한 단말 묶음의 판정·보고 경로가 404가 되지 않게 기본으로 켠다.
     assert compose.count("MINT_ENDPOINT_ROUTES: ${MINT_ENDPOINT_ROUTES:-true}") == 2
+
+
+def test_cli_key_file_is_streamed_from_the_host_file_and_never_put_on_the_command_line(tmp_path):
+    key = tmp_path / "verify.key"
+    key.write_text("sk-verify\n", encoding="utf-8")
+    tail = ('case "$*" in *"--key-file /dev/stdin"*) '
+            'echo "stdin:$(cat)" >> "$FAKE_DOCKER_LOG";; esac\n')
+    result, _, _ = run(tmp_path, "POSTGRES_PASSWORD=x\n", "cli", "verify", "run", "--server", "s1",
+                       "--key-file", str(key), docker_tail=tail)
+    assert result.returncode == 0, result.stderr
+    log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+    assert "verify run --server s1 --key-file /dev/stdin" in log and "stdin:sk-verify" in log
+    assert str(key) not in log
+    missing, _, _ = run(tmp_path, "POSTGRES_PASSWORD=x\n", "cli", "verify", "run",
+                        "--key-file", str(tmp_path / "none"))
+    assert missing.returncode != 0 and "읽을 수 없습니다" in missing.stderr
+
+
+def test_a_malformed_signing_key_stops_before_anything_starts(tmp_path):
+    env = "POSTGRES_PASSWORD=x\nMINT_WEBHOOK_HMAC_KEY=short\n"
+    result, _, _ = run(tmp_path, env, "cli", "status")
+    assert result.returncode != 0 and "MINT_WEBHOOK_HMAC_KEY 형식" in result.stderr
+    assert not (tmp_path / "docker.log").exists()
+
+
+def test_backup_says_the_env_file_and_secrets_folder_are_not_included(tmp_path):
+    (tmp_path / "deploy" / "config").mkdir(parents=True)
+    (tmp_path / "deploy" / "config" / "litellm.config.yaml").write_text("{}\n", encoding="utf-8")
+    result, _, _ = run(tmp_path, "POSTGRES_PASSWORD=x\n", "backup")
+    assert result.returncode == 0, result.stderr
+    assert ".env와 비밀 폴더" in result.stdout
+
+
+def test_up_waits_for_litellm_and_shows_its_log_tail_when_it_never_gets_ready(tmp_path):
+    (tmp_path / "deploy").mkdir()
+    (tmp_path / "deploy" / "litellm.config.example.yaml").write_text("{}\n", encoding="utf-8")
+    tail = 'case "$*" in *"up -d --wait litellm"*) exit 1;; esac\n'
+    result, _, _ = run(tmp_path, "POSTGRES_PASSWORD=x\n", "up", docker_tail=tail)
+    assert result.returncode != 0 and "40~60초" in result.stdout
+    assert "logs --tail 20 litellm" in (tmp_path / "docker.log").read_text(encoding="utf-8")
