@@ -106,3 +106,9 @@ def test_a_removed_operator_name_is_reported_as_removed_by_both_remove_and_add(c
         service.remove(ctx, "temp")
     with pytest.raises(ControlError, match="없습니다"):
         service.remove(ctx, "never-existed")
+
+
+@pytest.mark.parametrize("days", [-1, 0, 3651, 10**9])
+def test_a_token_lifetime_outside_one_day_to_ten_years_is_refused(ctx, litellm, days):
+    with pytest.raises(ControlError, match="1일에서 3650일"):
+        operators.add(ctx, litellm, f"short-{days}", OperatorRole.VIEWER, None, days)

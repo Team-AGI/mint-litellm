@@ -225,3 +225,9 @@ def test_the_answer_carries_the_approved_server_list(tmp_path, stored, monkeypat
     monkeypatch.setattr(FakeDatabase, "desired_servers", desired_servers, raising=False)
     client, _ = build(tmp_path)
     assert post(client, REPORT, report()).json()["desired"] == desired
+
+
+def test_a_nul_character_in_the_body_is_refused_before_the_database(tmp_path, stored):
+    client, _ = build(tmp_path)
+    assert post(client, REPORT, report(kit_version="k\u0000")).status_code == 422
+    assert stored == []

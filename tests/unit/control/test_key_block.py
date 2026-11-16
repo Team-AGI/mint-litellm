@@ -319,3 +319,20 @@ def test_only_our_block_can_be_unblocked_here(conn, fake):
     key_block.approve(approver(conn), reader(fake), str(row["id"]))  # 이미 차단: 우리 것이 아니다
     with pytest.raises(ControlError):
         key_block.request_unblock(make_ctx(conn), reader(fake), str(row["id"]), reason="x")
+
+
+def test_the_key_owner_cannot_reject_or_unblock_a_proposal_about_their_own_key(conn, fake):
+    row = secret_proposal(conn, fake)  # tok2는 bob의 키
+    owner_approver = make_ctx(conn, "bob-op", "approver", "bob")
+    with pytest.raises(AdminError, match="자기 키"):
+        key_block.reject(owner_approver, str(row["id"]), reason="오탐")
+    pid = blocked_proposal_of(conn, fake, row)
+    owner_admin = make_ctx(conn, "bob-admin", "admin", "bob")
+    with pytest.raises(AdminError, match="자기 키"):
+        key_block.request_unblock(owner_admin, reader(fake), pid, reason="풀어 줘")
+
+
+def blocked_proposal_of(conn, fake, row):
+    key_block.approve(approver(conn), reader(fake), str(row["id"]))
+    apply(conn, fake, row["id"], "block")
+    return str(row["id"])

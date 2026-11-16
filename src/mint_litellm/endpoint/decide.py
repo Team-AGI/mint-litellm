@@ -290,6 +290,8 @@ async def _read_limited(request: Request, limit: int) -> bytes:
 
 async def _body(request: Request, model: type[BaseModel]) -> Any:
     raw = await _read_limited(request, BODY_LIMITS[request.url.path])
+    if b"\u0000" in raw or b"\x00" in raw:  # NUL 문자는 DB 텍스트에 들어갈 수 없다
+        raise HTTPException(status_code=422, detail="invalid request")
     try:
         return model.model_validate(strict_json(raw))
     except (ValueError, ValidationError) as exc:
