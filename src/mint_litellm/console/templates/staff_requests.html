@@ -43,7 +43,7 @@
 {% for c in mine %}<tr>
 <td><a href="/staff/confirmations?tab=mine&open={{ c.id }}">{{ c.server_id }}</a></td><td>{{ c.tool }}</td>
 <td class="nowrap">{{ c.requested_at | when if c.requested_at else '—' }}</td>
-<td>{{ m.badge(L.MY_CALL_APPROVAL, c.view) }}{% if c.view == 'pending' and c.hold_timed_out_at %}<br><span class="muted">호출은 시간 초과로 끝남 — 승인되면 같은 작업을 다시 요청하세요</span>{% endif %}</td>
+<td>{{ m.badge(L.MY_CALL_APPROVAL, c.view) }}{% if c.view == 'pending' and c.hold_timed_out_at %}<br><span class="muted nowrap">승인 후 다시 요청</span>{% endif %}</td>
 <td class="nowrap">{% if c.remaining_seconds is not none %}{{ c.remaining_seconds | span }} · {{ c.uses_left }}회 남음{% else %}—{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
