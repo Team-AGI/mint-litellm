@@ -572,3 +572,18 @@ def test_policy_activation_is_refused_for_settled_versions_and_bad_sources(conn,
     with pytest.raises(ControlError, match="정책 번들이 올바르지"):
         policy_versions.activate(conn, "unused", INSTANCE, "root", "v-new", source)
     assert fetchone(conn, "SELECT count(*) AS n FROM mint.policy_versions")["n"] == 1
+
+
+def test_an_approver_cannot_grant_their_own_key_or_user_even_with_another_requester(
+    ctx, litellm
+):
+    import dataclasses
+
+    from mint_litellm.control.context import Operator
+
+    relation = prepare(ctx, litellm)
+    owner = dataclasses.replace(ctx, operator=Operator("self-approver", "approver", "human-1"))
+    for scope_type, scope_id in (("key", GOOD_KEY), ("user", "human-1")):
+        with pytest.raises(ControlError, match="자신이 쓰는"):
+            approve(owner, litellm, relation, scope_type=scope_type, scope_id=scope_id,
+                    requested_by="someone-else")

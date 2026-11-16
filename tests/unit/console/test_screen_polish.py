@@ -424,3 +424,14 @@ def test_navigation_collapses_and_approval_tabs_precede_metrics(world):
     html = client.get("/approvals").text
     assert '<details class="mobile-menu">' in html
     assert html.index('class="tabs"') < html.index("응답 대기 호출")
+
+
+def test_templates_use_the_one_argument_join_filter():
+    """콘솔 ``join`` 필터는 인자를 받지 않는다(구분자 고정). 인자를 주면 화면이 500이 된다."""
+    import re
+    from pathlib import Path
+
+    folder = Path(__file__).resolve().parents[3] / "src/mint_litellm/console/templates"
+    pattern = re.compile(r"\|\s*join\(")
+    used = [p.name for p in folder.glob("*.html") if pattern.search(p.read_text("utf-8"))]
+    assert used == []

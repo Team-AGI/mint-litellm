@@ -1234,7 +1234,13 @@ def test_without_access_revocation_evidence_the_server_stays_terminating_with_an
     (alert,) = alerts(admin, "evidence_missing")
     assert alert["status"] == "open"
     job = fetchone(admin, "SELECT status, attempts FROM mint.jobs WHERE kind = 'server_finalize'")
-    assert job["status"] == "pending" and job["attempts"] == 1
+    # 사람의 증빙을 기다리는 동안은 시도로 세지 않아 작업 실패 경보가 쌓이지 않는다.
+    assert job["status"] == "pending" and job["attempts"] == 0
+    for _ in range(3):
+        admin.execute("UPDATE mint.jobs SET run_after = now() - interval '1 second'"
+                      " WHERE status = 'pending'")
+        drain(worker)
+    assert alerts(admin, "job_failed") == []
     revocation_evidence(admin)
     admin.execute("UPDATE mint.jobs SET run_after = now() - interval '1 second'"
                   " WHERE status = 'pending'")
