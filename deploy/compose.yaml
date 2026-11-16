@@ -47,6 +47,8 @@ services:
     env_file:
       - path: ${MINT_SECRETS_DIR:?MINT_SECRETS_DIR를 .env에 설정하십시오}/secrets.env
         required: false
+      - path: ${MINT_SECRETS_DIR}/settings.env
+        required: false
     environment:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/litellm
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY를 .env에 설정하십시오}

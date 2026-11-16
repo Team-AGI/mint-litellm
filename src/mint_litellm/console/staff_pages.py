@@ -478,6 +478,13 @@ def endpoint_kit(
         return endpoint_page(request, actor, "설치 묶음의 종류가 올바르지 않습니다.", 400)
     if config.kit_issuer is None:
         return endpoint_page(request, actor, "단말 설치 묶음을 발급할 수 없습니다.", 503)
+    if not config.endpoint_url:
+        # 비어 있으면 묶음에 컨테이너 안 주소가 적혀 단말에서 판정을 부를 수 없다.
+        return endpoint_page(
+            request, actor,
+            "단말이 부를 판정 주소가 정해지지 않아 설치 묶음을 발급할 수 없습니다. 운영자가 "
+            "MINT_ENDPOINT_PUBLIC_URL(단말에서 닿는 LiteLLM 주소)을 정한 뒤 다시 시도하세요.", 503,
+        )
     if not config.endpoint_routes:
         return endpoint_page(
             request, actor,
