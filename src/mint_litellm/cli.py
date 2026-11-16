@@ -26,6 +26,7 @@ from mint_litellm import (
     cli_restore,
     cli_siem,
     cli_upgrade,
+    cli_verify,
 )
 from mint_litellm.control import (
     allowlists,
@@ -1350,7 +1351,8 @@ ARGUMENTS.update(INTAKE_ARGUMENTS)
 def _add_arguments(parser: argparse.ArgumentParser, name: str) -> None:
     for spec in {**ARGUMENTS, **cli_restore.ARGUMENTS, **cli_evidence.ARGUMENTS,
                  **cli_upgrade.ARGUMENTS, **cli_backup.ARGUMENTS,
-                 **cli_siem.ARGUMENTS, **cli_keyblock.ARGUMENTS}.get(name, []):
+                 **cli_siem.ARGUMENTS, **cli_keyblock.ARGUMENTS,
+                 **cli_verify.ARGUMENTS}.get(name, []):
         if spec == "SUBJECT":
             group = parser.add_mutually_exclusive_group(required=True)
             group.add_argument("--team")
@@ -1401,7 +1403,8 @@ def build_parser() -> argparse.ArgumentParser:
     tree: dict[tuple[str, ...], argparse._SubParsersAction] = {(): root.add_subparsers(
         dest="group0", metavar="명령", required=True)}
     commands = [*COMMANDS, *cli_restore.COMMANDS, *cli_evidence.COMMANDS, *cli_upgrade.COMMANDS,
-                *cli_backup.COMMANDS, *cli_siem.COMMANDS, *cli_keyblock.COMMANDS]
+                *cli_backup.COMMANDS, *cli_siem.COMMANDS, *cli_keyblock.COMMANDS,
+                *cli_verify.COMMANDS]
     # 하위 명령도 가진 명령(``org suggest``)은 하위 명령 없이 부르면 자기 자신이 실행된다.
     parents = {c.path for c in commands if any(o.path[:len(c.path)] == c.path != o.path
                                               for o in commands)}
@@ -1437,7 +1440,7 @@ def build_parser() -> argparse.ArgumentParser:
 COMMAND_INDEX: dict[str, CliCommand] = {
     c.name: c for c in [*COMMANDS, *cli_restore.COMMANDS, *cli_evidence.COMMANDS,
                         *cli_upgrade.COMMANDS, *cli_backup.COMMANDS, *cli_siem.COMMANDS,
-                        *cli_keyblock.COMMANDS]
+                        *cli_keyblock.COMMANDS, *cli_verify.COMMANDS]
 }
 
 
@@ -1565,7 +1568,7 @@ def run_command(args: argparse.Namespace, environ: dict[str, str]) -> None:
             expand_ids(run)
         extra = {**cli_restore.HANDLERS, **cli_evidence.HANDLERS,
                  **cli_upgrade.HANDLERS, **cli_backup.HANDLERS, **cli_siem.HANDLERS,
-                 **cli_keyblock.HANDLERS}
+                 **cli_keyblock.HANDLERS, **cli_verify.HANDLERS}
         (HANDLERS.get(command.name) or extra[command.name])(run)
     if args.json:
         print(json.dumps(_result(run, command), ensure_ascii=False, default=str))

@@ -64,6 +64,8 @@ ENDPOINT_ALERTS = (
     AlertKind.ENDPOINT_EGRESS_REFUSED.value,
 )
 INPUT_SECRET = "input_secret"
+# 방어 검증기(``verify run``)가 쓰는 전용 키의 이름 접두사. 이 키는 차단 제안에서 제외한다.
+VERIFY_ALIAS_PREFIX = "mint-verify-"
 APPROVERS = ("admin", "approver")
 OPEN = ("proposed", "approved", "unblocking")
 
@@ -247,6 +249,8 @@ def _propose(job: JobContext, found: dict, cache: dict) -> bool:
         info = client.get_key(token)
         if info is None or info.get("blocked") is True:
             return False  # 없거나 이미 막혀 있으면 제안할 것이 없다
+        if str(info.get("key_alias") or "").startswith(VERIFY_ALIAS_PREFIX):
+            return False  # 방어 검증 전용 키는 일부러 막힐 입력을 보낸다
         keys, members = _team_impact(client, info.get("team_id"), cache)
     except LiteLLMError:
         return False

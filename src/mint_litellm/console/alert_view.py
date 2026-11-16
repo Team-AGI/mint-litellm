@@ -80,6 +80,7 @@ SUMMARY = {
         "최근 {window_seconds}초 동안 결과 {calls}건이 검사에 걸렸지만 막지 못했습니다."
     ),
     "key_block_proposed": "키 {key_alias}의 LiteLLM 차단 제안이 승인을 기다립니다.",
+    "defense_verify_failed": "서버 {server_id}의 방어 검증에서 {failed}건이 기대와 달랐습니다.",
     "siem_forward_failing": "SIEM 대상 {target}에 {minutes}분 넘게 전달하지 못했습니다.",
     "config_plaintext_secret": "LiteLLM 설정 {count}곳에 비밀이 평문으로 적혀 있습니다.",
     "call_spike": "서버 {server_id}의 {tool} 호출이 최근 {calls}건입니다(평소 {baseline_calls}건).",
