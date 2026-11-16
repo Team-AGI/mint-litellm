@@ -748,6 +748,12 @@ def build_policy_input(
     if server is not None and server.exec_contract_sha256 is not None:
         # 서버 행에 등록된 승인 대상 실행 계약. 보고된 계약과의 대조는 정책 규칙이 한다.
         server_doc["exec_approved_sha256"] = server.exec_contract_sha256
+    if is_builtin_server(resolved.server_id):
+        # 하네스 내장 도구의 가상 서버는 서버 행이 없지만 미등록 서버가 아니다. 고정 실행 계약을
+        # 승인본으로 두어 로컬 서버 규칙(POL-R-18·R-20)에 걸리지 않게 하고, 통제는 거부·호출별
+        # 승인·인자 검사가 맡는다(기본은 허용하고 기록).
+        server_doc["status"] = "approved"
+        server_doc["exec_approved_sha256"] = resolved.exec_contract_sha256
     managed = server is not None and server.contract_status == "managed"
     action_type, risk_grade, provisional = tool_traits(snapshot, tool, arguments)
     server_doc["contract_status"] = (

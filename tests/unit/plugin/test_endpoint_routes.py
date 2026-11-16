@@ -331,3 +331,16 @@ def test_the_contract_is_required_for_registered_servers_and_forbidden_for_built
     assert post(client, "/mint/v1/decide", no_contract).status_code == 422
     forged = builtin_body(contract=CONTRACT.model_dump(mode="json"))
     assert post(client, "/mint/v1/decide", forged).status_code == 422
+
+
+def test_a_built_in_tool_reaches_the_policy_as_an_approved_server_with_its_fixed_contract(
+    tmp_path,
+):
+    calls: list = []
+    snap = snapshot(server=None, approvals=())
+    client, _ = build(tmp_path, snap, evaluate=evaluator(calls=calls))
+    post(client, "/mint/v1/decide", builtin_body())
+    server = calls[-1]["server"]
+    # 로컬 서버 규칙(승인된 실행 계약 없음·불일치)에 걸리지 않도록 고정 계약을 승인본으로 둔다
+    assert server["status"] == "approved"
+    assert server["exec_approved_sha256"] == server["exec_contract_sha256"]
