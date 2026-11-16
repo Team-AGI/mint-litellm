@@ -5,6 +5,9 @@
   pre   호출 전 훅. 도구 호출마다 MINT 결정 경로에 판정을 묻고, 허용이 아니면 종료 코드 2로
         호출을 막는다. 오류는 모두 차단이다. 허용은 아무것도 출력하지 않고 종료 코드 0으로
         끝낸다(하네스의 권한 흐름을 그대로 두며 이 훅이 권한을 대신 주지 않는다).
+  cursor-pre·grok-pre  Cursor(beforeMCPExecution)·Grok Build CLI(PreToolUse)용 호출 전 훅. 입력을
+        ``pre``의 모양으로 바꿔 같은 판정을 묻는다. 막을 때는 종료 코드 2, Cursor는 허용도
+        ``{"permission": "allow"}``로 답한다. 호출 뒤 보고는 하지 않는다(호출 식별자가 없다).
   post  호출 뒤 훅(성공)과 post-failure(실패). 판정 때 받은 참조를 MINT에 돌려 결과를 보고한다.
         보고하지 못해도 호출에는 영향이 없고, MINT는 보고 없는 호출을 결과 미확인으로 남긴다.
   notify 호출이 승인 대기로 막힌 뒤 승인·거부 결과를 알리는 작은 조회 루프(내부용, 막힌 훅이
@@ -557,6 +560,8 @@ def decide(
         return
     tool_use_id = event.get("tool_use_id")
     arguments = event.get("tool_input")
+    if name in BUILTIN_TOOLS and harness not in ("claude", "codex"):
+        return  # Cursor·Grok는 MCP 호출만 판정한다(내장 도구 가상 서버는 claude·codex뿐)
     if name in BUILTIN_TOOLS:
         # 내장 도구: 가상 서버 builtin:<하네스> 아래 도구 이름 그대로 판정한다(실행 계약 없음).
         if not isinstance(arguments, dict):
@@ -605,6 +610,27 @@ def decide(
         flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
         with os.fdopen(os.open(os.path.join(pending, tool_use_id), flags, 0o600), "w") as handle:
             handle.write(str(answer["reference"]))
+
+
+def adapt_event(command: str, event: Mapping[str, Any]) -> dict[str, Any]:
+    """Cursor(beforeMCPExecution)·Grok(PreToolUse)의 훅 입력을 ``pre``가 읽는 모양으로 바꾼다.
+
+    Cursor는 서버·도구 이름을 따로, 인자를 JSON 글자로 준다. Grok는 ``toolName``·``toolInput``을
+    주고 MCP가 아닌 도구도 모두 부른다(그런 호출은 이 훅의 대상이 아니라 통과).
+    """
+    if command == "grok-pre":
+        return {"tool_name": event.get("toolName"), "tool_input": event.get("toolInput")}
+    server, tool = event.get("mcp_server_name"), event.get("tool_name")
+    raw = event.get("tool_input")
+    if not isinstance(server, str) or not isinstance(tool, str) or not server or not tool:
+        raise Refuse("Cursor hook input has no MCP server or tool name")
+    try:
+        arguments = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        raise Refuse("Cursor tool arguments are not JSON") from None
+    arguments = {} if arguments is None else arguments
+    name = tool if tool.startswith("mcp__") else server_prefix(server) + tool
+    return {"tool_name": name, "tool_input": arguments, "mcp_server": {"name": server}}
 
 
 def report_result(
@@ -2667,7 +2693,8 @@ def _give_up(code: int, message: str) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
-    commands = ["pre", "post", "post-failure", "run", "serve", "notify", "reconcile", "netpolicy"]
+    commands = ["pre", "post", "post-failure", "run", "serve", "notify", "reconcile", "netpolicy",
+                "cursor-pre", "grok-pre"]
     parser.add_argument("command", choices=commands)
     parser.add_argument("--url")
     parser.add_argument("--key-file")
@@ -2675,7 +2702,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--state-dir")
     parser.add_argument("--ca-file")
     parser.add_argument("--server")
-    parser.add_argument("--harness", choices=["claude", "codex"], default="claude")
+    parser.add_argument(
+        "--harness", choices=["claude", "codex", "cursor", "grok"], default="claude"
+    )
     parser.add_argument("--no-keepalive", action="store_true")
     parser.add_argument("--idle", type=float, default=BROKER_IDLE)
     parser.add_argument("--http-timeout", type=float, default=HTTP_TIMEOUT)
@@ -2731,7 +2760,7 @@ def main(argv: list[str] | None = None) -> None:
             _give_up(REFUSED, f"MINT launcher failed: {type(exc).__name__}")
         return
 
-    blocking = args.command == "pre"
+    blocking = args.command in ("pre", "cursor-pre", "grok-pre")
     notice = "MINT hook timed out" + ("; the call is blocked" if blocking else "")
     watchdog = threading.Timer(args.deadline, _give_up, [2 if blocking else 0, notice])
     watchdog.daemon = True
@@ -2740,6 +2769,8 @@ def main(argv: list[str] | None = None) -> None:
         event = json.loads(sys.stdin.buffer.read())  # 지역 인코딩이 아니라 UTF-8 그대로
         if not isinstance(event, dict):
             raise Refuse("hook input is not an object")
+        if args.command in ("cursor-pre", "grok-pre"):
+            event = adapt_event(args.command, event)
         with open(os.path.expanduser(args.key_file), encoding="utf-8") as handle:
             key = handle.read().strip()
         state_dir = os.path.expanduser(args.state_dir)
@@ -2765,6 +2796,9 @@ def main(argv: list[str] | None = None) -> None:
                 on_pending=lambda: notify_enabled(state_dir) and kick_notify(notify_args),
                 harness=args.harness,
             )
+            if args.command == "cursor-pre":  # Cursor는 허용도 JSON으로 답해야 한다(아니면 막힌다).
+                print('{"permission": "allow"}')
+                sys.stdout.flush()
         else:
             report_result(
                 event, failed=args.command == "post-failure", url=args.url, key=key,

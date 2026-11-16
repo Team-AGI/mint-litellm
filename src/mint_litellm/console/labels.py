@@ -291,7 +291,10 @@ PRINCIPAL = {"user": "사용자", "team_key": "팀 키", "service_account": "서
 KIT_PLATFORM = {"linux": "Linux", "windows": "Windows"}
 # 단말 설정에서 발견한 MCP 항목의 전송 방식
 LOCAL_TRANSPORT = {"stdio": "로컬 실행", "http": "원격(HTTP)", "sse": "원격(SSE)"}
-KIT_HARNESS = {"claude": "Claude Code", "codex": "Codex", "all": "Claude Code + Codex"}
+KIT_HARNESS = {
+    "claude": "Claude Code", "codex": "Codex", "cursor": "Cursor", "grok": "Grok Build CLI",
+    "all": "모든 도구",
+}
 ORG_RULE = {
     "team_metadata": "팀 메타데이터",
     "team_alias": "팀 별칭",

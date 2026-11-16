@@ -1,0 +1,1 @@
+- 단말 설치 묶음이 Cursor(관리형 `hooks.json`의 failClosed 호출 전 훅)와 Grok Build CLI(PreToolUse 훅·서버 정의)를 지원하고, 도구 선택·점검·제거·단말 MCP 목록에 반영했다(Antigravity·DeepSeek은 문서 안내만).
