@@ -51,7 +51,7 @@ def test_the_process_and_autostart_inventory_is_stored_as_plain_rows(tmp_path, s
     assert fields["processes"] == [
         {
             "server": "srv-1", "count": 2, "sandbox": None, "egress_refused": None,
-            "egress_unfiltered": None,
+            "egress_unfiltered": None, "egress_filtered": None,
         }  # fmt: skip
     ]
     assert fields["autostart"] == [{"kind": "cron", "name": "@reboot", "server": "srv-1"},

@@ -167,7 +167,7 @@ def test_every_registry_entry_refers_to_a_known_kind_and_the_release_path_is_uns
 
 def test_job_kinds_follow_the_registration_rules(url, all_handlers):
     assert {k for k, v in jobs.KINDS.items() if v.convergent} == {
-        "contract_observe", "sync_server", "sync_target", "activation_finalize",
+        "contract_observe", "sync_server", "sync_target", "activation_finalize", "kit_key_sync",
         "relation_finalize", "server_finalize"}
     with psycopg.connect(url) as conn:
         ensure(conn, INSTANCE)
