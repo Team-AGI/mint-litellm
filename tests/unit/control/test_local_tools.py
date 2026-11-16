@@ -88,10 +88,8 @@ def test_approving_turns_the_provisional_contract_into_an_approved_one(local, ct
     assert contract["status"] == "approved" and contract["source"] == "observed"
     assert contract["input_keys"] == ["path"] and contract["action_type"] == "read"
     assert set(rows(conn)) == {"run_shell"}  # 실행 유형은 옮기지 않는다
-    # 전환 직후에도 승인한 도구는 관측본이 있어 화면에서 「삭제」로 보이지 않는다.
-    shown = contracts.diff(ctx, "loc")
-    assert [o["name"] for o in shown["observations"] if o["kind"] == "tool"] == ["read_file"]
-    assert compare.changes(shown) == []
+    # 전환 직후 관측본이 아직 없어도 승인한 도구가 화면에서 「삭제」로 보이지 않는다.
+    assert compare.changes(contracts.diff(ctx, "loc")) == []
     # 이어지는 관측은 승인본과 같으면 드리프트가 없고, 바뀌면 승인본에 표시한다.
     local_tools.consume(ctx)
     assert fetchone(conn, "SELECT drift FROM mint.tool_contracts WHERE tool='read_file'")[
