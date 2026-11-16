@@ -927,3 +927,12 @@ def test_empty_staff_page_shows_pending_call_requests(sworld, monkeypatch):
     html = logged_in(sworld).get("/staff").text
     assert "처리 대기 중인 호출 승인 요청이 1건" in html
     assert "/staff/confirmations?tab=mine" in html
+
+
+def test_parallel_requests_of_one_staff_session_do_not_deadlock(sworld):
+    import concurrent.futures
+
+    client = logged_in(sworld)
+    with concurrent.futures.ThreadPoolExecutor(8) as pool:
+        codes = list(pool.map(lambda _: client.get("/staff").status_code, range(16)))
+    assert codes == [200] * 16

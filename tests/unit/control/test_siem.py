@@ -16,6 +16,7 @@ import pytest
 from ctl_fixtures import INSTANCE
 
 from mint_litellm.control import siem
+from mint_litellm.control.errors import ControlError
 
 LOOPBACK = "127.0" + ".0.1"  # 주소 이름 조회 지연을 피한다
 KEY = "AKIA" + "ABCDEFGHIJKLMNOP"  # 클라우드 접근 키 모양(시험용 가짜 값)
@@ -271,8 +272,8 @@ def release(conn, name="t1"):
 
 def test_delivers_in_order_with_token_and_moves_the_cursor(admin, collector):
     add_events(admin, 3)
-    target(admin, endpoint=collector.url, secret_ref="env:T_TOKEN")
-    env = {"T_TOKEN": "tok-1"}
+    target(admin, endpoint=collector.url, secret_ref="env:MINT_SIEM_T_TOKEN")
+    env = {"MINT_SIEM_T_TOKEN": "tok-1"}
     siem.run(job(admin), env)
     headers, _ = collector.requests[0]
     assert headers["Authorization"] == "Splunk tok-1"
@@ -358,7 +359,7 @@ def test_no_alert_before_the_threshold(admin, collector):
 
 def test_missing_secret_fails_without_sending(admin, collector):
     add_events(admin, 1)
-    target(admin, endpoint=collector.url, secret_ref="env:NOPE")
+    target(admin, endpoint=collector.url, secret_ref="env:MINT_SIEM_NOPE")
     siem.run(job(admin), {})
     assert row(admin)["last_error"] == "secret_missing" and collector.requests == []
 
@@ -381,8 +382,8 @@ def test_elastic_item_failure_is_a_failure_but_duplicates_are_not(admin):
 
 def test_otlp_posts_json_logs(admin, collector):
     add_events(admin, 2)
-    target(admin, kind="otlp", endpoint=collector.url, secret_ref="env:K")
-    siem.run(job(admin), {"K": "bearer-1"})
+    target(admin, kind="otlp", endpoint=collector.url, secret_ref="env:MINT_SIEM_K")
+    siem.run(job(admin), {"MINT_SIEM_K": "bearer-1"})
     headers, body = collector.requests[0]
     assert headers["Authorization"] == "Bearer bearer-1"
     assert len(json.loads(body)["resourceLogs"][0]["scopeLogs"][0]["logRecords"]) == 2
@@ -472,7 +473,7 @@ def test_listing_hides_the_secret_and_the_path(admin):
     target(
         admin,
         endpoint="https://s.test:8088/services/collector/event?k=1",
-        secret_ref="env:T_TOKEN",
+        secret_ref="env:MINT_SIEM_T_TOKEN",
         from_start=False,
     )
     (t,) = siem.listing(admin, INSTANCE)
@@ -481,4 +482,15 @@ def test_listing_hides_the_secret_and_the_path(admin):
 
 def test_syslog_targets_refuse_a_token(admin):
     with pytest.raises(siem.ControlError):
-        target(admin, kind="syslog", endpoint="tls://s.test", secret_ref="env:X")
+        target(admin, kind="syslog", endpoint="tls://s.test", secret_ref="env:MINT_SIEM_X")
+
+
+def test_a_token_is_read_only_from_siem_variables_or_the_secrets_folder(admin):
+    for ref in ("env:MINT_DATABASE_URL", "env:MINT_LITELLM_KEY", "file:/proc/self/environ",
+                "file:/run/secrets/../../etc/passwd"):
+        with pytest.raises(ControlError, match="MINT_SIEM_"):
+            siem.check_secret_ref(ref)
+        with pytest.raises(siem.SendError):
+            siem.read_secret(ref, {"MINT_DATABASE_URL": "postgresql://secret"})
+    siem.check_secret_ref("env:MINT_SIEM_HEC_TOKEN")
+    siem.check_secret_ref("file:/run/secrets/hec_token")
