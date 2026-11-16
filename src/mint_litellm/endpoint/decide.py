@@ -147,7 +147,7 @@ class LocalMcpItem(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    harness: Literal["claude", "codex"]
+    harness: Literal["claude", "codex", "cursor", "grok"]
     name: str = Field(min_length=1, max_length=128)
     kind: Literal["stdio", "http", "sse"]
     target: str = Field(pattern=_TARGET)  # stdio는 실행 파일 이름, 원격은 호스트

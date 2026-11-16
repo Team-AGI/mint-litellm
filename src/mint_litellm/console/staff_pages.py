@@ -39,7 +39,7 @@ from mint_litellm.control.db.connection import connect
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.litellm_admin import LiteLLMError
 from mint_litellm.control.services import console_sessions, reads, staff
-from mint_litellm.endpoint.kit_build import build_kit
+from mint_litellm.endpoint.kit_build import HARNESSES, build_kit
 from mint_litellm.plugin.snapshot import WINDOW_MAX_USES
 
 router = APIRouter(dependencies=[Depends(require_csrf)])
@@ -512,7 +512,7 @@ def endpoint_kit(
     kit = build_kit(
         contracts, decide_url=config.endpoint_url or config.litellm_url, key=key,
         ca_pem=config.endpoint_ca_pem, platform=platform,
-        harnesses=("claude", "codex") if harness == "all" else (harness,),
+        harnesses=tuple(HARNESSES) if harness == "all" else (harness,),
         allow_unsandboxed=config.endpoint_allow_unsandboxed, gateway_key=gateway_key,
     )
     media, name = (

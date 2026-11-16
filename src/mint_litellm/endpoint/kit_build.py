@@ -28,7 +28,7 @@ LAUNCHERS = {
     ),
 }
 FILES = tuple(item for launchers in LAUNCHERS.values() for item in launchers) + PROGRAMS
-HARNESSES = ("claude", "codex")
+HARNESSES = ("claude", "codex", "cursor", "grok")
 GATEWAY_NAME = "litellm_gateway"  # 하네스 설정의 게이트웨이 서버 이름(승인 로컬 서버는 쓸 수 없다)
 
 
