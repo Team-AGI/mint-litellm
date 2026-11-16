@@ -326,3 +326,16 @@ def test_old_screen_paths_redirect_to_the_new_ones(admin, old, new):
     target = response.headers["location"]
     assert target.split("?")[0] == new.split("?")[0]
     assert sorted(target.split("?", 1)[-1].split("&")) == sorted(new.split("?", 1)[-1].split("&"))
+
+
+def test_the_ledger_shows_and_filters_the_caller_of_a_decision(world, admin):
+    # 호출 판정 사건은 호출한 주체를 actor가 아니라 subject에 남긴다.
+    world.query(
+        "INSERT INTO mint.events (event_id, instance_id, kind, source_key, subject, payload)"
+        " VALUES (%s, %s, 'decision_evaluated', %s, %s::jsonb, %s::jsonb)",
+        uuid.uuid4(), INSTANCE, f"decision:{uuid.uuid4()}:1",
+        json.dumps({"principal_type": "user", "principal_id": "caller@example.com"}),
+        json.dumps({"server_id": "srv-ok", "enforced_action": "allow"}))
+    html = admin.get("/ledger").text
+    assert "caller@example.com" in html
+    assert "caller@example.com" in admin.get("/ledger?actor=caller@example.com").text

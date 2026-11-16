@@ -439,6 +439,10 @@ def parse_ref(text: str) -> tuple[UUID, int | None]:
     return UUID(head), attempt
 
 
+# 호출 판정 사건은 호출한 주체를 actor가 아니라 subject에 남긴다(운영자 작업은 actor).
+LEDGER_ACTOR = "COALESCE(actor, subject->>'principal_id')"
+
+
 def _ledger_where(
     instance: str,
     *,
@@ -467,7 +471,7 @@ def _ledger_where(
     for clause, value in (
         ("inserted_at < %s", until),
         ("kind = %s", kind),
-        ("actor = %s", actor),
+        (f"{LEDGER_ACTOR} = %s", actor),
         ("(payload->>'resolved_server_id' = %s OR payload->>'server_id' = %s)", server_id),
         ("invocation_id = %s", invocation_id),
     ):
@@ -502,7 +506,7 @@ def ledger(
     size, offset = (limit, 0) if limit is not None else _page(page)
     return fetchall(
         conn,
-        "SELECT event_id, inserted_at, kind, source_key, actor,"
+        f"SELECT event_id, inserted_at, kind, source_key, {LEDGER_ACTOR} AS actor,"
         " COALESCE(payload->>'resolved_server_id', payload->>'server_id') AS server_id,"
         " payload->>'enforced_action' AS result, payload->>'outcome' AS outcome, payload"
         f" FROM mint.events WHERE {where} ORDER BY inserted_at DESC, event_id DESC"
@@ -518,8 +522,8 @@ def ledger_filters(conn: psycopg.Connection, instance: str) -> dict[str, list[st
     )
     actors = fetchall(
         conn,
-        "SELECT DISTINCT actor FROM mint.events WHERE instance_id = %s AND actor IS NOT NULL"
-        " ORDER BY actor",
+        f"SELECT DISTINCT {LEDGER_ACTOR} AS actor FROM mint.events WHERE instance_id = %s"
+        f" AND {LEDGER_ACTOR} IS NOT NULL ORDER BY actor",
         (instance,),
     )
     return {"kinds": [r["kind"] for r in kinds], "actors": [r["actor"] for r in actors]}
