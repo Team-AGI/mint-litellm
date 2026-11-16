@@ -22,19 +22,18 @@ from mint_litellm.console import (
     sso_pages,
     staff_pages,
 )
+from mint_litellm.console.cookies import delete_cookie, set_cookie
 from mint_litellm.console.core import (
     COOKIE,
     ConsoleConfig,
     Unauthenticated,
     config_of,
     db,
-    delete_cookie,
     error_response,
     login_redirect,
     read_cookie,
     require_csrf,
     require_origin,
-    set_cookie,
     too_many_attempts,
 )
 from mint_litellm.console.error_pages import error_reply, wants_page
