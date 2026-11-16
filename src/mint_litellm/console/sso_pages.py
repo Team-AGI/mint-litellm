@@ -9,15 +9,8 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse, Response
 
 from mint_litellm.console import oidc
-from mint_litellm.console.core import (
-    COOKIE,
-    STAFF_COOKIE,
-    config_of,
-    db,
-    delete_cookie,
-    set_cookie,
-    too_many_attempts,
-)
+from mint_litellm.console.cookies import delete_cookie, set_cookie
+from mint_litellm.console.core import COOKIE, STAFF_COOKIE, config_of, db, too_many_attempts
 from mint_litellm.console.login import LoginRefused
 from mint_litellm.console.oidc import login_context
 from mint_litellm.console.staff_pages import start_staff_session

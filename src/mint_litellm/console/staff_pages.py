@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from mint_litellm.console import labels, login
+from mint_litellm.console.cookies import delete_cookie, set_cookie
 from mint_litellm.console.core import (
     STAFF_COOKIE,
     STATUS,
@@ -25,11 +26,9 @@ from mint_litellm.console.core import (
     Unauthenticated,
     config_of,
     db,
-    delete_cookie,
     read_cookie,
     require_csrf,
     require_origin,
-    set_cookie,
     too_many_attempts,
 )
 from mint_litellm.console.oidc import login_context

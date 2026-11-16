@@ -16,7 +16,8 @@ import psycopg
 from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
 
-from mint_litellm.console.core import config_of, set_cookie, too_many_attempts
+from mint_litellm.console.cookies import set_cookie
+from mint_litellm.console.core import config_of, too_many_attempts
 from mint_litellm.console.login import LoginRefused
 from mint_litellm.console.oidc import login_context
 from mint_litellm.console.sso_pages import PAGES, TOO_MANY, human_user, open_session

@@ -226,7 +226,7 @@ class World:
             "--requested-by",
             subject.user_id,
         )
-        self.mint.run("call-approval", "approve", request["id"])
+        self.mint.run("call-approval", "approve", request["id"], "--for", "once")
         return request["id"]
 
     def call(
