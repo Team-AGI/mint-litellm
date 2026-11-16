@@ -398,8 +398,14 @@ _CONFUSABLE = str.maketrans("аеорсухіјѕԁɡАВЕКМНОРСТХΑΒ�
 _BASE64 = re.compile(r"[A-Za-z0-9+/]{16,}={0,2}")
 
 
-def _normalized(text: str) -> str:
+# 지시문을 쪼개 숨기는 마크업: HTML 태그·주석, 마크다운 강조 기호, 백틱.
+_MARKUP = re.compile(r"<!--.*?-->|</?[A-Za-z][^<>]{0,200}>|[*_`~]+", re.S)
+
+
+def _normalized(text: str, *, strip_markup: bool = False) -> str:
     text = unicodedata.normalize("NFKC", _HIDDEN.sub("", text)).translate(_CONFUSABLE)
+    if strip_markup:
+        text = _MARKUP.sub("", text)
     return " ".join(text.split()).casefold()
 
 
@@ -435,7 +441,8 @@ def description_scan(defs: list[dict] | None, data: PolicyData | None) -> Outcom
         raw = "\n".join(_strings(d))
         scanned += len(raw)
         hidden += len(_HIDDEN.findall(raw))
-        texts = [_normalized(raw), *(_normalized(t) for t in _decoded(raw))]
+        plain = [raw, *_decoded(raw)]
+        texts = [_normalized(t) for t in plain] + [_normalized(t, strip_markup=True) for t in plain]
         hits += sum(1 for m in markers if any(m in t for t in texts))
     hits += 1 if hidden else 0
     inputs = {"tools": len(defs), "chars": scanned, "hits": hits, "hidden_chars": hidden,
