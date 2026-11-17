@@ -176,3 +176,41 @@ def test_a_gateway_key_write_404_for_another_reason_still_raises(conn, world):
     approve(conn, relation, "user", "u1")
     with pytest.raises(LiteLLMHttpError):
         kit_key_sync.sync_kit_keys(conn, INSTANCE, VanishingClient(route_404=True))
+
+
+def test_an_issued_user_key_gets_the_current_hook_routes_once(conn, world):
+    from mint_litellm.endpoint.routes import KIT_KEY_ROUTES
+
+    class RoutedClient(Client):
+        def __init__(self, routes):
+            super().__init__()
+            self.routes = routes
+            self.updated = []
+
+        def get_key(self, token):
+            return {"object_permission": {}, "allowed_routes": self.routes}
+
+        def update_key_routes(self, token):
+            self.updated.append(token)
+            self.routes = list(KIT_KEY_ROUTES)
+
+    stale = RoutedClient(["/mint/v1/decide"])
+    assert kit_key_sync.sync_kit_keys(conn, INSTANCE, stale) >= 1
+    assert len(stale.updated) == 1
+    current = RoutedClient(list(KIT_KEY_ROUTES))
+    kit_key_sync.sync_kit_keys(conn, INSTANCE, current)
+    assert current.updated == []
+
+
+def test_the_routes_write_is_limited_to_the_hook_routes():
+    from mint_litellm.control.litellm_write import WriteRefused, check_kit_write, check_write
+    from mint_litellm.endpoint.routes import KIT_KEY_ROUTES
+
+    good = {"key": "sk-1", "allowed_routes": list(KIT_KEY_ROUTES)}
+    check_write("POST", "/key/update", good)
+    for bad in ({"key": "sk-1", "allowed_routes": ["/key/generate"]},
+                {"key": "sk-1", "allowed_routes": list(KIT_KEY_ROUTES), "models": []}):
+        with pytest.raises(WriteRefused):
+            check_write("POST", "/key/update", bad)
+    with pytest.raises(WriteRefused):
+        check_kit_write("POST", "/key/update", good)

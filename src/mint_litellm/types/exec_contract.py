@@ -75,17 +75,30 @@ def network_hints(contract: "ExecContract") -> list[str]:
     return hints
 
 
+class PackRef(BaseModel):
+    """서버 쪽에서 만든 실행 묶음(wheel 모음)을 가리킨다. 묶음 해시가 정체성이다."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    sha256: str = Field(pattern=_SHA256)
+    runtime: Literal["python3"]
+    python: str = Field(pattern=r"^[0-9]{1,2}\.[0-9]{1,3}$")  # major.minor
+    entry: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_]*$", max_length=256)
+
+
 class ExecContract(BaseModel):
     """승인 대상 로컬 서버의 실행 계약. 판본이 바뀌면 필드를 더하고 ``schema_version``을 올린다."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[1] = SCHEMA_VERSION
+    # 1판: 실행 파일 해시로 식별. 2판: ``pack``의 묶음 해시로 식별(``executable``은 런타임 경로).
+    schema_version: Literal[1, 2] = SCHEMA_VERSION
     executable: str = Field(min_length=1, max_length=1024)
     argv: tuple[str, ...] = Field(default=(), max_length=64)
     # 비어 있으면 작업 디렉터리를 비교하지 않는다(하네스가 세션 디렉터리에서 서버를 띄운다).
     cwd: str | None = Field(default=None, min_length=1, max_length=1024)
-    executable_sha256: str = Field(pattern=_SHA256)
+    executable_sha256: str | None = Field(default=None, pattern=_SHA256)
+    pack: PackRef | None = None
     script_sha256: str | None = Field(default=None, pattern=_SHA256)
     env: dict[str, str] = Field(default_factory=dict, max_length=64)
     secret_refs: dict[str, str] = Field(default_factory=dict, max_length=64)
@@ -123,6 +136,14 @@ class ExecContract(BaseModel):
         return tuple(sorted(value))
 
     @model_validator(mode="after")
+    def _pack_matches_version(self) -> "ExecContract":
+        if (self.pack is not None) != (self.schema_version == 2):
+            raise ValueError("pack is required with schema_version 2 and only then")
+        if self.pack is None and self.executable_sha256 is None:
+            raise ValueError("executable_sha256 is required without pack")
+        return self
+
+    @model_validator(mode="after")
     def _hosts_match_network(self) -> "ExecContract":
         if (self.network == "hosts") != bool(self.allowed_hosts):
             raise ValueError("allowed_hosts is required with network hosts and only then")
@@ -131,6 +152,10 @@ class ExecContract(BaseModel):
     @model_serializer(mode="wrap")
     def _omit_empty_file_access(self, handler):
         data = handler(self)
+        if data.get("pack") is None:
+            data.pop("pack", None)
+        if data.get("executable_sha256") is None:
+            data.pop("executable_sha256", None)
         if not data.get("file_access"):
             data.pop("file_access", None)
         if data.get("network") is None:

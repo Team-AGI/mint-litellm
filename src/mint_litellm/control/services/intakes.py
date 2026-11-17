@@ -10,6 +10,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from mint_litellm.control import alerts, intake_checks
+from mint_litellm.control import servers as server_domain
 from mint_litellm.control.approvals import _derive_org, build_conditions, check_scope_and_permission
 from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import fetchall, fetchone
@@ -31,6 +32,7 @@ from mint_litellm.types.canonical import canonical_text, pin_sha256, sha256
 from mint_litellm.types.cli_commands import APPROVER_UP
 from mint_litellm.types.decision import normalize_auth_type, url_sha256
 from mint_litellm.types.events import EventKind
+from mint_litellm.types.exec_contract import ExecContract
 from mint_litellm.types.ids import new_uuid7
 from mint_litellm.types.jobs import intake_reject_job_key, intake_run_job_key
 
@@ -45,6 +47,9 @@ _REQUIRED = (
     "purpose", "data_grade", "allowed_resources", "provider", "owner_user_id", "readiness",
     "data_return_terms", "requested_by",
 )
+# 단말 신청(로컬)의 검사 순서. 검사 모듈이 같은 이름의 목록을 가지면 이 값을 그쪽으로 바꾼다.
+LOCAL_CHECKS = ("exec_shape", "pack_build", "inspection", "description_scan", "risk_grade",
+                "termination_readiness")
 # 서버 행이 새 신청으로 이어질 수 있는 상태(재검사 전이가 있는 상태)
 _SERVER_REENTRY = ("pending", "awaiting_approval", "rejected")
 
@@ -86,7 +91,7 @@ def latest_checks(conn: Any, instance_id: str, intake_id: Any) -> list[dict]:
         " WHERE instance_id = %s AND intake_id = %s ORDER BY \"check\", attempt DESC",
         (instance_id, intake_id),
     )
-    order = {name: i for i, name in enumerate(intake_checks.CHECKS)}
+    order = {name: i for i, name in enumerate((*LOCAL_CHECKS, *intake_checks.CHECKS))}
     return sorted(rows, key=lambda r: order[r["check"]])
 
 
@@ -186,8 +191,8 @@ def deployment_candidate(conn: Any, instance_id: str, server_id: str) -> dict | 
 
 def _enqueue_run(ctx: Context, row: dict, mode: str = "") -> str:
     """수용검증 작업을 등록한다. 시도 번호가 같으면 한 작업이다."""
-    if not mode and row.get("source") == "staff":
-        mode = "staff"
+    if not mode and row.get("source") in ("staff", "endpoint"):
+        mode = row["source"]
     target = f"{row['id']}/{mode}" if mode else str(row["id"])
     if mode == "reject":  # 같은 신청의 LiteLLM 거절 전달은 어느 경로에서든 한 작업이다
         return enqueue_job(ctx, "intake_run", target, intake_reject_job_key(row["id"]))
@@ -798,7 +803,9 @@ def conclude(ctx: Context, intake_id: str, *, needs_registry_credentials: bool) 
         failed = [c for c in checks if c["result"] == "fail"]
         verdict = ("failed" if failed else
                    "indeterminate" if any(c["result"] == "indeterminate" for c in checks)
-                   or len(checks) < len(intake_checks.CHECKS) else "passed")
+                   or len(checks) < len(
+                       LOCAL_CHECKS if row["source"] == "endpoint" else intake_checks.CHECKS)
+                   else "passed")
         if row["status"] != "checking":
             raise conflict(f"checking이 아닌 신청({row['status']})은 판정할 수 없습니다.")
         ctx.conn.execute(
@@ -916,12 +923,16 @@ def decide(
     second: Operator | None = None,
     expected_version: int | None = None,
     litellm: Callable[[], Any] | None = None,
+    narrow_network: str | None = None,
+    narrow_file_access: list[str] | None = None,
 ) -> dict:
     """``approve``(통과), ``except``(판별 불가, 사유 필수·2인·유효 기간 90일 이내), ``reject``."""
     require_role(ctx, f"intake {decision}")
     if decision not in ("approve", "except", "reject"):
         raise ValueError(decision)
     reason = (reason or "").strip() or None
+    if narrow_network not in (None, "none"):
+        raise ControlError("네트워크는 none으로만 좁힐 수 있습니다.")
     if decision in ("except", "reject") and reason is None:
         raise ControlError("사유가 필요합니다(--reason).")
     with transact(ctx):
@@ -970,6 +981,8 @@ def decide(
             checks,
             litellm,
             allowed_hosts,
+            narrow_network,
+            narrow_file_access,
         )
 
 
@@ -989,12 +1002,20 @@ def _approve(
     checks: list[dict],
     litellm: Callable[[], Any] | None = None,
     allowed_hosts: list[str] | None = None,
+    narrow_network: str | None = None,
+    narrow_file_access: list[str] | None = None,
 ) -> dict:
     server_id = row["server_id"]
     scope_type = scope_type or "user"
     scope_id = scope_id or row["owner_user_id"]
     if scope_type not in ("key", "user", "team"):
         raise ControlError("승인 범위는 key, user, team 중 하나여야 합니다.")
+    if row["source"] == "endpoint":
+        return _approve_local(ctx, row, decision, reason, valid_until, scope_type, scope_id,
+                              team_id, second_info, checks, litellm, narrow_network,
+                              narrow_file_access)
+    if narrow_network is not None or narrow_file_access is not None:
+        raise ControlError("실행 권한 좁히기는 단말 신청에만 쓸 수 있습니다.")
     tools = fetchall(
         ctx.conn,
         "SELECT id, tool, risk_grade, action_type FROM mint.tool_contracts WHERE instance_id = %s"
@@ -1106,4 +1127,168 @@ def _approve(
     enqueue_job(ctx, "sync_server", server_id)
     if scope_type in ("key", "team"):
         enqueue_job(ctx, "sync_target", f"{scope_type}:{scope_id}")
+    return {**updated, "approval_id": str(approval_id), "relation_id": str(relation_id)}
+
+
+def _narrowed(
+    contract: ExecContract, network: str | None, file_access: list[str] | None
+) -> ExecContract:
+    """승인자가 실행 권한을 좁힌 계약(해시가 새로 정해진다). 넓히는 값은 거절한다."""
+    doc = contract.model_dump(mode="json")
+    if network is not None:
+        if network != "none":
+            raise ControlError("네트워크는 none으로만 좁힐 수 있습니다.")
+        doc["network"], doc["allowed_hosts"] = "none", []
+    if file_access is not None:
+        declared = {f["path"]: f for f in doc.get("file_access") or []}
+        extra = sorted(set(file_access) - set(declared))
+        if extra:
+            raise ControlError(f"선언하지 않은 경로는 더할 수 없습니다: {extra[0][:64]}")
+        doc["file_access"] = [declared[p] for p in sorted(set(file_access))]
+    return ExecContract.model_validate(doc)
+
+
+def _approve_local(
+    ctx: Context, row: dict, decision: str, reason: str | None, valid_until: datetime | None,
+    scope_type: str, scope_id: str, team_id: str | None, second_info: dict | None,
+    checks: list[dict], litellm: Callable[[], Any] | None,
+    narrow_network: str | None = None, narrow_file_access: list[str] | None = None,
+) -> dict:
+    """단말 신청(로컬 서버) 승인: 계약 등록, 서버 승인, 범위 승인, 키 동기화 등록을 한 트랜잭션으로.
+
+    LiteLLM에는 서버가 없으므로 승인은 바로 활성이다. 도구 후보가 없으면(검사로 목록을 받지
+    못한 판별 불가) 단말이 보고한 도구 이름을 상한으로 삼고 판정은 임시 계약이 맡는다.
+    """
+    server_id = row["server_id"]
+    deployment = deployment_candidate(ctx.conn, ctx.instance_id, server_id)
+    if (deployment is None or not deployment["pack_sha256"]
+            or not isinstance(deployment["exec_contract"], dict)):
+        raise ControlError("실행 묶음이 준비되지 않았습니다. 재검사한 뒤 결정하십시오.")
+    try:
+        contract = _narrowed(ExecContract.model_validate(
+            {k: v for k, v in deployment["exec_contract"].items() if k != "identity_kind"}),
+            narrow_network, narrow_file_access)
+    except ValueError:
+        raise ControlError("실행 계약이 올바르지 않습니다. 재검사한 뒤 결정하십시오.") from None
+    if contract.pack is None or contract.pack.sha256 != deployment["pack_sha256"]:
+        raise ControlError("실행 계약이 묶음과 맞지 않습니다. 재검사한 뒤 결정하십시오.")
+    tools = fetchall(
+        ctx.conn,
+        "SELECT id, tool, risk_grade, action_type FROM mint.tool_contracts WHERE instance_id = %s"
+        " AND server_id = %s AND status = 'candidate' AND source = 'intake' ORDER BY tool",
+        (ctx.instance_id, server_id),
+    )
+    if any(t["risk_grade"] is None or t["action_type"] is None for t in tools):
+        raise ControlError("위험 등급이 산정되지 않은 도구가 있어 승인할 수 없습니다.")
+    if tools:
+        names = [t["tool"] for t in tools]
+    else:
+        observed = (deployment["pack_spec"] or {}).get("observed_tools") or []
+        names = sorted({t["name"] for t in observed
+                        if isinstance(t, dict) and isinstance(t.get("name"), str)})
+        if not names:
+            raise ControlError("승인할 도구를 알 수 없습니다. 검사로 도구 목록을 받아야 합니다.")
+    high = sorted(t["tool"] for t in tools if t["risk_grade"] in ("high", "critical"))
+    if valid_until is None:
+        short = decision == "except" or bool(high)
+        valid_until = datetime.now(UTC) + timedelta(
+            days=DEFAULT_SHORT_DAYS if short else DEFAULT_DAYS)
+    allowlist_ids = sorted(
+        {a for c in checks for a in (c["inputs"] or {}).get("allowlist_ids", [])})
+    lacking = ([e["key"] for e in evidence.missing(ctx, "approve", "intake", str(row["id"]))]
+               if decision == "except" else [])
+    updated = _decided(
+        ctx, row, "exception" if decision == "except" else "approved", reason or "수용검증 통과",
+        {"second_approver": None if second_info is None else second_info["name"],
+         **({"missing_evidence": lacking} if lacking else {})},
+    )
+    # 계약 등록이 서버 행의 계약 값을 정한다(등록 사건이 단말 배포 근거가 된다)
+    server_domain.register_local(ctx, server_id, contract)
+    for tool in tools:
+        version = fetchone(ctx.conn,
+                           "UPDATE mint.tool_contracts SET status = 'approved' WHERE id = %s"
+                           " RETURNING version", (tool["id"],))["version"]
+        ctx.emit(EventKind.CONTRACT_APPROVED, tool["id"], version,
+                 {"server_id": server_id, "tool": tool["tool"], "risk_grade": tool["risk_grade"],
+                  "action_type": tool["action_type"], "intake_id": str(row["id"])})
+    version = fetchone(
+        ctx.conn,
+        "UPDATE mint.deployment_contracts SET status = 'approved', exec_contract_sha256 = %s,"
+        " exec_contract_version = %s, exec_contract = %s::jsonb WHERE id = %s RETURNING version",
+        (contract.sha256(), contract.schema_version, json.dumps(contract.document()),
+         deployment["id"]))["version"]
+    ctx.emit(EventKind.DEPLOYMENT_CONTRACT_APPROVED, deployment["id"], version,
+             {"server_id": server_id, "sha256": deployment["sha256"],
+              "pack_sha256": deployment["pack_sha256"], "intake_id": str(row["id"])})
+    relation = fetchone(
+        ctx.conn,
+        "SELECT id FROM mint.usage_relations WHERE instance_id = %s AND org_id = %s"
+        " AND server_id = %s AND purpose = %s AND team_id IS NOT DISTINCT FROM %s FOR UPDATE",
+        (ctx.instance_id, row["org_id"], server_id, row["purpose"], team_id),
+    )
+    if relation is None:
+        relation_id = new_uuid7()
+        rel = fetchone(
+            ctx.conn,
+            "INSERT INTO mint.usage_relations (id, instance_id, org_id, team_id, purpose,"
+            " server_id) VALUES (%s, %s, %s, %s, %s, %s) RETURNING state_version",
+            (relation_id, ctx.instance_id, row["org_id"], team_id, row["purpose"], server_id),
+        )
+        ctx.emit(EventKind.RELATION_CREATED, relation_id, rel["state_version"],
+                 {"relation_id": str(relation_id), "org_id": row["org_id"], "team_id": team_id,
+                  "purpose": row["purpose"], "server_id": server_id})
+    else:
+        relation_id = relation["id"]
+    if litellm is not None:
+        check_scope_and_permission(
+            ctx, litellm(),
+            {"server_id": server_id, "team_id": team_id, "org_id": row["org_id"]},
+            scope_type, scope_id,
+        )
+    conditions = build_conditions(
+        high_risk_tools=high, business_hours_only=False, business_hours=None,
+        require_consent=None)
+    basis = {"text": reason or "수용검증 통과", "intake_id": str(row["id"]),
+             "allowlist_ids": allowlist_ids}
+    if second_info:
+        basis["second_approver"] = second_info["name"]
+    if lacking:
+        basis["missing_evidence"] = lacking
+    approval_id = new_uuid7()
+    klass = "exception" if decision == "except" else "standard"
+    granted = fetchone(
+        ctx.conn,
+        "INSERT INTO mint.approvals (id, instance_id, org_id, relation_id, class, server_id, tools,"
+        " scope_type, scope_id, valid_from, valid_until, conditions, basis, granted_by,"
+        " requested_by, status) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, now(), %s, %s::jsonb,"
+        " %s::jsonb, %s, %s, 'active') RETURNING state_version",
+        (approval_id, ctx.instance_id, row["org_id"], relation_id, klass, server_id, names,
+         scope_type, scope_id, valid_until, json.dumps(conditions),
+         json.dumps(basis, ensure_ascii=False), ctx.operator.name, row["requested_by"]),
+    )
+    ctx.emit(
+        EventKind.APPROVAL_GRANTED, approval_id, granted["state_version"],
+        {"approval_id": str(approval_id), "relation_id": str(relation_id),
+         "server_id": server_id, "org_id": row["org_id"], "scope_type": scope_type,
+         "scope_id": scope_id, "tools": names, "class": klass,
+         "valid_until": valid_until.isoformat(), "requested_by": row["requested_by"],
+         "granted_by": ctx.operator.name,
+         "second_approver": None if second_info is None else second_info["name"],
+         "conditions": conditions, "basis": basis},
+    )
+    managed = ", contract_status = 'managed'" if tools else ""
+    server = fetchone(
+        ctx.conn,
+        "UPDATE mint.servers SET status = 'approved', data_grade = %s,"
+        " basis_allowlist_ids = %s::uuid[]" + managed
+        + " WHERE instance_id = %s AND server_id = %s AND status = 'awaiting_approval'"
+        " RETURNING id, state_version",
+        (row["data_grade"], allowlist_ids, ctx.instance_id, server_id),
+    )
+    if server is None:
+        raise conflict("서버가 승인 대기 상태가 아니라 승인할 수 없습니다.")
+    ctx.emit(EventKind.SERVER_APPROVED, server["id"], server["state_version"],
+             {"server_id": server_id, "first_approval_id": str(approval_id),
+              "basis_allowlist_ids": allowlist_ids})
+    enqueue_job(ctx, "kit_key_sync", "all")
     return {**updated, "approval_id": str(approval_id), "relation_id": str(relation_id)}
