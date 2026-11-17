@@ -192,6 +192,8 @@ class Stage2Settings:
     # 새로 발급하는 단말 설치 묶음 키의 유효 기간(일, 30~365). 만료 전 14일 안의 보고가 늘려 준다.
     endpoint_key_days: int = 90
     intake_allowed_ports: tuple[int, ...] = (443, 8443)
+    # 단말 신청 실행 계약에 적는 조직 런타임 경로(Python 3). 단말은 이 경로를 확인한 뒤 쓴다.
+    local_python: str = "/usr/bin/python3"
     console_url: str | None = None
     # 채팅 승인(Slack): 요청 서명 비밀과 모달을 여는 봇 토큰. 서명 비밀이 없으면 채팅 승인은 꺼진다.
     slack_signing_secret: str | None = None
@@ -256,6 +258,7 @@ class Stage2Settings:
             endpoint_silent_hours=_seconds(env, "MINT_ENDPOINT_SILENT_HOURS", 24),
             endpoint_key_days=_days(env, "MINT_ENDPOINT_KEY_DAYS", 90, 30),
             intake_allowed_ports=_ports(env.get("MINT_INTAKE_ALLOWED_PORTS")),
+            local_python=env.get("MINT_LOCAL_PYTHON", "").strip() or "/usr/bin/python3",
             spike_window_seconds=_seconds(env, "MINT_SPIKE_WINDOW_SECONDS", 300),
             spike_baseline_seconds=_seconds(env, "MINT_SPIKE_BASELINE_SECONDS", 86400),
             spike_factor=_seconds(env, "MINT_SPIKE_FACTOR", 3),
