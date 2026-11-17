@@ -19,7 +19,7 @@ from typing import Any
 import psycopg
 from psycopg.errors import UniqueViolation
 
-from mint_litellm.control import alerts, exports, intake_jobs, jobs, ledger
+from mint_litellm.control import alerts, endpoint_inspections, exports, intake_jobs, jobs, ledger
 from mint_litellm.control.config import ControlConfig
 from mint_litellm.control.db.connection import connect, fetchone
 from mint_litellm.control.errors import ControlError
@@ -33,6 +33,7 @@ log = logging.getLogger("mint_litellm.worker")
 
 # 처리기가 붙은 작업 종류(이 모듈을 부르는 실행기가 쓰는 처리기를 등록한다)
 jobs.HANDLERS.update(intake_jobs.HANDLERS)
+jobs.HANDLERS.update(endpoint_inspections.HANDLERS)
 
 POLL_SECONDS = 1.0
 # 되돌림 상태에서 외부 쓰기 작업을 다시 시도하기까지의 간격(초)

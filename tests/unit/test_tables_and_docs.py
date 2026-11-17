@@ -140,6 +140,8 @@ def test_command_roles_follow_the_operator_role_model():
         "intake approve",
         "intake reject",
         "intake except",
+        "intake inspect",
+        "intake inspect-revoke",
     }
     for command in COMMANDS:
         if command.unauthenticated:

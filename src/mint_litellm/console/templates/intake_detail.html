@@ -20,6 +20,8 @@
 {% if stale and i.status in ('passed', 'indeterminate') %}<div class="banner error" role="alert">연결·도구 정의 증거가 24시간을 넘었습니다</div>{% endif %}
 {% if lacking and (i.status == 'indeterminate' or i.decision == 'exception') %}<div class="banner error" role="alert">증빙 누락: {{ lacking | join }}</div>{% endif %}
 {% if provider_blocked %}<div class="banner error">제공자가 허용되지 않았습니다. <a href="/access?tab=allowlists">제공자 허용</a> 후 {% if i.status == "indeterminate" %}재검사하세요.{% else %}<a href="/intakes/new?server_id={{ i.server_id | urlencode }}">다시 신청</a>하세요.{% endif %}</div>{% endif %}
+{% if inspect.open %}<div class="effect">단말 검사 대기 · 남은 시간 {{ inspect.left }}</div>
+{% elif inspect.latest and inspect.latest.status in ('submitted', 'verified') %}<div class="effect">단말 검사 받음 · 예외 승인으로만 승인됩니다</div>{% endif %}
 {% if next_step %}<div class="effect">다음 행동: {% if next_step == '증빙 첨부' %}<a href="?tab=evidence">{{ next_step }}</a>{% else %}{{ next_step }}{% endif %}</div>{% endif %}
 <div class="cards">
   {{ m.kpi('검사 통과', passed ~ ' / ' ~ (checks | length), level='danger' if failed else ('wait' if passed != (checks | length) else none)) }}
@@ -52,7 +54,7 @@
 {% else %}
 {% if checks %}
 <table><thead><tr><th>단계</th><th>결과</th><th>실행 시각</th><th>증거 만료</th><th>사유</th></tr></thead><tbody>
-{% for c in checks %}<tr><td>{{ L.pick(L.CHECK, c.check) }}</td><td>{{ m.badge(L.CHECK_RESULT, c.result) }}</td><td class="nowrap">{{ c.ran_at | when }}</td><td class="nowrap">{{ c.evidence_valid_until | when }}</td><td>{{ L.pick(L.CHECK_REASON, c.reason_code) }}{% set d = c.inputs.detail if c.inputs is mapping and c.inputs.detail is mapping else none %}{% if d %}<details><summary>상세</summary><p>{{ L.pick(L.INSPECTION_STAGE, d.stage) }}{% if d.exit_code is not none %} · 종료 코드 {{ d.exit_code }}{% endif %}</p>{% if d.stderr_tail %}<pre>{{ d.stderr_tail }}</pre>{% endif %}</details>{% endif %}</td></tr>{% endfor %}
+{% for c in checks %}<tr><td>{{ L.pick(L.CHECK, c.check) }}{% if c.method.startswith('endpoint:') %} <span class="badge off">단말 검사</span>{% endif %}</td><td>{{ m.badge(L.CHECK_RESULT, c.result) }}</td><td class="nowrap">{{ c.ran_at | when }}</td><td class="nowrap">{{ c.evidence_valid_until | when }}</td><td>{{ L.pick(L.CHECK_REASON, c.reason_code) }}{% set d = c.inputs.detail if c.inputs is mapping and c.inputs.detail is mapping else none %}{% if d %}<details><summary>상세</summary><p>{{ L.pick(L.INSPECTION_STAGE, d.stage) }}{% if d.exit_code is not none %} · 종료 코드 {{ d.exit_code }}{% endif %}</p>{% if d.stderr_tail %}<pre>{{ d.stderr_tail }}</pre>{% endif %}</details>{% endif %}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}<p class="muted">아직 검사 결과가 없습니다.</p>{% endif %}
 <h2>도구와 위험 등급</h2>
@@ -72,6 +74,20 @@
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ i.state_version }}">
   <label>신청자(사용자 식별자)<input name="user_id" required></label>
   <button type="submit" class="primary">지정</button>
+</form>
+{% endif %}
+{% endif %}
+
+{% if inspect.can or inspect.open %}
+<h2>단말 검사</h2>
+{% if inspect.open %}
+<form method="post" action="/intakes/{{ i.id }}/inspect-revoke" class="filters">
+  {{ m.csrf(actor) }}<input type="hidden" name="inspection_id" value="{{ inspect.open.id }}">
+  <button type="submit">검사용 승인 철회</button>
+</form>
+{% else %}
+<form method="post" action="/intakes/{{ i.id }}/inspect" class="filters">
+  {{ m.csrf(actor) }}<button type="submit" class="primary">검사용 승인</button>
 </form>
 {% endif %}
 {% endif %}

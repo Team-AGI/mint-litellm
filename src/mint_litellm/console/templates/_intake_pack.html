@@ -7,6 +7,10 @@
   <dt>진입점</dt><dd>{{ pack.entry | blank }}</dd>
   <dt>네트워크</dt><dd>{% if pack.network == 'none' %}차단{% elif pack.network == 'hosts' %}허용 호스트만: {{ pack.hosts | join }}{% else %}제한 없음{% endif %}</dd>
 </dl>
+{% if pack.env %}<h2>환경 변수</h2>
+<table><thead><tr><th>이름</th><th>값</th></tr></thead><tbody>
+{% for name, value in pack.env %}<tr><td>{{ name }}</td><td>{{ value }}</td></tr>{% endfor %}
+</tbody></table>{% endif %}
 <h2>의존성</h2>
 <table><thead><tr><th>이름</th><th>크기</th><th>해시</th></tr></thead><tbody>
 {% for f in pack.files %}<tr><td>{{ f.name }}</td><td class="nowrap">{{ f.size | blank }}</td><td>{{ m.ident(f.sha) }}</td></tr>{% endfor %}
@@ -23,12 +27,18 @@
 {% for a in pack.access %}<tr><td>{{ a.path }}</td><td>{{ '읽기·쓰기' if a.mode == 'rw' else '읽기' }}</td></tr>{% endfor %}
 </tbody></table>
 {% endif %}
-<h2>검사 컨테이너 도구</h2>
+<h2>{{ inspect.source if inspect else '검사 컨테이너' }} 도구</h2>
 {% if tools %}
 <table><thead><tr><th>도구</th><th>위험 등급</th><th>동작 유형</th><th>상태</th></tr></thead><tbody>
 {% for t in tools %}<tr><td>{{ t.tool }}</td><td>{{ L.pick(L.RISK, t.risk_grade) }}</td><td>{{ L.pick(L.ACTION, t.action_type) }}</td><td>{{ '승인됨' if t.status == 'approved' else '후보' }}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}<p class="muted">검사로 받은 도구가 없습니다.</p>{% endif %}
+{% if inspect and inspect.history %}
+<h2>검사용 승인</h2>
+<table><thead><tr><th>상태</th><th>발급자</th><th>발급</th><th>만료</th></tr></thead><tbody>
+{% for h in inspect.history %}<tr><td>{{ L.pick(L.INSPECTION_STATUS, h.status) }}</td><td>{{ h.issued_by | who }}</td><td class="nowrap">{{ h.issued_at | when }}</td><td class="nowrap">{{ h.expires_at | when }}</td></tr>{% endfor %}
+</tbody></table>
+{% endif %}
 {% if pack.reported_tools %}
 <h2>단말이 보낸 참고 도구</h2>
 <table><thead><tr><th>도구</th><th>구분</th></tr></thead><tbody>

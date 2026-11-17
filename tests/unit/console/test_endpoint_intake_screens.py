@@ -93,3 +93,64 @@ def test_an_intake_without_pack_columns_still_renders(world):
     intake = add_intake(world)
     html = world.session_client("approver").get(f"/intakes/{intake}").text
     assert "실행 묶음" not in html
+
+
+def make_inspectable(world, intake=None):
+    intake = intake or add_intake(world, status="indeterminate", result="indeterminate")
+    world.query("ALTER TABLE mint.intakes DISABLE TRIGGER USER")
+    world.query("UPDATE mint.intakes SET source = 'endpoint', endpoint_key_token = 'kit-key'"
+                " WHERE id = %s", intake)
+    world.query("ALTER TABLE mint.intakes ENABLE TRIGGER USER")
+    world.query("UPDATE mint.deployment_contracts SET pack_sha256 = %s, pack_manifest = %s,"
+                " exec_contract = %s, pack_spec = %s", SHA, json.dumps(MANIFEST),
+                json.dumps({**CONTRACT, "schema_version": 2}), json.dumps(ROW["pack_spec"]))
+    world.query("INSERT INTO mint.endpoint_installs (instance_id, key_token, user_id, key_alias,"
+                " issued_by) VALUES ('inst1', 'kit-key', 'human-9', 'kit-alias', 'root')")
+    return intake
+
+
+def post_form(world, client, path, **data):
+    return client.post(path, data={"csrf": world.csrf(client), **data})
+
+
+def test_an_admin_grants_and_withdraws_an_inspection_approval_from_the_intake_screen(world):
+    intake = make_inspectable(world)
+    client = world.session_client("admin")
+    html = client.get(f"/intakes/{intake}").text
+    assert "단말 검사" in html and f"/intakes/{intake}/inspect" in html
+    assert "검사용 승인" in html and "단말 검사 대기" not in html
+    assert post_form(world, client, f"/intakes/{intake}/inspect").status_code == 303
+    html = client.get(f"/intakes/{intake}").text
+    assert re.search(r"단말 검사 대기 · 남은 시간 (59|60)분", html)
+    assert "검사용 승인 철회" in html and f"/intakes/{intake}/inspect" not in html.replace(
+        "/inspect-revoke", "")
+    again = post_form(world, client, f"/intakes/{intake}/inspect")
+    assert again.status_code == 409 and "이미 열려" in again.text
+    inspection = world.query("SELECT id FROM mint.endpoint_inspections")[0][0]
+    assert post_form(world, client, f"/intakes/{intake}/inspect-revoke",
+                     inspection_id=str(inspection)).status_code == 303
+    html = client.get(f"/intakes/{intake}").text
+    assert "단말 검사 대기" not in html and f"/intakes/{intake}/inspect\"" in html
+    assert "철회" in client.get(f"/intakes/{intake}?tab=pack").text
+
+
+def test_the_inspection_button_needs_a_local_indeterminate_intake_and_a_pack(world):
+    other = add_intake(world, status="indeterminate", result="indeterminate")
+    client = world.session_client("admin")
+    assert f"/intakes/{other}/inspect" not in client.get(f"/intakes/{other}").text
+    intake = make_inspectable(world, other)
+    assert f"/intakes/{intake}/inspect" in client.get(f"/intakes/{intake}").text
+    world.query("UPDATE mint.deployment_contracts SET pack_sha256 = NULL")
+    assert f"/intakes/{intake}/inspect" not in client.get(f"/intakes/{intake}").text
+
+
+def test_a_device_inspection_is_labelled_in_the_check_table_and_the_tool_list(world):
+    intake = make_inspectable(world)
+    world.query("INSERT INTO mint.intake_checks (id, instance_id, intake_id, \"check\", attempt,"
+                " result, reason_code, method) VALUES (gen_random_uuid(), 'inst1', %s,"
+                " 'inspection', 9, 'indeterminate', 'ENDPOINT_INSPECTED', 'endpoint:tools_list')",
+                intake)
+    client = world.session_client("approver")
+    html = client.get(f"/intakes/{intake}").text
+    assert "단말 검사로 받음" in html and html.count("단말 검사") >= 2
+    assert "단말 검사 도구" in client.get(f"/intakes/{intake}?tab=pack").text

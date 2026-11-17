@@ -61,6 +61,7 @@ from mint_litellm.control.services import call_approvals as call_approval_servic
 from mint_litellm.control.services import consents as consent_service
 from mint_litellm.control.services import contracts as contract_service
 from mint_litellm.control.services import denials as denial_service
+from mint_litellm.control.services import intake_inspections as inspection_service
 from mint_litellm.control.services import intakes as intake_service
 from mint_litellm.control.services import operators as operator_service
 from mint_litellm.control.services import orgs as org_service
@@ -1026,6 +1027,10 @@ INTAKE_HANDLERS: dict[str, Handler] = {
                                   transport=r.args.transport)),
     "intake assign": lambda r: intake_service.assign_requester(
         r.context(), r.litellm(), r.args.intake_id, r.args.requester),
+    "intake inspect": lambda r: _created(
+        r, inspection_service.issue(r.context(), r.args.intake_id)),
+    "intake inspect-revoke": lambda r: inspection_service.revoke(
+        r.context(), r.args.inspection_id),
     "intake approve": _intake_decide("approve"),
     "intake reject": _intake_decide("reject"),
     "intake except": _intake_decide("except"),
@@ -1340,6 +1345,8 @@ INTAKE_ARGUMENTS: dict[str, list[Any]] = {
         _a("--transport", help="새 배포 주소의 전송 방식(기본은 승인된 값)"),
     ],
     "intake assign": [_INTAKE_ID, _a("--requester", required=True, help="신청자 사용자 식별자")],
+    "intake inspect": [_INTAKE_ID],
+    "intake inspect-revoke": [_a("inspection_id", help="검사용 승인 식별자")],
     "intake approve": _DECISION,
     "intake reject": _DECISION,
     "intake except": _DECISION,
