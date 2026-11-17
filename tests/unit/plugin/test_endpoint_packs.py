@@ -73,7 +73,8 @@ def test_me_lists_scope_and_recent_intakes_for_the_calling_key(tmp_path, scope):
     assert answer["servers"] == [{"server_id": "demo", "pack_sha256": PACK,
                                   "permit_until": UNTIL.isoformat(), "status": "approved"}]
     assert answer["intakes"][0]["id"] == str(UUID(int=1))
-    assert answer["intakes"][0]["next"] == "wait"
+    assert answer["intakes"][0]["stage"] == "received"
+    assert answer["intakes"][0]["next"] == "검사가 끝나기를 기다림"
     assert client.get(ME).status_code == 401
     assert client.get(ME, headers=HEADERS).json()["servers"] == []
 

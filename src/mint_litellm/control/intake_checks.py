@@ -584,6 +584,22 @@ def pack_build_failed(code: str) -> Outcome:
     return Outcome("indeterminate", code, "pack:pip_download")
 
 
+def _failure_detail(result: dict) -> dict:
+    """검사 컨테이너의 실패 상세(단계·종료 코드·오류 출력 끝). 관리자 화면에만 쓴다."""
+    detail = result.get("detail")
+    if not isinstance(detail, dict):
+        return {}
+    code, tail = detail.get("exit_code"), detail.get("stderr_tail")
+    return {"detail": {
+        "stage": detail.get("stage") if detail.get("stage") in INSPECTION_STAGES else None,
+        "exit_code": code if isinstance(code, int) and not isinstance(code, bool) else None,
+        "stderr_tail": tail[-2048:] if isinstance(tail, str) else "",
+    }}
+
+
+INSPECTION_STAGES = ("start", "initialize", "tools_list")
+
+
 def inspection_outcome(result: dict) -> Outcome:
     """검사 컨테이너 결과. 도구 목록을 끝까지 받은 경우만 통과이다."""
     method = "inspector:tools_list"
@@ -592,7 +608,7 @@ def inspection_outcome(result: dict) -> Outcome:
             tools, list):
         reason = result.get("reason")
         return Outcome("indeterminate", reason if isinstance(reason, str) and reason
-                       else "INSPECTION_INCOMPLETE", method)
+                       else "INSPECTION_INCOMPLETE", method, _failure_detail(result))
     if depth(tools) > MAX_DEPTH:
         return Outcome("indeterminate", "LIMIT_EXCEEDED", method, {"tools": len(tools)})
     defs = [tool_definition(t) for t in tools if isinstance(t, dict) and t.get("name")]

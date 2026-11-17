@@ -52,7 +52,7 @@
 {% else %}
 {% if checks %}
 <table><thead><tr><th>단계</th><th>결과</th><th>실행 시각</th><th>증거 만료</th><th>사유</th></tr></thead><tbody>
-{% for c in checks %}<tr><td>{{ L.pick(L.CHECK, c.check) }}</td><td>{{ m.badge(L.CHECK_RESULT, c.result) }}</td><td class="nowrap">{{ c.ran_at | when }}</td><td class="nowrap">{{ c.evidence_valid_until | when }}</td><td>{{ L.pick(L.CHECK_REASON, c.reason_code) }}</td></tr>{% endfor %}
+{% for c in checks %}<tr><td>{{ L.pick(L.CHECK, c.check) }}</td><td>{{ m.badge(L.CHECK_RESULT, c.result) }}</td><td class="nowrap">{{ c.ran_at | when }}</td><td class="nowrap">{{ c.evidence_valid_until | when }}</td><td>{{ L.pick(L.CHECK_REASON, c.reason_code) }}{% set d = c.inputs.detail if c.inputs is mapping and c.inputs.detail is mapping else none %}{% if d %}<details><summary>상세</summary><p>{{ L.pick(L.INSPECTION_STAGE, d.stage) }}{% if d.exit_code is not none %} · 종료 코드 {{ d.exit_code }}{% endif %}</p>{% if d.stderr_tail %}<pre>{{ d.stderr_tail }}</pre>{% endif %}</details>{% endif %}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}<p class="muted">아직 검사 결과가 없습니다.</p>{% endif %}
 <h2>도구와 위험 등급</h2>

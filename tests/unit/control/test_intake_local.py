@@ -37,6 +37,7 @@ class Fake:
                          "pack_manifest": MANIFEST}
         self.existing = existing or {}
         self.records, self.stored, self.graded, self.updates = [], [], [], []
+        self.outcomes = {}
         self.conn = SimpleNamespace(execute=lambda sql, args: self.updates.append(args))
         self.job = SimpleNamespace(
             conn=self.conn, instance_id="i", settings=SimpleNamespace(local_python="/opt/py3"),
@@ -49,8 +50,9 @@ class Fake:
             deployment_candidate=lambda *_: self.contract,
             existing_check=lambda conn, inst, iid, name, attempt: self.existing.get(name),
             contract_binding=lambda *_: "bound",
-            record_check=lambda ctx, row, attempt, name, out, bound: self.records.append(
-                (name, out.result, out.reason)),
+            record_check=lambda ctx, row, attempt, name, out, bound: (
+                self.records.append((name, out.result, out.reason)),
+                self.outcomes.__setitem__(name, out)),
             store_candidates=lambda ctx, sid, defs: self.stored.append(defs) or True,
             store_grades=lambda ctx, sid, graded: self.graded.append(graded),
         )
@@ -118,6 +120,27 @@ def test_incomplete_inspection_stores_no_candidates(monkeypatch):
     assert result["inspection"] == ("indeterminate", "TIMEOUT")
     assert result["description_scan"][0] == "indeterminate"
     assert len(result) == 6 and not fake.stored
+
+
+def test_a_failed_inspection_records_the_stage_exit_code_and_stderr_tail(monkeypatch):
+    detail = {"stage": "start", "exit_code": 1, "stderr_tail": "ValueError: not set" + "z" * 3000}
+    fake = Fake()
+    fake.install(monkeypatch, inspect=lambda *a, **k: {
+        "status": "failed", "reason": "INSPECTION_FAILED", "tools": [], "complete": False,
+        "detail": detail})
+    fake.run()
+    assert fake.outcomes["inspection"].reason == "INSPECTION_FAILED"
+    recorded = fake.outcomes["inspection"].inputs["detail"]
+    assert (recorded["stage"], recorded["exit_code"]) == ("start", 1)
+    assert len(recorded["stderr_tail"]) == 2048 and recorded["stderr_tail"].endswith("z")
+
+
+def test_a_malformed_detail_is_dropped_to_safe_values():
+    out = checks.inspection_outcome({"status": "failed", "reason": "INSPECTION_FAILED",
+                                     "detail": {"stage": "elsewhere", "exit_code": "x",
+                                                "stderr_tail": 5}})
+    assert out.inputs["detail"] == {"stage": None, "exit_code": None, "stderr_tail": ""}
+    assert checks.inspection_outcome({"status": "failed"}).inputs == {}
 
 
 def test_retry_skips_recorded_checks_and_reuses_the_pack(monkeypatch):

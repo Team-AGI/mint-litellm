@@ -32,6 +32,7 @@ from pydantic import (
 )
 
 from mint_litellm.compat.litellm_1_106 import HookData
+from mint_litellm.endpoint import intake_text
 from mint_litellm.endpoint.routes import (
     DECIDE_PATH,
     INTAKES_PATH,
@@ -556,8 +557,9 @@ def make_router(
             ],
             "intakes": [
                 {"id": str(r["id"]), "server_id": r["server_id"], "status": r["status"],
-                 "decision": r["decision"], "reason": r["reason"],
-                 "next": "none" if r["decision"] else "wait", "created_at": _iso(r["created_at"])}
+                 "decision": r["decision"], "reason": intake_text.reason_of(r),
+                 "stage": intake_text.stage_of(r), "next": intake_text.next_of(r),
+                 "created_at": _iso(r["created_at"])}
                 for r in rows[:20]
             ],
         }

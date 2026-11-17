@@ -30,6 +30,10 @@ def tool(i, pad=0):
 
 
 def main():
+    if mode == "crash":
+        text = "ValueError: GHIDRA_INSTALL_DIR is not set"
+        sys.stderr.write("x" * 5000 + text + chr(7) + chr(10))
+        sys.exit(3)
     if mode == "child":
         child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
         open(sys.argv[2], "w").write(str(child.pid))
@@ -128,6 +132,21 @@ class InspectorTests(unittest.TestCase):
         result = self.run_pack(["hang"], timeout=1)
         self.assertEqual(result["reason"], "TIMEOUT")
         self.assertLess(time.monotonic() - started, 10)
+
+    def test_a_server_that_exits_at_start_leaves_its_reason(self):
+        result = self.run_pack(["crash"])
+        detail = result["detail"]
+        self.assertEqual(result["reason"], "INSPECTION_FAILED")
+        self.assertEqual((detail["stage"], detail["exit_code"]), ("start", 3))
+        self.assertIn("GHIDRA_INSTALL_DIR is not set", detail["stderr_tail"])
+        self.assertLessEqual(len(detail["stderr_tail"]), 2048)
+        self.assertNotIn(chr(7), detail["stderr_tail"])
+
+    def test_a_good_run_has_no_detail(self):
+        self.assertIsNone(self.run_pack(["ok"])["detail"])
+
+    def test_a_hung_server_reports_the_stage_it_stopped_in(self):
+        self.assertEqual(self.run_pack(["hang"], timeout=1)["detail"]["stage"], "initialize")
 
     def test_wrong_entry_is_refused(self):
         request = {"pack_sha256": self.pack, "entry": "other:main", "argv": []}
