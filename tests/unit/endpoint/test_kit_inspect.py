@@ -405,12 +405,16 @@ def test_add_sends_env_values_and_adds_read_access_for_path_values(tmp_path):
     code, sent, lines = add_with(tmp_path, ["GHIDRA_INSTALL_DIR=/opt/ghidra", "MODE=fast"])
     assert code == 0
     body = sent[0]
-    assert body["spec"]["env"] == {"GHIDRA_INSTALL_DIR": "/opt/ghidra", "MODE": "fast"}
+    assert body["env"] == {"GHIDRA_INSTALL_DIR": "/opt/ghidra", "MODE": "fast"}
+    # 단말이 만든 본문을 서버 본문 모델이 그대로 받아야 한다(모르는 필드는 거부된다).
+    from mint_litellm.endpoint.decide import IntakeBody
+
+    IntakeBody.model_validate({**body, "request_id": "00000000-0000-4000-8000-000000000001"})
     assert {"path": "/opt/ghidra", "mode": "ro"} in body["file_access"]
     assert body["env_names"] == []
     assert any("/opt/ghidra" in line and "읽기" in line for line in lines)
     code, sent, _ = add_with(tmp_path, [], ro=["/opt/ghidra"])
-    assert "env" not in sent[0]["spec"]
+    assert "env" not in sent[0]
 
 
 def test_add_refuses_a_forbidden_env_before_sending_anything(tmp_path):
@@ -432,7 +436,7 @@ def test_the_interactive_prompt_collects_env_and_can_decline_the_read_access(tmp
     args = add_args(yes=False, command=["uvx", "demo==1.0"])
     code = kit_module.run_add(args, tmp_path, gateway, out=lines.append, read=read, tty=True)
     assert code == 0
-    assert gateway.sent[0]["spec"]["env"] == {"GHIDRA_INSTALL_DIR": "/opt/ghidra"}
+    assert gateway.sent[0]["env"] == {"GHIDRA_INSTALL_DIR": "/opt/ghidra"}
     assert gateway.sent[0]["file_access"] == []
     assert "이름=값 형식으로 적으십시오" in lines
 
