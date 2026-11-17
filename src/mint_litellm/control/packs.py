@@ -89,6 +89,20 @@ def _entry(wheels: list[Path], command: str, spec: dict) -> str:
     raise PackError("PACK_ENTRY_NOT_FOUND")
 
 
+def _direct_url(wheels: list[Path]) -> bool:
+    """Requires-Dist에 `이름 @ 주소` 꼴(직접 URL)이 있는가."""
+    for wheel in wheels:
+        with zipfile.ZipFile(wheel) as archive:
+            for name in archive.namelist():
+                if name.endswith(".dist-info/METADATA") and name.count("/") == 1:
+                    for line in archive.read(name).decode("utf-8", "replace").splitlines():
+                        if line.startswith("Requires-Dist:") and (
+                            "@" in line.split(";", 1)[0] or "://" in line.split(";", 1)[0]
+                        ):
+                            return True
+    return False
+
+
 def build_pack(
     spec: dict,
     allowlists: list[dict],
@@ -140,6 +154,11 @@ def build_pack(
             not p.is_file() or p.is_symlink() or p.suffix != ".whl" for p in wheels
         ):
             raise PackError("PACK_RESOLVE_FAILED")
+        try:
+            if _direct_url(wheels):
+                raise PackError("PACK_DIRECT_URL")
+        except (zipfile.BadZipFile, UnicodeError):
+            raise PackError("PACK_RESOLVE_FAILED") from None
         files, size = [], 0
         for wheel in wheels:
             parts = wheel.name.split("-")

@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import time
 import uuid
 from pathlib import Path
@@ -18,16 +19,19 @@ def inspect_pack(
     temporary.write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
     temporary.replace(request_dir / "request.json")
     end = time.monotonic() + timeout
-    while time.monotonic() < end:
-        try:
-            result = json.loads((request_dir / "result.json").read_text(encoding="utf-8"))
-            if result.get("pack_sha256") == pack_sha256:
-                return result
-            break
-        except FileNotFoundError:
-            time.sleep(min(0.2, max(0, end - time.monotonic())))
-        except (ValueError, OSError):
-            break
+    try:
+        while time.monotonic() < end:
+            try:
+                result = json.loads((request_dir / "result.json").read_text(encoding="utf-8"))
+                if result.get("pack_sha256") == pack_sha256:
+                    return result
+                break
+            except FileNotFoundError:
+                time.sleep(min(0.2, max(0, end - time.monotonic())))
+            except (ValueError, OSError):
+                break
+    finally:
+        shutil.rmtree(request_dir, ignore_errors=True)
     return {
         "status": "incomplete",
         "reason": "INSPECTION_UNAVAILABLE",

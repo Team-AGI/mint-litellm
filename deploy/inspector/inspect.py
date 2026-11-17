@@ -179,10 +179,15 @@ def inspect(request, packs=PACKS):
     finally:
         if process is not None:
             try:
-                os.killpg(process.pid, signal.SIGKILL)
+                if hasattr(os, "killpg"):
+                    os.killpg(process.pid, signal.SIGKILL)
+                else:  # 개발용 Windows: 프로세스 그룹이 없다
+                    process.kill()
             except ProcessLookupError:
                 pass
             process.wait()
+            process.stdin.close()
+            process.stdout.close()
         if not result["complete"]:
             result["tools"] = []
         result["finished_at"] = datetime.now(timezone.utc).isoformat()  # noqa: UP017

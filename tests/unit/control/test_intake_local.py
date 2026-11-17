@@ -1,0 +1,146 @@
+"""단말 출처 신청의 검사 분기(가짜 행·가짜 묶음·가짜 검사 컨테이너)."""
+
+import contextlib
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from mint_litellm.control import intake_checks as checks
+from mint_litellm.control import intake_jobs, packs
+
+DIGEST = "ab" * 32
+MANIFEST = {
+    "entry": "pkg:main",
+    "platform": {"python": "3.12"},
+    "files": [{"name": "pkg-1-py3-none-any.whl", "sha256": "cd" * 32, "size": 10}],
+}
+SPEC = {
+    "index": "pypi", "name": "pkg", "version": "1.0", "extras": [], "command": "pkg",
+    "argv": ["--root", "/data"], "file_access": [{"path": "/data", "mode": "ro"}],
+    "network": "hosts", "allowed_hosts": ["b.example", "a.example"], "env_names": [],
+}
+TOOL = {"name": "read", "description": "읽기", "inputSchema": {"type": "object"},
+        "annotations": {"readOnlyHint": True}}
+POLICY = checks.PolicyData(
+    ("ignore previous",),
+    {"data": {"internal": 1}, "action": {"read": 0, "write": 1, "delete": 2},
+     "irreversible": ["delete"], "grades": ["low", "medium", "high"]},
+    "f" * 64,
+)
+READY = {"credential_notice": "mail", "revocation_record": "log", "audit_access_days": 90}
+
+
+class Fake:
+    def __init__(self, spec=SPEC, existing=None):
+        self.contract = {"id": "c1", "pack_spec": spec, "pack_sha256": DIGEST,
+                         "pack_manifest": MANIFEST}
+        self.existing = existing or {}
+        self.records, self.stored, self.graded, self.updates = [], [], [], []
+        self.conn = SimpleNamespace(execute=lambda sql, args: self.updates.append(args))
+        self.job = SimpleNamespace(
+            conn=self.conn, instance_id="i", settings=SimpleNamespace(local_python="/opt/py3"),
+            policy_data=SimpleNamespace(get=lambda *_: POLICY), checkpoint=lambda: None)
+        self.row = {"id": "n1", "server_id": "s1", "org_id": "o", "data_grade": "internal",
+                    "readiness": READY, "source": "endpoint"}
+
+    def install(self, monkeypatch, build=None, inspect=None):
+        fake_intakes = SimpleNamespace(
+            deployment_candidate=lambda *_: self.contract,
+            existing_check=lambda conn, inst, iid, name, attempt: self.existing.get(name),
+            contract_binding=lambda *_: "bound",
+            record_check=lambda ctx, row, attempt, name, out, bound: self.records.append(
+                (name, out.result, out.reason)),
+            store_candidates=lambda ctx, sid, defs: self.stored.append(defs) or True,
+            store_grades=lambda ctx, sid, graded: self.graded.append(graded),
+        )
+        monkeypatch.setattr(intake_jobs, "intakes", fake_intakes)
+        monkeypatch.setattr(intake_jobs, "_allowlists", lambda *_: [])
+        stored = [checks.tool_definition(TOOL)]
+        monkeypatch.setattr(intake_jobs, "_stored_definitions", lambda *_: stored)
+        monkeypatch.setattr(intake_jobs, "transact", lambda ctx: contextlib.nullcontext())
+        monkeypatch.setattr(packs, "build_pack", build or (lambda *a, **k: (DIGEST, MANIFEST)))
+        monkeypatch.setattr(
+            intake_jobs.inspection, "inspect_pack",
+            inspect or (lambda *a, **k: {"status": "ok", "complete": True, "tools": [TOOL]}))
+
+    def run(self):
+        intake_jobs._run_local_checks(self.job, SimpleNamespace(conn=self.conn), self.row, 1)
+        return self.records
+
+
+def test_all_six_checks_pass_and_pack_is_recorded(monkeypatch):
+    fake = Fake()
+    fake.install(monkeypatch)
+    names = [name for name, _, _ in fake.run()]
+    assert names == list(checks.LOCAL_CHECKS)
+    assert {result for _, result, _ in fake.records} == {"pass"}
+    assert [d["name"] for d in fake.stored[0]] == ["read"]
+    digest, manifest, contract, *_ = fake.updates[0]
+    assert digest == DIGEST and json.loads(manifest) == MANIFEST
+    contract = json.loads(contract)
+    assert contract["schema_version"] == 2 and contract["executable"] == "/opt/py3"
+    assert contract["executable_sha256"] is None
+    assert contract["pack"] == {"sha256": DIGEST, "runtime": "python3", "python": "3.12",
+                                "entry": "pkg:main"}
+    assert contract["allowed_hosts"] == ["a.example", "b.example"]
+    assert contract["file_access"] == [{"path": "/data", "mode": "ro"}]
+
+
+@pytest.mark.parametrize("change", [
+    {"name": "bad name"}, {"version": ""}, {"command": "../x"}, {"argv": ["a"] * 33},
+])
+def test_shape_violation_fails_and_stops(monkeypatch, change):
+    fake = Fake({**SPEC, **change})
+    fake.install(monkeypatch)
+    assert [(n, r) for n, r, _ in fake.run()] == [("exec_shape", "fail")]
+    assert not fake.updates
+
+
+def test_pack_failure_is_indeterminate_not_a_rejection(monkeypatch):
+    def refuse(*args, **kwargs):
+        raise packs.PackError("PACK_SDIST_ONLY")
+
+    fake = Fake()
+    fake.install(monkeypatch, build=refuse)
+    result = {name: (r, why) for name, r, why in fake.run()}
+    assert result["pack_build"] == ("indeterminate", "PACK_SDIST_ONLY")
+    assert result["inspection"] == ("indeterminate", "PACK_UNAVAILABLE")
+    assert "fail" not in {r for r, _ in result.values()}
+    assert len(result) == 6 and not fake.stored and not fake.updates
+
+
+def test_incomplete_inspection_stores_no_candidates(monkeypatch):
+    fake = Fake()
+    fake.install(monkeypatch, inspect=lambda *a, **k: {
+        "status": "incomplete", "reason": "TIMEOUT", "tools": [], "complete": False})
+    result = {name: (r, why) for name, r, why in fake.run()}
+    assert result["inspection"] == ("indeterminate", "TIMEOUT")
+    assert result["description_scan"][0] == "indeterminate"
+    assert len(result) == 6 and not fake.stored
+
+
+def test_retry_skips_recorded_checks_and_reuses_the_pack(monkeypatch):
+    fake = Fake(existing={"exec_shape": {"result": "pass"}, "pack_build": {"result": "pass"}})
+    seen = []
+    fake.install(monkeypatch, inspect=lambda digest, entry, argv: seen.append(
+        (digest, entry, argv)) or {"status": "ok", "complete": True, "tools": [TOOL]})
+    monkeypatch.setattr(packs, "build_pack", lambda *a, **k: pytest.fail("rebuilt"))
+    assert [n for n, _, _ in fake.run()][0] == "inspection"
+    assert seen == [(DIGEST, "pkg:main", ["--root", "/data"])]
+
+
+def test_endpoint_intake_uses_local_checks_and_concludes(monkeypatch):
+    calls = []
+    row = {"id": "n1", "server_id": "s1", "source": "endpoint", "status": "received"}
+    fake_intakes = SimpleNamespace(
+        get=lambda ctx, target: row, begin_checking=lambda ctx, target: row,
+        conclude=lambda ctx, target, needs_registry_credentials: calls.append(
+            ("conclude", needs_registry_credentials)) or "indeterminate")
+    monkeypatch.setattr(intake_jobs, "intakes", fake_intakes)
+    monkeypatch.setattr(intake_jobs, "_context", lambda job: "ctx")
+    monkeypatch.setattr(intake_jobs, "_run_local_checks", lambda *a: calls.append("local"))
+    monkeypatch.setattr(intake_jobs, "_run_checks", lambda *a, **k: pytest.fail("remote"))
+    job = SimpleNamespace(job={"target_ref": "n1", "idempotency_key": "intake_run:n1:1"})
+    intake_jobs.intake_run(job)
+    assert calls == ["local", ("conclude", False)]

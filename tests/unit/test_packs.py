@@ -93,6 +93,32 @@ class PackTests(unittest.TestCase):
         ):
             self.build()
 
+    def test_direct_url_dependency(self):
+        def download(requirement, destination, python):
+            self.download(requirement, destination, python)
+            with zipfile.ZipFile(destination / "example-1.0-py3-none-any.whl", "a") as z:
+                z.writestr(
+                    "example-1.0.dist-info/METADATA",
+                    "Name: example\nRequires-Dist: dep @ https://host.example/dep.whl\n",
+                )
+
+        with self.assertRaisesRegex(packs.PackError, "PACK_DIRECT_URL"):
+            self.build(download=download)
+
+    def test_marker_alone_is_not_direct_url(self):
+        def download(requirement, destination, python):
+            self.download(requirement, destination, python)
+            with zipfile.ZipFile(destination / "example-1.0-py3-none-any.whl", "a") as z:
+                z.writestr(
+                    "example-1.0.dist-info/METADATA",
+                    "Name: example\nRequires-Dist: dep>=1; python_version < '3.9'\n",
+                )
+            self.digest = hashlib.sha256(
+                (destination / "example-1.0-py3-none-any.whl").read_bytes()
+            ).hexdigest()
+
+        self.assertTrue(self.build(download=download)[0])
+
     def test_index_denied(self):
         with self.assertRaisesRegex(packs.PackError, "PACK_INDEX_NOT_ALLOWED"):
             packs.build_pack(self.spec, [], packs_dir=self.temp.name)

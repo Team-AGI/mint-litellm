@@ -172,10 +172,14 @@ services:
     image: python:3.12-slim
     profiles: ["worker"]
     command: ["python", "/opt/mint/inspect.py"]
+    user: "65532:65532"
     network_mode: none
     read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
     tmpfs:
-      - /tmp
+      - /tmp:size=256m
     mem_limit: 512m
     cpus: 1
     pids_limit: 128

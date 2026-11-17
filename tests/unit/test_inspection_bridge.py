@@ -39,14 +39,22 @@ class InspectionTests(unittest.TestCase):
 
     def test_timeout_creates_atomic_request(self):
         with tempfile.TemporaryDirectory() as directory:
-            result = inspection.inspect_pack(
-                "a" * 64, "pkg:main", [], directory=directory, timeout=0
-            )
+            seen = []
+
+            def look(_):
+                requests = list(Path(directory).glob("*/request.json"))
+                seen.append(
+                    (json.loads(requests[0].read_text())["entry"], len(requests),
+                     list(Path(directory).glob("*/request.tmp")))
+                )
+
+            with patch.object(inspection.time, "sleep", side_effect=look):
+                result = inspection.inspect_pack(
+                    "a" * 64, "pkg:main", [], directory=directory, timeout=0.5
+                )
             self.assertEqual(result["status"], "incomplete")
-            requests = list(Path(directory).glob("*/request.json"))
-            self.assertEqual(len(requests), 1)
-            self.assertEqual(json.loads(requests[0].read_text())["entry"], "pkg:main")
-            self.assertFalse(list(Path(directory).glob("*/request.tmp")))
+            self.assertEqual(seen[0], ("pkg:main", 1, []))
+            self.assertFalse(list(Path(directory).iterdir()))
 
     def test_matching_result(self):
         with tempfile.TemporaryDirectory() as directory:
