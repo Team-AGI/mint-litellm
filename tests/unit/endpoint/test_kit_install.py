@@ -100,7 +100,7 @@ def test_the_reports_fit_what_the_server_accepts(folder, tmp_path, reports):
     assert installed["mode"] == "managed" and installed["mcp_servers"] == ["srv-1", "srv-2"]
     assert removed["mode"] == "none" and removed["mcp_servers"] == []
     for payload in (installed, removed):
-        ReportBody.model_validate({k: v for k, v in payload.items() if k != "capabilities"})
+        ReportBody.model_validate(payload)
         assert payload["processes"] == [] and payload["autostart"] == []
     assert installed["kit_version"] == kit_version()
 
@@ -270,7 +270,7 @@ def test_both_tools_are_installed_and_reported_together(tmp_path, reports, monke
     assert (tmp_path / "root/etc/claude-code/managed-settings.json").exists()
     assert (tmp_path / "root/etc/codex/requirements.toml").exists()
     payload = reports[0][2]
-    ReportBody.model_validate({k: v for k, v in payload.items() if k != "capabilities"})
+    ReportBody.model_validate(payload)
     assert payload["claude_version"] == "2.1.0 (Claude Code) · codex-cli 0.9.0"
 
 

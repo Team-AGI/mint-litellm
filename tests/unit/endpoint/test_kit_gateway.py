@@ -298,7 +298,7 @@ def test_a_user_level_codex_report_carries_the_trust_state_and_the_install_says_
     state = kit.install()
     assert kit.report(state, "installed")
     payload = reports[-1][2]
-    ReportBody.model_validate({k: v for k, v in payload.items() if k != "capabilities"})
+    ReportBody.model_validate(payload)
     assert payload["hook_trust"] == "untrusted"
     _, problems = kit.check(state)
     assert any("Codex" in problem for problem in problems)
