@@ -2358,6 +2358,8 @@ class Kit:
             "mcp_servers": state.get("mcp_servers", [])[:MAX_REPORTED_SERVERS] if installed else [],
             **self.inventory(),
         }
+        if installed:
+            payload["capabilities"] = ["inspect"]
         if pending:
             payload["removed"] = pending
         trust = self.hook_trust(state) if installed else None
@@ -2378,6 +2380,9 @@ class Kit:
             finally:
                 os.unlink(handle.name)
         self.answer = answer if isinstance(answer, dict) else {}
+        if isinstance(answer, dict) and installed and not self.system_mode:
+            # 검사 권한은 하네스 설정·desired와 따로 사용자 캐시에만 둔다(사라진 것은 지운다).
+            self.run_as_user(lambda: save_inspections(self.home, self.answer.get("inspections")))
         if answer and payload.get("tool_lists"):
             self.run_as_user(lambda: mark_tool_lists_sent(self.home, payload["tool_lists"]))
         if answer and pending:
@@ -3496,7 +3501,12 @@ def run_add(
     except AddError as exc:
         out(str(exc))
         return 2
-    env_names = sorted({*env_names, *(args.env or [])})
+    try:
+        env_values, plain = parse_env(args.env or [])
+    except AddError as exc:
+        out(str(exc))
+        return 2
+    env_names = sorted({*env_names, *plain})
     candidates = path_candidates(spec["argv"])
     access = {p: "ro" for p in candidates}
     access.update({p: "ro" for p in args.ro or []})
@@ -3511,6 +3521,23 @@ def run_add(
                 access.pop(path, None)
             elif pick.startswith("w"):
                 access[path] = "rw"
+    while interactive:  # 비밀이 아닌 환경 변수(예: 프로그램이 설치된 폴더)
+        typed = ask("환경 변수 이름=값 (끝내려면 Enter)", "", read)
+        if not typed:
+            break
+        if "=" not in typed:
+            out("이름=값 형식으로 적으십시오")
+            continue
+        try:
+            env_values.update(parse_env([typed])[0])
+        except AddError as exc:
+            out(str(exc))
+    for path in env_paths(env_values):
+        if path in access:
+            continue
+        if not interactive or ask(f"경로 {path[:40]}를 읽기로 더할까요? (y/n)", "y", read) != "n":
+            access[path] = "ro"
+            out(f"파일 접근에 읽기로 더했습니다: {path[:50]}")
     hosts = list(args.host or [])
     network = args.network or ("hosts" if hosts else "none")
     if interactive and not args.network and not hosts:
@@ -3540,7 +3567,8 @@ def run_add(
         ("파일 접근", ", ".join(
             f"{p} ({'쓰기' if m == 'rw' else '읽기'})" for p, m in access.items()) or "없음"),
         ("네트워크", "없음" if network == "none" else ", ".join(hosts)),
-        ("환경 변수", ", ".join(env_names) or "없음"), ("목적", purpose[:70]),
+        ("환경 변수", ", ".join([*env_names, *(f"{k}={v}" for k, v in env_values.items())])[:70]
+         or "없음"), ("목적", purpose[:70]),
         ("자료 등급", GRADE_TEXT[grade]),
     ]  # fmt: skip
     for label, value in rows:
@@ -3555,6 +3583,8 @@ def run_add(
         args.request_id or str(uuid.uuid4()), server_id, spec, list(access.items()), network,
         hosts, env_names, purpose, grade,
     )
+    if env_values:
+        body["spec"]["env"] = env_values
     status, doc = gateway.json("POST", INTAKES_PATH, body)
     out(submit_text(status, doc))
     if status == 201:
@@ -3685,9 +3715,11 @@ def tab3_lines(model: dict, ui: dict) -> list[str]:
         out = [f"  {pad('서버', 26)}{pad('상태', 14)}다음 할 일"]
     for i, row in enumerate(intakes):
         mark = ">" if i == ui["cursor"] else " "
+        need = model.get("inspections", {}).get(row.get("id"))
+        later = inspect_text(need, model.get("now") or time.time()) if need else next_text(row)
         out.append(
             f"{mark} {pad(clip(str(row.get('server_id', '')), 25), 26)}{pad(row_label(row), 14)}"
-            f"{clip(next_text(row), 36)}"
+            f"{clip(later, 36)}"
         )
     if ui["detail"] and ui["cursor"] < len(intakes):
         row = intakes[ui["cursor"]]
@@ -3737,6 +3769,10 @@ def handle_key(key: str, ui: dict, model: dict) -> str | None:
         ui["detail"] = False
     elif key == "s" and ui["tab"] == 1 and model["servers"]:
         return "get"
+    elif key == "s" and ui["tab"] == 2 and ui["cursor"] < len(model["intakes"]):
+        row = model["intakes"][ui["cursor"]]
+        need = model.get("inspections", {}).get(row.get("id"))
+        return "inspect" if need and need.get("phase") != "submitted" else None
     elif key in ("n", "c", "r", "o", "q"):
         return {"n": "new", "c": "check", "r": "report", "o": "web", "q": "quit"}[key]
     return None
@@ -3807,6 +3843,9 @@ def build_model(kit, state: dict, gateway: Gateway | None) -> dict:
     mode = {"managed": "관리형", "user": "사용자 수준(관리되지 않음)"}.get(
         state.get("mode"), "설치 안 됨")
     intakes = [i for i in (me or {}).get("intakes", []) if isinstance(i, dict)]
+    inspections = {
+        i["intake_id"]: i for i in (load_inspections(kit.home, now) if kit.home.exists() else [])
+    }
     applied = {  # 진행 중이거나 승인된 신청은 다시 신청할 항목이 아니다
         i.get("server_id") for i in intakes
         if i.get("decision") not in ("rejected", "withdrawn") and i.get("stage") not in (
@@ -3823,7 +3862,7 @@ def build_model(kit, state: dict, gateway: Gateway | None) -> dict:
         "key": "ok" if me is not None else "rejected" if status in (401, 403, 404) else "unknown",
         "mode": mode, "harnesses": kit.harnesses, "server_count": len(state.get("mcp_servers", [])),
         "problems": problems, "servers": servers,
-        "intakes": intakes, "found": found,
+        "intakes": intakes, "found": found, "inspections": inspections, "now": now,
         "result": result,
     }  # fmt: skip
 
@@ -3854,8 +3893,464 @@ def run_screen(kit, state: dict, gateway: Gateway | None, actions, read=read_key
             model = build_model(kit, state, gateway)
 
 
+# --- 단말 검사(검사 권한: 격리 실행으로 도구 목록만 받아 제출) ----------------------------------
+INSPECTIONS_FILE = "inspections.json"  # 사용자 캐시: 보고 응답의 검사 권한과 진행 단계
+INSPECT_PATH = "/mint/v1/endpoint/inspections"
+INSPECT_PACKS = "inspect-packs"  # 검사용 묶음 폴더(실행 허가를 받는 폴더와 따로 둔다)
+INSPECT_SECONDS = 30
+INSPECT_TOOLS = 200
+INSPECT_BYTES = 1 << 20
+INSPECT_DETAIL = 2048
+INSPECT_KEEP = 16
+INSPECT_CONTRACT_BYTES = 64 << 10
+INSPECT_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+INSPECT_SYSTEM = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32")
+INSPECT_ETC = (
+    "/etc/ld.so.cache", "/etc/ld.so.conf", "/etc/ld.so.conf.d", "/etc/alternatives",
+    "/etc/localtime",
+)  # fmt: skip
+INSPECT_PATH_ENV = "/usr/local/bin:/usr/bin:/bin"
+PACK_ENTRY = re.compile(
+    r"^([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*):([A-Za-z_][A-Za-z0-9_]*)$"
+)
+NO_INSPECT_TEXT = "이 단말에서는 검사할 수 없습니다"
+# 로더·인터프리터를 바꾸는 변수는 신청 환경 변수로 받지 않는다.
+ENV_DENIED = re.compile(
+    r"^(LD_|DYLD_|PYTHON|NODE_|PERL|RUBY|MALLOC_|PATH$|HOME$|TMPDIR$|SHELL$|IFS$|ENV$|BASH_ENV$|"
+    r"CLASSPATH$|JAVA_TOOL_OPTIONS$|_JAVA_OPTIONS$|JDK_JAVA_OPTIONS$|GCONV_PATH$|LOCPATH$|"
+    r"NLSPATH$|HOSTALIASES$)",
+    re.IGNORECASE,
+)
+ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+
+
+def env_rule_error(name: str, value: str) -> str | None:
+    """신청 환경 변수(이름=값) 하나가 규칙에 맞지 않는 사유. 맞으면 None."""
+    if not ENV_NAME.match(name):
+        return f"환경 변수 이름이 올바르지 않습니다: {name[:30]}"
+    if ENV_DENIED.match(name):
+        return f"{name}은(는) 쓸 수 없는 이름입니다"
+    if SECRET_NAME.search(name):
+        return f"{name}은(는) 비밀로 보여 받지 않습니다"
+    if len(value) > 1024 or any(c in value for c in ("\x00", "\n", "\r")):
+        return f"{name}의 값이 올바르지 않습니다"
+    return None
+
+
+def parse_env(items: list[str]) -> tuple[dict[str, str], list[str]]:
+    """``--env`` 항목을 (이름=값, 이름만)으로. 규칙에 맞지 않으면 ``AddError``."""
+    values: dict[str, str] = {}
+    names: list[str] = []
+    for item in items:
+        name, eq, value = item.partition("=")
+        if not eq:
+            names.append(name)
+            continue
+        why = env_rule_error(name, value)
+        if why:
+            raise AddError(why)
+        values[name] = value
+    return values, names
+
+
+def env_paths(values: dict[str, str]) -> list[str]:
+    """값이 경로처럼 보이는 것(파일 접근 선언 후보)."""
+    return list(dict.fromkeys(v for v in values.values() if v.startswith("/") or WIN_ABS.match(v)))
+
+
+def load_inspections(home: Path, now: float | None = None) -> list[dict]:
+    """상태 파일의 검사 권한(만료된 것은 뺀다)."""
+    try:
+        doc = json.loads((home / STATE_REL / INSPECTIONS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    items = doc.get("items") if isinstance(doc, dict) else None
+    now = time.time() if now is None else now
+    if not isinstance(items, list):
+        return []
+    return [
+        i for i in items if isinstance(i, dict) and (parse_time(i.get("expires_at")) or 0) > now
+    ]
+
+
+def write_inspections(home: Path, items: list[dict]) -> None:
+    path = home / STATE_REL / INSPECTIONS_FILE
+    try:
+        if items:
+            write_atomic(path, json.dumps({"items": items}).encode(), 0o600)
+        else:
+            path.unlink(missing_ok=True)
+    except OSError:
+        return
+
+
+def valid_inspection(item: object, now: float) -> dict | None:
+    """응답의 검사 권한 하나에서 알려진 항목만(모양이 틀리거나 만료면 None)."""
+    if not isinstance(item, dict):
+        return None
+    ident, intake, server = item.get("id"), item.get("intake_id"), item.get("server")
+    digest, contract = item.get("pack_sha256"), item.get("contract")
+    until = parse_time(item.get("expires_at"))
+    if not (
+        isinstance(ident, str) and INSPECT_ID.match(ident) and isinstance(intake, str)
+        and 0 < len(intake) <= 128 and isinstance(server, str) and SERVER_NAME.match(server)
+        and isinstance(digest, str) and SHA256_HEX.match(digest) and isinstance(contract, dict)
+        and until is not None and until > now
+        and len(json.dumps(contract)) <= INSPECT_CONTRACT_BYTES
+    ):
+        return None
+    return {
+        "id": ident, "intake_id": intake, "server": server, "pack_sha256": digest,
+        "contract": contract, "expires_at": item["expires_at"],
+    }  # fmt: skip
+
+
+def save_inspections(home: Path, remote: object, now: float | None = None) -> None:
+    """보고 응답의 ``inspections``를 상태 파일에 맞춘다. 응답에서 사라졌거나 만료된 검사는 지운다.
+
+    이 목록은 하네스 설정·desired·시작 허가와 아무 관계가 없다(검사 화면과 ``mint inspect``만 쓴다).
+    """
+    now = time.time() if now is None else now
+    old = {i["id"]: i for i in load_inspections(home, now) if isinstance(i.get("id"), str)}
+    kept: list[dict] = []
+    for raw in (remote if isinstance(remote, list) else [])[:INSPECT_KEEP]:
+        item = valid_inspection(raw, now)
+        if item is None:
+            continue
+        before = old.get(item["id"]) or {}
+        if before.get("pack_sha256") == item["pack_sha256"]:
+            item.update({k: before[k] for k in ("phase", "body") if k in before})
+        kept.append(item)
+    write_inspections(home, kept)
+
+
+def set_inspection(home: Path, ident: str, **fields: object) -> None:
+    items = load_inspections(home)
+    for item in items:
+        if item.get("id") == ident:
+            for key, value in fields.items():
+                if value is None:
+                    item.pop(key, None)
+                else:
+                    item[key] = value
+    write_inspections(home, items)
+
+
+def inspect_text(item: dict, now: float) -> str:
+    """탭 3의 「다음 할 일」 칸."""
+    if item.get("phase") == "submitted":
+        return "검사 제출함"
+    until = parse_time(item.get("expires_at")) or now
+    return f"단말 검사 필요 · 남은 {max(int((until - now) // 60), 1)}분"
+
+
+def inspect_ready(bwrap: str | None = None) -> str | None:
+    """이 단말에서 격리 검사를 할 수 있으면 bubblewrap 경로, 아니면 None."""
+    found = bwrap or shutil.which("bwrap")
+    return found if found and bwrap_probe(found) else None
+
+
+def limit_mounts(contract: dict, folder: str, home: str) -> list[str]:
+    """격리 안에 읽기 전용으로 붙일 경로(런타임, 묶음 폴더, 작업 폴더, 계약의 파일 접근)."""
+    found: list[str] = []
+
+    def add(path: object) -> None:
+        if (
+            isinstance(path, str) and path.startswith("/") and "\x00" not in path
+            and not any(path == s or path.startswith(s + "/") for s in INSPECT_SYSTEM)
+            and path not in found
+        ):
+            found.append(path)
+
+    path = str(contract.get("executable") or "")
+    chain = [path]
+    for _ in range(8):
+        if not os.path.islink(chain[-1]):
+            break
+        link = os.readlink(chain[-1])
+        chain.append(os.path.normpath(os.path.join(os.path.dirname(chain[-1]), link)))
+    for step in dict.fromkeys([*chain, os.path.realpath(path)]):
+        prefix = os.path.dirname(os.path.dirname(step))
+        broad = prefix.count("/") < 2 or prefix in ("/opt", "/srv", "/mnt") or (
+            bool(home) and (home == prefix or home.startswith(prefix.rstrip("/") + "/"))
+        )
+        add(step if broad else prefix)
+    add(folder)
+    add(contract.get("cwd"))
+    for entry in contract.get("file_access") or ():
+        add(entry.get("path") if isinstance(entry, dict) else None)  # rw 선언도 읽기만
+    ordered = sorted(found, key=lambda p: p.count("/"))
+    return [
+        p for i, p in enumerate(ordered)
+        if not any(p.startswith(q.rstrip("/") + "/") for q in ordered[:i])
+    ]
+
+
+def inspect_launch(contract: dict, folder: str, home: str, bwrap: str) -> tuple[list[str], dict]:
+    """(격리 명령, 환경). 네트워크 없음·빈 홈·읽기 전용 경로만. 만들 수 없으면 ``PackError``."""
+    pack, runtime = contract.get("pack"), contract.get("executable")
+    match = PACK_ENTRY.match(str(pack.get("entry"))) if isinstance(pack, dict) else None
+    if not match or not isinstance(runtime, str) or not os.path.isfile(runtime):
+        raise PackError("실행 계약을 열 수 없습니다")
+    module, function = match.groups()
+    run = (
+        f"import runpy; runpy.run_module({module!r}, run_name='__main__', alter_sys=True)"
+        if function == "__main__"
+        else f"from {module} import {function}; sys.exit({function}())"
+    )
+    code = f"import sys; sys.path[:0] = [{folder!r}]; {run}"
+    argv = [runtime, "-I", "-B", "-c", code, *[str(a) for a in contract.get("argv") or []]]
+    cmd = [bwrap, "--unshare-all", "--unshare-net", "--die-with-parent", "--new-session",
+           "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"]  # fmt: skip
+    for path in (*INSPECT_SYSTEM, *INSPECT_ETC):
+        cmd += ["--ro-bind-try", path, path]
+    if home and home != "/" and not any(home.startswith(s + "/") for s in INSPECT_SYSTEM):
+        cmd += ["--tmpfs", home]
+    for path in limit_mounts(contract, folder, home):
+        cmd += ["--ro-bind-try", path, path]
+    cmd += ["--chdir", str(contract.get("cwd") or "/"), "--", *argv]
+    env = {"PATH": INSPECT_PATH_ENV, "HOME": home or "/", "LANG": "C.UTF-8"}
+    for name, value in (contract.get("env") or {}).items():
+        if isinstance(name, str) and isinstance(value, str) and not ENV_DENIED.match(name):
+            env[name] = value
+    return cmd, env
+
+
+def user_process_count() -> int:
+    """이 사용자의 실행 단위(스레드 포함) 수. 프로세스 수 상한은 이 값에 더해 건다."""
+    uid = os.getuid()
+    count = 0
+    for name in os.listdir("/proc"):
+        if name.isdigit():
+            try:
+                if os.stat(f"/proc/{name}").st_uid == uid:
+                    count += len(os.listdir(f"/proc/{name}/task"))
+            except OSError:
+                pass
+    return count
+
+
+def apply_limits(procs: int) -> None:
+    """자식이 exec하기 전에: CPU 30초, 메모리(힙) 1 GiB, 프로세스는 지금 개수 + 64."""
+    import resource
+
+    # ponytail: RLIMIT_DATA라 JVM 같은 큰 가상 예약은 세지 않는다. cgroup이 있으면 거기로 옮긴다.
+    for which, soft in (
+        (resource.RLIMIT_CPU, INSPECT_SECONDS), (resource.RLIMIT_DATA, 1 << 30),
+        (resource.RLIMIT_NPROC, procs + 64),
+    ):
+        hard = resource.getrlimit(which)[1]
+        if hard != resource.RLIM_INFINITY:
+            soft = min(soft, hard)
+        resource.setrlimit(which, (soft, soft))
+
+
+class InspectFail(Exception):
+    def __init__(self, stage: str) -> None:
+        super().__init__(stage)
+        self.stage = stage
+
+
+def inspect_exchange(proc, lines, deadline: float, tools: list) -> None:
+    """initialize 뒤 tools/list를 끝까지(nextCursor 따라) 받아 ``tools``에 쌓는다."""
+    import queue
+
+    stage = ["initialize"]
+
+    def send(doc: dict) -> None:
+        try:
+            proc.stdin.write(json.dumps(doc).encode() + b"\n")
+            proc.stdin.flush()
+        except OSError as exc:
+            raise InspectFail(stage[0]) from exc
+
+    def ask(ident: int, method: str, params: dict) -> dict:
+        send({"jsonrpc": "2.0", "id": ident, "method": method, "params": params})
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise InspectFail("timeout")
+            try:
+                line = lines.get(timeout=min(left, 0.5))
+            except queue.Empty:
+                continue
+            if line is None:
+                raise InspectFail(stage[0])
+            try:
+                doc = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(doc, dict) and doc.get("id") == ident:
+                if not isinstance(doc.get("result"), dict):
+                    raise InspectFail(stage[0])
+                return doc["result"]
+
+    ask(1, "initialize", {
+        "protocolVersion": "2025-06-18", "capabilities": {},
+        "clientInfo": {"name": "mint-inspect", "version": "1"},
+    })  # fmt: skip
+    send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    stage[0] = "tools"
+    cursor, seen = None, set()
+    for number in range(2, 60):
+        result = ask(number, "tools/list", {} if cursor is None else {"cursor": cursor})
+        page = result.get("tools")
+        if not isinstance(page, list) or not all(isinstance(t, dict) for t in page):
+            raise InspectFail("tools")
+        tools.extend(page)
+        if len(tools) > INSPECT_TOOLS or len(json.dumps(tools).encode()) > INSPECT_BYTES:
+            raise InspectFail("limit")
+        cursor = result.get("nextCursor")
+        if not cursor:
+            return
+        if not isinstance(cursor, str) or cursor in seen:
+            raise InspectFail("tools")
+        seen.add(cursor)
+    raise InspectFail("limit")
+
+
+def inspect_run(
+    cmd: list[str], env: dict, digest: str, seconds: float = INSPECT_SECONDS, limits: bool = True
+) -> dict:
+    """격리 명령을 띄워 도구 목록을 끝까지 받는다. 결과 본문(제출 형식)을 돌려준다."""
+    import queue
+    import threading
+
+    procs = user_process_count() if limits else 0
+    proc = subprocess.Popen(
+        cmd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        start_new_session=True, preexec_fn=(lambda: apply_limits(procs)) if limits else None,
+    )  # fmt: skip
+    lines: queue.Queue = queue.Queue()
+    tail = bytearray()
+
+    def read_out() -> None:
+        try:
+            for raw in iter(lambda: proc.stdout.readline(INSPECT_BYTES * 2), b""):
+                lines.put(raw)
+        except (OSError, ValueError):
+            pass
+        lines.put(None)
+
+    def read_err() -> None:
+        try:
+            for raw in iter(lambda: proc.stderr.read(4096), b""):
+                tail.extend(raw)
+                del tail[: -INSPECT_DETAIL * 2]
+        except (OSError, ValueError):
+            pass
+
+    for target in (read_out, read_err):
+        threading.Thread(target=target, daemon=True).start()
+    tools: list = []
+    stage, done = "done", True
+    try:
+        inspect_exchange(proc, lines, time.monotonic() + seconds, tools)
+    except InspectFail as exc:
+        stage, done = exc.stage, False
+    exited = proc.poll()
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)  # 격리 도구의 이름공간은 부모가 죽으면 함께 끝난다
+    except OSError:
+        pass
+    proc.kill()
+    proc.wait()
+    text = bytes(tail[-INSPECT_DETAIL:]).decode("utf-8", errors="replace")
+    return {
+        "pack_sha256": digest, "complete": done, "tools": tools if done else [],
+        "detail": {"stage": stage, "exit_code": exited, "stderr_tail": text},
+    }  # fmt: skip
+
+
+def refusal_body(digest: str, stage: str, text: str) -> dict:
+    return {
+        "pack_sha256": digest, "complete": False, "tools": [],
+        "detail": {"stage": stage, "exit_code": None, "stderr_tail": text[:INSPECT_DETAIL]},
+    }  # fmt: skip
+
+
+def inspect_body(item: dict, folder: Path, home: Path) -> dict:
+    """묶음 폴더가 준비된 검사 하나를 격리 실행하고 제출할 본문을 만든다(격리 못 하면 거절 본문)."""
+    digest = item["pack_sha256"]
+    bwrap = inspect_ready()
+    if bwrap is None:
+        return refusal_body(digest, "sandbox", "격리 도구를 쓸 수 없어 검사를 시작하지 않았습니다")
+    try:
+        cmd, env = inspect_launch(item["contract"], str(folder), str(home), bwrap)
+        return inspect_run(cmd, env, digest)
+    except PackError as exc:
+        return refusal_body(digest, "pack", str(exc))
+    except OSError as exc:
+        return refusal_body(digest, "start", f"검사를 시작하지 못했습니다({type(exc).__name__})")
+
+
+def find_inspection(home: Path, target: str) -> dict | None:
+    items = load_inspections(home)
+    for field in ("id", "intake_id", "server"):
+        for item in items:
+            if item.get(field) == target:
+                return item
+    return None
+
+
+def run_inspect(kit, gateway: Gateway | None, target: str, out=print, body_of=inspect_body) -> int:
+    """``mint inspect``: 검사 권한 하나를 받기·검증·격리 실행·제출까지 한 번에."""
+    if gateway is None:
+        out("키가 없습니다. 설치 묶음을 다시 받아 설치하십시오")
+        return 1
+    item = find_inspection(kit.home, target)
+    if item is None:
+        out("검사할 항목이 없습니다")
+        return 1
+    if item.get("phase") == "submitted":
+        out("검사 제출함")
+        return 0
+    if not sys.platform.startswith("linux"):
+        out(NO_INSPECT_TEXT)
+        return 1
+    ident = item["id"]
+    base = f"{INSPECT_PATH}/{urllib.parse.quote(ident, safe='')}"
+    digest = item["pack_sha256"]
+    folder = kit.home / STATE_REL / INSPECT_PACKS / digest[:16]
+    body = item.get("body")
+    if body is None:
+        blobs: dict = {}
+        try:
+            if ready_status(folder, digest) != "ok":
+                blobs = fetch_pack(gateway, item["server"], digest)
+                install_blobs(digest, blobs, folder.parent)
+            status, _ = gateway.json("POST", base + "/start")
+            if status == 409:
+                out("이미 시작했거나 만료되었습니다")
+                return 1
+            if status != 200:
+                out(pack_http_text(status) if status in (0, -1) else f"시작 실패({status})")
+                return 1
+            set_inspection(kit.home, ident, phase="started")
+            body = body_of(item, folder, kit.home)
+            set_inspection(kit.home, ident, phase="result", body=body)
+        except (PackError, OSError) as exc:
+            out(str(exc)[:80])
+            return 1
+        finally:
+            for handle in blobs.values():
+                handle.close()
+            shutil.rmtree(folder, ignore_errors=True)
+    # 응답을 잃으면 저장해 둔 같은 본문을 다시 보낸다.
+    status, _ = gateway.json("POST", base + "/result", body)
+    if status == 200:
+        set_inspection(kit.home, ident, phase="submitted", body=None)
+        out("검사 제출함")
+        return 0
+    if status in (404, 409):
+        out("이미 제출했거나 만료되었습니다")
+        return 1
+    out("제출하지 못했습니다. 다시 시도하십시오" if status in (0, -1) else f"제출 실패({status})")
+    return 1
+
+
 # --- 대화형 명령(screen·add·requests·get) ------------------------------------------------------
-CLI_COMMANDS = ("screen", "add", "requests", "get")
+CLI_COMMANDS = ("screen", "add", "requests", "get", "inspect")
 
 
 def open_installed(folder: Path):
@@ -3992,6 +4487,8 @@ def cli_main(argv: list[str]) -> int:
     sub.add_parser("requests")
     get = sub.add_parser("get")
     get.add_argument("server")
+    inspect = sub.add_parser("inspect")
+    inspect.add_argument("target")
     add = sub.add_parser("add")
     add.add_argument("name", nargs="?")
     add.add_argument("command", nargs="*")
@@ -4011,6 +4508,10 @@ def cli_main(argv: list[str]) -> int:
         return run_get(kit, gateway, args.server)
     if args.command_name == "requests":
         return run_requests(gateway)
+    if args.command_name == "inspect":
+        if gateway is not None and find_inspection(kit.home, args.target) is None and state:
+            kit.report(state, "installed")  # 받아 둔 검사 권한이 없으면 한 번 보고해서 받는다
+        return run_inspect(kit, gateway, args.target)
     if args.command_name == "add":
         if gateway is None:
             print("키가 없습니다. 설치 묶음을 다시 받아 설치하십시오")
@@ -4026,6 +4527,12 @@ def cli_main(argv: list[str]) -> int:
             return ""
         lines: list[str] = []
         run_get(kit, gateway, model["servers"][ui["cursor"]]["name"], out=lines.append)
+        return lines[-1] if lines else ""
+
+    def inspect_action(model, ui):
+        lines: list[str] = []
+        row = model["intakes"][ui["cursor"]]
+        run_inspect(kit, gateway, row["id"], out=lines.append)
         return lines[-1] if lines else ""
 
     def check_action(model, ui):
@@ -4048,8 +4555,8 @@ def cli_main(argv: list[str]) -> int:
         return f"직원 화면: {parts.scheme}://{parts.netloc}/staff"
 
     actions = {
-        "get": get_action, "check": check_action, "report": report_action, "new": new_action,
-        "add_found": found_action, "web": web_action,
+        "get": get_action, "inspect": inspect_action, "check": check_action,
+        "report": report_action, "new": new_action, "add_found": found_action, "web": web_action,
     }  # fmt: skip
     return run_screen(kit, state, gateway, actions)
 

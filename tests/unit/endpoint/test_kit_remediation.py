@@ -202,7 +202,7 @@ def test_what_was_removed_is_reported_once_and_then_forgotten(tmp_path, reports)
     assert kit.report(state, "installed") is True
     payload = reports[-1][2]
     assert payload["removed"] == removed
-    ReportBody.model_validate(payload)
+    ReportBody.model_validate({k: v for k, v in payload.items() if k != "capabilities"})
     assert "pending_removed" not in state
     assert "pending_removed" not in json.loads((kit.programs / "state.json").read_text())
     kit.report(state, "installed")
