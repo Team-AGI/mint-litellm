@@ -153,9 +153,19 @@ def intake_list(request: Request, actor: StaffActor = Depends(staff_actor)):
 
 def intake_form(request: Request, actor: StaffActor, form=None, error=None, status=200):
     values = {"request_id": str(new_uuid7()), "transport": "http", "data_grade": "internal",
-              "audit_access_days": "90", **(form or {})}
+              **INTAKE_DEFAULTS, **(form or {})}
+    ports = ", ".join(map(str, actor.config.stage2.intake_allowed_ports))
     return staff_render(request, "staff_intake_new.html",
-                        {"f": values, "error": error}, actor, status)
+                        {"f": values, "error": error, "ports": ports}, actor, status)
+
+
+# 종료 준비 항목은 직원이 알기 어려워 조직 기본 문구로 채워 두고 필요할 때만 고친다.
+INTAKE_DEFAULTS = {
+    "audit_access_days": "90",
+    "credential_notice": "자격 증명이 바뀌면 관리자에게 알립니다",
+    "revocation_record": "철회는 MINT 기록으로 남깁니다",
+    "data_return_terms": "사용을 끝내면 서버에 남은 자료를 삭제합니다",
+}
 
 
 @router.get("/staff/intakes/new")
@@ -176,7 +186,9 @@ def intake_submit(
                 purpose=purpose, data_grade=data_grade, resources=resources,
                 credential_notice=credential_notice, revocation_record=revocation_record,
                 audit_access_days=audit_access_days, data_return_terms=data_return_terms)
-    return act(actor, lambda: staff_intakes.submit(actor.sctx, actor.id_hash, request_id, form),
+    ports = actor.config.stage2.intake_allowed_ports
+    return act(actor, lambda: staff_intakes.submit(
+                   actor.sctx, actor.id_hash, request_id, form, ports),
                "intake_created", "/staff/intakes/" + request_id,
                lambda **kw: intake_form(request, actor, form, **kw))
 

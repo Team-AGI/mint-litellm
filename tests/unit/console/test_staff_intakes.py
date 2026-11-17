@@ -90,3 +90,16 @@ def test_staff_database_role_cannot_write_an_intake_without_the_session_function
             conn.execute("SELECT mint.staff_submit_intake(%s,'{}'::jsonb,'{}')", (uuid.uuid4(),))
     assert sworld.query("SELECT count(*) FROM mint.intakes WHERE instance_id=%s", INSTANCE) == [
         (0,)]
+
+
+def test_a_port_outside_the_allowed_list_is_refused_on_the_form_not_recorded(sworld):
+    # 접수 뒤 자동 거절되는 대신 화면에서 허용 포트를 알려 고치게 한다.
+    client = staff_tests.logged_in(sworld)
+    page = client.get("/staff/intakes/new")
+    # 허용 포트 표시·종료 준비 기본값
+    assert "443, 8443" in page.text and "사용을 끝내면" in page.text
+    response = client.post("/staff/intakes",
+                           data=form(client, url="https://docs.example.com:8080/mcp"))
+    assert response.status_code == 400
+    assert "포트 8080" in response.text and "443, 8443" in response.text
+    assert sworld.query("SELECT count(*) FROM mint.intakes") == [(0,)]

@@ -23,7 +23,8 @@ def submit(world, **changes):
             "server_id": "staff-docs", "url": base.URL, "transport": "http",
             "purpose": "문서 조회", "data_grade": "internal", "resources": "docs",
             "credential_notice": "mail", "revocation_record": "log", "audit_access_days": "90",
-            "data_return_terms": "종료 후 삭제", **changes})
+            "data_return_terms": "종료 후 삭제", **changes},
+            allowed_ports=(443, 8443, 9000))  # 시험 서버 포트도 허용해 접수 뒤 검사까지 간다
 
 
 def test_staff_request_runs_the_existing_checks_and_requires_a_different_approver(world):
