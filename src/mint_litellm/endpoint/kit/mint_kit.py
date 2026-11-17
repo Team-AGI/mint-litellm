@@ -3294,6 +3294,15 @@ SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL", re.IGNO
 WIN_ABS = re.compile(r"^[A-Za-z]:[\\/]")
 MAX_ARGV = 64
 GRADES = ("public", "internal", "confidential", "restricted")
+GRADE_NAMES = {"공개": "public", "내부": "internal", "기밀": "confidential", "제한": "restricted"}
+GRADE_TEXT = {value: name for name, value in GRADE_NAMES.items()}
+GRADE_CHOICES = "·".join(GRADE_NAMES)
+
+
+def parse_grade(text: str) -> str | None:
+    """한국어 이름이나 내부 값을 내부 값으로. 모르면 None."""
+    text = text.strip().lower()
+    return GRADE_NAMES.get(text) or (text if text in GRADES else None)
 
 
 class AddError(Exception):
@@ -3456,7 +3465,19 @@ def ask(question: str, default: str, read=input) -> str:
     return answer or default
 
 
-def run_add(args, home: Path, gateway: Gateway, out=print, read=input, tty: bool = False) -> int:
+def confirm(read=input, key=None) -> bool:
+    """키 하나로 확정(``key``가 있을 때) 또는 줄 입력으로 y와 Enter."""
+    if key is not None:
+        print("이대로 신청할까요? (y/n) ", end="", flush=True)
+        answer = key()
+        print(answer if len(answer) == 1 else "")
+        return answer == "y"
+    return ask("이대로 신청할까요? (y/n, Enter)", "n", read).lower() == "y"
+
+
+def run_add(
+    args, home: Path, gateway: Gateway, out=print, read=input, tty: bool = False, key=None
+) -> int:
     """``mint add``. 해석 -> 확인 -> 제출. 서버는 실행하지 않는다."""
     try:
         if args.source:
@@ -3503,11 +3524,14 @@ def run_add(args, home: Path, gateway: Gateway, out=print, read=input, tty: bool
         return 2
     purpose = args.purpose or (ask("목적", "", read) if interactive else "")
     if not purpose:
-        out("목적(--purpose)을 적으십시오")
+        out("목적을 적으십시오" if interactive else "목적(--purpose)을 적으십시오")
         return 2
-    grade = args.grade or (ask("자료 등급", "internal", read) if interactive else "internal")
-    if grade not in GRADES:
-        out("자료 등급은 " + ", ".join(GRADES) + " 중 하나입니다")
+    typed = args.grade or (
+        ask(f"자료 등급 ({GRADE_CHOICES})", GRADE_TEXT["internal"], read) if interactive
+        else "internal")
+    grade = parse_grade(typed)
+    if grade is None:
+        out(f"자료 등급은 {GRADE_CHOICES} 중 하나입니다")
         return 2
     package = spec["name"] + (f"[{','.join(spec['extras'])}]" if spec["extras"] else "")
     rows = [
@@ -3516,14 +3540,15 @@ def run_add(args, home: Path, gateway: Gateway, out=print, read=input, tty: bool
         ("파일 접근", ", ".join(
             f"{p} ({'쓰기' if m == 'rw' else '읽기'})" for p, m in access.items()) or "없음"),
         ("네트워크", "없음" if network == "none" else ", ".join(hosts)),
-        ("환경 변수", ", ".join(env_names) or "없음"), ("목적", purpose[:70]), ("자료 등급", grade),
+        ("환경 변수", ", ".join(env_names) or "없음"), ("목적", purpose[:70]),
+        ("자료 등급", GRADE_TEXT[grade]),
     ]  # fmt: skip
     for label, value in rows:
         out(f"{pad(label, 10)}{value}")
     for name in env_names:
         if SECRET_NAME.search(name):
             out(f"{name}은(는) 비밀로 보입니다. 관리자가 비밀 참조로 등록합니다")
-    if not args.yes and not (tty and ask("이대로 신청할까요? (y/n)", "n", read).lower() == "y"):
+    if not args.yes and not (tty and confirm(read, key)):
         out("신청하지 않았습니다. 확인 없이 하려면 --yes를 쓰십시오" if not tty else "취소했습니다")
         return 1
     body = build_intake(
@@ -3560,6 +3585,34 @@ def clip(text: str, width: int) -> str:
 
 def pad(text: str, width: int) -> str:
     return text + " " * max(width - cell_width(text), 0)
+
+
+STAGE_NAMES = {
+    "received": "접수", "pack": "묶음 준비", "inspect": "검사 중", "passed": "검사 통과",
+    "indeterminate": "판별 불가", "failed": "검사 실패", "approved": "승인", "rejected": "거절",
+    "withdrawn": "철회",
+}
+STAGE_FLOW = ("received", "pack", "inspect")
+NEXT_TEXT = {"wait": "검사가 끝나기를 기다림", "none": "없음"}
+
+
+def stage_path(stage: object) -> str:
+    """접수부터 지금 단계까지(예: 접수 > 묶음 준비 > 검사 중 > 판별 불가)."""
+    if stage not in STAGE_NAMES:
+        return "-"
+    steps = list(STAGE_FLOW[: STAGE_FLOW.index(stage) + 1]) if stage in STAGE_FLOW else [
+        *STAGE_FLOW, stage]
+    return " > ".join(STAGE_NAMES[k] for k in steps)
+
+
+def next_text(row: dict) -> str:
+    value = str(row.get("next") or "")
+    return NEXT_TEXT.get(value, value) or "-"
+
+
+def row_label(row: dict) -> str:
+    return STAGE_NAMES.get(str(row.get("stage"))) or intake_label(
+        row.get("status"), row.get("decision"))
 
 
 def intake_label(status: object, decision: object) -> str:
@@ -3632,20 +3685,21 @@ def tab3_lines(model: dict, ui: dict) -> list[str]:
         out = [f"  {pad('서버', 26)}{pad('상태', 14)}다음 할 일"]
     for i, row in enumerate(intakes):
         mark = ">" if i == ui["cursor"] else " "
-        label = intake_label(row.get("status"), row.get("decision"))
         out.append(
-            f"{mark} {pad(clip(str(row.get('server_id', '')), 25), 26)}{pad(label, 14)}"
-            f"{clip(str(row.get('next') or ''), 36)}"
+            f"{mark} {pad(clip(str(row.get('server_id', '')), 25), 26)}{pad(row_label(row), 14)}"
+            f"{clip(next_text(row), 36)}"
         )
     if ui["detail"] and ui["cursor"] < len(intakes):
         row = intakes[ui["cursor"]]
-        out += ["", f"사유  {clip(str(row.get('reason') or '-'), 70)}",
-                f"다음  {clip(str(row.get('next') or '-'), 70)}"]  # fmt: skip
+        out += ["", f"진행  {clip(stage_path(row.get('stage')), 70)}",
+                f"사유  {clip(str(row.get('reason') or '-'), 70)}",
+                f"다음  {clip(next_text(row), 70)}"]  # fmt: skip
     if found:
         out += ["", "이 PC의 관리되지 않는 로컬 MCP (Enter로 신청)"]
         for j, item in enumerate(found):
             mark = ">" if len(intakes) + j == ui["cursor"] else " "
-            out.append(f"{mark} {item['harness']}:{item['name']}")
+            blocked = "  관리 정책으로 막힘 · 신청 필요" if item.get("blocked") else ""
+            out.append(f"{mark} {item['harness']}:{item['name']}{blocked}")
     return out
 
 
@@ -3752,13 +3806,24 @@ def build_model(kit, state: dict, gateway: Gateway | None) -> dict:
         })  # fmt: skip
     mode = {"managed": "관리형", "user": "사용자 수준(관리되지 않음)"}.get(
         state.get("mode"), "설치 안 됨")
+    intakes = [i for i in (me or {}).get("intakes", []) if isinstance(i, dict)]
+    applied = {  # 진행 중이거나 승인된 신청은 다시 신청할 항목이 아니다
+        i.get("server_id") for i in intakes
+        if i.get("decision") not in ("rejected", "withdrawn") and i.get("stage") not in (
+            "rejected", "withdrawn", "failed")
+    }
+    blocked = state.get("mode") == "managed"
+    found = [
+        {**item, "blocked": blocked and item["harness"] == "codex"}
+        for item in (scan_local_mcp(kit.home) if kit.home.exists() else [])
+        if item["name"] not in applied
+    ]
     return {
         "connected": me is not None, "user": (me or {}).get("user"),
         "key": "ok" if me is not None else "rejected" if status in (401, 403, 404) else "unknown",
         "mode": mode, "harnesses": kit.harnesses, "server_count": len(state.get("mcp_servers", [])),
         "problems": problems, "servers": servers,
-        "intakes": [i for i in (me or {}).get("intakes", []) if isinstance(i, dict)],
-        "found": scan_local_mcp(kit.home) if kit.home.exists() else [],
+        "intakes": intakes, "found": found,
         "result": result,
     }  # fmt: skip
 
@@ -3881,9 +3946,8 @@ def run_requests(gateway: Gateway | None, out=print) -> int:
         return 0
     out(f"{pad('서버', 28)}{pad('상태', 14)}다음 할 일")
     for row in rows:
-        label = intake_label(row.get("status"), row.get("decision"))
-        out(f"{pad(clip(str(row.get('server_id', '')), 27), 28)}{pad(label, 14)}"
-            f"{clip(str(row.get('next') or row.get('reason') or ''), 36)}")  # fmt: skip
+        out(f"{pad(clip(str(row.get('server_id', '')), 27), 28)}{pad(row_label(row), 14)}"
+            f"{clip(next_text(row), 36)}")  # fmt: skip
     return 0
 
 
@@ -3900,7 +3964,7 @@ def check_lines(result: dict, problems: list[str]) -> list[str]:
     return [f"{pad(a, 12)}{b}" for a, b in rows] + [f"  - {p}" for p in problems]
 
 
-def interactive_add(kit, gateway, home: Path, source: str | None, read=input) -> str:
+def interactive_add(kit, gateway, home: Path, source: str | None, read=input, key=None) -> str:
     """화면에서 고른 신청. 결과의 마지막 줄을 돌려준다."""
     lines: list[str] = []
     name, tokens = None, []
@@ -3913,7 +3977,10 @@ def interactive_add(kit, gateway, home: Path, source: str | None, read=input) ->
         source=source, name=name, command=tokens, purpose=None, grade=None, network=None,
         host=[], env=[], ro=[], rw=[], yes=False, request_id=None,
     )
-    run_add(args, home, gateway, out=lambda t: (lines.append(t), print(t))[0], read=read, tty=True)
+    run_add(
+        args, home, gateway, out=lambda t: (lines.append(t), print(t))[0], read=read, tty=True,
+        key=key,
+    )
     return lines[-1] if lines else ""
 
 
@@ -3949,7 +4016,7 @@ def cli_main(argv: list[str]) -> int:
             print("키가 없습니다. 설치 묶음을 다시 받아 설치하십시오")
             return 1
         tty = sys.stdin.isatty()
-        return run_add(args, kit.home, gateway, tty=tty)
+        return run_add(args, kit.home, gateway, tty=tty, key=read_key if tty else None)
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         print(json.dumps(state or {"mode": "none"}, indent=1))
         return 0
@@ -3969,11 +4036,12 @@ def cli_main(argv: list[str]) -> int:
         return "보고했습니다" if kit.report(state, "installed") else NO_GATEWAY
 
     def new_action(model, ui):
-        return interactive_add(kit, gateway, kit.home, None)
+        return interactive_add(kit, gateway, kit.home, None, key=read_key)
 
     def found_action(model, ui):
         item = model["found"][ui["cursor"] - len(model["intakes"])]
-        return interactive_add(kit, gateway, kit.home, f"{item['harness']}:{item['name']}")
+        return interactive_add(
+            kit, gateway, kit.home, f"{item['harness']}:{item['name']}", key=read_key)
 
     def web_action(model, ui):
         parts = urllib.parse.urlsplit(kit.config.get("decide_url", ""))

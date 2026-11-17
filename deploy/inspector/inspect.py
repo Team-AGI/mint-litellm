@@ -52,6 +52,26 @@ def _extract(archive, target, total=0):
     return total
 
 
+TAIL = 2048
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def _failure(stage, process, errors):
+    """실패 단계·종료 코드·서버 오류 출력 끝부분. 결과는 관리자만 본다."""
+    code = process.poll() if process is not None else None
+    if stage == "initialize" and code is not None:
+        stage = "start"  # 첫 응답 전에 서버가 끝났다
+    tail = ""
+    if errors is not None:
+        try:
+            errors.seek(0, os.SEEK_END)
+            errors.seek(max(0, errors.tell() - TAIL))
+            tail = _CONTROL.sub("", errors.read(TAIL).decode("utf-8", "replace"))
+        except (OSError, ValueError):
+            pass
+    return {"stage": stage, "exit_code": code, "stderr_tail": tail[-TAIL:]}
+
+
 def inspect(request, packs=PACKS):
     pack = request.get("pack_sha256", "")
     result = {
@@ -62,8 +82,11 @@ def inspect(request, packs=PACKS):
         "pack_sha256": pack,
         "inspector": {"image": "python:3.12-slim", "python": sys.version.split()[0]},
         "finished_at": None,
+        "detail": None,
     }
     process = None
+    errors = None
+    stage = "start"
     try:
         if not re.fullmatch(r"[0-9a-f]{64}", pack):
             raise ValueError("invalid pack")
@@ -108,11 +131,12 @@ def inspect(request, packs=PACKS):
                 raise ValueError("invalid argv")
             if function == "__main__" and len(argv) >= 2 and argv[:2] == ["-m", module]:
                 argv = argv[2:]
+            errors = tempfile.TemporaryFile()
             process = subprocess.Popen(
                 [sys.executable, "-I", "-c", code, temp, entry, *argv],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
+                stderr=errors,
                 start_new_session=True,
             )
             lines = queue.Queue(maxsize=2)
@@ -144,6 +168,7 @@ def inspect(request, packs=PACKS):
                             raise ValueError("protocol error")
                         return response["result"]
 
+            stage = "initialize"
             call(
                 1,
                 "initialize",
@@ -156,6 +181,7 @@ def inspect(request, packs=PACKS):
             process.stdin.write(b'{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
             process.stdin.flush()
             cursor, seen, identifier = None, set(), 2
+            stage = "tools_list"
             while True:
                 page = call(identifier, "tools/list", {"cursor": cursor} if cursor else {})
                 tools = page.get("tools")
@@ -177,6 +203,8 @@ def inspect(request, packs=PACKS):
     except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile, json.JSONDecodeError):
         result["reason"] = "INSPECTION_FAILED"
     finally:
+        if not result["complete"]:
+            result["detail"] = _failure(stage, process, errors)
         if process is not None:
             try:
                 if hasattr(os, "killpg"):
@@ -188,6 +216,8 @@ def inspect(request, packs=PACKS):
             process.wait()
             process.stdin.close()
             process.stdout.close()
+        if errors is not None:
+            errors.close()
         if not result["complete"]:
             result["tools"] = []
         result["finished_at"] = datetime.now(timezone.utc).isoformat()  # noqa: UP017

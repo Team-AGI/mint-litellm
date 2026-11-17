@@ -1275,13 +1275,15 @@ class PluginDatabase:
 
         async def read(conn: Any) -> Any:
             cursor = await conn.execute(
-                "SELECT id, server_id, status, decision, reason, created_at"
+                "SELECT id, server_id, status, decision, reason, created_at,"
+                " check_name, reason_code, pack_ready"
                 " FROM mint.endpoint_my_intakes(%s, %s) ORDER BY created_at DESC LIMIT 20",
                 (instance_id, key_token),
             )
             return await cursor.fetchall()
 
-        keys = ("id", "server_id", "status", "decision", "reason", "created_at")
+        keys = ("id", "server_id", "status", "decision", "reason", "created_at",
+                "check_name", "reason_code", "pack_ready")
         return [dict(zip(keys, row, strict=True)) for row in await self._run(read)]
 
     async def endpoint_submit_intake(

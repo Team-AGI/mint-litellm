@@ -394,6 +394,19 @@ def test_my_intakes_lists_only_the_key_owners_staff_and_endpoint_requests(seeded
         conn.execute("SELECT * FROM mint.endpoint_my_intakes(%s, %s)", (INSTANCE, KEY))
 
 
+def test_my_intakes_names_the_blocking_check_and_whether_the_pack_exists(seeded):
+    world = seeded
+    mine = submit(world)
+    world.conn.execute(
+        "INSERT INTO mint.intake_checks (id, instance_id, intake_id, \"check\", attempt, result,"
+        " reason_code, method) VALUES (gen_random_uuid(), %s, %s, 'pack_build', 1,"
+        " 'indeterminate', 'PACK_SDIST_ONLY', 'm')", (INSTANCE, mine))
+    with as_login(world.url, "mint_plugin") as conn:
+        row = conn.execute("SELECT check_name, reason_code, pack_ready"
+                           " FROM mint.endpoint_my_intakes(%s, %s)", (INSTANCE, KEY)).fetchone()
+    assert row == ("pack_build", "PACK_SDIST_ONLY", False)
+
+
 def test_the_employee_pages_and_withdrawal_cover_endpoint_requests(seeded):
     world = seeded
     request_id = submit(world)

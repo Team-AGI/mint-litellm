@@ -217,7 +217,11 @@ CHECK = {
     "risk_grade": "위험 등급",
     "termination_readiness": "종료 준비",
     "supply_chain": "공급망",
+    "exec_shape": "실행 명세 형식",
+    "pack_build": "묶음 준비",
+    "inspection": "도구 목록 검사",
 }
+INSPECTION_STAGE = {"start": "서버 시작", "initialize": "초기화", "tools_list": "도구 목록 받기"}
 SOURCE = {"submission": "제출", "operator": "운영자 등록", "staff": "직원 신청",
           "endpoint": "단말 신청"}
 DATA_GRADE = {"public": "공개", "internal": "내부", "confidential": "기밀", "restricted": "제한"}
@@ -231,6 +235,26 @@ ACTION = {
     "credential_access": "자격 접근",
 }
 CHECK_REASON = {
+    "ARGV_INVALID": "실행 인자 형식 오류",
+    "ARGV_TOO_MANY": "실행 인자가 너무 많음",
+    "COMMAND_INVALID": "명령 이름 형식 오류",
+    "EXEC_CONTRACT_INVALID": "실행 계약을 만들 수 없음",
+    "INSPECTION_FAILED": "검사 중 서버가 실패함",
+    "INSPECTION_INCOMPLETE": "도구 목록을 끝까지 받지 못함",
+    "INSPECTION_UNAVAILABLE": "검사기가 응답하지 않음",
+    "NAME_INVALID": "패키지 이름 형식 오류",
+    "OAUTH2_FLOW_UNCONFIRMED": "인증 방식 확인 못 함",
+    "PACK_DIGEST_MISMATCH": "내려받은 파일이 배포처 값과 다름",
+    "PACK_DIRECT_URL": "직접 주소 패키지는 허용되지 않음",
+    "PACK_ENTRY_NOT_FOUND": "실행 진입점을 찾지 못함",
+    "PACK_INDEX_NOT_ALLOWED": "패키지 저장소가 허용되지 않음",
+    "PACK_RESOLVE_FAILED": "패키지를 받지 못함",
+    "PACK_SDIST_ONLY": "소스 배포본만 있어 묶을 수 없음",
+    "PACK_TOO_LARGE": "묶음이 너무 큼",
+    "PACK_UNAVAILABLE": "묶음이 없어 검사하지 못함",
+    "SPEC_INVALID": "신청 명세 형식 오류",
+    "TIMEOUT": "검사 시간 초과",
+    "VERSION_INVALID": "판본 형식 오류",
     "REGISTRY_ID_CONFLICT": "서버 식별자가 다른 등록과 충돌하거나 비공개 상태를 확인하지 못함",
     "ALL_KEYS_NOT_CLOSED": "모든 키 허용을 끄지 못함",
     "APPROVE_REFUSED": "승인 거부됨",

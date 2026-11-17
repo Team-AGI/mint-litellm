@@ -709,3 +709,107 @@ def test_the_installed_shim_opens_the_screen_only_on_a_terminal(tmp_path, folder
     kit.install()
     shim = (kit.home / ".local/bin/mint").read_text()
     assert "set -- screen" in shim and "set -- status" in shim and "[ -t 0 ]" in shim
+
+
+# --- 신청 입력·단계 표시 --------------------------------------------------------------------
+
+
+def test_the_purpose_prompt_names_the_option_only_for_scripts(tmp_path):
+    lines = []
+    args = add_args(purpose=None, yes=False)
+    assert kit_module.run_add(args, tmp_path, FakeGateway(), out=lines.append) == 2
+    assert lines[-1] == "목적(--purpose)을 적으십시오"
+    lines.clear()
+    kit_module.run_add(args, tmp_path, FakeGateway(), out=lines.append, read=lambda q: "", tty=True)
+    assert lines[-1] == "목적을 적으십시오"
+
+
+def test_data_grades_are_asked_and_shown_in_korean_and_sent_as_internal_values(tmp_path):
+    asked, lines, gateway = [], [], FakeGateway()
+
+    def read(question):
+        asked.append(question)
+        return {"자료 등급": "기밀", "이대로": "y"}.get(next(
+            (k for k in ("자료 등급", "이대로") if k in question), ""), "")
+
+    code = kit_module.run_add(
+        add_args(yes=False, grade=None), tmp_path, gateway, out=lines.append, read=read, tty=True)
+    assert code == 0 and gateway.sent[0]["data_grade"] == "confidential"
+    assert any("공개·내부·기밀·제한" in q and "[내부]" in q for q in asked)
+    assert any(line.startswith("자료 등급") and "기밀" in line for line in lines)
+    assert not any("confidential" in line or "internal" in line for line in lines)
+    assert kit_module.parse_grade("제한") == "restricted"
+    assert kit_module.parse_grade("public") == "public" and kit_module.parse_grade("x") is None
+    lines.clear()
+    assert kit_module.run_add(add_args(grade="가나"), tmp_path, gateway, out=lines.append) == 2
+    assert lines[-1] == "자료 등급은 공개·내부·기밀·제한 중 하나입니다"
+
+
+def test_a_single_key_confirms_on_the_screen_and_a_line_prompt_says_to_press_enter(tmp_path):
+    gateway, asked = FakeGateway(), []
+    args = add_args(yes=False)
+    quiet = lambda t: 0  # noqa: E731
+    kw = dict(out=quiet, tty=True, read=lambda q: "")
+    assert kit_module.run_add(args, tmp_path, gateway, key=lambda: "y", **kw) == 0
+    assert kit_module.run_add(args, tmp_path, gateway, key=lambda: "n", **kw) == 1
+    assert len(gateway.sent) == 1
+
+    def read(question):
+        asked.append(question)
+        return "y" if "이대로" in question else ""
+
+    assert kit_module.run_add(args, tmp_path, gateway, out=quiet, read=read, tty=True) == 0
+    assert "이대로 신청할까요? (y/n, Enter) [n] " in asked
+
+
+def test_tab_three_shows_the_stage_and_never_an_english_next_step():
+    steps = [("received", "접수"), ("pack", "접수 > 묶음 준비"),
+             ("inspect", "접수 > 묶음 준비 > 검사 중"),
+             ("indeterminate", "접수 > 묶음 준비 > 검사 중 > 판별 불가"),
+             ("approved", "접수 > 묶음 준비 > 검사 중 > 승인")]
+    for stage, path in steps:
+        assert kit_module.stage_path(stage) == path
+    rows = [{"server_id": "a", "status": "checking", "decision": None, "stage": "pack",
+             "next": "wait"},
+            {"server_id": "b", "status": "decided", "decision": "approved", "stage": "approved",
+             "next": "none", "reason": None}]
+    lines = kit_module.render_screen(model(intakes=rows), ui(tab=2, detail=True), 80, 24)
+    text = "\n".join(lines)
+    assert "묶음 준비" in text and "승인" in text and "진행  접수 > 묶음 준비" in text
+    assert "wait" not in text and "none" not in text
+    out = []
+    kit_module.run_requests(FakeGateway(me={"intakes": rows}), out=out.append)
+    assert not any("wait" in line or "none" in line for line in out)
+    assert kit_module.row_label({"status": "checking", "decision": None}) == "검사 중"
+
+
+def test_found_items_with_a_request_are_left_out_and_managed_codex_items_are_marked(tmp_path):
+    (tmp_path / ".claude.json").write_text(json.dumps({"mcpServers": {
+        "gh": {"command": "uvx", "args": ["demo==2.0"]},
+        "again": {"command": "uvx", "args": ["demo==2.0"]}}}))
+    (tmp_path / ".codex").mkdir()
+    (tmp_path / ".codex/config.toml").write_text('[mcp_servers.tool]\ncommand = "uvx"\n')
+
+    class Kit:
+        home, programs, harnesses = tmp_path, None, []
+
+        def check(self, state):
+            return {}, []
+
+        def local_contracts(self):
+            return {}
+
+        def local_permits(self):
+            return {}
+
+    intakes = [{"server_id": "gh", "status": "checking", "decision": None, "stage": "pack"},
+               {"server_id": "again", "status": "decided", "decision": "rejected",
+                "stage": "rejected"}]
+    me = {"user": "u", "servers": [], "intakes": intakes}
+    built = kit_module.build_model(Kit(), {"mode": "managed"}, FakeGateway(me=me))
+    found = {(i["harness"], i["name"]): i["blocked"] for i in built["found"]}
+    assert found == {("claude", "again"): False, ("codex", "tool"): True}
+    text = "\n".join(kit_module.render_screen(built, ui(tab=2), 80, 24))
+    assert "codex:tool  관리 정책으로 막힘 · 신청 필요" in text
+    user_level = kit_module.build_model(Kit(), {"mode": "user"}, FakeGateway(me=me))
+    assert not any(i["blocked"] for i in user_level["found"])
