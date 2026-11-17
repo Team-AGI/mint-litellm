@@ -30,29 +30,22 @@ def desired_servers(contracts: Mapping[str, Mapping[str, Any]]) -> list[dict[str
     ]
 
 
-def scoped_desired(
-    scope: Iterable[Mapping[str, Any]], legacy: Mapping[str, Mapping[str, Any]]
-) -> list[dict[str, Any]]:
-    """범위 함수가 낸 묶음 서버와, 묶음이 없는 기존 서버 계약을 한 목록(이름 순)으로 합친다.
+def scoped_desired(scope: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """범위 함수가 낸 서버(묶음 서버와 1판 로컬 서버 모두)를 응답에 실을 목록(이름 순)으로 만든다.
 
-    묶음 서버는 범위에 닿을 때만 싣는다. 기존 서버는 범위 함수가 내지 않으므로 지금까지처럼 승인된
-    것을 모두 싣되, 묶음 계약(``pack`` 있음)은 범위에 없으면 싣지 않는다.
+    범위에 닿지 않는 서버는 승인되어 있어도 싣지 않는다.
     """
-    items = {
-        row["server_id"]: {
-            "name": row["server_id"],
-            "version": contract_version(row["exec_contract"]),
-            "contract": row["exec_contract"],
-            "pack_sha256": row["pack_sha256"],
-            "permit_until": row["permit_until"].isoformat()
-            if hasattr(row["permit_until"], "isoformat") else row["permit_until"],
-        }
-        for row in scope
-    }
-    plain = {n: d for n, d in legacy.items() if n not in items and not d.get("pack")}
-    for item in desired_servers(plain):
-        items[item["name"]] = item
-    return [items[name] for name in sorted(items)][:MAX_DESIRED]
+    rows = {row["server_id"]: row for row in scope}
+    checked = approved_contracts({n: r["exec_contract"] for n, r in rows.items()})
+    items = []
+    for name, contract in list(checked.items())[:MAX_DESIRED]:
+        item = {"name": name, "version": contract_version(contract), "contract": contract}
+        if rows[name]["pack_sha256"]:
+            until = rows[name]["permit_until"]
+            item["pack_sha256"] = rows[name]["pack_sha256"]
+            item["permit_until"] = until.isoformat() if hasattr(until, "isoformat") else until
+        items.append(item)
+    return items
 
 
 def revoke_names(

@@ -758,7 +758,7 @@ def decide_intake(actor: Actor, intake_id: str, body: IntakeDecisionBody) -> dic
     narrowing = {
         key: value
         for key, value in (
-            ("narrow_network", body.narrow_network),
+            ("narrow_network", None if body.narrow_network == "keep" else body.narrow_network),
             ("narrow_file_access", body.narrow_file_access),
         )
         if value is not None

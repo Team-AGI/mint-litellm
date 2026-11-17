@@ -17,7 +17,9 @@ PACK = "a" * 64
 OTHER = "b" * 64
 WHEEL = "demo-1.0-py3-none-any.whl"
 UNTIL = datetime(2030, 1, 1, tzinfo=UTC)
-CONTRACT = {"schema_version": 2, "executable": "/usr/bin/python3", "argv": ["-m", "demo"]}
+CONTRACT = {"schema_version": 2, "executable": "/usr/bin/python3", "argv": ["-m", "demo"],
+            "pack": {"sha256": PACK, "runtime": "python3", "python": "3.12",
+                     "entry": "demo.server:main"}}
 ROW = {"server_id": "demo", "pack_sha256": PACK, "permit_until": UNTIL, "exec_contract": CONTRACT,
        "pack_manifest": {"files": [{"name": WHEEL, "sha256": "c" * 64, "size": 3}]}}
 HEADERS = {"Authorization": "Bearer sk-other"}
@@ -146,7 +148,7 @@ def test_the_report_answer_carries_the_scoped_list_and_the_revoke_names(tmp_path
         return [N(server_id=n, identity_kind="stdio", status="approved") for n in ("demo", "old")]
 
     async def legacy_desired(self, instance_id, key_token):
-        return scoped_desired(await self.endpoint_scope(instance_id, key_token), {})
+        return scoped_desired(await self.endpoint_scope(instance_id, key_token))
 
     monkeypatch.setattr(FakeDatabase, "report_install", report_install, raising=False)
     monkeypatch.setattr(FakeDatabase, "registered_servers", registered, raising=False)
@@ -167,15 +169,15 @@ def test_the_report_answer_carries_the_scoped_list_and_the_revoke_names(tmp_path
     assert json.dumps(answer)
 
 
-def test_scoped_desired_filters_pack_contracts_and_keeps_plain_ones():
-    plain = {"executable": "/usr/bin/node", "argv": [], "executable_sha256": "ab" * 32,
-             "schema_version": 1}
-    legacy = {"b": plain, "demo": {**plain, "pack": {"sha256": PACK}},
-              "gone": {**plain, "pack": {"sha256": OTHER}}}
-    items = scoped_desired([ROW], legacy)
+def test_scoped_desired_lists_only_what_the_scope_returns():
+    plain = {"server_id": "b", "pack_sha256": None, "permit_until": UNTIL,
+             "exec_contract": {"executable": "/usr/bin/node", "argv": [],
+                               "executable_sha256": "ab" * 32, "schema_version": 1}}
+    items = scoped_desired([ROW, plain])
     assert [i["name"] for i in items] == ["b", "demo"]
     assert items[1]["pack_sha256"] == PACK and items[1]["permit_until"] == UNTIL.isoformat()
     assert "pack_sha256" not in items[0]
+    assert scoped_desired([]) == []
 
 
 def test_revoke_names_are_reported_managed_servers_outside_the_scope():

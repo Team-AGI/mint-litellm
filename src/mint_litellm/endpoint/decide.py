@@ -630,13 +630,17 @@ def _pack_path(row: Mapping[str, Any] | None, file: str) -> Path | None:
     return path if path.is_relative_to(base) and path.is_file() else None
 
 
+_INTAKE_SQLSTATE = {"23505": 409, "MT429": 429, "42501": 404, "23514": 400}
+
+
 def _intake_status(exc: Exception) -> int | None:
     """DB 함수가 낸 예외의 종류. 충돌 409, 한도 429, 키 없음 404, 그 밖의 MINT 예외는 형식 400."""
     text = str(exc)
-    for marker, status in (("MINT-CONFLICT", 409), ("MINT-QUOTA", 429), ("MINT-KEY", 404)):
-        if marker in text:
-            return status
-    return 400 if "MINT-" in text else None
+    if "MINT-" not in text:
+        return None
+    return _INTAKE_SQLSTATE.get(getattr(exc, "sqlstate", None) or "") or next(
+        (status for marker, status in (("MINT-CONFLICT", 409), ("MINT-QUOTA", 429),
+                                       ("MINT-KEY", 404)) if marker in text), 400)
 
 
 def _intake_detail(exc: Exception) -> str:

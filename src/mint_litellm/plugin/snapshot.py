@@ -1301,26 +1301,8 @@ class PluginDatabase:
         return await self._run(write)  # type: ignore[no-any-return]
 
     async def desired_servers(self, instance_id: str, key_token: str) -> list[dict[str, Any]]:
-        """설치 보고 응답에 실을 승인된 로컬 서버 목록(이름·계약·판본).
-
-        묶음 서버는 이 키의 범위에 닿는 것만, 묶음 없는 기존 서버는 승인된 것 전부이다.
-        """
-
-        async def read(conn: Any) -> Any:
-            cursor = await conn.execute(
-                "SELECT DISTINCT ON (s.server_id) s.server_id, e.payload -> 'exec_contract'"
-                " FROM mint.servers s JOIN mint.events e ON e.instance_id = s.instance_id"
-                " AND e.kind = 'server_registered' AND e.payload ->> 'server_id' = s.server_id"
-                " AND e.payload ->> 'exec_contract_sha256' = s.exec_contract_sha256"
-                " WHERE s.instance_id = %s AND s.identity_kind = 'stdio'"
-                " AND s.status = 'approved' ORDER BY s.server_id, e.inserted_at DESC",
-                (instance_id,),
-            )
-            return await cursor.fetchall()
-
-        rows = await self._run(read)
-        scope = await self.endpoint_scope(instance_id, key_token)
-        return scoped_desired(scope, {n: d for n, d in rows if isinstance(d, dict)})
+        """설치 보고 응답에 실을 승인된 로컬 서버 목록(이름·계약·판본). 이 키의 범위에 닿는 것만."""
+        return scoped_desired(await self.endpoint_scope(instance_id, key_token))
 
     async def revoke_servers(
         self, instance_id: str, reported: Sequence[str], desired: Sequence[str]

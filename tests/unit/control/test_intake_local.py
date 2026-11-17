@@ -80,7 +80,7 @@ def test_all_six_checks_pass_and_pack_is_recorded(monkeypatch):
     assert digest == DIGEST and json.loads(manifest) == MANIFEST
     contract = json.loads(contract)
     assert contract["schema_version"] == 2 and contract["executable"] == "/opt/py3"
-    assert contract["executable_sha256"] is None
+    assert "executable_sha256" not in contract and contract["identity_kind"] == "stdio"
     assert contract["pack"] == {"sha256": DIGEST, "runtime": "python3", "python": "3.12",
                                 "entry": "pkg:main"}
     assert contract["allowed_hosts"] == ["a.example", "b.example"]

@@ -47,9 +47,6 @@ _REQUIRED = (
     "purpose", "data_grade", "allowed_resources", "provider", "owner_user_id", "readiness",
     "data_return_terms", "requested_by",
 )
-# 단말 신청(로컬)의 검사 순서. 검사 모듈이 같은 이름의 목록을 가지면 이 값을 그쪽으로 바꾼다.
-LOCAL_CHECKS = ("exec_shape", "pack_build", "inspection", "description_scan", "risk_grade",
-                "termination_readiness")
 # 서버 행이 새 신청으로 이어질 수 있는 상태(재검사 전이가 있는 상태)
 _SERVER_REENTRY = ("pending", "awaiting_approval", "rejected")
 
@@ -91,7 +88,7 @@ def latest_checks(conn: Any, instance_id: str, intake_id: Any) -> list[dict]:
         " WHERE instance_id = %s AND intake_id = %s ORDER BY \"check\", attempt DESC",
         (instance_id, intake_id),
     )
-    order = {name: i for i, name in enumerate((*LOCAL_CHECKS, *intake_checks.CHECKS))}
+    order = {name: i for i, name in enumerate((*intake_checks.LOCAL_CHECKS, *intake_checks.CHECKS))}
     return sorted(rows, key=lambda r: order[r["check"]])
 
 
@@ -804,7 +801,8 @@ def conclude(ctx: Context, intake_id: str, *, needs_registry_credentials: bool) 
         verdict = ("failed" if failed else
                    "indeterminate" if any(c["result"] == "indeterminate" for c in checks)
                    or len(checks) < len(
-                       LOCAL_CHECKS if row["source"] == "endpoint" else intake_checks.CHECKS)
+                       intake_checks.LOCAL_CHECKS if row["source"] == "endpoint"
+                       else intake_checks.CHECKS)
                    else "passed")
         if row["status"] != "checking":
             raise conflict(f"checking이 아닌 신청({row['status']})은 판정할 수 없습니다.")

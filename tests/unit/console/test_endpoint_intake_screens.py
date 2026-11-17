@@ -22,13 +22,6 @@ CONTRACT = {
 }
 ROW = {"pack_sha256": SHA, "pack_manifest": MANIFEST, "exec_contract": CONTRACT,
        "pack_spec": {"observed_tools": [{"name": "reported_tool"}]}}
-ADD_COLUMNS = (
-    "ALTER TABLE mint.intakes DROP CONSTRAINT IF EXISTS intakes_source_check",
-    "ALTER TABLE mint.intakes ADD CONSTRAINT intakes_source_check"
-    " CHECK (source IN ('submission', 'operator', 'staff', 'endpoint'))",
-    "ALTER TABLE mint.deployment_contracts ADD COLUMN pack_spec jsonb,"
-    " ADD COLUMN pack_sha256 text, ADD COLUMN pack_manifest jsonb, ADD COLUMN exec_contract jsonb",
-)
 
 
 def test_the_view_lists_the_pack_files_and_only_narrower_network_choices():
@@ -69,11 +62,11 @@ def test_the_staff_form_offers_local_run_with_a_command_example():
 
 
 def make_local(world):
-    for sql in ADD_COLUMNS:
-        world.query(sql)
     intake = add_intake(world)
     world.query("ALTER TABLE mint.intakes DISABLE TRIGGER USER")
-    world.query("UPDATE mint.intakes SET source = 'endpoint' WHERE id = %s", intake)
+    world.query("UPDATE mint.intakes SET source = 'endpoint', endpoint_key_token = 'k'"
+                " WHERE id = %s",
+                intake)
     world.query("ALTER TABLE mint.intakes ENABLE TRIGGER USER")
     world.query("UPDATE mint.deployment_contracts SET pack_sha256 = %s, pack_manifest = %s,"
                 " exec_contract = %s, pack_spec = %s", SHA, json.dumps(MANIFEST),
