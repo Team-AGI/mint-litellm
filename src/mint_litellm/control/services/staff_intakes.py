@@ -92,7 +92,8 @@ def detail(sctx: staff.StaffContext, identifier: str) -> dict:
         raise not_found("신청을 찾을 수 없습니다.") from None
     row = fetchone(sctx.control,
                    "SELECT id, server_id, purpose, data_grade, allowed_resources, readiness,"
-                   " data_return_terms, status, decision, decision_reason, created_at, decided_at,state_version"
+                   " data_return_terms, status, decision, decision_reason, created_at, decided_at,"
+                   " state_version"
                    " FROM mint.intakes WHERE instance_id=%s AND requested_by=%s"
                    " AND source='staff' AND id=%s", (sctx.instance_id, sctx.user_id, intake_id))
     if row is None:
