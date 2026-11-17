@@ -8,6 +8,10 @@
   {% else %}<dt>주소</dt><dd>{{ m.copy_hash(s.url_sha256) }}</dd>{% endif %}
   {% if s.identity_kind == 'stdio' %}<dt>네트워크</dt><dd>{% if s.network == 'none' %}차단{% elif s.network == 'hosts' %}허용 호스트만: {{ s.allowed_hosts | join }}{% else %}제한 없음{% endif %}</dd>{% endif %}
 </dl>
+{% if pack and pack.ready %}<dl class="detail">
+  <dt>패키지</dt><dd>{{ pack.name | blank }} {{ pack.version | blank }}</dd>
+  <dt>묶음 해시</dt><dd>{{ m.ident(pack.sha12) }} <button type="button" class="copy" data-copy="{{ pack.sha }}">복사</button></dd>
+</dl>{% endif %}
 {% if s.identity_kind == 'stdio' %}
 <h2>파일 접근</h2>
 {% if s.file_access %}

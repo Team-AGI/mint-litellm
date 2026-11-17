@@ -125,6 +125,9 @@ tr:hover td { background: var(--bg-subtle); }
 table.clickable tbody tr { cursor: pointer; }
 td.num, td.num * { font-variant-numeric: tabular-nums; }
 
+.local-hint { display: none; }
+.form:has(option[value=stdio]:checked) .remote { display: none; }
+.form:has(option[value=stdio]:checked) .local-hint { display: block; }
 .badge { display: inline-flex; align-items: center; gap: var(--s1); white-space: nowrap; }
 .badge .icon { width: 16px; text-align: center; }
 .badge.ok { color: var(--ok); }

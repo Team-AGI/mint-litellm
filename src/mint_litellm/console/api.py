@@ -728,6 +728,8 @@ class IntakeDecisionBody(Versioned):
     team_id: str | None = None
     allowed_hosts: list[str] | None = None
     second_approver_token: str | None = None
+    narrow_network: Literal["keep", "none"] | None = None
+    narrow_file_access: list[str] | None = None
 
 
 class ReapproveBody(Versioned):
@@ -753,10 +755,19 @@ def decide_intake(actor: Actor, intake_id: str, body: IntakeDecisionBody) -> dic
         valid_until = datetime.now(UTC) + timedelta(
             days=intake_days(body.decision, body.valid_days, strict)
         )
+    narrowing = {
+        key: value
+        for key, value in (
+            ("narrow_network", body.narrow_network),
+            ("narrow_file_access", body.narrow_file_access),
+        )
+        if value is not None
+    }
     return intake_service.decide(
         actor.ctx,
         intake_id,
         body.decision,
+        **narrowing,
         reason=body.reason,
         valid_until=valid_until,
         scope_type=body.scope_type,
