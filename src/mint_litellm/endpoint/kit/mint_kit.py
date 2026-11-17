@@ -3584,7 +3584,7 @@ def run_add(
         hosts, env_names, purpose, grade,
     )
     if env_values:
-        body["spec"]["env"] = env_values
+        body["env"] = env_values  # 서버 본문의 최상위 env(명세 안이 아니다)
     status, doc = gateway.json("POST", INTAKES_PATH, body)
     out(submit_text(status, doc))
     if status == 201:
