@@ -126,3 +126,13 @@ class PackTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_pip_runs_from_the_bundled_wheel_when_the_image_has_no_pip(tmp_path, monkeypatch):
+    from mint_litellm.control import packs
+
+    wheel = tmp_path / "pip.whl"
+    monkeypatch.setenv("MINT_PIP_WHEEL", str(wheel))
+    assert packs._pip()[1:] == ["-m", "pip"]  # 파일이 없으면 설치된 pip
+    wheel.write_bytes(b"zip")
+    assert packs._pip()[1:] == [str(wheel) + "/pip"]

@@ -5,12 +5,15 @@ FROM python:3.13-slim@sha256:ae14d4ce8771606477a81446e7ef429edd6762305fc50c84507
 COPY pyproject.toml README.md LICENSE /src/
 COPY src /src/src
 RUN pip wheel --no-deps --wheel-dir /wheels /src
+# 실행 묶음 만들기용 pip(이미지에 설치하지 않고 wheel 파일로만 둔다).
+RUN pip download --no-deps --only-binary=:all: --dest /pipwheel "pip==25.3"     && mv /pipwheel/pip-*.whl /pipwheel/pip.whl
 
 FROM ${LITELLM_IMAGE}
 # 정책 시험과 번들 준비에 쓰는 opa 실행 파일과 정책 소스. 정책 엔진 이미지와 같은 판본이다.
 COPY --from=openpolicyagent/opa:1.21.4@sha256:12420358d3f22a0cd2424ddc44a16e292ecb42825d3dfbca779986006822a3f6 /opa /usr/local/bin/opa
 COPY policy /opt/mint/policy
 COPY --from=build /wheels /tmp/wheels
+COPY --from=build /pipwheel/pip.whl /opt/mint/pip.whl
 # 기반 이미지에 이미 있는 의존성 불일치는 허용하고 MINT 설치로 새로 생긴 불일치만 실패로 본다.
 # uv.lock에서 내보낸 판본 제약. 기반 이미지에 이미 있는 패키지는 그 판본을 유지하고 새로 설치하는 패키지만 잠금 판본을 쓴다.
 COPY deploy/constraints.txt deploy/merge-constraints.py /tmp/

@@ -31,14 +31,23 @@ def _metadata(name: str, version: str) -> dict:
         return json.load(response)
 
 
+# 이미지는 보안을 위해 pip를 지운다. 묶음 만들기만 설치하지 않은 pip wheel을 직접 실행한다.
+PIP_WHEEL = "/opt/mint/pip.whl"
+
+
+def _pip() -> list[str]:
+    wheel = os.environ.get("MINT_PIP_WHEEL", PIP_WHEEL)
+    if os.path.isfile(wheel):
+        return [sys.executable, wheel + "/pip"]
+    return [sys.executable, "-m", "pip"]
+
+
 def _download(requirement: str, destination: Path, python: str) -> None:
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith("PIP_")}
     env["PIP_CONFIG_FILE"] = os.devnull
     subprocess.run(
         [
-            sys.executable,
-            "-m",
-            "pip",
+            *_pip(),
             "download",
             "--only-binary=:all:",
             "--index-url",
