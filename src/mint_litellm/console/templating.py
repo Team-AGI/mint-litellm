@@ -33,6 +33,7 @@ MENU = (
 STAFF_MENU = (
     (None, (
         ("/staff", "내 서버", None),
+        ("/staff/intakes", "MCP 서버 도입 신청", None),
         ("/staff/confirmations", "내 요청", "staff_requests"),
         ("/staff/endpoint", "내 단말", None),
     )),

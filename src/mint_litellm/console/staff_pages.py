@@ -38,9 +38,10 @@ from mint_litellm.control import endpoint_kits, kit_key_sync, links
 from mint_litellm.control.db.connection import connect
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.litellm_admin import LiteLLMError
-from mint_litellm.control.services import console_sessions, reads, staff
+from mint_litellm.control.services import console_sessions, reads, staff, staff_intakes
 from mint_litellm.endpoint.kit_build import HARNESSES, build_kit
 from mint_litellm.plugin.snapshot import WINDOW_MAX_USES
+from mint_litellm.types.ids import new_uuid7
 
 router = APIRouter(dependencies=[Depends(require_csrf)])
 # 로그인은 세션이 없을 때(또는 만료된 쿠키가 남았을 때)도 받으므로 CSRF 토큰 대신 출처만 본다.
@@ -141,7 +142,77 @@ def staff_render(
     )
 
 
+# --- 서버 도입 신청 --------------------------------------------------------------------------
+
+
+@router.get("/staff/intakes")
+def intake_list(request: Request, actor: StaffActor = Depends(staff_actor)):
+    return staff_render(request, "staff_intakes.html",
+                        {"rows": staff_intakes.listing(actor.sctx)}, actor)
+
+
+def intake_form(request: Request, actor: StaffActor, form=None, error=None, status=200):
+    values = {"request_id": str(new_uuid7()), "transport": "http", "data_grade": "internal",
+              "audit_access_days": "90", **(form or {})}
+    return staff_render(request, "staff_intake_new.html",
+                        {"f": values, "error": error}, actor, status)
+
+
+@router.get("/staff/intakes/new")
+def intake_new(request: Request, actor: StaffActor = Depends(staff_actor)):
+    return intake_form(request, actor)
+
+
+@router.post("/staff/intakes")
+def intake_submit(
+    request: Request, request_id: str = Form(...), server_id: str = Form(...),
+    url: str = Form(...), transport: str = Form(...), purpose: str = Form(...),
+    data_grade: str = Form(...), resources: str = Form(""),
+    credential_notice: str = Form(...), revocation_record: str = Form(...),
+    audit_access_days: str = Form(...), data_return_terms: str = Form(...),
+    actor: StaffActor = Depends(staff_actor),
+):
+    form = dict(request_id=request_id, server_id=server_id, url=url, transport=transport,
+                purpose=purpose, data_grade=data_grade, resources=resources,
+                credential_notice=credential_notice, revocation_record=revocation_record,
+                audit_access_days=audit_access_days, data_return_terms=data_return_terms)
+    return act(actor, lambda: staff_intakes.submit(actor.sctx, actor.id_hash, request_id, form),
+               "intake_created", "/staff/intakes/" + request_id,
+               lambda **kw: intake_form(request, actor, form, **kw))
+
+
+@router.get("/staff/intakes/{intake_id}")
+def intake_detail(intake_id: str, request: Request, actor: StaffActor = Depends(staff_actor)):
+    row = staff_intakes.detail(actor.sctx, intake_id)
+    reason = row["decision_reason"] or ""
+    if reason.startswith("check_failed:"):
+        _, check, code = reason.split(":", 2)
+        reason = labels.pick(labels.CHECK, check) + ": " + labels.pick(labels.CHECK_REASON, code)
+    return staff_render(request, "staff_intake_detail.html",
+                        {"i": row, "decision_reason": reason}, actor)
+
+
 # --- 로그인·로그아웃 --------------------------------------------------------------------------
+
+@router.post("/staff/intakes/{intake_id}/withdraw")
+def intake_withdraw(intake_id: str, request: Request, state_version: int = Form(...),
+                    reason: str = Form(...), confirm: str = Form(""),
+                    actor: StaffActor = Depends(staff_actor)):
+    from mint_litellm.control.services import intake_withdrawals
+
+    def action():
+        if confirm != "yes":
+            raise ControlError("철회 확인란을 선택하십시오.")
+        return intake_withdrawals.staff_withdraw(actor.sctx, actor.id_hash,
+                                                 intake_id, state_version, reason)
+
+    def rebuild(error=None, status=400):
+        row = staff_intakes.detail(actor.sctx, intake_id)
+        return staff_render(request, "staff_intake_detail.html",
+                            {"i": row, "decision_reason": row["decision_reason"] or "",
+                             "error": error}, actor, status)
+
+    return act(actor, action, "intake_withdrawn", "/staff/intakes/" + intake_id, rebuild)
 
 
 def start_staff_session(
