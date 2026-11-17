@@ -14,7 +14,7 @@ from mint_litellm.control.services.intakes import _validated_inputs
 from mint_litellm.types.canonical import canonical_text
 
 
-def validate(form: dict) -> tuple[dict, str]:
+def validate(form: dict, allowed_ports: tuple[int, ...] = (443, 8443)) -> tuple[dict, str]:
     sid = str(form.get("server_id", "")).strip()
     url = str(form.get("url", "")).strip()
     transport = form.get("transport", "http")
@@ -32,6 +32,12 @@ def validate(form: dict) -> tuple[dict, str]:
     except ValueError:
         raise ControlError("서버 주소는 자격 정보·쿼리·조각이 없는 "
                            "HTTP 또는 HTTPS 주소여야 합니다.") from None
+    # 포트는 허용 목록 예외가 없는 검사라, 접수 뒤 자동 거절되기 전에 화면에서 바로 알린다.
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    if port not in allowed_ports:
+        raise ControlError(
+            f"포트 {port}은(는) 쓸 수 없습니다. 허용 포트: {', '.join(map(str, allowed_ports))}."
+        )
     if transport not in ("http", "sse"):
         raise ControlError("전송 방식은 HTTP 또는 SSE여야 합니다.")
     resources = str(form.get("resources", ""))
@@ -62,12 +68,15 @@ def validate(form: dict) -> tuple[dict, str]:
     return payload, contract
 
 
-def submit(sctx: staff.StaffContext, session_id_hash: str, request_id: str, form: dict) -> str:
+def submit(
+    sctx: staff.StaffContext, session_id_hash: str, request_id: str, form: dict,
+    allowed_ports: tuple[int, ...] = (443, 8443),
+) -> str:
     try:
         identifier = UUID(request_id)
     except (ValueError, TypeError):
         raise ControlError("신청 화면을 다시 열어 제출하십시오.") from None
-    payload, contract = validate(form)
+    payload, contract = validate(form, allowed_ports)
     staff._active_session(sctx, session_id_hash)
     try:
         with staff._staff_transaction(sctx, session_id_hash) as conn:
