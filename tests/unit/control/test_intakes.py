@@ -1448,6 +1448,16 @@ def test_an_observed_tool_drift_registers_one_recheck_that_stores_bound_candidat
     assert drift_state(world) == [("echo", "description")]  # 승인본은 그대로 둔다
 
 
+def test_a_description_change_stays_blocking_even_after_it_is_reverted(world):
+    approved_world(world)
+    observe(world, CHANGED)
+    assert drift_state(world) == [("echo", "description")]
+    observe(world, TOOL)  # 설명을 원래대로 되돌려도 재승인 전까지 막힌 채로 둔다
+    assert drift_state(world) == [("echo", "description")]
+    observe(world, CHANGED_INPUT)  # 입력 정의까지 바뀌면 입력 변경이 우선한다
+    assert drift_state(world) == [("echo", "input_schema")]
+
+
 def test_without_drift_the_evidence_run_stores_evidence_but_no_candidates(world):
     intake_id = approved_world(world)
     with psycopg.connect(world.url) as conn:

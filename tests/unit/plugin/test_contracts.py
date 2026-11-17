@@ -40,6 +40,10 @@ def managed(**overrides):
             {"tool_contracts": (ToolContractRow("c", "server", "search", "input_schema", 1),)},
             "input_schema",
         ),
+        (  # 승인 뒤 설명·annotations 변경(러그 풀)도 재승인 전까지 막는다
+            {"tool_contracts": (ToolContractRow("c", "server", "search", "description", 1),)},
+            "description",
+        ),
         (
             {
                 "server": server_row(
@@ -100,8 +104,8 @@ def test_contract_findings_convert_as_family(tmp_path):
     assert result.snapshot.findings[0].reason_code == "CONTRACT_DRIFT_unapproved_tool"
 
 
-def test_description_and_output_are_alert_only(tmp_path):
-    for drift in ("none", "description", "output_schema"):
+def test_output_change_is_alert_only(tmp_path):
+    for drift in ("none", "output_schema"):
         contract = ToolContractRow("c", "server", "search", drift, 1, input_keys=())
         h = harness(tmp_path, managed(tool_contracts=(contract,)))
         assert asyncio.run(evaluate_request(request(), h.deps)).allowed
