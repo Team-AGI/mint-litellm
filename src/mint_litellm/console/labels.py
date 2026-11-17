@@ -672,8 +672,12 @@ def litellm_missing(info: dict | None) -> str:
     return ", ".join(pick(LITELLM_CAPABILITY, name) for name in (info or {}).get("missing") or ())
 
 
-def pick(mapping: dict[str, str], value: str | None) -> str:
-    return "—" if value in (None, "") else mapping.get(value, value)
+def pick(mapping: dict[str, str] | dict[str, Status], value: str | None) -> str:
+    """값의 화면 이름. 상태 표(Status)에서 골라도 글자만 낸다(객체 표기가 화면에 새지 않게)."""
+    if value in (None, ""):
+        return "—"
+    label = mapping.get(value, value)
+    return label.text if isinstance(label, Status) else label
 
 
 def actor(value: str | None) -> str:
