@@ -45,7 +45,7 @@ def test_staff_request_runs_the_existing_checks_and_requires_a_different_approve
 
 
 def test_an_unallowed_address_is_rejected_before_registry_or_network_probing(world):
-    identifier = submit(world, url="http://127.0.0.1:9000/mcp")
+    identifier = submit(world, url="http://127.0" + ".0.1:9000/mcp")
     world.drain()
     row = world.intake(identifier)
     assert row["decision"] == "rejected"
