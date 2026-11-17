@@ -19,7 +19,7 @@
 <ol class="steps" aria-label="진행 단계">{% for level, text in progress %}<li class="{{ level }}"><span class="icon" aria-hidden="true">{{ ICONS[level] }}</span>{{ text }}</li>{% endfor %}</ol>
 {% if stale and i.status in ('passed', 'indeterminate') %}<div class="banner error" role="alert">연결·도구 정의 증거가 24시간을 넘었습니다</div>{% endif %}
 {% if lacking and (i.status == 'indeterminate' or i.decision == 'exception') %}<div class="banner error" role="alert">증빙 누락: {{ lacking | join }}</div>{% endif %}
-{% if provider_blocked %}<div class="banner error">제공자가 허용되지 않았습니다. <a href="/access?tab=allowlists">제공자 허용</a> 후 <a href="/intakes/new?server_id={{ i.server_id | urlencode }}">다시 신청</a>하세요.</div>{% endif %}
+{% if provider_blocked %}<div class="banner error">제공자가 허용되지 않았습니다. <a href="/access?tab=allowlists">제공자 허용</a> 후 {% if i.status == "indeterminate" %}재검사하세요.{% else %}<a href="/intakes/new?server_id={{ i.server_id | urlencode }}">다시 신청</a>하세요.{% endif %}</div>{% endif %}
 {% if next_step %}<div class="effect">다음 행동: {% if next_step == '증빙 첨부' %}<a href="?tab=evidence">{{ next_step }}</a>{% else %}{{ next_step }}{% endif %}</div>{% endif %}
 <div class="cards">
   {{ m.kpi('검사 통과', passed ~ ' / ' ~ (checks | length), level='danger' if failed else ('wait' if passed != (checks | length) else none)) }}
