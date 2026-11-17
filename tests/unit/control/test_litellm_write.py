@@ -242,7 +242,8 @@ def test_a_kit_key_is_limited_to_the_hook_routes_and_the_workers_client_cannot_m
     assert fake.generated == [KIT_KEY]
     assert fake.generated[0]["allowed_routes"] == [
         "/mint/v1/decide", "/mint/v1/result", "/mint/v1/endpoint/report",
-        "/mint/v1/endpoint/outcomes"]
+        "/mint/v1/endpoint/outcomes", "/mint/v1/endpoint/me", "/mint/v1/endpoint/intakes",
+        "/mint/v1/endpoint/packs/*"]
     kit.generate_kit_key(user_id="u2", team_id=None, alias="mint-kit-cd34")
     assert "team_id" not in fake.generated[1]
     with pytest.raises(WriteRefused):

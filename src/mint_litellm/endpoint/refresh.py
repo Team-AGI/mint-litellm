@@ -30,6 +30,41 @@ def desired_servers(contracts: Mapping[str, Mapping[str, Any]]) -> list[dict[str
     ]
 
 
+def scoped_desired(
+    scope: Iterable[Mapping[str, Any]], legacy: Mapping[str, Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    """범위 함수가 낸 묶음 서버와, 묶음이 없는 기존 서버 계약을 한 목록(이름 순)으로 합친다.
+
+    묶음 서버는 범위에 닿을 때만 싣는다. 기존 서버는 범위 함수가 내지 않으므로 지금까지처럼 승인된
+    것을 모두 싣되, 묶음 계약(``pack`` 있음)은 범위에 없으면 싣지 않는다.
+    """
+    items = {
+        row["server_id"]: {
+            "name": row["server_id"],
+            "version": contract_version(row["exec_contract"]),
+            "contract": row["exec_contract"],
+            "pack_sha256": row["pack_sha256"],
+            "permit_until": row["permit_until"].isoformat()
+            if hasattr(row["permit_until"], "isoformat") else row["permit_until"],
+        }
+        for row in scope
+    }
+    plain = {n: d for n, d in legacy.items() if n not in items and not d.get("pack")}
+    for item in desired_servers(plain):
+        items[item["name"]] = item
+    return [items[name] for name in sorted(items)][:MAX_DESIRED]
+
+
+def revoke_names(
+    statuses: Mapping[str, str], reported: Iterable[str], desired: Iterable[str]
+) -> list[str]:
+    """단말이 보고한 MINT 서버(등록된 승인 상태) 중 범위에 없는 이름."""
+    keep = set(desired)
+    return sorted(
+        {n for n in reported if statuses.get(n) == "approved" and n not in keep}
+    )[:MAX_DESIRED]
+
+
 def merge_local_mcp(
     reported: Iterable[Mapping[str, Any]], previous: Iterable[Mapping[str, Any]] | None, now: str
 ) -> list[dict[str, Any]]:
