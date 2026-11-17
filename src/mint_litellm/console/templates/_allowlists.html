@@ -11,7 +11,7 @@
 <form method="post" action="/allowlists" class="form">
   {{ m.csrf(actor) }}
   <label>종류<select name="kind">{% for k, v in L.ALLOWLIST_KIND.items() %}<option value="{{ k }}">{{ v }} - {{ L.ALLOWLIST_KIND_HELP[k] }}</option>{% endfor %}</select></label>
-  <label>값<input name="value" required></label>
+  <label>값<input name="value" placeholder="호스트 또는 대역(CIDR)" required></label>
   <label>유효 기간(일)<input type="number" name="valid_days" value="90" min="1" max="365"></label>
   <label>메모<input name="note"></label>
   <div class="actions"><a class="button" href="/access?tab=allowlists">취소</a><button type="submit" class="primary">추가</button></div>

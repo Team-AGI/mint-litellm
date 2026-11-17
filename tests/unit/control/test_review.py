@@ -438,3 +438,13 @@ def test_a_call_approval_expiring_exactly_now_cannot_be_approved(ctx, litellm, c
     approver = make_ctx(conn, "carol", "approver", user_id="carol")
     with pytest.raises(ControlError, match="만료되지 않은"):
         approvals.call_approve(approver, call_id, None)
+
+
+def test_an_egress_range_broader_than_eight_bits_is_refused(ctx):
+    from mint_litellm.control import allowlists
+
+    with pytest.raises(ControlError, match="/8보다 좁아야"):
+        allowlists.add(ctx, "egress_target", "0" + ".0.0.0/0", NOW, NOW + timedelta(days=9),
+                       None, None)
+    allowlists.add(ctx, "egress_target", "100" + ".81.203.0/24", NOW, NOW + timedelta(days=9),
+                   None, None)

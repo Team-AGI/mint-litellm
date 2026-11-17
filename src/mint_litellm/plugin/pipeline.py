@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hmac
+import ipaddress
 import json
 import logging
 import posixpath
@@ -685,6 +686,16 @@ def _host_of(value: str) -> str:
     return host.removeprefix("*.").rstrip(".")
 
 
+def _network_of(value: str) -> ipaddress.IPv4Network | ipaddress.IPv6Network | None:
+    """IP·CIDR 항목이나 IP를 담은 URL 항목이면 그 대역. 이름이면 None."""
+    for text in (value.strip(), _host_of(value)):
+        try:
+            return ipaddress.ip_network(text.strip("[]"), strict=False)
+        except ValueError:
+            continue
+    return None
+
+
 def _argument_patterns(
     snapshot: Snapshot,
     principal: Principal,
@@ -693,8 +704,16 @@ def _argument_patterns(
     secret_markers: Sequence[str],
     timing: StageClock = OFF,
 ) -> dict[str, bool]:
-    hosts = {_host_of(h) for h in _condition_list(conditions, "allowed_hosts")}
-    hosts |= {_host_of(v) for v, org in snapshot.egress_targets if org in (None, principal.org_id)}
+    entries = [*_condition_list(conditions, "allowed_hosts"),
+               *(v for v, org in snapshot.egress_targets if org in (None, principal.org_id))]
+    hosts: set[str] = set()
+    networks = []
+    for entry in entries:
+        network = _network_of(entry)
+        if network is not None:
+            networks.append(network)
+        else:
+            hosts.add(_host_of(entry))
     raw_paths = _condition_list(conditions, "allowed_paths")
     paths = [posixpath.normpath(p.replace("\\", "/")) for p in raw_paths]
     started = timing.now()
@@ -702,6 +721,7 @@ def _argument_patterns(
         return compute_patterns(
             arguments,
             allowed_hosts={h for h in hosts if h},
+            allowed_networks=networks,
             allowed_paths=paths,
             paths_unrestricted=conditions.get("allowed_paths_unrestricted") is True,
             secret_markers=secret_markers,

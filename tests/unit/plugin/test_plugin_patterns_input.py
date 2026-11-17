@@ -80,6 +80,33 @@ def test_allowed_hosts_come_from_the_approval_and_from_egress_targets(tmp_path):
     assert sent_patterns(tmp_path, args, egress=[("ok.test", "other-org")])["url_external"] is True
 
 
+def test_registered_internal_address_or_range_is_allowed_and_not_treated_as_private(tmp_path):
+    # 공유 대역(CGNAT)의 내부 자료 서버: 등록 전에는 외부·내부 주소로 막히고, IP나 CIDR로 등록하면
+    # 그 대역 안의 주소만 통과한다(같은 대역이어도 등록하지 않으면 막힌다).
+    inside = {"u": f"http://100{D}81{D}203{D}49/docs/normal"}
+    other = {"u": f"http://100{D}81{D}204{D}10/docs"}
+    blocked = sent_patterns(tmp_path, inside)
+    assert blocked["url_external"] is True and blocked["private_host"] is True
+    for entry in (f"100{D}81{D}203{D}0/24", f"100{D}81{D}203{D}49", f"http://100{D}81{D}203{D}49/"):
+        ok = sent_patterns(tmp_path, inside, egress=[(entry, None)])
+        assert ok["url_external"] is False and ok["private_host"] is False, entry
+    ranged = sent_patterns(tmp_path, other, egress=[(f"100{D}81{D}203{D}0/24", None)])
+    assert ranged["url_external"] is True and ranged["private_host"] is True
+    approved = sent_patterns(tmp_path, inside,
+                             conditions={"allowed_hosts": [f"100{D}81{D}0{D}0/16"]})
+    assert approved["url_external"] is False and approved["private_host"] is False
+
+
+def test_loopback_and_metadata_addresses_stay_private_even_when_registered(tmp_path):
+    for address, entry in ((f"127{D}0{D}0{D}1", f"127{D}0{D}0{D}0/8"),
+                           (f"169{D}254{D}169{D}254", f"169{D}254{D}0{D}0/16")):
+        got = sent_patterns(tmp_path, {"u": f"http://{address}/x"}, egress=[(entry, None)])
+        assert got["private_host"] is True, address
+    loose = sent_patterns(tmp_path, {"u": "http://0x64.0x51.0xcb.0x31/x"},
+                          egress=[(f"100{D}81{D}203{D}0/24", None)])
+    assert loose["private_host"] is True  # 느슨한 표기는 등록 예외로 보지 않는다
+
+
 def test_allowed_paths_come_from_the_approval(tmp_path):
     args = {"p": "/etc/passwd"}
     assert sent_patterns(tmp_path, args)["path_traversal"] is True
