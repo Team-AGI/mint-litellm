@@ -90,8 +90,9 @@ def submit(
 def listing(sctx: staff.StaffContext) -> list[dict]:
     return fetchall(sctx.control,
                     "SELECT id, server_id, purpose, status, decision, created_at, decided_at"
-                    " FROM mint.intakes WHERE instance_id=%s AND requested_by=%s AND source='staff'"
-                    " ORDER BY created_at DESC LIMIT 100", (sctx.instance_id, sctx.user_id))
+                    " FROM mint.intakes WHERE instance_id=%s AND requested_by=%s"
+                    " AND source IN ('staff','endpoint') ORDER BY created_at DESC LIMIT 100",
+                    (sctx.instance_id, sctx.user_id))
 
 
 def detail(sctx: staff.StaffContext, identifier: str) -> dict:
@@ -104,7 +105,8 @@ def detail(sctx: staff.StaffContext, identifier: str) -> dict:
                    " data_return_terms, status, decision, decision_reason, created_at, decided_at,"
                    " state_version"
                    " FROM mint.intakes WHERE instance_id=%s AND requested_by=%s"
-                   " AND source='staff' AND id=%s", (sctx.instance_id, sctx.user_id, intake_id))
+                   " AND source IN ('staff','endpoint') AND id=%s",
+                   (sctx.instance_id, sctx.user_id, intake_id))
     if row is None:
         raise not_found("신청을 찾을 수 없습니다.")
     return row

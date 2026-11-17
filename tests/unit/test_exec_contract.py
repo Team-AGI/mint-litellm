@@ -120,3 +120,70 @@ def test_host_allowlist_is_hashed_sorted_and_validated():
             ExecContract(**base, network="hosts", allowed_hosts=bad)
     with pytest.raises(ValueError):  # 목록은 hosts 선언과 함께만
         ExecContract(**base, network="any", allowed_hosts=("a.com",))
+
+
+V1_PLAIN = (
+    '{"argv":["/opt/srv/index.js"],"cwd":null,"env":{},"executable":"/usr/bin/node",'
+    '"executable_sha256":"' + HEX + '","identity_kind":"stdio","schema_version":1,'
+    '"script_sha256":null,"secret_refs":{}}'
+)
+V1_FULL = (
+    '{"allowed_hosts":["api.example.com:443"],"argv":["a","b"],"cwd":"/work","env":{"A":"1"},'
+    '"executable":"/usr/bin/node","executable_sha256":"' + HEX + '",'
+    '"file_access":[{"mode":"rw","path":"/data"}],"identity_kind":"stdio","network":"hosts",'
+    '"schema_version":1,"script_sha256":"' + "cd" * 32 + '","secret_refs":{"T":"r"}}'
+)
+
+
+def test_the_first_version_serializes_and_hashes_byte_for_byte_as_before():
+    plain = contract()
+    assert plain.canonical() == V1_PLAIN
+    assert plain.sha256() == "3c9484f97df991d11c27a924a30e204cbd99e5814126134562648cbd9a562fb6"
+    full = contract(argv=["a", "b"], cwd="/work", script_sha256="cd" * 32, env={"A": "1"},
+                    secret_refs={"T": "r"}, file_access=[{"path": "/data", "mode": "rw"}],
+                    network="hosts", allowed_hosts=["api.example.com:443"])
+    assert full.canonical() == V1_FULL
+    assert full.sha256() == "1f7fe1809f536d0cc800454633554bafdcaae40deacae1fa4f1fbc6c086ca6f3"
+    assert "pack" not in plain.document()
+
+
+def pack_contract(**override):
+    args = {
+        "schema_version": 2, "executable": "/usr/bin/python3", "argv": ["--stdio"],
+        "pack": {"sha256": HEX, "runtime": "python3", "python": "3.12",
+                 "entry": "pyghidra_mcp.server:main"},
+    }
+    return ExecContract(**(args | override))
+
+
+def test_a_pack_contract_needs_no_executable_hash_and_follows_the_pack():
+    c = pack_contract()
+    assert c.executable_sha256 is None and "executable_sha256" not in c.document()
+    assert c.document()["pack"]["sha256"] == HEX
+    assert c.resolved("local-1").exec_contract_version == 2
+    assert ExecContract.model_validate_json(c.canonical().replace('"identity_kind":"stdio",', "")
+                                            ).sha256() == c.sha256()
+    other = pack_contract(pack={"sha256": "cd" * 32, "runtime": "python3", "python": "3.12",
+                                "entry": "pyghidra_mcp.server:main"})
+    assert other.sha256() != c.sha256()
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [{"schema_version": 1},  # 묶음은 2판에서만
+     {"pack": None},  # 2판은 묶음이 있어야 한다
+     {"pack": {"sha256": "xyz", "runtime": "python3", "python": "3.12", "entry": "a.b:c"}},
+     {"pack": {"sha256": HEX, "runtime": "node", "python": "3.12", "entry": "a.b:c"}},
+     {"pack": {"sha256": HEX, "runtime": "python3", "python": "3", "entry": "a.b:c"}},
+     {"pack": {"sha256": HEX, "runtime": "python3", "python": "3.12", "entry": "a b"}},
+     {"pack": {"sha256": HEX, "runtime": "python3", "python": "3.12", "entry": "a.b:c",
+               "extra": 1}}],
+)
+def test_a_pack_contract_is_closed_and_tied_to_version_two(bad):
+    with pytest.raises(ValidationError):
+        pack_contract(**bad)
+
+
+def test_the_first_version_still_needs_the_executable_hash():
+    with pytest.raises(ValidationError):
+        ExecContract(executable="/usr/bin/node")
