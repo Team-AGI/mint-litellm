@@ -768,6 +768,7 @@ def test_without_key_issuance_or_approved_servers_there_is_no_kit(sworld):
     client = logged_in(sworld)
     refused = download(client)
     assert refused.status_code == 503 and "발급할 수 없습니다" in refused.text
+    assert "MINT_KIT_ISSUER_KEY" in refused.text  # 운영자가 할 일을 알린다
     assert sworld.query("SELECT count(*) FROM mint.endpoint_installs") == [(0,)]
     import dataclasses
 

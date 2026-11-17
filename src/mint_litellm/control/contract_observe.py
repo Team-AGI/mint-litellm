@@ -179,8 +179,14 @@ def record_tools(
                 ),
             )
             if contract:
-                # 입력 변경 차단은 재승인 전까지 유지한다.
-                effective = "input_schema" if contract["drift"] == "input_schema" else drift
+                # 입력·설명 변경 차단은 재승인 전까지 유지한다(설명을 되돌려도 풀리지 않는다).
+                # 둘 다 걸리면 입력 변경이 우선한다.
+                if contract["drift"] == "input_schema" or drift == "input_schema":
+                    effective = "input_schema"
+                elif contract["drift"] == "description" and drift in ("none", "output_schema"):
+                    effective = "description"
+                else:
+                    effective = drift
                 updated = fetchone(
                     ctx.conn,
                     "UPDATE mint.tool_contracts SET drift=%s,observed_sha256=%s,"
@@ -210,7 +216,8 @@ def record_tools(
                     ctx,
                     entity,
                     observation["observed_sha256"],
-                    {"input_schema": "high", "added": "low", "removed": "low"}.get(drift, "medium"),
+                    {"input_schema": "high", "description": "high", "added": "low",
+                     "removed": "low"}.get(drift, "medium"),
                     payload,
                 )
                 recheck = recheck or drift != "removed"

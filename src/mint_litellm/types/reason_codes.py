@@ -59,9 +59,10 @@ class Reason(StrEnum):
 
 
 class ContractDriftKind(StrEnum):
-    """``CONTRACT_DRIFT_<kind>``의 한정자. 경보형 변경(설명·출력 스키마)은 사유가 되지 않는다."""
+    """``CONTRACT_DRIFT_<kind>``의 한정자. 경보형 변경(출력 스키마)은 사유가 되지 않는다."""
 
     INPUT_SCHEMA = "input_schema"
+    DESCRIPTION = "description"  # 설명·annotations 변경(재승인 전까지 차단)
     DEPLOYMENT = "deployment"
     UNOBSERVED = "unobserved"
     UNAPPROVED_TOOL = "unapproved_tool"

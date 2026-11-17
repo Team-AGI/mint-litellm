@@ -558,7 +558,11 @@ def endpoint_kit(
     if platform not in labels.KIT_PLATFORM or harness not in labels.KIT_HARNESS:
         return endpoint_page(request, actor, "설치 묶음의 종류가 올바르지 않습니다.", 400)
     if config.kit_issuer is None:
-        return endpoint_page(request, actor, "단말 설치 묶음을 발급할 수 없습니다.", 503)
+        return endpoint_page(
+            request, actor,
+            "단말 설치 묶음 발급 키가 설정되지 않아 발급할 수 없습니다. 운영자가 ./mint.sh up(또는 "
+            "upgrade)을 다시 실행하면 키를 만들어 넣습니다(MINT_KIT_ISSUER_KEY).", 503,
+        )
     if not config.endpoint_url:
         # 비어 있으면 묶음에 컨테이너 안 주소가 적혀 단말에서 판정을 부를 수 없다.
         return endpoint_page(

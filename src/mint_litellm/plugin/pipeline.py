@@ -574,8 +574,9 @@ def contract_result(
     contract = current_contract(snapshot, tool)
     if contract is None:
         return StageResult.finding(Reason.CONTRACT_DRIFT, "unapproved_tool")
-    if contract.drift == "input_schema":
-        return StageResult.finding(Reason.CONTRACT_DRIFT, "input_schema")
+    if contract.drift in ("input_schema", "description"):
+        # 승인 뒤 설명·annotations가 바뀐 도구(러그 풀)도 재승인 전까지 막는다(POL-O-01).
+        return StageResult.finding(Reason.CONTRACT_DRIFT, contract.drift)
     if server.deployment_drift:
         return StageResult.finding(Reason.CONTRACT_DRIFT, "deployment")
     if (
