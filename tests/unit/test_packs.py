@@ -59,6 +59,13 @@ class PackTests(unittest.TestCase):
         self.assertEqual(json.loads(raw), manifest)
         self.assertEqual(manifest["entry"], "pkg:main")
 
+    def test_building_the_same_pack_again_reuses_it(self):
+        # 재검사는 같은 묶음을 다시 만든다. 실패하지 않고 임시 폴더도 남지 않는다.
+        first, _ = self.build()
+        second, _ = self.build()
+        self.assertEqual(first, second)
+        self.assertEqual(sorted(p.name for p in Path(self.temp.name).iterdir()), [first])
+
     def test_digest_mismatch(self):
         with self.assertRaisesRegex(packs.PackError, "PACK_DIGEST_MISMATCH"):
             self.build(

@@ -221,7 +221,12 @@ CHECK = {
     "pack_build": "묶음 준비",
     "inspection": "도구 목록 검사",
 }
-INSPECTION_STAGE = {"start": "서버 시작", "initialize": "초기화", "tools_list": "도구 목록 받기"}
+INSPECTION_STATUS = {
+    "issued": "단말 검사 대기", "consumed": "단말 검사 중", "submitted": "단말 검사 받음",
+    "verified": "단말 검사 받음", "expired": "만료", "revoked": "철회", "invalid": "무효",
+}
+INSPECTION_STAGE = {"start": "서버 시작", "initialize": "초기화", "tools_list": "도구 목록 받기",
+                    "sandbox": "격리 준비"}
 SOURCE = {"submission": "제출", "operator": "운영자 등록", "staff": "직원 신청",
           "endpoint": "단말 신청"}
 DATA_GRADE = {"public": "공개", "internal": "내부", "confidential": "기밀", "restricted": "제한"}
@@ -239,6 +244,9 @@ CHECK_REASON = {
     "ARGV_TOO_MANY": "실행 인자가 너무 많음",
     "COMMAND_INVALID": "명령 이름 형식 오류",
     "EXEC_CONTRACT_INVALID": "실행 계약을 만들 수 없음",
+    "ENDPOINT_INCOMPLETE": "단말이 목록을 끝까지 받지 못함",
+    "ENDPOINT_INSPECTED": "단말 검사로 받음",
+    "REAPPROVAL_PENDING": "재승인 계획이 진행 중",
     "INSPECTION_FAILED": "검사 중 서버가 실패함",
     "INSPECTION_INCOMPLETE": "도구 목록을 끝까지 받지 못함",
     "INSPECTION_UNAVAILABLE": "검사기가 응답하지 않음",
@@ -537,6 +545,8 @@ EVENT_KIND = {
     "intake_requester_assigned": "신청자 지정",
     "intake_checked": "수용검증",
     "intake_decided": "신청 결정",
+    "intake_exception_requested": "예외 승인 요청",
+    "intake_exception_cancelled": "예외 승인 요청 취소",
     "contract_approved": "계약 승인",
     "contract_drift_detected": "계약 변경 탐지",
     "contract_superseded": "계약 교체",
@@ -645,8 +655,13 @@ NOTICES = {
     "intake_withdrawn": "신청을 철회했습니다. 기존 검사 이력은 보존됩니다.",
     "evidence_attached": "증빙을 첨부했습니다.",
     "rechecked": "재검사를 등록했습니다.",
+    "inspection_issued": "검사용 승인을 주었습니다.",
+    "inspection_revoked": "검사용 승인을 철회했습니다.",
     "intake_approved": "신청을 승인했습니다.",
     "intake_rejected": "신청을 거절했습니다.",
+    "exception_requested": "두 번째 승인자의 확인을 요청했습니다.",
+    "exception_confirmed": "예외 승인을 확인했습니다.",
+    "exception_rejected": "예외 승인 요청을 거절했습니다.",
     "reapproval_planned": "재승인 계획을 등록했습니다.",
     "provisional_approved": "임시 계약을 승인된 도구 계약으로 바꿨습니다.",
     "operator_removed": "운영자를 삭제했습니다.",

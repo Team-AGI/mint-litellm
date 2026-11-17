@@ -52,8 +52,30 @@ def scope(monkeypatch, tmp_path):
             raise calls["raise"]
         return UUID(int=2)
 
+    calls["inspection_pack"] = None
+
+    async def inspection_pack(self, instance_id, key_token, server_id, pack_sha256):
+        return calls["inspection_pack"]
+
+    async def inspections(self, instance_id, key_token):
+        return calls.get("inspections", [])
+
+    async def inspection_start(self, instance_id, key_token, inspection_id):
+        calls.setdefault("start", []).append((key_token, inspection_id))
+        if isinstance(calls.get("raise"), Exception):
+            raise calls["raise"]
+
+    async def inspection_submit(self, instance_id, key_token, inspection_id, body):
+        calls.setdefault("result", []).append((key_token, inspection_id, body))
+        if isinstance(calls.get("raise"), Exception):
+            raise calls["raise"]
+
     for name, fn in (("endpoint_scope", endpoint_scope), ("endpoint_my_intakes", my_intakes),
-                     ("endpoint_submit_intake", submit)):
+                     ("endpoint_submit_intake", submit),
+                     ("endpoint_inspection_pack", inspection_pack),
+                     ("endpoint_inspections", inspections),
+                     ("endpoint_inspection_start", inspection_start),
+                     ("endpoint_inspection_submit", inspection_submit)):
         monkeypatch.setattr(FakeDatabase, name, fn, raising=False)
     return calls
 
@@ -184,3 +206,105 @@ def test_scoped_desired_lists_only_what_the_scope_returns():
 def test_revoke_names_are_reported_managed_servers_outside_the_scope():
     statuses = {"a": "approved", "b": "approved", "c": "revoked"}
     assert revoke_names(statuses, ["a", "b", "c", "mine"], ["a"]) == ["b"]
+
+
+# --- 검사용 승인 ----------------------------------------------------------------------------
+
+INSPECT_ID = str(UUID(int=9))
+START = f"/mint/v1/endpoint/inspections/{INSPECT_ID}/start"
+RESULT = f"/mint/v1/endpoint/inspections/{INSPECT_ID}/result"
+TOOL = {"name": "decompile", "description": "d", "inputSchema": {"type": "object"}}
+
+
+def result(**override):
+    return {"pack_sha256": PACK, "complete": True, "tools": [TOOL]} | override
+
+
+def test_a_pack_outside_the_scope_is_sent_for_a_live_inspection_of_this_key_only(tmp_path, scope):
+    client, _ = build(tmp_path)
+    assert pack(client, sha=OTHER).status_code == 404
+    scope["inspection_pack"] = {"server_id": "demo", "pack_sha256": OTHER,
+                                "pack_manifest": {"files": []}}
+    assert pack(client, sha=OTHER).content == b"{}"
+    assert pack(client, sha=OTHER, file=WHEEL).status_code == 404  # manifest에 없는 파일
+
+
+def test_the_report_lists_inspections_only_for_a_kit_that_declares_the_capability(
+        tmp_path, scope, monkeypatch):
+    async def report_install(self, instance_id, key_token, **fields):
+        return "recorded"
+
+    async def registered(self, instance_id):
+        return []
+
+    async def desired(self, instance_id, key_token):
+        return []
+
+    for name, fn in (("report_install", report_install), ("registered_servers", registered),
+                     ("desired_servers", desired)):
+        monkeypatch.setattr(FakeDatabase, name, fn, raising=False)
+    scope["inspections"] = [{"id": UUID(int=9), "intake_id": UUID(int=3), "server_id": "demo",
+                             "pack_sha256": PACK, "contract": CONTRACT, "expires_at": UNTIL}]
+    client, _ = build(tmp_path)
+    base = {"kit_version": "k", "action": "installed", "mode": "managed", "mcp_servers": []}
+    assert "inspections" not in post(client, REPORT, base).json()
+    assert "inspections" not in post(client, REPORT, {**base, "capabilities": ["x"]}).json()
+    got = post(client, REPORT, {**base, "capabilities": ["inspect", "future"]}).json()
+    assert got["inspections"] == [{
+        "id": INSPECT_ID, "intake_id": str(UUID(int=3)), "server": "demo", "pack_sha256": PACK,
+        "contract": CONTRACT, "expires_at": UNTIL.isoformat()}]
+    assert post(client, REPORT, {**base, "capabilities": ["a"] * 9}).status_code == 422
+    assert post(client, REPORT, {**base, "capabilities": ["a" * 33]}).status_code == 422
+
+
+def test_start_and_result_reach_the_db_with_the_calling_key(tmp_path, scope):
+    client, _ = build(tmp_path)
+    assert post(client, START, {}).json() == {"started": True}
+    assert scope["start"] == [(KEY, UUID(INSPECT_ID))]
+    detail = {"stage": "sandbox", "exit_code": 2, "stderr_tail": "no bwrap"}
+    assert post(client, RESULT, result(complete=False, tools=[], detail=detail)).json() == {
+        "recorded": True}
+    (_, inspection, sent) = scope["result"][0]
+    assert inspection == UUID(INSPECT_ID) and sent["detail"] == detail and sent["complete"] is False
+    assert post(client, START, {}, headers={}).status_code == 401
+    assert post(client, RESULT, result(), headers={}).status_code == 401
+
+
+@pytest.mark.parametrize(("message", "status"), [
+    ("MINT-NOTFOUND: no such inspection", 404), ("MINT-CONFLICT: already", 409),
+    ("MINT-INVALID: result", 400), ("MINT-KEY: key not accepted", 404), ("lost", 503)])
+def test_inspection_errors_map_to_http_statuses(tmp_path, scope, message, status):
+    scope["raise"] = RuntimeError(message)
+    client, _ = build(tmp_path)
+    assert post(client, START, {}).status_code == status
+    assert post(client, RESULT, result()).status_code == status
+
+
+@pytest.mark.parametrize("override", [
+    {"tools": [TOOL] * 201}, {"pack_sha256": "zz"}, {"complete": "yes"}, {"extra": 1},
+    {"detail": {"stderr_tail": "x" * 2049}}, {"detail": {"unknown": 1}}])
+def test_a_malformed_result_is_refused_before_the_db(tmp_path, scope, override):
+    client, _ = build(tmp_path)
+    assert post(client, RESULT, result(**override)).status_code == 422
+    assert "result" not in scope
+    assert client.post("/mint/v1/endpoint/inspections/nope/start", headers=KEY_HEADER
+                       ).status_code == 422
+
+
+def test_the_result_body_is_limited_to_256_kib(tmp_path, scope):
+    client, _ = build(tmp_path)
+    big = [{"name": "t", "description": "x" * 1000} for _ in range(200)]
+    assert post(client, RESULT, result(tools=big)).status_code == 200  # 약 200 KB
+    huge = [{"name": "t", "description": "x" * 2000} for _ in range(200)]
+    assert post(client, RESULT, result(tools=huge)).status_code == 413
+
+
+def test_an_intake_may_carry_env_values_and_the_kit_key_may_call_the_new_paths(tmp_path, scope):
+    from mint_litellm.endpoint.routes import KIT_KEY_ROUTES
+
+    client, _ = build(tmp_path)
+    assert post(client, INTAKES, intake(env={"GHIDRA_INSTALL_DIR": "/opt/ghidra"})
+                ).status_code == 201
+    assert scope["submit"][-1][2]["env"] == {"GHIDRA_INSTALL_DIR": "/opt/ghidra"}
+    assert post(client, INTAKES, intake(env={"1x": "a"})).status_code == 422
+    assert "/mint/v1/endpoint/inspections/*" in KIT_KEY_ROUTES

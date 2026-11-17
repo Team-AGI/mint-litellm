@@ -899,7 +899,7 @@ def _require_separation(
 
 def _require_fresh_evidence(ctx: Context, row: dict) -> None:
     for c in latest_checks(ctx.conn, ctx.instance_id, row["id"]):
-        if c["check"] in ("connection", "definitions") and (
+        if c["check"] in ("connection", "definitions", "inspection") and (
             datetime.now(UTC) - c["ran_at"] > EVIDENCE_MAX_AGE
         ):
             raise stale_evidence(

@@ -22,7 +22,7 @@ RUN python -m ensurepip     && python -m pip freeze > /tmp/base-freeze.txt     &
 # 비루트 사용자(기반 이미지의 nonroot)로 실행한다. 판정 버퍼·내보내기·정책 번들은 이 사용자가 쓰는 디렉터리이며,
 # 이 경로에 처음 만들어지는 명명 볼륨은 이 소유자를 물려받는다(기존 볼륨은 mint.sh up이 소유자를 맞춘다).
 RUN mkdir -p /var/lib/mint/buffer /var/lib/mint/export /var/lib/mint/packs \
-    /var/lib/mint/inspect /bundles \
+    /var/lib/mint/inspect /var/lib/mint/inspect-work /bundles \
     && chown -R 65532:65532 /var/lib/mint /bundles
 ENV HOME=/tmp
 

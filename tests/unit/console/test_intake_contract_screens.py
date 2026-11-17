@@ -721,3 +721,102 @@ def test_intake_rejects_address_different_from_registry(world, monkeypatch):
     assert response.status_code == 400
     assert "입력한 서버 주소가 등록된 주소와 다릅니다" in response.text
     assert world.query("SELECT count(*) FROM mint.intakes")[0][0] == 0
+
+
+# --- 2인 예외 승인: 화면에서 두 번째 승인자 확인 ----------------------------------------------
+
+
+def hold_it(world, intake, role="admin", **extra):
+    client = world.session_client(role)
+    data = {"decision": "except", "reason": "수동 확인함", "csrf": world.csrf(client),
+            "state_version": version(world, intake), **extra}
+    return client.post(f"/intakes/{intake}/decision", data=data)
+
+
+def hold_id(world) -> str:
+    return str(world.query("SELECT id FROM mint.exception_holds WHERE status = 'pending'")[0][0])
+
+
+def hold_step(world, hold, role, step):
+    client = world.session_client(role)
+    return client.post(f"/exceptions/{hold}/{step}", data={"csrf": world.csrf(client)})
+
+
+def exception_intake(world):
+    return add_intake(world, status="indeterminate", result="indeterminate")
+
+
+def test_an_exception_request_waits_without_approving_and_the_form_has_no_token_field(world):
+    intake = exception_intake(world)
+    html = world.session_client("admin").get(f"/intakes/{intake}").text
+    assert "second_approver_token" not in html and "두 번째 승인자 토큰" not in html
+    response = hold_it(world, intake)
+    assert response.status_code == 303 and "exception_requested" in response.headers["location"]
+    assert world.query("SELECT status FROM mint.intakes")[0][0] == "indeterminate"
+    assert world.query("SELECT count(*) FROM mint.approvals")[0][0] == 0
+    assert "두 번째 승인 대기" in world.session_client("admin").get(f"/intakes/{intake}").text
+    assert world.query("SELECT count(*) FROM mint.events WHERE kind = 'intake_exception_requested'"
+                       )[0][0] == 1
+
+
+def test_the_other_approver_sees_the_waiting_request_and_confirming_approves_it(world):
+    intake = exception_intake(world)
+    hold_it(world, intake, valid_days=20)
+    page = world.session_client("approver").get("/approvals?tab=second").text
+    assert "srv-wait" in page and "확인" in page and "/exceptions/" in page
+    response = hold_step(world, hold_id(world), "approver", "confirm")
+    assert response.status_code == 303 and "exception_confirmed" in response.headers["location"]
+    assert world.query("SELECT status, decision, decided_by FROM mint.intakes")[0] == (
+        "decided", "exception", "admin")
+    row = world.query("SELECT class, granted_by, basis->>'second_approver',"
+                      " extract(day FROM valid_until - valid_from) FROM mint.approvals")[0]
+    assert row[:3] == ("exception", "admin", "approver") and 19 <= row[3] <= 20
+    assert world.query("SELECT status FROM mint.exception_holds")[0][0] == "confirmed"
+
+
+def test_the_first_approver_and_the_requester_cannot_confirm(world):
+    intake = exception_intake(world)
+    hold_it(world, intake)
+    assert hold_step(world, hold_id(world), "admin", "confirm").status_code == 403
+    assert world.query("SELECT status FROM mint.exception_holds")[0][0] == "pending"
+    mine = add_intake(world, status="indeterminate", result="indeterminate", server="srv-ok",
+                      requested_by="human-2")
+    hold_it(world, mine)
+    held = str(world.query("SELECT h.id FROM mint.exception_holds h JOIN mint.intakes i"
+                           " ON i.id = h.intake_id WHERE i.id = %s", mine)[0][0])
+    assert hold_step(world, held, "approver", "confirm").status_code == 403
+    state = world.query("SELECT status FROM mint.intakes WHERE id = %s", mine)[0][0]
+    assert state == "indeterminate"
+
+
+def test_a_viewer_cannot_confirm_and_an_expired_request_is_cancelled(world):
+    intake = exception_intake(world)
+    hold_it(world, intake)
+    hold = hold_id(world)
+    assert hold_step(world, hold, "viewer", "confirm").status_code == 403
+    world.query("UPDATE mint.exception_holds SET expires_at = now() - interval '1 minute'")
+    assert "srv-wait" not in world.session_client("approver").get("/approvals?tab=second").text
+    assert hold_step(world, hold, "approver", "confirm").status_code == 409
+    assert world.query("SELECT status FROM mint.exception_holds")[0][0] == "expired"
+    assert world.query("SELECT status FROM mint.intakes")[0][0] == "indeterminate"
+    assert hold_it(world, intake).status_code == 303  # 만료 뒤 다시 요청할 수 있다
+
+
+def test_rejecting_cancels_the_request_and_a_new_request_supersedes_the_old(world):
+    intake = exception_intake(world)
+    hold_it(world, intake)
+    first = hold_id(world)
+    hold_it(world, intake)
+    assert world.query("SELECT status FROM mint.exception_holds WHERE id = %s", first)[0][0] \
+        == "superseded"
+    assert hold_step(world, hold_id(world), "approver", "reject").status_code == 303
+    assert world.query("SELECT count(*) FROM mint.exception_holds WHERE status = 'rejected'"
+                       )[0][0] == 1
+    assert world.query("SELECT status FROM mint.intakes")[0][0] == "indeterminate"
+
+
+def test_the_cli_token_path_still_approves_an_exception_directly(world):
+    intake = exception_intake(world)
+    ok = decide(world, intake, decision="except", reason="수동 확인함",
+                second_approver_token=TOKENS["approver"])
+    assert ok.status_code == 200, ok.text

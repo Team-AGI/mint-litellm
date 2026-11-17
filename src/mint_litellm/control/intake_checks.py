@@ -597,7 +597,7 @@ def _failure_detail(result: dict) -> dict:
     }}
 
 
-INSPECTION_STAGES = ("start", "initialize", "tools_list")
+INSPECTION_STAGES = ("start", "initialize", "tools_list", "sandbox")
 
 
 def inspection_outcome(result: dict) -> Outcome:
@@ -632,6 +632,7 @@ def local_exec_contract(spec: dict, digest: str, manifest: dict, executable: str
             pack=PackRef(sha256=digest, runtime="python3",
                          python=manifest["platform"]["python"], entry=manifest["entry"]),
             argv=tuple(spec.get("argv", [])),
+            env=dict(spec.get("env") or {}),
             file_access=tuple(FileAccess(path=f["path"], mode=f.get("mode", "ro"))
                               for f in spec.get("file_access") or []),
             network=spec.get("network"),
