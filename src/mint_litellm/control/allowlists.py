@@ -1,5 +1,6 @@
 """허용 목록. 종료일이 필수이고 해제는 명시적 행위이다."""
 
+import ipaddress
 from datetime import datetime
 
 from mint_litellm.control import orgs
@@ -26,6 +27,14 @@ def add(
         raise ControlError(f"kind는 {', '.join(KINDS)} 중 하나여야 합니다.")
     if not value:
         raise ControlError("value가 비어 있습니다.")
+    if kind == "egress_target" and "/" in value:
+        try:
+            network = ipaddress.ip_network(value, strict=False)
+        except ValueError:
+            network = None
+        if network is not None and network.prefixlen < 8:
+            # 이보다 넓은 대역은 사실상 모든 주소를 허용해 목적지 제한을 없앤다.
+            raise ControlError("반출 허용 대역은 /8보다 좁아야 합니다.")
     if valid_from >= valid_until:
         raise ControlError("valid-until은 valid-from보다 뒤여야 합니다.")
     if org_id is not None:

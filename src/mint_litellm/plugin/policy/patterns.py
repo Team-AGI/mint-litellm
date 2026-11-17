@@ -190,26 +190,54 @@ def host_allowed(host: str, allowed: Collection[str]) -> bool:
     return bool(host) and any(host == a or host.endswith("." + a) for a in allowed)
 
 
+Network = ipaddress.IPv4Network | ipaddress.IPv6Network
+
+
+def registered_address(host: str, networks: Collection[Network]) -> bool:
+    """관리자가 IP·CIDR로 명시 등록한 목적지 주소인가(표준 표기만, 느슨한 표기는 아니다).
+
+    루프백·링크로컬(클라우드 메타데이터)·미지정·멀티캐스트는 등록해도 내부 주소 예외가 아니다.
+    """
+    if not networks:
+        return False
+    try:
+        address = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    if (address.is_loopback or address.is_link_local or address.is_unspecified
+            or address.is_multicast):
+        return False
+    return any(address.version == n.version and address in n for n in networks)
+
+
 def compute_patterns(
     arguments: Mapping[str, Any],
     *,
     allowed_hosts: Collection[str] = (),
+    allowed_networks: Collection[Network] = (),
     allowed_paths: Collection[str] = (),
     paths_unrestricted: bool = False,
     secret_markers: Collection[str] = (),
 ) -> dict[str, bool]:
-    """``allowed_hosts``는 소문자 호스트, ``allowed_paths``는 정규화된 절대 경로 접두."""
+    """``allowed_hosts``는 소문자 호스트, ``allowed_networks``는 등록한 IP·CIDR(그 안의 주소는
+    허용 목적지이자 내부 주소 예외), ``allowed_paths``는 정규화된 절대 경로 접두."""
     result = dict.fromkeys(NAMES, False)
     try:
         # 상한 검사를 모두 끝낸 뒤에 훑는다. 상한을 넘는 인자는 훑어 봐야 결과가 같다(모두 참).
         for raw in list(_strings(arguments)):
             for text in _forms(raw):
                 for host in _urls(text):
-                    if not host_allowed(host, allowed_hosts):
+                    registered = registered_address(host, allowed_networks)
+                    if not (registered or host_allowed(host, allowed_hosts)):
                         result["url_external"] = True
-                    if _private_host(host, loose=True):
+                    if not registered and _private_host(host, loose=True):
                         result["private_host"] = True
-                if _private_host(_bare_host(text), loose=False):
+                bare = _bare_host(text)
+                if not registered_address(bare, allowed_networks) and _private_host(
+                    bare, loose=False
+                ):
                     result["private_host"] = True
                 if _traversal(text, allowed_paths, paths_unrestricted):
                     result["path_traversal"] = True
