@@ -1,0 +1,15 @@
+{% import "macros.html" as m %}
+{% if holds %}
+<table><thead><tr><th>서버</th><th>신청자</th><th>요청</th><th>대상</th><th>기간</th><th>사유</th><th>만료</th><th></th></tr></thead><tbody>
+{% for h in holds %}<tr>
+<td><a href="/intakes/{{ h.intake_id }}">{{ h.server_id }}</a></td>
+<td>{{ h.requested_by | who }}</td><td>{{ h.first_name }}</td>
+<td>{{ L.pick(L.SCOPE, h.params.scope_type) }} {{ h.params.scope_id or '' }}</td>
+<td>{{ h.params.valid_days or 30 }}일</td><td>{{ h.params.reason | masked }}</td>
+<td class="nowrap">{{ h.expires_at | when }}</td>
+<td>{% if actor.role in ('admin', 'approver') %}<form method="post" class="actions">{{ m.csrf(actor) }}
+<button type="submit" formaction="/exceptions/{{ h.id }}/confirm" class="primary">확인</button>
+<button type="submit" formaction="/exceptions/{{ h.id }}/reject">거절</button></form>{% endif %}</td>
+</tr>{% endfor %}
+</tbody></table>
+{% else %}{{ m.empty('두 번째 승인을 기다리는 요청이 없습니다', '/intakes', '신청 보기') }}{% endif %}

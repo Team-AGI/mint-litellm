@@ -76,6 +76,8 @@ class EventKind(StrEnum):
     INTAKE_REQUESTER_ASSIGNED = "intake_requester_assigned"
     INTAKE_CHECKED = "intake_checked"
     INTAKE_DECIDED = "intake_decided"
+    INTAKE_EXCEPTION_REQUESTED = "intake_exception_requested"
+    INTAKE_EXCEPTION_CANCELLED = "intake_exception_cancelled"
     CONTRACT_APPROVED = "contract_approved"
     CONTRACT_DRIFT_DETECTED = "contract_drift_detected"
     CONTRACT_SUPERSEDED = "contract_superseded"
@@ -184,6 +186,8 @@ CONTROL_ENTITY: dict[EventKind, str] = {
     EventKind.INTAKE_REQUESTER_ASSIGNED: "intake",
     EventKind.INTAKE_CHECKED: "intake_check",
     EventKind.INTAKE_DECIDED: "intake",
+    EventKind.INTAKE_EXCEPTION_REQUESTED: "exception_hold",
+    EventKind.INTAKE_EXCEPTION_CANCELLED: "exception_hold",
     EventKind.CONTRACT_APPROVED: "tool_contract",
     EventKind.CONTRACT_DRIFT_DETECTED: "tool_contract",
     EventKind.CONTRACT_SUPERSEDED: "tool_contract",

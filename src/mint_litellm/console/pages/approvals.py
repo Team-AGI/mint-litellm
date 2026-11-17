@@ -15,7 +15,7 @@ from mint_litellm.control.approvals import DEFAULT_CALL_WINDOW
 from mint_litellm.control.db.connection import fetchall
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import allowlists as allowlist_service
-from mint_litellm.control.services import approval_metrics, dashboard_reads, reads
+from mint_litellm.control.services import approval_metrics, dashboard_reads, exception_holds, reads
 from mint_litellm.control.services import approvals as approval_service
 from mint_litellm.control.services import call_approval_rules as call_approval_rule_service
 from mint_litellm.control.services import call_approvals as call_approval_service
@@ -65,7 +65,7 @@ def _focus(request: Request) -> str | None:
 
 SLOW_SECONDS = 300  # 호출 승인이 이만큼 기다리면 강조한다(기본 처리 기한)
 SLA_MINUTES = (5, 15, 30, 60)
-TABS = ("calls", "servers", "renewals", "rules", "blocks")
+TABS = ("calls", "servers", "second", "renewals", "rules", "blocks")
 ACCESS_TABS = ("approvals", "dormant", "denials", "allowlists")
 RULE_FIELDS = {  # 규칙 칸 -> 이전 링크의 쿼리 이름
     "org_id": "rule_org", "server_id": "rule_server", "tool_pattern": "rule_tool",
@@ -94,8 +94,9 @@ def approvals_page(request: Request, actor: Actor, error=None, status=200, tab=N
     renewal = renewal_service.candidates(actor.conn, actor.instance)
     rules = reads.call_approval_rules(actor.conn, actor.instance)
     blocks = key_block.listing(actor.conn, actor.instance) if tab == "blocks" else []
+    holds = exception_holds.pending(actor.conn, actor.instance)
     ctx = {
-        "blocks": blocks, "block_view": _block_view,
+        "holds": holds, "blocks": blocks, "block_view": _block_view,
         "tab": tab, "focus": focus, "error": error, "page": page_number(request),
         "rows": calls, "pending": pending, "queue": queue, "renewal": renewal, "rules": rules,
         "slow": sum(1 for c in pending if (c["age_seconds"] or 0) >= sla * 60),
@@ -106,6 +107,7 @@ def approvals_page(request: Request, actor: Actor, error=None, status=200, tab=N
         ),
         "tabs": [
             ("calls", "호출", len(pending)), ("servers", "서버 도입", len(queue)),
+            ("second", "두 번째 승인", len(holds)),
             ("renewals", "갱신", len(renewal["unchanged"]) + len(renewal["changed"])),
             ("rules", "규칙", sum(1 for r in rules if r["status"] == "active")),
             ("blocks", "차단 제안", key_block.count_waiting(actor.conn, actor.instance)),
@@ -578,6 +580,23 @@ def lift_allowlist(
         "lifted", "/access?tab=allowlists",
         lambda **kw: access_page(request, actor, tab="allowlists", **kw),
     )
+
+
+@router.post("/exceptions/{hold_id}/{decision}")
+def decide_exception_hold(
+    hold_id: str, decision: str, request: Request, actor: Actor = Depends(page_actor)
+):
+    def action():
+        if decision == "confirm":
+            api.confirm_exception(actor, hold_id)
+        elif decision == "reject":
+            exception_holds.reject(actor.ctx, hold_id)
+        else:
+            raise AdminError(AdminCode.NOT_FOUND, "알 수 없는 동작입니다.")
+
+    ok = "exception_confirmed" if decision == "confirm" else "exception_rejected"
+    return act(actor, action, ok, "/approvals?tab=second",
+               lambda **kw: approvals_page(request, actor, tab="second", **kw))
 
 
 @router.post("/key-blocks/{proposal_id}/{decision}")

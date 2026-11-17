@@ -14,9 +14,9 @@ from mint_litellm.control.db.connection import fetchall
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import contracts as contract_service
 from mint_litellm.control.services import evidence as evidence_service
+from mint_litellm.control.services import exception_holds, reads
 from mint_litellm.control.services import intake_inspections as inspection_service
 from mint_litellm.control.services import intakes as intake_service
-from mint_litellm.control.services import reads
 from mint_litellm.control.services import servers as server_service
 
 router = APIRouter(dependencies=[Depends(require_csrf)])
@@ -456,6 +456,7 @@ def intake_page(
         "pack": pack,
         "progress": intake_progress(intake, lacking, checks),
         "decision_form": decision_form or {},
+        "hold": next(iter(exception_holds.pending(actor.conn, actor.instance, intake_id)), None),
         "provider_blocked": any(c["reason_code"] == "PROVIDER_NOT_ALLOWED" for c in checks),
         "passed": sum(1 for c in checks if c["result"] == "pass"),
         "failed": sum(1 for c in checks if c["result"] == "fail"),
@@ -769,7 +770,6 @@ def decide_intake(
     valid_days: int | None = Form(None),
     scope_type: str = Form("user"),
     scope_id: str = Form(""),
-    second_approver_token: str = Form(""),
     narrow_network: str = Form(""),
     narrow_files: str = Form(""),
     narrow_file_access: list[str] = Form([]),
@@ -785,11 +785,12 @@ def decide_intake(
             valid_days=valid_days,
             scope_type=scope_type,
             scope_id=scope_id or None,
-            second_approver_token=second_approver_token or None,
         )
-        api.decide_intake(actor, intake_id, body)
+        (api.hold_exception if decision == "except" else api.decide_intake)(
+            actor, intake_id, body)
 
-    ok = "intake_rejected" if decision == "reject" else "intake_approved"
+    ok = {"reject": "intake_rejected", "except": "exception_requested"}.get(
+        decision, "intake_approved")
     return act(
         actor,
         action,

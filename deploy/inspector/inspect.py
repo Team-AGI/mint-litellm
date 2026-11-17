@@ -86,6 +86,7 @@ def inspect(request, packs=PACKS):
     }
     process = None
     errors = None
+    failure = None  # 서버가 뜨기 전 검사 쪽 실패(공간 부족 등)
     stage = "start"
     try:
         if not re.fullmatch(r"[0-9a-f]{64}", pack):
@@ -105,7 +106,8 @@ def inspect(request, packs=PACKS):
             r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*:[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", entry
         ):
             raise ValueError("invalid entry")
-        with tempfile.TemporaryDirectory() as temp:
+        # 큰 묶음(풀면 수백 MB)은 메모리에 잡히는 tmpfs 대신 디스크 작업 폴더에 푼다.
+        with tempfile.TemporaryDirectory(dir=os.environ.get("INSPECT_WORKDIR") or None) as temp:
             target = Path(temp)
             extracted = 0
             for item in manifest["files"]:
@@ -200,11 +202,16 @@ def inspect(request, packs=PACKS):
             result.update(status="ok", complete=True)
     except queue.Empty:
         result["reason"] = "TIMEOUT"
-    except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile, json.JSONDecodeError):
+    except (
+        OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile, json.JSONDecodeError
+    ) as exc:
         result["reason"] = "INSPECTION_FAILED"
+        failure = f"{type(exc).__name__}: {exc}"[:300]
     finally:
         if not result["complete"]:
             result["detail"] = _failure(stage, process, errors)
+            if result["detail"] is not None and failure and not result["detail"].get("stderr_tail"):
+                result["detail"]["error"] = failure
         if process is not None:
             try:
                 if hasattr(os, "killpg"):
