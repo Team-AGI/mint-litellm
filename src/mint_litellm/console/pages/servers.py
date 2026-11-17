@@ -316,6 +316,9 @@ def intake_progress(
 ) -> list[tuple[str, str]]:
     """진행 표시 4단계(접수·검사·증빙·결정)를 (심각도, 이름)으로."""
     st = intake["status"]
+    if intake.get("decision") == "withdrawn":
+        return [("ok", "접수"), ("off", "검사 이력 보존"), ("off", "승인 심사 종료"),
+                ("off", "신청 철회")]
     checked = {
         "failed": ("error", "검사 실패"),
         "received": ("wait", "검사 중"),
@@ -573,6 +576,21 @@ def create_intake(
             },
         ),
     )
+
+
+@router.post("/intakes/{intake_id}/withdraw")
+def withdraw_intake(intake_id: str, request: Request, state_version: int = Form(...),
+                    reason: str = Form(...), confirm: str = Form(""),
+                    actor: Actor = Depends(page_actor)):
+    from mint_litellm.control.services import intake_withdrawals
+
+    def action():
+        if confirm != "yes":
+            raise ControlError("철회 확인란을 선택하십시오.")
+        return intake_withdrawals.withdraw(actor.ctx, intake_id, state_version, reason)
+
+    return act(actor, action, "intake_withdrawn", "/intakes/" + intake_id,
+               lambda **kw: intake_page(request, actor, intake_id, **kw))
 
 
 @router.get("/intakes/{intake_id}")

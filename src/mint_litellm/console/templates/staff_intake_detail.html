@@ -1,7 +1,18 @@
 {% extends "staff_base.html" %}{% import "macros.html" as m %}
 {% block title %}{{ i.server_id }} 도입 신청 · MINT{% endblock %}
 {% block body %}
-<h1>{{ i.server_id }} {{ m.badge(L.INTAKE, i.status) }}</h1>
+<h1>{{ i.server_id }} {{ m.badge(L.DECISION, i.decision) if i.decision == 'withdrawn' else m.badge(L.INTAKE, i.status) }}</h1>
+{% if i.status in ('received','passed','indeterminate') %}
+<details><summary>신청 철회</summary>
+<p>승인 전 신청을 철회합니다. 기존 검사 이력은 보존되며 새로 신청할 수 있습니다.</p>
+<form method="post" action="/staff/intakes/{{ i.id }}/withdraw" class="form">
+{{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ i.state_version }}">
+<label>철회 사유<textarea name="reason" required maxlength="500"></textarea></label>
+<label><input type="checkbox" name="confirm" value="yes" required>이 신청을 철회하겠습니다.</label>
+<button type="submit">신청 철회</button>
+</form></details>
+{% endif %}
+{% if i.status == 'checking' %}<p>검사 진행 중에는 철회할 수 없습니다. 검사가 끝난 뒤 새로고침하십시오.</p>{% endif %}
 <dl class="detail">
 <dt>신청자</dt><dd>{{ actor.user_id }}</dd>
 <dt>목적</dt><dd>{{ i.purpose }}</dd>

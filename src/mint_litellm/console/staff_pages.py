@@ -194,6 +194,26 @@ def intake_detail(intake_id: str, request: Request, actor: StaffActor = Depends(
 
 # --- 로그인·로그아웃 --------------------------------------------------------------------------
 
+@router.post("/staff/intakes/{intake_id}/withdraw")
+def intake_withdraw(intake_id: str, request: Request, state_version: int = Form(...),
+                    reason: str = Form(...), confirm: str = Form(""),
+                    actor: StaffActor = Depends(staff_actor)):
+    from mint_litellm.control.services import intake_withdrawals
+
+    def action():
+        if confirm != "yes":
+            raise ControlError("철회 확인란을 선택하십시오.")
+        return intake_withdrawals.staff_withdraw(actor.sctx, actor.id_hash,
+                                                 intake_id, state_version, reason)
+
+    def rebuild(error=None, status=400):
+        row = staff_intakes.detail(actor.sctx, intake_id)
+        return staff_render(request, "staff_intake_detail.html",
+                            {"i": row, "decision_reason": row["decision_reason"] or "",
+                             "error": error}, actor, status)
+
+    return act(actor, action, "intake_withdrawn", "/staff/intakes/" + intake_id, rebuild)
+
 
 def start_staff_session(
     config: ConsoleConfig, control: psycopg.Connection, staff_conn: psycopg.Connection,

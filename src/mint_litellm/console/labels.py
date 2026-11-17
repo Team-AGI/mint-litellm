@@ -194,6 +194,7 @@ INTAKE = {
     "decided": Status("결정됨", "off"),
 }
 DECISION = {
+    "withdrawn": Status("철회됨", "off"),
     "approved": Status("승인됨", "ok"),
     "rejected": Status("거절됨", "block"),
     "exception": Status("예외 승인됨", "wait"),
@@ -601,6 +602,7 @@ NOTICES = {
     "operator_role": "운영자의 역할을 변경했습니다.",
     "requester_assigned": "신청자를 지정했습니다.",
     "intake_created": "신청을 등록했습니다.",
+    "intake_withdrawn": "신청을 철회했습니다. 기존 검사 이력은 보존됩니다.",
     "evidence_attached": "증빙을 첨부했습니다.",
     "rechecked": "재검사를 등록했습니다.",
     "intake_approved": "신청을 승인했습니다.",
