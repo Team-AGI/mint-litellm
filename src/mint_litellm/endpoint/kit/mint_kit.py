@@ -48,11 +48,14 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
+import zipfile
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -91,6 +94,7 @@ APPARMOR_PROFILE = "mint-bwrap"
 BIN_DIR = "/usr/local/bin"
 SHIM = "mint"
 MAX_PENDING = 256
+MAX_REPORTED_SERVERS = 256  # 받는 쪽 보고 상한과 같다. 넘으면 잘라 보낸다.
 UNIT = "mint-report"
 TASK_NAME = "MINT Endpoint Report"
 SYNC_TASK_NAME = "MINT Endpoint Sync"  # Windows 관리형: 사용자 권한으로 Codex 설정을 맞추는 작업
@@ -761,6 +765,18 @@ def is_ours_entry(entry: object, name: str) -> bool:
     )
 
 
+def pack_consistent(item: dict, contract: dict) -> bool:
+    """묶음 항목이면 응답의 묶음 해시가 계약의 것과 같아야 한다(판 1 항목은 해당 없음)."""
+    pack = contract.get("pack")
+    if pack is None and item.get("pack_sha256") is None:
+        return True
+    digest = item.get("pack_sha256")
+    return (
+        isinstance(pack, dict) and isinstance(digest, str) and pack.get("sha256") == digest
+        and bool(SHA256_HEX.match(digest))
+    )
+
+
 def contract_version(contract: dict) -> str:
     """계약 내용의 판본(MINT가 응답에 싣는 값과 같은 계산)."""
     text = json.dumps(contract, sort_keys=True, separators=(",", ":"))
@@ -919,6 +935,12 @@ def scan_local_mcp(home: Path) -> list[dict]:
             if item:
                 found.setdefault(tuple(item.values()), item)
 
+    read_mcp_sources(home, add)
+    return sorted(found.values(), key=lambda i: (i["harness"], i["name"]))[:MAX_ITEMS]
+
+
+def read_mcp_sources(home: Path, add) -> None:
+    """하네스 설정 파일의 서버 표를 ``add(하네스, 표)``로 넘긴다. 읽지 못하는 파일은 건너뛴다."""
     try:
         if (home / ".claude.json").stat().st_size <= MAX_CONFIG:
             data = json.loads((home / ".claude.json").read_text(encoding="utf-8-sig"))
@@ -937,7 +959,6 @@ def scan_local_mcp(home: Path) -> list[dict]:
     except (ImportError, OSError, ValueError):
         pass  # tomllib은 Python 3.11부터라 이전 판본에서는 Codex 설정을 읽지 않는다.
     scan_cursor_grok(home, add)
-    return sorted(found.values(), key=lambda i: (i["harness"], i["name"]))[:MAX_ITEMS]
 
 
 def scan_cursor_grok(home: Path, add) -> None:
@@ -1641,7 +1662,8 @@ class Kit:
             logical = str(path)
         tool = f"{self.logical_programs}/mint_kit.py"
         text = (
-            f"#!/bin/sh{NL}[ $# -gt 0 ] || set -- status{NL}"
+            f"#!/bin/sh{NL}[ $# -gt 0 ] || {{{NL}"
+            f"  [ -t 0 ] && [ -t 1 ] && set -- screen || set -- status{NL}}}{NL}"
             f'exec {shlex.quote(python)} -I -B {shlex.quote(tool)} "$@"{NL}'
         )
         self.write_tracked(state, path, logical, text.encode(), 0o755, self.owner)
@@ -2333,7 +2355,7 @@ class Kit:
             "action": action,
             "mode": state.get("mode", "none") if installed else "none",
             "claude_version": self.harness_versions(),
-            "mcp_servers": state.get("mcp_servers", []) if installed else [],
+            "mcp_servers": state.get("mcp_servers", [])[:MAX_REPORTED_SERVERS] if installed else [],
             **self.inventory(),
         }
         if pending:
@@ -2626,6 +2648,7 @@ class Kit:
                 isinstance(name, str) and SERVER_NAME.match(name) and name not in skip
                 and isinstance(contract, dict) and isinstance(contract.get("executable"), str)
                 and item.get("version") == contract_version(contract)
+                and pack_consistent(item, contract)
             ):
                 items[name] = contract
         return items
@@ -2682,6 +2705,123 @@ class Kit:
         self.save_state(state)
         return sorted(done)
 
+    # -- 묶음 서버: 허가·준비·철회 ----------------------------------------------------------------
+
+    drop_to: tuple[int, int] | None = None  # 관리자 보고기가 사용자 캐시를 읽을 때 내려갈 계정
+
+    def local_contracts(self) -> dict:
+        try:
+            doc = json.loads((self.programs / "contracts.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        servers = doc.get("servers") if isinstance(doc, dict) else None
+        return servers if isinstance(servers, dict) else {}
+
+    def local_permits(self) -> dict:
+        try:
+            doc = json.loads((self.programs / PERMITS).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        permits = doc.get("permits") if isinstance(doc, dict) else None
+        return permits if isinstance(permits, dict) else {}
+
+    def writable(self) -> bool:
+        return self.managed and os.access(self.programs, os.W_OK)
+
+    def apply_permits(self, state: dict, desired: list, dropped: set[str]) -> bool:
+        """응답의 시작 허가를 계약 파일 옆 ``permits.json``에 쓴다(서버가 허가를 빼면 지워진다)."""
+        if not self.writable():
+            return False
+        permits = {}
+        for item in desired[:MAX_PENDING]:
+            if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+                continue
+            contract = item.get("contract") if isinstance(item.get("contract"), dict) else {}
+            digest, until = item.get("pack_sha256"), item.get("permit_until")
+            pack = contract.get("pack") if isinstance(contract.get("pack"), dict) else {}
+            if (
+                item["name"] not in dropped and isinstance(digest, str)
+                and pack.get("sha256") == digest and parse_time(until) is not None
+                and SERVER_NAME.match(item["name"])
+            ):
+                permits[item["name"]] = {"pack_sha256": digest, "permit_until": until}
+        data = json.dumps({"permits": permits}, indent=1, sort_keys=True).encode()
+        path, logical = self.programs / PERMITS, f"{self.logical_programs}/{PERMITS}"
+        try:
+            if path.exists() and path.read_bytes() == data:
+                return False
+            write_atomic(path, data, 0o644)
+        except OSError:
+            return False
+        state.setdefault("files", {})[logical] = sha256_bytes(data)
+        self.save_state(state)
+        return True
+
+    def drop_contracts(self, state: dict, names: list[str]) -> list[str]:
+        """범위를 잃은 서버를 계약 파일(과 허가)에서 뺀다. 이 묶음이 쓴 그대로인 파일만 고친다."""
+        if not self.writable() or not names:
+            return []
+        logical = f"{self.logical_programs}/contracts.json"
+        path = self.programs / "contracts.json"
+        try:
+            raw = read_trusted(path, self.root_owned())
+            listing = json.loads(raw)
+            current = listing.get("servers", {})
+        except (OSError, ValueError, AttributeError):
+            return []
+        gone = [n for n in names if n in current]
+        if not gone or state.get("files", {}).get(logical) != sha256_bytes(raw):
+            return []
+        data = json.dumps(
+            {**listing, "servers": {k: v for k, v in current.items() if k not in gone}}, indent=1
+        ).encode()
+        try:
+            write_atomic(path, data, 0o644)
+        except OSError:
+            return []
+        state["files"][logical] = sha256_bytes(data)
+        permits = {k: v for k, v in self.local_permits().items() if k not in gone}
+        try:
+            body = json.dumps({"permits": permits}, indent=1, sort_keys=True).encode()
+            write_atomic(self.programs / PERMITS, body, 0o644)
+            state["files"][f"{self.logical_programs}/{PERMITS}"] = sha256_bytes(body)
+        except OSError:
+            pass
+        self.save_state(state)
+        return gone
+
+    def promote_packs(self) -> list[str]:
+        """사용자가 받아 둔 묶음(관리자 단계 대기)을 다시 검증해 풀고 준비 폴더로 옮긴다."""
+        if not self.writable():
+            return []
+        made = []
+        for name, contract in sorted(self.local_contracts().items()):
+            pack = contract.get("pack") if isinstance(contract, dict) else None
+            digest = pack.get("sha256") if isinstance(pack, dict) else None
+            if not isinstance(digest, str) or not SHA256_HEX.match(digest):
+                continue
+            if ready_status(self.programs / PACKS / digest[:16], digest) == "ok":
+                continue
+            staged = self.home / STATE_REL / PACKS / digest[:16]
+            blobs = read_staged(self.drop_to, staged, {"manifest.json": MANIFEST_MAX})
+            try:
+                if blobs is None:
+                    continue
+                blobs["manifest.json"].seek(0)
+                files = manifest_files(json.loads(blobs["manifest.json"].read()))
+                more = read_staged(self.drop_to, staged, {f["name"]: f["size"] for f in files})
+                if more is None:
+                    continue
+                blobs.update(more)
+                install_blobs(digest, blobs, self.programs / PACKS)
+                made.append(name)
+            except (PackError, OSError, ValueError):
+                sys.stderr.write(f"MINT 묶음 준비 실패: {name}" + NL)
+            finally:
+                for handle in (blobs or {}).values():
+                    handle.close()
+        return made
+
     def put_configs(self, state: dict, mcp: dict) -> set[str]:
         """관리형 설정 파일에 서버 항목을 더하거나 바꾼다(이 묶음의 것만). 반영한 이름."""
         done: set[str] = set()
@@ -2730,6 +2870,1120 @@ class Kit:
                     pass
             done |= found
         return done
+
+
+# --- 실행 묶음(pack): 받기·검증·준비 ----------------------------------------------------------
+# 묶음 = manifest.json + wheel 파일들. 단말은 MINT에서만 받고, 해시가 맞는 wheel만 zip으로 직접
+# 풀어(pip 없음) 준비 폴더를 만든다. 준비 폴더는 ``.ready.json``을 마지막에 쓰고 한 번에 이름을
+# 바꿔 놓으므로 반쯤 된 폴더는 「사용 가능」으로 보이지 않는다.
+PACKS = "packs"  # 설치 폴더 아래: 준비된 묶음(<해시 앞 16>/)
+PERMITS = "permits.json"  # 계약 파일 옆: 서버별 시작 허가(만료 시각)
+READY = ".ready.json"
+PACK_MAX_FILES = 10_000
+PACK_MAX_BYTES = 512 << 20
+PACK_MAX_WHEELS = 256
+MANIFEST_MAX = 1 << 20
+PACK_FILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,200}\.whl$")
+SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
+S_NEED, S_WORK, S_READY = "받기 필요", "준비 중", "사용 가능"
+S_EXPIRED, S_NOPROG = "실행 허가 만료", "필요한 프로그램 없음"
+S_BAD, S_WAIT = "묶음 불일치", "반영 대기"
+
+
+class PackError(Exception):
+    """묶음을 받거나 풀 수 없는 사유(사람이 읽는 문장)."""
+
+
+def manifest_digest(manifest: object) -> str:
+    text = json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return sha256_bytes(text.encode("utf-8"))
+
+
+def manifest_files(manifest: object) -> list[dict]:
+    """manifest의 wheel 목록(이름·해시·크기). 모양이 틀리면 ``PackError``."""
+    files = manifest.get("files") if isinstance(manifest, dict) else None
+    if not isinstance(files, list) or not 0 < len(files) <= PACK_MAX_WHEELS:
+        raise PackError("묶음 목록의 모양이 틀립니다")
+    seen: set[str] = set()
+    total = 0
+    for item in files:
+        name = item.get("name") if isinstance(item, dict) else None
+        size, digest = (item.get("size"), item.get("sha256")) if isinstance(item, dict) else (0, 0)
+        if (
+            not isinstance(name, str) or not PACK_FILE.match(name) or name in seen
+            or not isinstance(digest, str) or not SHA256_HEX.match(digest)
+            or not isinstance(size, int) or isinstance(size, bool) or not 0 < size <= PACK_MAX_BYTES
+        ):
+            raise PackError("묶음 목록에 받을 수 없는 파일이 있습니다")
+        seen.add(name)
+        total += size
+    if total > PACK_MAX_BYTES:
+        raise PackError("묶음이 너무 큽니다")
+    return files
+
+
+def wheel_target(name: str) -> str | None:
+    """wheel 안 경로를 준비 폴더의 상대 경로로. 받지 않으면 None, 위험하면 오류."""
+    if name.endswith("/"):
+        return None
+    parts = name.split("/")
+    if (
+        not name or len(name) > 1024 or "\\" in name or chr(0) in name or name.startswith("/")
+        or any(p in ("", ".", "..") or len(p) > 255 or ":" in p for p in parts)
+    ):
+        raise PackError(f"안전하지 않은 경로가 있습니다: {name[:60]}")
+    if parts[0].endswith(".data"):
+        if len(parts) >= 3 and parts[1] in ("purelib", "platlib"):
+            return "/".join(parts[2:])
+        return None  # scripts·headers·data는 쓰지 않는다
+    return name
+
+
+def extract_wheel(handle, dest: Path, seen: dict[str, tuple[str, str]], budget: list[int]) -> None:
+    """wheel 하나를 ``dest``에 직접 푼다. ``budget``은 [남은 파일 수, 남은 바이트]."""
+    try:
+        archive = zipfile.ZipFile(handle)
+    except zipfile.BadZipFile as exc:
+        raise PackError("wheel을 열 수 없습니다") from exc
+    with archive:
+        for info in archive.infolist():
+            if info.is_dir():
+                continue
+            if info.flag_bits & 1:
+                raise PackError("암호가 걸린 파일이 있습니다")
+            mode = (info.external_attr >> 16) & 0o170000
+            if mode not in (0, 0o100000):
+                raise PackError(f"링크나 특수 파일이 있습니다: {info.filename[:60]}")
+            rel = wheel_target(info.filename)
+            if rel is None:
+                continue
+            budget[0] -= 1
+            budget[1] -= info.file_size
+            if budget[0] < 0 or budget[1] < 0:
+                raise PackError("파일 수나 크기가 상한을 넘습니다")
+            sha, written = hashlib.sha256(), 0
+            target = dest / rel
+            key = rel.lower()
+            if key in seen and seen[key][0] != rel:
+                raise PackError(f"대소문자만 다른 경로가 겹칩니다: {rel[:60]}")
+            try:
+                with archive.open(info) as source:
+                    chunks = []
+                    for block in iter(lambda: source.read(1 << 20), b""):
+                        written += len(block)
+                        if written > info.file_size:
+                            raise PackError("압축 해제 크기가 선언과 다릅니다")
+                        sha.update(block)
+                        chunks.append(block)
+                digest = sha.hexdigest()
+                if key in seen:
+                    if seen[key][1] != digest:
+                        raise PackError(f"같은 경로의 내용이 서로 다릅니다: {rel[:60]}")
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+                fd = os.open(target, flags | getattr(os, "O_NOFOLLOW", 0), 0o644)
+                with os.fdopen(fd, "wb") as out:
+                    out.writelines(chunks)
+                seen[key] = (rel, digest)
+            except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
+                raise PackError(f"파일을 풀지 못했습니다: {rel[:60]}") from exc
+
+
+def tree_hashes(folder: Path) -> dict[str, str]:
+    """준비 폴더의 파일 해시 목록(``.ready.json`` 제외). 링크가 있으면 ``PackError``."""
+    found: dict[str, str] = {}
+    for base, dirs, names in os.walk(folder, followlinks=False):
+        for name in [*dirs, *names]:
+            path = Path(base) / name
+            if path.is_symlink() or not (path.is_dir() or path.is_file()):
+                raise PackError(f"링크나 특수 파일이 있습니다: {name[:60]}")
+            if name in names and (rel := path.relative_to(folder).as_posix()) != READY:
+                found[rel] = sha256_file(path)
+    return found
+
+
+def tree_digest(files: dict[str, str]) -> str:
+    return sha256_bytes(json.dumps(files, sort_keys=True, separators=(",", ":")).encode())
+
+
+def ready_status(folder: Path, digest: str) -> str:
+    """준비 폴더 상태: ``missing``(없음)·``ok``·``bad``(내용이 다름)."""
+    try:
+        ready = json.loads((folder / READY).read_text(encoding="utf-8"))
+    except OSError:
+        return "missing"
+    except ValueError:
+        return "bad"
+    try:
+        files = tree_hashes(folder)
+    except (OSError, PackError):
+        return "bad"
+    good = (
+        isinstance(ready, dict) and ready.get("pack_sha256") == digest
+        and ready.get("files") == files and ready.get("content_sha256") == tree_digest(files)
+    )
+    return "ok" if good else "bad"
+
+
+def check_blobs(digest: str, blobs: dict) -> dict:
+    """받은 manifest·wheel(열린 파일 객체)을 승인 해시와 대조한다. 맞으면 manifest."""
+    handle = blobs.get("manifest.json")
+    if handle is None:
+        raise PackError("묶음 목록이 없습니다")
+    handle.seek(0)
+    raw = handle.read(MANIFEST_MAX + 1)
+    try:
+        manifest = json.loads(raw) if len(raw) <= MANIFEST_MAX else None
+    except ValueError:
+        manifest = None
+    if manifest is None or manifest_digest(manifest) != digest:
+        raise PackError("묶음 목록이 승인된 해시와 다릅니다")
+    for item in manifest_files(manifest):
+        wheel = blobs.get(item["name"])
+        if wheel is None:
+            raise PackError(f"받지 못한 파일이 있습니다: {item['name'][:60]}")
+        wheel.seek(0)
+        sha, size = hashlib.sha256(), 0
+        while block := wheel.read(1 << 20):
+            size += len(block)
+            sha.update(block)
+        if size != item["size"] or sha.hexdigest() != item["sha256"]:
+            raise PackError(f"파일이 목록과 다릅니다: {item['name'][:60]}")
+    return manifest
+
+
+def install_blobs(digest: str, blobs: dict, packs: Path) -> Path:
+    """검증된 묶음을 ``packs/<앞 16>/``에 푼다. 끝까지 되었을 때만 그 이름이 생긴다."""
+    manifest = check_blobs(digest, blobs)
+    final = packs / digest[:16]
+    stage = packs / f".tmp-{digest[:16]}-{os.getpid()}"
+    try:
+        packs.mkdir(parents=True, exist_ok=True)
+        shutil.rmtree(stage, ignore_errors=True)
+        stage.mkdir(mode=0o755)
+        seen: dict[str, tuple[str, str]] = {}
+        budget = [PACK_MAX_FILES, PACK_MAX_BYTES]
+        for item in manifest_files(manifest):
+            blobs[item["name"]].seek(0)
+            extract_wheel(blobs[item["name"]], stage, seen, budget)
+        files = tree_hashes(stage)
+        ready = {"pack_sha256": digest, "files": files, "content_sha256": tree_digest(files)}
+        write_atomic(stage / READY, json.dumps(ready, indent=1).encode(), 0o644)
+        if final.exists():
+            old = packs / f".old-{digest[:16]}-{os.getpid()}"
+            os.replace(final, old)
+            shutil.rmtree(old, ignore_errors=True)
+        os.replace(stage, final)
+    except OSError as exc:
+        raise PackError(f"준비 폴더를 만들지 못했습니다({type(exc).__name__})") from exc
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+    return final
+
+
+def stage_blobs(blobs: dict, folder: Path) -> None:
+    """검증된 파일을 사용자 캐시에 둔다(관리자 단계가 다시 검증하고 푼다)."""
+    shutil.rmtree(folder, ignore_errors=True)
+    folder.mkdir(parents=True, mode=0o700)
+    for name, handle in blobs.items():
+        handle.seek(0)
+        write_atomic(folder / name, handle.read(), 0o600)
+
+
+def read_staged(
+    target: tuple[int, int] | None, folder: Path, limits: dict[str, int]
+) -> dict | None:
+    """``folder``의 파일을 사용자 권한으로 읽어 이 프로세스만 가진 임시 파일에 담는다.
+
+    관리자가 사용자 캐시를 읽을 때 쓴다: 읽기는 내려간 자식이 하므로 링크 바꿔치기가 통하지 않고,
+    담긴 내용은 이후 사용자가 바꿀 수 없다. 읽지 못하거나 상한을 넘으면 None.
+    """
+    sinks = {name: tempfile.TemporaryFile() for name in limits}
+
+    def work() -> int:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+        try:
+            for name, cap in limits.items():
+                with os.fdopen(os.open(folder / name, flags), "rb") as source:
+                    got = 0
+                    for block in iter(lambda: source.read(1 << 20), b""):
+                        got += len(block)
+                        if got > cap:
+                            return 1
+                        sinks[name].write(block)
+                sinks[name].flush()
+        except OSError:
+            return 1
+        return 0
+
+    if target is None:
+        code = work()
+    else:
+        pid = os.fork()
+        if pid == 0:
+            code = 1
+            try:
+                os.setgroups([])
+                os.setresgid(target[1], target[1], target[1])
+                os.setresuid(target[0], target[0], target[0])
+                code = work()
+            except BaseException:
+                pass
+            os._exit(code)
+        _, status = os.waitpid(pid, 0)
+        code = status
+    return sinks if code == 0 else None
+
+
+def pack_state(
+    name: str, contract: dict, programs: Path, staged: Path, permits: dict, now: float
+) -> str:
+    """서버 하나의 화면 상태. 묶음 서버가 아니면 사용 가능."""
+    pack = contract.get("pack")
+    if not isinstance(pack, dict):
+        return S_READY
+    digest = str(pack.get("sha256", ""))
+    if not os.path.exists(str(contract.get("executable", ""))):
+        return S_NOPROG
+    found = ready_status(programs / PACKS / digest[:16], digest)
+    if found == "bad":
+        return S_BAD
+    if found == "missing":
+        return S_WORK if (staged / digest[:16]).is_dir() else S_NEED
+    permit = permits.get(name) if isinstance(permits.get(name), dict) else {}
+    until = parse_time(permit.get("permit_until"))
+    if permit.get("pack_sha256") != digest or until is None or until <= now:
+        return S_EXPIRED
+    return S_READY
+
+
+def parse_time(text: object) -> float | None:
+    """ISO 8601 시각(Z·소수 자리 길이 무관) -> 초. 읽지 못하면 None."""
+    if not isinstance(text, str):
+        return None
+    fixed = re.sub(r"\.(\d+)", lambda m: "." + (m.group(1) + "000000")[:6], text.strip())
+    try:
+        moment = datetime.fromisoformat(fixed.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)).timestamp()  # noqa: UP017
+
+
+# --- 게이트웨이 호출(키트 키) -----------------------------------------------------------------
+GATEWAY_TIMEOUT = 10
+ME_PATH = "/mint/v1/endpoint/me"
+INTAKES_PATH = "/mint/v1/endpoint/intakes"
+PACK_PATH = "/mint/v1/endpoint/packs"
+NO_GATEWAY = "게이트웨이에 닿지 못함"
+
+
+class Gateway:
+    """키트 키로 단말 경로를 부른다. 닿지 못하면 상태 0."""
+
+    def __init__(self, base: str, key: str, ca_pem: str | None = None) -> None:
+        self.base, self.key, self.ca_pem = base.rstrip("/"), key, ca_pem
+
+    def call(self, method: str, path: str, body: object = None, limit: int = 1 << 20):
+        """(상태, 본문 바이트). 본문이 ``limit``을 넘으면 상태 -1."""
+        import ssl
+
+        data = None if body is None else json.dumps(body).encode()
+        headers = {"Authorization": f"Bearer {self.key}"}
+        if data is not None:
+            headers["Content-Type"] = "application/json"
+        request = urllib.request.Request(
+            self.base + path, data=data, headers=headers, method=method
+        )
+        context = None
+        if self.base.startswith("https:"):
+            context = ssl.create_default_context(cadata=self.ca_pem or None)
+        try:
+            with urllib.request.urlopen(request, timeout=GATEWAY_TIMEOUT, context=context) as r:
+                raw = r.read(limit + 1)
+                return (r.status, raw) if len(raw) <= limit else (-1, b"")
+        except urllib.error.HTTPError as error:
+            return error.code, error.read(65536)
+        except (OSError, ValueError):
+            return 0, b""
+
+    def json(self, method: str, path: str, body: object = None):
+        status, raw = self.call(method, path, body)
+        try:
+            doc = json.loads(raw) if raw else None
+        except ValueError:
+            doc = None
+        return status, doc
+
+    def download(self, path: str, cap: int):
+        """파일을 임시 파일로 받는다. (상태, 파일 또는 None)."""
+        import ssl
+
+        request = urllib.request.Request(
+            self.base + path, headers={"Authorization": f"Bearer {self.key}"}
+        )
+        context = None
+        if self.base.startswith("https:"):
+            context = ssl.create_default_context(cadata=self.ca_pem or None)
+        sink = tempfile.TemporaryFile()
+        try:
+            with urllib.request.urlopen(request, timeout=GATEWAY_TIMEOUT, context=context) as r:
+                got = 0
+                for block in iter(lambda: r.read(1 << 20), b""):
+                    got += len(block)
+                    if got > cap:
+                        sink.close()
+                        return -1, None
+                    sink.write(block)
+            sink.flush()
+            return 200, sink
+        except urllib.error.HTTPError as error:
+            sink.close()
+            return error.code, None
+        except OSError:
+            sink.close()
+            return 0, None
+
+
+def fetch_pack(gateway: Gateway, server: str, digest: str) -> dict:
+    """승인된 묶음의 manifest와 wheel을 받아 열린 임시 파일 목록(이름 -> 파일)으로."""
+    base = f"{PACK_PATH}/{urllib.parse.quote(server, safe='')}/{digest}/"
+    blobs: dict = {}
+    try:
+        status, handle = gateway.download(base + "manifest.json", MANIFEST_MAX)
+        if status != 200:
+            raise PackError(pack_http_text(status))
+        blobs["manifest.json"] = handle
+        try:
+            manifest = json.loads(handle.seek(0) or handle.read())
+        except ValueError as exc:
+            raise PackError("묶음 목록을 읽을 수 없습니다") from exc
+        if manifest_digest(manifest) != digest:
+            raise PackError("묶음 목록이 승인된 해시와 다릅니다")
+        for item in manifest_files(manifest):
+            status, handle = gateway.download(base + item["name"], item["size"])
+            if status != 200:
+                raise PackError(pack_http_text(status))
+            blobs[item["name"]] = handle
+    except BaseException:
+        for opened in blobs.values():
+            opened.close()
+        raise
+    return blobs
+
+
+def pack_http_text(status: int) -> str:
+    if status == 0:
+        return NO_GATEWAY
+    if status in (401, 403):
+        return KEY_REJECTED_TEXT
+    if status == 404:
+        return "승인된 묶음이 아니거나 범위가 바뀌었습니다"
+    if status == -1:
+        return "받은 파일이 목록보다 큽니다"
+    return f"묶음을 받지 못했습니다(HTTP {status})"
+
+
+# --- 도입 신청 명령 해석(단말은 서버를 실행하지 않는다) ------------------------------------------
+SPEC_TEXT = re.compile(
+    r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[([A-Za-z0-9._,-]+)\])?"
+    r"(?:(?:==|@)([A-Za-z0-9][A-Za-z0-9.+!_-]*))?$"
+)
+MODULE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
+SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL", re.IGNORECASE)
+WIN_ABS = re.compile(r"^[A-Za-z]:[\\/]")
+MAX_ARGV = 64
+GRADES = ("public", "internal", "confidential", "restricted")
+
+
+class AddError(Exception):
+    """신청 명령을 해석하지 못한 사유(사람이 읽는 문장)."""
+
+
+def split_spec(text: str) -> tuple[str, list[str], str | None]:
+    match = SPEC_TEXT.match(text)
+    if not match:
+        raise AddError("패키지는 이름==판본 형식으로 적으십시오")
+    version = None if match.group(3) in (None, "latest") else match.group(3)
+    extras = sorted(e for e in (match.group(2) or "").split(",") if e)
+    return match.group(1), extras, version
+
+
+def norm_dist(name: str) -> str:
+    return re.sub(r"[-_.]+", "_", name).lower()
+
+
+def installed_version(name: str, home: Path) -> str | None:
+    """이 단말의 uv·pipx 도구 환경에 깔린 판본(없으면 이 인터프리터의 것)."""
+    for tool in (home / ".local/share/uv/tools" / name, home / ".local/share/pipx/venvs" / name):
+        for pattern in ("lib/python*/site-packages/*.dist-info", "Lib/site-packages/*.dist-info"):
+            for info in sorted(tool.glob(pattern)):
+                dist, _, version = info.name[: -len(".dist-info")].rpartition("-")
+                if norm_dist(dist) == norm_dist(name) and version:
+                    return version
+    try:
+        from importlib import metadata
+
+        return metadata.version(name)
+    except Exception:
+        return None
+
+
+def dist_for_module(module: str) -> str:
+    top = module.split(".")[0]
+    try:
+        from importlib import metadata
+
+        found = metadata.packages_distributions().get(top)
+        if found:
+            return found[0]
+    except Exception:
+        pass
+    return top.replace("_", "-")
+
+
+def parse_command(tokens: list[str], home: Path) -> dict:
+    """``uvx``·``pipx run``·``python -m`` 명령을 신청 명세로 바꾼다. 실행하지 않는다."""
+    if not tokens:
+        raise AddError("실행할 명령을 적으십시오")
+    exe = re.sub(r"\.(exe|cmd|bat)$", "", tokens[0].replace("\\", "/").rsplit("/", 1)[-1].lower())
+    rest = list(tokens[1:])
+    origin_flag = ""
+    if exe == "uvx" or (exe == "uv" and rest[:2] == ["tool", "run"]):
+        rest = rest[2:] if exe == "uv" else rest
+        origin_flag = "--from"
+    elif exe == "pipx" and rest[:1] == ["run"]:
+        rest, origin_flag = rest[1:], "--spec"
+    elif exe in ("python", "python3", "py") and rest[:1] == ["-m"] and len(rest) >= 2:
+        module = rest[1]
+        if not MODULE_NAME.match(module):
+            raise AddError("모듈 이름이 올바르지 않습니다")
+        return finish_spec(dist_for_module(module), [], None, module, rest[2:], home)
+    else:
+        raise AddError("P1은 PyPI 패키지만 신청할 수 있습니다")
+    origin = None
+    while rest and rest[0].startswith("-"):
+        flag = rest.pop(0)
+        if flag == origin_flag and rest:
+            origin = rest.pop(0)
+        elif flag.startswith(origin_flag + "="):
+            origin = flag.split("=", 1)[1]
+        else:
+            raise AddError(f"지원하지 않는 옵션입니다: {flag[:30]}")
+    if not rest:
+        raise AddError("패키지 이름이 없습니다")
+    first = rest.pop(0)
+    if origin:
+        name, extras, version = split_spec(origin)
+        return finish_spec(name, extras, version, first, rest, home)
+    name, extras, version = split_spec(first)
+    return finish_spec(name, extras, version, name, rest, home)
+
+
+def finish_spec(name, extras, version, command, argv, home: Path) -> dict:
+    version = version or installed_version(name, home)
+    if not version:
+        raise AddError("판본을 지정하십시오: 이름==판본")
+    if len(argv) > MAX_ARGV or any(len(a) > 4096 or chr(0) in a for a in argv):
+        raise AddError("인자가 너무 많거나 깁니다")
+    return {"index": "pypi", "name": name, "version": version, "extras": extras,
+            "command": command, "argv": list(argv)}  # fmt: skip
+
+
+def harness_entry(home: Path, harness: str, name: str) -> dict | None:
+    """하네스 설정에서 로컬 MCP 항목 하나(명령·인자·환경 변수)."""
+    found: list[dict] = []
+
+    def add(kind: str, servers: object) -> None:
+        entry = servers.get(name) if isinstance(servers, dict) else None
+        if kind == harness and isinstance(entry, dict):
+            found.append(entry)
+
+    read_mcp_sources(home, add)
+    return found[0] if found else None
+
+
+def entry_tokens(entry: dict) -> list[str]:
+    command, args = entry.get("command"), entry.get("args")
+    if not isinstance(command, str) or not command.strip():
+        raise AddError("이 항목은 로컬 명령이 아닙니다")
+    return [command, *[a for a in (args if isinstance(args, list) else []) if isinstance(a, str)]]
+
+
+def path_candidates(argv: list[str]) -> list[str]:
+    """인자 중 절대 경로(파일 접근 후보)."""
+    return list(dict.fromkeys(
+        a for a in argv if len(a) <= 1024 and (a.startswith("/") or WIN_ABS.match(a))
+    ))
+
+
+def build_intake(request_id, server_id, spec, access, network, hosts, env_names, purpose,
+                 grade) -> dict:  # fmt: skip
+    return {
+        "request_id": request_id, "server_id": server_id, "spec": spec,
+        "file_access": [{"path": p, "mode": m} for p, m in access],
+        "network": network, "allowed_hosts": hosts if network == "hosts" else [],
+        "env_names": env_names, "purpose": purpose, "data_grade": grade, "resources": [],
+    }  # fmt: skip
+
+
+def submit_text(status: int, doc: object) -> str:
+    """제출 응답을 사람 문구로."""
+    if status == 201:
+        return "신청했습니다"
+    detail = ""
+    if isinstance(doc, dict):
+        raw = doc.get("error") or doc.get("detail") or doc.get("message")
+        detail = raw if isinstance(raw, str) else ""
+    if status == 409:
+        return "같은 서버가 진행 중이거나 이미 승인되었습니다"
+    if status == 429:
+        return "신청 한도를 넘었습니다. 잠시 뒤 다시 시도하십시오"
+    if status in (400, 422):
+        return "신청 내용이 맞지 않습니다" + (f": {detail[:80]}" if detail else "")
+    if status in (401, 403, 404):
+        return KEY_REJECTED_TEXT
+    if status == 0:
+        return NO_GATEWAY
+    return f"신청하지 못했습니다(HTTP {status})"
+
+
+def ask(question: str, default: str, read=input) -> str:
+    try:
+        answer = read(f"{question} [{default}] " if default else f"{question} ").strip()
+    except EOFError:
+        answer = ""
+    return answer or default
+
+
+def run_add(args, home: Path, gateway: Gateway, out=print, read=input, tty: bool = False) -> int:
+    """``mint add``. 해석 -> 확인 -> 제출. 서버는 실행하지 않는다."""
+    try:
+        if args.source:
+            harness, _, item = args.source.partition(":")
+            entry = harness_entry(home, harness, item)
+            if entry is None:
+                raise AddError("그 하네스 설정에서 항목을 찾지 못했습니다")
+            tokens = entry_tokens(entry)
+            env_names = sorted(k for k in (entry.get("env") or {}) if isinstance(k, str))
+            server_id = args.name or item
+        else:
+            tokens, entry, env_names, server_id = args.command, {}, [], args.name
+        if not server_id or not SERVER_NAME.match(server_id):
+            raise AddError("서버 이름은 영문·숫자·._-로 적으십시오")
+        spec = parse_command(tokens, home)
+    except AddError as exc:
+        out(str(exc))
+        return 2
+    env_names = sorted({*env_names, *(args.env or [])})
+    candidates = path_candidates(spec["argv"])
+    access = {p: "ro" for p in candidates}
+    access.update({p: "ro" for p in args.ro or []})
+    access.update({p: "rw" for p in args.rw or []})
+    interactive = tty and not args.yes
+    if interactive:
+        for path in candidates:
+            if path in (args.rw or []):
+                continue
+            pick = ask(f"파일 접근 {path[:50]} (r 읽기, w 쓰기, n 제외)", "r", read).lower()
+            if pick.startswith("n"):
+                access.pop(path, None)
+            elif pick.startswith("w"):
+                access[path] = "rw"
+    hosts = list(args.host or [])
+    network = args.network or ("hosts" if hosts else "none")
+    if interactive and not args.network and not hosts:
+        if ask("네트워크 (none 없음, hosts 호스트 지정)", "none", read).lower().startswith("h"):
+            network = "hosts"
+    if network == "hosts" and not hosts and interactive:
+        typed = ask("허용 호스트(쉼표로 구분)", "", read).replace(" ", "")
+        hosts = [h for h in typed.split(",") if h]
+    if network == "hosts" and not hosts:
+        out("hosts에는 허용 호스트(--host)가 필요합니다")
+        return 2
+    purpose = args.purpose or (ask("목적", "", read) if interactive else "")
+    if not purpose:
+        out("목적(--purpose)을 적으십시오")
+        return 2
+    grade = args.grade or (ask("자료 등급", "internal", read) if interactive else "internal")
+    if grade not in GRADES:
+        out("자료 등급은 " + ", ".join(GRADES) + " 중 하나입니다")
+        return 2
+    package = spec["name"] + (f"[{','.join(spec['extras'])}]" if spec["extras"] else "")
+    rows = [
+        ("이름", server_id), ("패키지", f"{package}=={spec['version']}"),
+        ("명령", " ".join([spec["command"], *spec["argv"]])[:70]),
+        ("파일 접근", ", ".join(
+            f"{p} ({'쓰기' if m == 'rw' else '읽기'})" for p, m in access.items()) or "없음"),
+        ("네트워크", "없음" if network == "none" else ", ".join(hosts)),
+        ("환경 변수", ", ".join(env_names) or "없음"), ("목적", purpose[:70]), ("자료 등급", grade),
+    ]  # fmt: skip
+    for label, value in rows:
+        out(f"{pad(label, 10)}{value}")
+    for name in env_names:
+        if SECRET_NAME.search(name):
+            out(f"{name}은(는) 비밀로 보입니다. 관리자가 비밀 참조로 등록합니다")
+    if not args.yes and not (tty and ask("이대로 신청할까요? (y/n)", "n", read).lower() == "y"):
+        out("신청하지 않았습니다. 확인 없이 하려면 --yes를 쓰십시오" if not tty else "취소했습니다")
+        return 1
+    body = build_intake(
+        args.request_id or str(uuid.uuid4()), server_id, spec, list(access.items()), network,
+        hosts, env_names, purpose, grade,
+    )
+    status, doc = gateway.json("POST", INTAKES_PATH, body)
+    out(submit_text(status, doc))
+    if status == 201:
+        out(f"신청 번호 {doc.get('id') if isinstance(doc, dict) else ''}".strip())
+        return 0
+    return 1
+
+
+# --- 표시 폭(한글은 두 칸) ----------------------------------------------------------------------
+def cell_width(text: str) -> int:
+    return sum(
+        0 if unicodedata.combining(c) else 2 if unicodedata.east_asian_width(c) in "WF" else 1
+        for c in text
+    )
+
+
+def clip(text: str, width: int) -> str:
+    if cell_width(text) <= width:
+        return text
+    out, used = "", 0
+    for char in text:
+        step = cell_width(char)
+        if used + step > width - 2:
+            break
+        out, used = out + char, used + step
+    return out + ".."
+
+
+def pad(text: str, width: int) -> str:
+    return text + " " * max(width - cell_width(text), 0)
+
+
+def intake_label(status: object, decision: object) -> str:
+    if decision in ("approved", "approve"):
+        return "승인"
+    if decision in ("rejected", "reject", "denied"):
+        return "거절"
+    if decision == "withdrawn" or status == "withdrawn":
+        return "철회"
+    names = {
+        "received": "접수", "checking": "검사 중", "building": "묶음 준비", "passed": "검사 통과",
+        "indeterminate": "판별 불가", "failed": "검사 실패", "decided": "결정",
+    }
+    return names.get(str(status), str(status or "-"))
+
+
+NEXT_BY_STATE = {
+    S_NEED: "s 키로 묶음을 받으십시오",
+    S_WORK: "관리자 단계가 마칠 때까지 기다리십시오",
+    S_EXPIRED: "r 키로 다시 보고하십시오",
+    S_NOPROG: "관리자에게 런타임 설치를 요청하십시오",
+    S_BAD: "s 키로 다시 받으십시오",
+    S_WAIT: "r 키로 다시 보고하십시오",
+}
+TABS = ("상태", "내 서버", "도입 신청")
+HELP = "1-3 탭  위/아래 선택  Enter 상세  n 신청  s 받기  c 점검  r 새로고침  o 웹  q 끝"
+
+
+def tab1_lines(model: dict) -> list[str]:
+    key = {"ok": "유효", "rejected": "거절됨"}.get(model["key"], "확인하지 못함")
+    lines = [
+        ("게이트웨이", "연결됨" if model["connected"] else NO_GATEWAY),
+        ("사용자", model.get("user") or "-"), ("키", key),
+        ("설치 방식", model["mode"]), ("하네스", ", ".join(model["harnesses"]) or "-"),
+        ("MCP 서버", f"{model['server_count']}개"),
+    ]
+    out = [f"{pad(a, 12)}{b}" for a, b in lines]
+    problems = model["problems"]
+    out.append(f"{pad('점검', 12)}{'이상 없음' if not problems else f'문제 {len(problems)}건'}")
+    out += [f"  - {p}" for p in problems]
+    return out
+
+
+def tab2_lines(model: dict, ui: dict) -> list[str]:
+    servers = model["servers"]
+    if not servers:
+        return ["나에게 승인된 서버가 없습니다"]
+    out = [f"  {pad('서버', 26)}{pad('종류', 6)}{pad('상태', 22)}실행 허가"]
+    for i, row in enumerate(servers):
+        mark = ">" if i == ui["cursor"] else " "
+        until = (row.get("permit_until") or "")[:16].replace("T", " ")
+        out.append(
+            f"{mark} {pad(clip(row['name'], 25), 26)}{pad(row['kind'], 6)}"
+            f"{pad(row['state'], 22)}{until}"
+        )
+    if ui["detail"] and servers:
+        row = servers[min(ui["cursor"], len(servers) - 1)]
+        out += ["", f"{row['name']}  {row['state']}"]
+        if row.get("pack_sha256"):
+            out.append(f"  묶음 {row['pack_sha256'][:16]}")
+        if row["state"] in NEXT_BY_STATE:
+            out.append("  " + NEXT_BY_STATE[row["state"]])
+    return out
+
+
+def tab3_lines(model: dict, ui: dict) -> list[str]:
+    intakes, found = model["intakes"], model["found"]
+    out = ["신청한 서버가 없습니다"]
+    if intakes:
+        out = [f"  {pad('서버', 26)}{pad('상태', 14)}다음 할 일"]
+    for i, row in enumerate(intakes):
+        mark = ">" if i == ui["cursor"] else " "
+        label = intake_label(row.get("status"), row.get("decision"))
+        out.append(
+            f"{mark} {pad(clip(str(row.get('server_id', '')), 25), 26)}{pad(label, 14)}"
+            f"{clip(str(row.get('next') or ''), 36)}"
+        )
+    if ui["detail"] and ui["cursor"] < len(intakes):
+        row = intakes[ui["cursor"]]
+        out += ["", f"사유  {clip(str(row.get('reason') or '-'), 70)}",
+                f"다음  {clip(str(row.get('next') or '-'), 70)}"]  # fmt: skip
+    if found:
+        out += ["", "이 PC의 관리되지 않는 로컬 MCP (Enter로 신청)"]
+        for j, item in enumerate(found):
+            mark = ">" if len(intakes) + j == ui["cursor"] else " "
+            out.append(f"{mark} {item['harness']}:{item['name']}")
+    return out
+
+
+def render_screen(model: dict, ui: dict, width: int = 80, height: int = 24) -> list[str]:
+    """화면 한 장(줄 목록, 각 줄은 ``width``칸 이내)."""
+    tabs = "".join(
+        f"[{i + 1} {t}]" if i == ui["tab"] else f" {i + 1} {t} " for i, t in enumerate(TABS)
+    )
+    state = "연결됨" if model["connected"] else NO_GATEWAY
+    head = pad("MINT  " + tabs, width - cell_width(state) - 1) + " " + state
+    body = (tab1_lines(model), tab2_lines(model, ui), tab3_lines(model, ui))[ui["tab"]]
+    room = max(height - 4, 3)
+    lines = [head, "-" * width, *body[:room]]
+    lines += [""] * (height - 2 - len(lines))
+    lines += ["-" * width, ui.get("message") or HELP]
+    return [clip(line, width) for line in lines]
+
+
+def handle_key(key: str, ui: dict, model: dict) -> str | None:
+    """키 하나를 화면 상태에 반영하고, 밖에서 해야 할 일 이름(없으면 None)을 돌려준다."""
+    count = (0, len(model["servers"]), len(model["intakes"]) + len(model["found"]))[ui["tab"]]
+    if key in ("1", "2", "3"):
+        ui.update(tab=int(key) - 1, cursor=0, detail=False)
+    elif key in ("left", "right"):
+        ui.update(tab=(ui["tab"] + (1 if key == "right" else -1)) % 3, cursor=0, detail=False)
+    elif key == "up":
+        ui["cursor"] = max(ui["cursor"] - 1, 0)
+    elif key == "down":
+        ui["cursor"] = min(ui["cursor"] + 1, max(count - 1, 0))
+    elif key == "enter":
+        if ui["tab"] == 2 and ui["cursor"] >= len(model["intakes"]) and model["found"]:
+            return "add_found"
+        ui["detail"] = not ui["detail"] if count else False
+    elif key == "esc":
+        ui["detail"] = False
+    elif key == "s" and ui["tab"] == 1 and model["servers"]:
+        return "get"
+    elif key in ("n", "c", "r", "o", "q"):
+        return {"n": "new", "c": "check", "r": "report", "o": "web", "q": "quit"}[key]
+    return None
+
+
+def read_key() -> str:
+    """키 하나를 이름으로(1·2·3, left/right/up/down, enter, esc, 글자). 입력이 끝나면 q."""
+    if os.name == "nt":
+        import msvcrt
+
+        char = msvcrt.getwch()
+        if char in ("\x00", "\xe0"):
+            return {"H": "up", "P": "down", "K": "left", "M": "right"}.get(msvcrt.getwch(), "")
+        return {"\r": "enter", "\x1b": "esc", "\x03": "q"}.get(char, char.lower())
+    import select
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    saved = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        raw = os.read(fd, 1)
+        if not raw:
+            return "q"
+        if raw == b"\x1b":
+            if select.select([fd], [], [], 0.05)[0]:
+                raw += os.read(fd, 2)
+            return {b"\x1b[A": "up", b"\x1b[B": "down", b"\x1b[C": "right",
+                    b"\x1b[D": "left"}.get(raw, "esc")  # fmt: skip
+        named = {b"\n": "enter", b"\r": "enter", b"\x03": "q"}
+        return named.get(raw, raw.decode(errors="ignore").lower())
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+
+
+def build_model(kit, state: dict, gateway: Gateway | None) -> dict:
+    """화면이 그릴 값: 로컬 상태와 ``me`` 응답(닿지 못하면 로컬 정보만)."""
+    result, problems = kit.check(state) if state else ({}, ["설치되어 있지 않습니다"])
+    status, me = gateway.json("GET", ME_PATH) if gateway else (0, None)
+    me = me if status == 200 and isinstance(me, dict) else None
+    contracts = kit.local_contracts()
+    permits = kit.local_permits()
+    staged = kit.home / STATE_REL / PACKS
+    now = time.time()
+    servers = []
+    names = list(contracts)
+    for item in (me or {}).get("servers", []):
+        if isinstance(item, dict) and isinstance(item.get("server_id"), str):
+            if item["server_id"] not in names:
+                names.append(item["server_id"])
+    remote = {i["server_id"]: i for i in (me or {}).get("servers", []) if isinstance(i, dict)}
+    for name in names:
+        contract = contracts.get(name)
+        info = remote.get(name, {})
+        if contract is None:
+            row_state, kind = S_WAIT, "묶음" if info.get("pack_sha256") else "로컬"
+        else:
+            row_state = pack_state(name, contract, kit.programs, staged, permits, now)
+            kind = "묶음" if contract.get("pack") else "로컬"
+        pack = contract.get("pack") if contract else None
+        servers.append({
+            "name": name, "kind": kind, "state": row_state,
+            "pack_sha256": (pack or {}).get("sha256") or info.get("pack_sha256"),
+            "permit_until": (permits.get(name) or {}).get("permit_until")
+            or info.get("permit_until"),
+        })  # fmt: skip
+    mode = {"managed": "관리형", "user": "사용자 수준(관리되지 않음)"}.get(
+        state.get("mode"), "설치 안 됨")
+    return {
+        "connected": me is not None, "user": (me or {}).get("user"),
+        "key": "ok" if me is not None else "rejected" if status in (401, 403, 404) else "unknown",
+        "mode": mode, "harnesses": kit.harnesses, "server_count": len(state.get("mcp_servers", [])),
+        "problems": problems, "servers": servers,
+        "intakes": [i for i in (me or {}).get("intakes", []) if isinstance(i, dict)],
+        "found": scan_local_mcp(kit.home) if kit.home.exists() else [],
+        "result": result,
+    }  # fmt: skip
+
+
+def enable_vt() -> None:
+    if os.name == "nt":
+        os.system("")  # 콘솔의 ANSI 처리를 켠다
+
+
+def run_screen(kit, state: dict, gateway: Gateway | None, actions, read=read_key, out=None) -> int:
+    """대화형 화면. ``actions``는 밖에서 하는 일(get·check·report·new·web) 이름 -> 함수."""
+    out = out or sys.stdout
+    enable_vt()
+    ui = {"tab": 0, "cursor": 0, "detail": False, "message": ""}
+    model = build_model(kit, state, gateway)
+    while True:
+        size = shutil.get_terminal_size((80, 24))
+        width, height = min(size.columns, 80), max(size.lines, 12)
+        out.write("\x1b[2J\x1b[H" + "\n".join(render_screen(model, ui, width, height)) + "\n")
+        out.flush()
+        ui["message"] = ""
+        action = handle_key(read(), ui, model)
+        if action == "quit":
+            return 0
+        if action:
+            ui["message"] = clip(str(actions[action](model, ui) or ""), width)
+            state = kit.load_state() or state
+            model = build_model(kit, state, gateway)
+
+
+# --- 대화형 명령(screen·add·requests·get) ------------------------------------------------------
+CLI_COMMANDS = ("screen", "add", "requests", "get")
+
+
+def open_installed(folder: Path):
+    """(Kit, 상태, Gateway 또는 None). 설치 기록을 못 찾으면 상태는 빈 값."""
+    if sys.platform == "win32":
+        account = Account(os.environ.get("USERNAME", ""), Path(os.path.expanduser("~")), 0, 0)
+        privileged = is_admin()
+    else:
+        import pwd
+
+        entry = pwd.getpwuid(os.getuid())
+        account = Account(entry.pw_name, Path(entry.pw_dir), entry.pw_uid, entry.pw_gid)
+        privileged = os.geteuid() == 0
+    kit = Kit(folder, None, privileged, account, False, strict=False)
+    state = kit.load_state()
+    if not state:
+        other = Kit(folder, None, not privileged, account, False, strict=False)
+        state = other.load_state()
+        kit = other if state else kit
+    if not kit.config.get("key"):
+        try:
+            kit.config["key"] = (kit.home / KEY_REL).read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
+    key, url = kit.config.get("key"), kit.config.get("decide_url")
+    gateway = Gateway(url, key, kit.config.get("ca_pem")) if key and url else None
+    return kit, state, gateway
+
+
+def can_write(path: Path) -> bool:
+    """``path``(아직 없으면 가장 가까운 상위 폴더)에 이 사용자가 쓸 수 있는가."""
+    while not path.exists() and path != path.parent:
+        path = path.parent
+    return os.access(path, os.W_OK)
+
+
+def run_get(kit, gateway: Gateway | None, server: str, out=print) -> int:
+    """``mint get``: 승인된 묶음을 받아 검증하고 풀어 준비한다. 반쯤 된 상태는 남기지 않는다."""
+    if gateway is None:
+        out("키가 없습니다. 설치 묶음을 다시 받아 설치하십시오")
+        return 1
+    status, me = gateway.json("GET", ME_PATH)
+    if status != 200 or not isinstance(me, dict):
+        out(pack_http_text(status))
+        return 1
+    entry = next(
+        (s for s in me.get("servers", []) if isinstance(s, dict) and s.get("server_id") == server),
+        None,
+    )
+    digest = entry.get("pack_sha256") if entry else None
+    if entry is None:
+        out("나에게 승인된 서버가 아닙니다")
+        return 1
+    if not isinstance(digest, str) or not SHA256_HEX.match(digest):
+        out("받을 묶음이 없는 서버입니다")
+        return 1
+    packs = kit.programs / PACKS
+    if ready_status(packs / digest[:16], digest) == "ok":
+        out("이미 준비되어 있습니다")
+        return 0
+    blobs: dict = {}
+    try:
+        blobs = fetch_pack(gateway, server, digest)
+        check_blobs(digest, blobs)
+        if can_write(kit.programs):
+            install_blobs(digest, blobs, packs)
+            out("준비했습니다. 실행 허가는 다음 보고 때 받습니다")
+        else:
+            stage_blobs(blobs, kit.home / STATE_REL / PACKS / digest[:16])
+            out("받아서 검증했습니다. 관리자 단계가 준비를 마칩니다")
+    except (PackError, OSError) as exc:
+        out(str(exc))
+        return 1
+    finally:
+        for handle in blobs.values():
+            handle.close()
+    return 0
+
+
+def run_requests(gateway: Gateway | None, out=print) -> int:
+    status, me = gateway.json("GET", ME_PATH) if gateway else (0, None)
+    if status != 200 or not isinstance(me, dict):
+        out(NO_GATEWAY if status == 0 else submit_text(status, me))
+        return 1
+    rows = [i for i in me.get("intakes", []) if isinstance(i, dict)]
+    if not rows:
+        out("신청한 서버가 없습니다")
+        return 0
+    out(f"{pad('서버', 28)}{pad('상태', 14)}다음 할 일")
+    for row in rows:
+        label = intake_label(row.get("status"), row.get("decision"))
+        out(f"{pad(clip(str(row.get('server_id', '')), 27), 28)}{pad(label, 14)}"
+            f"{clip(str(row.get('next') or row.get('reason') or ''), 36)}")  # fmt: skip
+    return 0
+
+
+def check_lines(result: dict, problems: list[str]) -> list[str]:
+    """``mint check``의 사람용 표."""
+    mode = {"managed": "관리형", "user": "사용자 수준(관리되지 않음)"}.get(
+        result.get("mode"), "설치 안 됨")
+    rows = [
+        ("설치 방식", mode), ("MCP 서버", f"{len(result.get('mcp_servers', []))}개"),
+        ("훅 신뢰", {"untrusted": "신뢰 안 함", "trusted": "신뢰함"}.get(
+            str(result.get("hook_trust")), "해당 없음")),
+        ("점검", "이상 없음" if not problems else f"문제 {len(problems)}건"),
+    ]  # fmt: skip
+    return [f"{pad(a, 12)}{b}" for a, b in rows] + [f"  - {p}" for p in problems]
+
+
+def interactive_add(kit, gateway, home: Path, source: str | None, read=input) -> str:
+    """화면에서 고른 신청. 결과의 마지막 줄을 돌려준다."""
+    lines: list[str] = []
+    name, tokens = None, []
+    if source is None:
+        name = ask("서버 이름", "", read)
+        import shlex
+
+        tokens = shlex.split(ask("명령(예: uvx 패키지==판본)", "", read))
+    args = argparse.Namespace(
+        source=source, name=name, command=tokens, purpose=None, grade=None, network=None,
+        host=[], env=[], ro=[], rw=[], yes=False, request_id=None,
+    )
+    run_add(args, home, gateway, out=lambda t: (lines.append(t), print(t))[0], read=read, tty=True)
+    return lines[-1] if lines else ""
+
+
+def cli_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="mint")
+    parser.add_argument("--kit", default=str(KIT))
+    sub = parser.add_subparsers(dest="command_name", required=True)
+    sub.add_parser("screen")
+    sub.add_parser("requests")
+    get = sub.add_parser("get")
+    get.add_argument("server")
+    add = sub.add_parser("add")
+    add.add_argument("name", nargs="?")
+    add.add_argument("command", nargs="*")
+    add.add_argument("--from", dest="source")
+    add.add_argument("--purpose")
+    add.add_argument("--grade")
+    add.add_argument("--network", choices=["none", "hosts"])
+    add.add_argument("--host", action="append")
+    add.add_argument("--env", action="append")
+    add.add_argument("--ro", action="append")
+    add.add_argument("--rw", action="append")
+    add.add_argument("--yes", action="store_true")
+    add.add_argument("--request-id")
+    args = parser.parse_args(argv)
+    kit, state, gateway = open_installed(Path(args.kit))
+    if args.command_name == "get":
+        return run_get(kit, gateway, args.server)
+    if args.command_name == "requests":
+        return run_requests(gateway)
+    if args.command_name == "add":
+        if gateway is None:
+            print("키가 없습니다. 설치 묶음을 다시 받아 설치하십시오")
+            return 1
+        tty = sys.stdin.isatty()
+        return run_add(args, kit.home, gateway, tty=tty)
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print(json.dumps(state or {"mode": "none"}, indent=1))
+        return 0
+
+    def get_action(model, ui):
+        if not model["servers"]:
+            return ""
+        lines: list[str] = []
+        run_get(kit, gateway, model["servers"][ui["cursor"]]["name"], out=lines.append)
+        return lines[-1] if lines else ""
+
+    def check_action(model, ui):
+        _, problems = kit.check(state)
+        return "이상 없음" if not problems else f"문제 {len(problems)}건"
+
+    def report_action(model, ui):
+        return "보고했습니다" if kit.report(state, "installed") else NO_GATEWAY
+
+    def new_action(model, ui):
+        return interactive_add(kit, gateway, kit.home, None)
+
+    def found_action(model, ui):
+        item = model["found"][ui["cursor"] - len(model["intakes"])]
+        return interactive_add(kit, gateway, kit.home, f"{item['harness']}:{item['name']}")
+
+    def web_action(model, ui):
+        parts = urllib.parse.urlsplit(kit.config.get("decide_url", ""))
+        return f"직원 화면: {parts.scheme}://{parts.netloc}/staff"
+
+    actions = {
+        "get": get_action, "check": check_action, "report": report_action, "new": new_action,
+        "add_found": found_action, "web": web_action,
+    }  # fmt: skip
+    return run_screen(kit, state, gateway, actions)
 
 
 def report_installed(
@@ -2810,13 +4064,22 @@ def report_installed(
     retired = kit.answer.get("retired")
     names: list[str] = []
     changed = False
+    kit.drop_to = target
     if isinstance(retired, list):
         names = [n for n in retired if isinstance(n, str)][:MAX_PENDING]
         run(lambda: save_retired(home, names, now(), folder if system else None))
         changed = bool(kit.remediate(state, names))
+    revoke = kit.answer.get("revoke")
+    if isinstance(revoke, list):
+        gone = [n for n in revoke if isinstance(n, str) and SERVER_NAME.match(n)][:MAX_PENDING]
+        names = [*names, *gone]
+        changed = bool(kit.remediate(state, gone)) or changed
+        changed = bool(kit.drop_contracts(state, gone)) or changed
     desired = kit.answer.get("desired")
     if isinstance(desired, list):
         changed = bool(kit.refresh(state, desired, names)) or changed
+        changed = kit.apply_permits(state, desired, set(names)) or changed
+        changed = bool(kit.promote_packs()) or changed
     if changed:
         kit.report(state, "installed")  # 지우거나 더한 것을 곧바로 알린다.
         if system and state.get("sync_task"):
@@ -2877,11 +4140,15 @@ def codex_version(home: Path) -> str | None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] in CLI_COMMANDS:
+        return cli_main(argv)
     parser = argparse.ArgumentParser(description="MINT endpoint kit")
     parser.add_argument(
         "action", nargs="?", default="install",
         choices=["install", "uninstall", "status", "check", "sync", "report"],
     )
+    parser.add_argument("--json", action="store_true")
     parser.add_argument("--if-due", action="store_true")
     parser.add_argument("--jitter", type=int, default=0)
     parser.add_argument("--user-level", action="store_true")
@@ -2944,7 +4211,10 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         result, problems = kit.check(state)
         result.pop("files", None)
-        print(json.dumps(result, indent=1, ensure_ascii=False))
+        if args.json:
+            print(json.dumps(result, indent=1, ensure_ascii=False))
+        else:
+            print(NL.join(check_lines(result, problems)))
         return 1 if problems else 0
     if args.action == "install":
         state = kit.install()
