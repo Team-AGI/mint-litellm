@@ -158,12 +158,34 @@ services:
       MINT_OPA_URL: http://opa:8181
     volumes:
       - export:/var/lib/mint/export
+      - packs:/var/lib/mint/packs
+      - inspect:/var/lib/mint/inspect
     depends_on:
       postgres:
         condition: service_healthy
       opa:
         condition: service_started
     stop_grace_period: 30s
+    restart: unless-stopped
+
+  inspector:
+    image: python:3.12-slim
+    profiles: ["worker"]
+    command: ["python", "/opt/mint/inspect.py"]
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 512m
+    cpus: 1
+    pids_limit: 128
+    volumes:
+      - ./inspector/inspect.py:/opt/mint/inspect.py:ro
+      - packs:/packs:ro
+      - inspect:/inspect
+    depends_on:
+      worker:
+        condition: service_started
     restart: unless-stopped
 
   # 관리자 콘솔. ./mint.sh up·upgrade가 함께 띄운다.
@@ -212,3 +234,5 @@ volumes:
   bundles:
   buffer:
   export:
+  packs:
+  inspect:
