@@ -644,6 +644,12 @@ def test_decided_failed_check_does_not_show_passed_progress(world):
     assert "검사 실패" in html and "제공자 허용" in html and "다시 신청" in html
 
 
+def test_a_held_unlisted_provider_asks_for_a_recheck_not_a_new_request(world):
+    intake = add_intake(world, url_blocked=True, status="indeterminate")
+    html = world.session_client("admin").get(f"/intakes/{intake}").text
+    assert "제공자 허용" in html and "재검사하세요" in html and "다시 신청" not in html
+
+
 def test_missing_registry_address_returns_to_first_step_with_saved_values(world, monkeypatch):
     from mint_litellm.control.errors import ControlError
 
