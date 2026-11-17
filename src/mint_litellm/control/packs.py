@@ -1,10 +1,12 @@
 """PyPI wheel을 검증하고 내용 주소로 저장한다."""
 
 import configparser
+import errno
 import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -208,8 +210,16 @@ def build_pack(
         ).encode()
         digest = hashlib.sha256(raw).hexdigest()
         (stage / "manifest.json").write_bytes(raw)
+        target = root / digest
+        if (target / "manifest.json").is_file():
+            # 같은 내용의 묶음이 이미 있다(재검사). Linux는 비어 있지 않은 폴더로의 이름 바꾸기를
+            # FileExistsError가 아닌 OSError(ENOTEMPTY)로 거절하므로 먼저 확인한다.
+            shutil.rmtree(stage, ignore_errors=True)
+            return digest, manifest
         try:
-            stage.rename(root / digest)
-        except FileExistsError:
-            pass
+            stage.rename(target)
+        except OSError as exc:
+            if exc.errno not in (errno.EEXIST, errno.ENOTEMPTY):
+                raise
+            shutil.rmtree(stage, ignore_errors=True)  # 동시에 만든 쪽이 먼저 옮겼다
         return digest, manifest
