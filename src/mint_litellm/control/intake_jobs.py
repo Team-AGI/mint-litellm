@@ -6,6 +6,7 @@ LiteLLM 읽기·쓰기는 모두 제어 평면 클라이언트(``JobContext.lite
 """
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -270,6 +271,11 @@ def _run_checks(
             continue
         if name == "url_guard":
             out = _url_guard(job, contract, allowlists)
+            if mode == "staff" and out.result == "fail" and out.reason == "PROVIDER_NOT_ALLOWED":
+                # 직원은 제공자 허용 목록을 알 수 없다. 자동 거절하지 않고 관리자 판단으로 넘기되,
+                # 허용되지 않은 곳에 접속하지 않도록 검사는 여기서 멈춘다.
+                out = replace(out, result="indeterminate")
+                halt = True
         elif name == "oauth_issuer_allowlist":
             auth = contract and contract["auth_type"]
             out = checks.oauth_issuer_allowlist(

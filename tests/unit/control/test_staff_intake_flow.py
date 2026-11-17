@@ -64,3 +64,15 @@ def test_a_conflicting_registry_is_not_overwritten_or_used_for_probing(world):
     assert world.stub.servers["staff-docs"]["mcp_info"]["mint_intake_id"] == "someone-else"
     assert not any(path in ("/v1/mcp/server", "/mcp-rest/test/connection",
                             "/mcp-rest/test/tools/list") for _, path, _ in world.stub.requests)
+
+
+def test_an_unlisted_provider_waits_for_an_administrator_without_probing(world):
+    # 직원은 제공자 허용 목록을 모르므로 자동 거절 대신 관리자 판단으로 넘기고, 접속은 하지 않는다.
+    world.conn.execute("UPDATE mint.allowlists SET status = 'lifted' WHERE kind = 'provider'")
+    identifier = submit(world)
+    world.drain()
+    row = world.intake(identifier)
+    assert row["status"] == "indeterminate" and row["decision"] is None
+    assert "staff-docs" not in world.stub.servers
+    assert not any(path in ("/v1/mcp/server", "/mcp-rest/test/connection",
+                            "/mcp-rest/test/tools/list") for _, path, _ in world.stub.requests)
