@@ -149,15 +149,17 @@ def hosts_launch(tmp_path, monkeypatch, why):
 
     monkeypatch.setattr(agent, "plan_sandbox", lambda *a, **k: (None, "appcontainer"))
     monkeypatch.setattr(agent.AppContainerRun, "prepare", lambda *a: Box())
-    with pytest.raises(SystemExit):
+    closed = []
+    Box.close = lambda self: closed.append(1)
+    with pytest.raises(agent.Refuse if why else SystemExit):
         agent.run_server("s", str(contracts), {}, state_dir=str(tmp_path / "st"),
                          sandbox=agent.Sandbox(True))  # fmt: skip
     (record,) = (tmp_path / "st" / "launched").iterdir()
-    assert asked == [("s", ["a.example"])]
+    assert asked == [("s", ["a.example"])] and bool(closed) is bool(why)
     return json.loads(record.read_text())
 
 
-def test_hosts_on_windows_without_a_firewall_rule_runs_unfiltered_and_says_so(
+def test_hosts_on_windows_without_a_firewall_rule_refuses_to_start_and_says_so(
     tmp_path, monkeypatch, capsys
 ):
     record = hosts_launch(tmp_path, monkeypatch, "no helper")

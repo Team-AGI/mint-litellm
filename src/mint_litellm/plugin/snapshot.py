@@ -20,7 +20,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from mint_litellm.endpoint.refresh import desired_servers, merge_local_mcp
+from mint_litellm.endpoint.refresh import merge_local_mcp, revoke_names, scoped_desired
 from mint_litellm.endpoint.remediation import remediation_events, retired_names
 from mint_litellm.plugin.buffer import ConsumeRequest, ConsumptionLost
 from mint_litellm.types.canonical import sha256
@@ -1256,23 +1256,61 @@ class PluginDatabase:
             await self.insert_event(event)
         return str(status)
 
-    async def desired_servers(self, instance_id: str) -> list[dict[str, Any]]:
-        """설치 보고 응답에 실을 승인된 로컬 서버 목록(이름·계약·판본)."""
+    async def endpoint_scope(self, instance_id: str, key_token: str) -> list[dict[str, Any]]:
+        """이 설치 키의 범위에 닿는 묶음 서버(DB 함수가 키·범위를 판정한다)."""
 
         async def read(conn: Any) -> Any:
             cursor = await conn.execute(
-                "SELECT DISTINCT ON (s.server_id) s.server_id, e.payload -> 'exec_contract'"
-                " FROM mint.servers s JOIN mint.events e ON e.instance_id = s.instance_id"
-                " AND e.kind = 'server_registered' AND e.payload ->> 'server_id' = s.server_id"
-                " AND e.payload ->> 'exec_contract_sha256' = s.exec_contract_sha256"
-                " WHERE s.instance_id = %s AND s.identity_kind = 'stdio'"
-                " AND s.status = 'approved' ORDER BY s.server_id, e.inserted_at DESC",
-                (instance_id,),
+                "SELECT server_id, pack_sha256, pack_manifest, exec_contract, permit_until"
+                " FROM mint.endpoint_scope(%s, %s)",
+                (instance_id, key_token),
             )
             return await cursor.fetchall()
 
-        rows = await self._run(read)
-        return desired_servers({name: doc for name, doc in rows if isinstance(doc, dict)})
+        keys = ("server_id", "pack_sha256", "pack_manifest", "exec_contract", "permit_until")
+        return [dict(zip(keys, row, strict=True)) for row in await self._run(read)]
+
+    async def endpoint_my_intakes(self, instance_id: str, key_token: str) -> list[dict[str, Any]]:
+        """이 설치 키로 낸 신청 최근 20건."""
+
+        async def read(conn: Any) -> Any:
+            cursor = await conn.execute(
+                "SELECT id, server_id, status, decision, reason, created_at"
+                " FROM mint.endpoint_my_intakes(%s, %s) ORDER BY created_at DESC LIMIT 20",
+                (instance_id, key_token),
+            )
+            return await cursor.fetchall()
+
+        keys = ("id", "server_id", "status", "decision", "reason", "created_at")
+        return [dict(zip(keys, row, strict=True)) for row in await self._run(read)]
+
+    async def endpoint_submit_intake(
+        self, key_token: str, request_id: UUID, payload: Mapping[str, Any]
+    ) -> UUID:
+        """단말 신청 접수. 충돌·한도·형식은 DB 함수가 예외로 알린다."""
+        from psycopg.types.json import Jsonb
+
+        async def write(conn: Any) -> Any:
+            async with conn.transaction():
+                cursor = await conn.execute(
+                    "SELECT mint.endpoint_submit_intake(%s, %s, %s)",
+                    (key_token, request_id, Jsonb(dict(payload))),
+                )
+                return (await cursor.fetchone())[0]
+
+        return await self._run(write)  # type: ignore[no-any-return]
+
+    async def desired_servers(self, instance_id: str, key_token: str) -> list[dict[str, Any]]:
+        """설치 보고 응답에 실을 승인된 로컬 서버 목록(이름·계약·판본). 이 키의 범위에 닿는 것만."""
+        return scoped_desired(await self.endpoint_scope(instance_id, key_token))
+
+    async def revoke_servers(
+        self, instance_id: str, reported: Sequence[str], desired: Sequence[str]
+    ) -> list[str]:
+        """단말이 보고한 승인 서버 중 이 키의 범위에 없는 이름."""
+        rows = await self.registered_servers(instance_id)
+        return revoke_names({r.server_id: r.status for r in rows if r.identity_kind == "stdio"},
+                            reported, desired)
 
     async def retired_servers(self, instance_id: str, reported: Sequence[str]) -> list[str]:
         """설치 보고 응답에 실을 폐기·미승인 로컬 서버 이름."""

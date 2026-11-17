@@ -32,7 +32,7 @@
 {% if tab == 'info' %}
 <dl class="detail">
   <dt>대상 서버</dt><dd><a href="/servers/{{ i.server_id | urlencode }}">{{ i.server_id }}</a></dd>
-  <dt>출처</dt><dd>{{ L.pick(L.SOURCE, i.source) }}</dd>
+  <dt>출처</dt><dd>{{ m.source_badge(i.source) }}</dd>
   <dt>신청자</dt><dd>{{ i.requested_by | who }}</dd>
   <dt>담당 사용자</dt><dd>{{ i.owner_user_id | blank }}</dd>
   <dt>목적</dt><dd>{{ i.purpose | blank }}</dd>
@@ -46,6 +46,7 @@
   {% if i.decision %}<dt>결정</dt><dd>{{ m.badge(L.DECISION, i.decision) }} · {{ i.decided_by | who }} · {{ i.decided_at | when }}</dd>
   <dt>결정 사유</dt><dd>{{ i.decision_reason | blank }}</dd>{% endif %}
 </dl>
+{% elif tab == 'pack' %}{% include "_intake_pack.html" %}
 {% elif tab == 'evidence' %}
 {% set evidence_action = '/intakes/' ~ i.id ~ '/evidence' %}{% include "_evidence.html" %}
 {% else %}
@@ -94,6 +95,12 @@
     <label>대상 식별자<input name="scope_id" value="{{ decision_form.scope_id if decision_form.scope_id is defined else (i.owner_user_id or '') }}"></label>
     <label>유효 기간(일)<input type="number" name="valid_days" value="{{ decision_form.valid_days if decision_form.valid_days is not none and decision_form.valid_days is defined else (strict_days if i.status == 'indeterminate' else days) }}" min="1" max="{{ max_exception_days if i.status == 'indeterminate' else 365 }}"></label>
   </div>
+  {% if pack and pack.ready %}
+  <fieldset><legend>실행 권한 좁히기</legend>
+    <label>네트워크<select name="narrow_network">{% for value, text in pack.network_choices %}<option value="{{ value }}">{{ text }}</option>{% endfor %}</select></label>
+    {% if pack.access %}<input type="hidden" name="narrow_files" value="1">{% for a in pack.access %}<label><input type="checkbox" name="narrow_file_access" value="{{ a.path }}" checked>{{ a.path }} · {{ '읽기·쓰기' if a.mode == 'rw' else '읽기' }}</label>{% endfor %}{% endif %}
+  </fieldset>
+  {% endif %}
   <label>{{ '사유(필수)' if i.status == 'indeterminate' else '사유' }}<textarea name="reason"{% if i.status == 'indeterminate' %} required{% endif %}>{{ decision_form.reason or "" }}</textarea></label>
   {% if i.status == 'indeterminate' %}<label>두 번째 승인자 토큰<input type="password" name="second_approver_token" autocomplete="off"></label>{% endif %}
   <input type="hidden" name="decision" value="{{ 'except' if i.status == 'indeterminate' else 'approve' }}">

@@ -4,9 +4,9 @@
 <h1>MCP 서버 도입 신청</h1>
 <div class="actions"><a class="button primary" href="/staff/intakes/new">신청 등록</a></div>
 {% if rows %}
-<table><thead><tr><th>서버</th><th>목적</th><th>진행</th><th>결정</th><th>접수 시각</th></tr></thead><tbody>
+<table><thead><tr><th>서버</th><th>출처</th><th>목적</th><th>진행</th><th>결정</th><th>접수 시각</th></tr></thead><tbody>
 {% for r in rows %}<tr>
-<td><a href="/staff/intakes/{{ r.id }}">{{ r.server_id }}</a></td><td>{{ r.purpose }}</td>
+<td><a href="/staff/intakes/{{ r.id }}">{{ r.server_id }}</a></td><td>{{ m.source_badge(r.source) }}</td><td>{{ r.purpose }}</td>
 <td>{{ m.badge(L.INTAKE, r.status) }}</td><td>{{ L.pick(L.DECISION, r.decision) if r.decision else '—' }}</td><td>{{ r.created_at | when }}</td>
 </tr>{% endfor %}
 </tbody></table>

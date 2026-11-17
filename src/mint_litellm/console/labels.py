@@ -218,7 +218,8 @@ CHECK = {
     "termination_readiness": "종료 준비",
     "supply_chain": "공급망",
 }
-SOURCE = {"submission": "제출", "operator": "운영자 등록", "staff": "직원 신청"}
+SOURCE = {"submission": "제출", "operator": "운영자 등록", "staff": "직원 신청",
+          "endpoint": "단말 신청"}
 DATA_GRADE = {"public": "공개", "internal": "내부", "confidential": "기밀", "restricted": "제한"}
 RISK = {"low": "낮음", "medium": "보통", "high": "높음", "critical": "심각"}
 ACTION = {

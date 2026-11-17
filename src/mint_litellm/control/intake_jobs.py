@@ -10,7 +10,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from mint_litellm.control import alerts
+from mint_litellm.control import alerts, inspection, packs
 from mint_litellm.control import intake_checks as checks
 from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import fetchall, fetchone
@@ -18,10 +18,12 @@ from mint_litellm.control.errors import ControlError
 from mint_litellm.control.jobs import JobContext
 from mint_litellm.control.litellm_admin import LiteLLMError
 from mint_litellm.control.services import evidence, intakes
-from mint_litellm.control.services.base import enqueue_job
+from mint_litellm.control.services.base import enqueue_job, transact
 from mint_litellm.types.jobs import intake_run_job_key
 
 POLL_LIMIT = 500
+PACK_PYTHON = "3.12"
+DEFAULT_LOCAL_PYTHON = "/usr/bin/python3"
 EXPIRY_WARNING = timedelta(days=7)
 
 
@@ -328,6 +330,82 @@ def _run_checks(
     return needs_credentials
 
 
+def _record_pack(job: JobContext, ctx: Context, contract: dict, spec: dict,
+                 digest: str, manifest: dict) -> None:
+    """같은 배포 계약 행에 묶음 해시·manifest·실행 계약(판 2)을 적는다. 다시 써도 같다."""
+    python = getattr(job.settings, "local_python", None) or DEFAULT_LOCAL_PYTHON
+    with transact(ctx):
+        ctx.conn.execute(
+            "UPDATE mint.deployment_contracts SET pack_sha256 = %s, pack_manifest = %s::jsonb,"
+            " exec_contract = %s::jsonb WHERE instance_id = %s AND id = %s",
+            (digest, json.dumps(manifest), json.dumps(
+                checks.local_exec_contract(spec, digest, manifest, python)),
+             job.instance_id, contract["id"]),
+        )
+
+
+def _run_local_checks(job: JobContext, ctx: Context, row: dict, attempt: int) -> None:
+    """단말 출처 신청의 검사. 이름·인자 수 위반만 거절이고 나머지 실패는 판별 불가이다."""
+    server_id = row["server_id"]
+    contract = intakes.deployment_candidate(job.conn, job.instance_id, server_id)
+    spec = contract and contract.get("pack_spec")
+    data = job.policy_data.get(job.conn, job.instance_id) if job.policy_data else None
+    allowlists = _allowlists(job, row["org_id"])
+    pack: tuple[str, dict] | None = None
+    defs: list[dict] | None = None
+    pending: list[tuple[str, Any]] = []
+
+    def flush() -> None:
+        bound = intakes.contract_binding(job.conn, job.instance_id, server_id)
+        for pending_name, pending_out in pending:
+            intakes.record_check(ctx, row, attempt, pending_name, pending_out, bound)
+        pending.clear()
+
+    for name in checks.LOCAL_CHECKS:
+        job.checkpoint()
+        done = intakes.existing_check(job.conn, job.instance_id, row["id"], name, attempt)
+        if done is not None:  # 재시도: 이 시도에서 이미 기록한 검사는 건너뛴다
+            if name == "pack_build" and done["result"] == "pass" and contract:
+                pack = (contract["pack_sha256"], contract["pack_manifest"])
+            if name == "inspection" and done["result"] == "pass":
+                defs = _stored_definitions(job, server_id)
+            if done["result"] == "fail":
+                return
+            continue
+        if name == "exec_shape":
+            out = checks.exec_shape(spec)
+        elif name == "pack_build":
+            try:
+                pack = packs.build_pack(spec, allowlists, python=PACK_PYTHON)
+                _record_pack(job, ctx, contract, spec, *pack)
+                out = checks.pack_build_outcome(*pack)
+            except packs.PackError as error:
+                out = checks.pack_build_failed(error.code)
+        elif name == "inspection":
+            if pack is None:
+                out = checks.Outcome("indeterminate", "PACK_UNAVAILABLE", "inspector:tools_list")
+            else:
+                out = checks.inspection_outcome(
+                    inspection.inspect_pack(pack[0], pack[1]["entry"], spec.get("argv", [])))
+                defs = out.extra.get("definitions")
+                if defs is not None:
+                    intakes.store_candidates(ctx, server_id, defs)
+        elif name == "description_scan":
+            out = checks.description_scan(defs, data)
+        elif name == "risk_grade":
+            out = checks.risk_grade(defs, row["data_grade"], data)
+            if out.extra.get("graded"):
+                intakes.store_grades(ctx, server_id, out.extra["graded"])
+        else:
+            out = checks.termination_readiness(row["readiness"])
+        pending.append((name, out))
+        if name == "inspection" or out.result == "fail":
+            flush()  # 후보 계약이 정해진 뒤에야 증거를 계약에 결속할 수 있다
+        if out.result == "fail":
+            return
+    flush()
+
+
 def _reject_at_litellm(job: JobContext, row: dict) -> None:
     """결정된 거절을 LiteLLM 제출에 한 번 전달한다(이미 거절됐으면 그대로 끝)."""
     if row["source"] != "submission" or row["decision"] != "rejected":
@@ -390,7 +468,11 @@ def intake_run(job: JobContext) -> None:
     started = intakes.begin_checking(ctx, target)
     if started is None:
         return  # 필수 입력이 없으면 검사로 가지 않는다
-    needs = _run_checks(job, ctx, started, attempt, mode, persist=True)
+    if started["source"] == "endpoint":
+        _run_local_checks(job, ctx, started, attempt)
+        needs = False
+    else:
+        needs = _run_checks(job, ctx, started, attempt, mode, persist=True)
     verdict = intakes.conclude(ctx, target, needs_registry_credentials=needs)
     if verdict == "failed":
         _reject_at_litellm(job, intakes.get(ctx, target))

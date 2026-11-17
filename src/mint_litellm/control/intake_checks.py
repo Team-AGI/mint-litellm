@@ -20,6 +20,8 @@ import httpx
 from mint_litellm.control.db.connection import fetchone
 from mint_litellm.control.litellm_admin import LiteLLMError
 from mint_litellm.control.litellm_control import ResponseTooLarge, ResponseTooSlow
+from mint_litellm.control.packs import PackError
+from mint_litellm.types.exec_contract import ExecContract, FileAccess, PackRef
 
 CHECKS = (
     "url_guard",
@@ -30,6 +32,16 @@ CHECKS = (
     "risk_grade",
     "termination_readiness",
     "supply_chain",
+)
+
+# 단말 출처(endpoint) 신청이 도는 검사. 묶음을 서버에서 만들고 검사 컨테이너가 도구를 받는다.
+LOCAL_CHECKS = (
+    "exec_shape",
+    "pack_build",
+    "inspection",
+    "description_scan",
+    "risk_grade",
+    "termination_readiness",
 )
 
 # 증거 유효 기간(일): 연결·정의 30, 공급망 90, 기타 365
@@ -525,3 +537,89 @@ def supply_chain(image_digest: str | None, source_commit: str | None) -> Outcome
         return _done("supply_chain", Outcome("pass", None, method, {"applicable": False}))
     return _done("supply_chain", Outcome("indeterminate", "EVIDENCE_NOT_ATTACHED", method,
                                          {"applicable": True}))
+
+
+# --- 단말 신청(local) 전용 -----------------------------------------------------------------
+
+_PACK_NAME = re.compile(r"^[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*$")
+_PACK_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.!+_-]*$")
+_COMMAND = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+MAX_ARGV = 32
+MAX_ARG_CHARS = 1024
+
+
+def exec_shape(spec: Any) -> Outcome:
+    """신청 명세의 이름 형식과 인자 수만 본다. 어긋나면 fail(그 밖의 검사는 판별 불가로 둔다)."""
+    method = "shape:pack_spec"
+    if not isinstance(spec, dict):
+        return Outcome("fail", "SPEC_INVALID", method)
+    name, version, command = spec.get("name"), spec.get("version"), spec.get("command")
+    argv, extras = spec.get("argv", []), spec.get("extras", [])
+    inputs = {"argv": len(argv) if isinstance(argv, list) else None}
+    if not (isinstance(name, str) and len(name) <= 128 and _PACK_NAME.fullmatch(name)):
+        return Outcome("fail", "NAME_INVALID", method, inputs)
+    if not (isinstance(version, str) and len(version) <= 64 and _PACK_VERSION.fullmatch(version)):
+        return Outcome("fail", "VERSION_INVALID", method, inputs)
+    if not (isinstance(command, str) and len(command) <= 64 and _COMMAND.fullmatch(command)):
+        return Outcome("fail", "COMMAND_INVALID", method, inputs)
+    if not (isinstance(extras, list) and len(extras) <= 16 and all(
+            isinstance(x, str) and len(x) <= 64 and _PACK_NAME.fullmatch(x) for x in extras)):
+        return Outcome("fail", "NAME_INVALID", method, inputs)
+    if not isinstance(argv, list) or len(argv) > MAX_ARGV:
+        return Outcome("fail", "ARGV_TOO_MANY", method, inputs)
+    if any(not isinstance(a, str) or len(a) > MAX_ARG_CHARS or "\0" in a for a in argv):
+        return Outcome("fail", "ARGV_INVALID", method, inputs)
+    return Outcome("pass", None, method, inputs)
+
+
+def pack_build_outcome(digest: str, manifest: dict) -> Outcome:
+    files = manifest.get("files", [])
+    inputs = {"pack_sha256": digest, "files": len(files),
+              "bytes": sum(f.get("size", 0) for f in files)}
+    return Outcome("pass", None, "pack:pip_download", inputs, "pack:" + digest, digest)
+
+
+def pack_build_failed(code: str) -> Outcome:
+    """묶음을 못 만든 것은 거절 사유가 아니다. 관리자 판단으로 넘긴다."""
+    return Outcome("indeterminate", code, "pack:pip_download")
+
+
+def inspection_outcome(result: dict) -> Outcome:
+    """검사 컨테이너 결과. 도구 목록을 끝까지 받은 경우만 통과이다."""
+    method = "inspector:tools_list"
+    tools = result.get("tools")
+    if result.get("status") != "ok" or result.get("complete") is not True or not isinstance(
+            tools, list):
+        reason = result.get("reason")
+        return Outcome("indeterminate", reason if isinstance(reason, str) and reason
+                       else "INSPECTION_INCOMPLETE", method)
+    if depth(tools) > MAX_DEPTH:
+        return Outcome("indeterminate", "LIMIT_EXCEEDED", method, {"tools": len(tools)})
+    defs = [tool_definition(t) for t in tools if isinstance(t, dict) and t.get("name")]
+    names = [d["name"] for d in defs]
+    if len(defs) != len(tools) or len(set(names)) != len(names):
+        return Outcome("indeterminate", "COLLECTION_FAILED", method, {"tools": len(tools)})
+    digest = sha256_hex(jcs(sorted(sha256_hex(jcs(d)) for d in defs)))
+    return Outcome("pass", None, method, {"tools": len(defs), "bytes": len(jcs(tools))},
+                   "inspector:tools_list", digest, {"definitions": defs})
+
+
+def local_exec_contract(spec: dict, digest: str, manifest: dict, executable: str) -> dict:
+    """묶음으로 만든 실행 계약(판 2)의 저장 형식. 승인 때 읽는 형식과 같다(`document()`).
+
+    실행 파일은 조직 런타임이고 해시 대신 묶음을 가리킨다. 형식이 어긋나면 묶음 오류로 본다.
+    """
+    try:
+        return ExecContract(
+            schema_version=2,
+            executable=executable,
+            pack=PackRef(sha256=digest, runtime="python3",
+                         python=manifest["platform"]["python"], entry=manifest["entry"]),
+            argv=tuple(spec.get("argv", [])),
+            file_access=tuple(FileAccess(path=f["path"], mode=f.get("mode", "ro"))
+                              for f in spec.get("file_access") or []),
+            network=spec.get("network"),
+            allowed_hosts=tuple(spec.get("allowed_hosts") or []),
+        ).document()
+    except (ValueError, KeyError, TypeError):
+        raise PackError("EXEC_CONTRACT_INVALID") from None

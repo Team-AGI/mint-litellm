@@ -60,6 +60,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime, timezone
 from typing import Any, NamedTuple
 
 DECIDE_PATH = "/mint/v1/decide"
@@ -835,6 +836,138 @@ def verify_launch(approved: Mapping[str, Any], fd: int) -> None:
         raise Refuse("server script differs from the approved contract")
 
 
+# --- 실행 묶음(pack) 서버 -------------------------------------------------------------------
+# 묶음 서버는 MINT가 준 wheel을 단말이 풀어 둔 준비 폴더에서, 조직 런타임(계약의 executable)으로
+# 시작한다. 시작 때마다 런타임 경로·준비 폴더 내용 해시·시작 허가를 다시 확인한다.
+_DOTTED = r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*"
+PACK_ENTRY = re.compile(rf"^({_DOTTED}):([A-Za-z_][A-Za-z0-9_]*)$")
+PACKS_DIR = os.path.join(KIT_DIR, "packs")
+PACK_PLATFORM = os.name != "nt"  # 묶음 서버는 Linux만(Windows는 다음 단계)
+PERMITS_FILE = "permits.json"
+READY_FILE = ".ready.json"
+SHA256_TEXT = re.compile(r"^[0-9a-f]{64}$")
+TIME_FRACTION = re.compile(r"\.(\d+)")
+
+
+def parse_time(text: Any) -> float | None:
+    """ISO 8601 시각(끝의 Z·소수 자리 길이 무관) -> 초. 읽지 못하면 None."""
+    if not isinstance(text, str):
+        return None
+    fixed = TIME_FRACTION.sub(lambda m: "." + (m.group(1) + "000000")[:6], text.strip())
+    try:
+        moment = datetime.fromisoformat(fixed.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)).timestamp()  # noqa: UP017
+
+
+def content_digest(files: Mapping[str, str]) -> str:
+    text = json.dumps(dict(files), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _trusted(info: os.stat_result) -> bool:
+    return info.st_uid == 0 and not info.st_mode & 0o022
+
+
+def check_runtime(executable: str, python: str, managed: bool) -> str:
+    """조직 런타임: 관리형이면 경로 전체가 root 소유·그룹/기타 쓰기 불가이고 판본이 같아야 한다."""
+    real = os.path.realpath(executable)
+    if managed and os.name == "posix":
+        path = real
+        while True:
+            if not _trusted(os.stat(path)):
+                raise Refuse(f"runtime path is not root-owned and closed to writes: {path}")
+            parent = os.path.dirname(path)
+            if parent == path:
+                break
+            path = parent
+    probe = "import sys;print('%d.%d' % sys.version_info[:2])"
+    try:
+        done = subprocess.run(
+            [real, "-I", "-c", probe], capture_output=True, text=True, timeout=10,
+            env={k: v for k, v in os.environ.items() if k == "SystemRoot"},
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise Refuse(f"runtime cannot be started ({type(exc).__name__})") from exc
+    if done.stdout.strip() != python:
+        raise Refuse(f"runtime version {done.stdout.strip() or '?'} is not the approved {python}")
+    return real
+
+
+def ready_state(folder: str, managed: bool) -> dict[str, str]:
+    """준비 폴더의 파일 해시 목록. 링크·특수 파일은 거절, 관리형이면 소유·쓰기 권한도 본다."""
+    found: dict[str, str] = {}
+    for base, dirs, names in os.walk(folder, followlinks=False):
+        for name in [*dirs, *names]:
+            path = os.path.join(base, name)
+            info = os.lstat(path)
+            if managed and os.name == "posix" and not _trusted(info):
+                raise Refuse(f"ready folder entry is not root-owned and closed to writes: {name}")
+            if os.path.islink(path) or not (os.path.isdir(path) or os.path.isfile(path)):
+                raise Refuse(f"ready folder holds a link or special file: {name}")
+            if name in names:
+                rel = os.path.relpath(path, folder).replace(os.sep, "/")
+                if rel != READY_FILE:
+                    found[rel] = sha256_file(path)
+    return found
+
+
+def verify_pack(
+    server: str,
+    approved: Mapping[str, Any],
+    *,
+    packs_dir: str,
+    permits_path: str,
+    managed: bool,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """묶음 계약을 시작 직전에 검증해 실제로 띄울 계약(argv·준비 폴더 반영)을 돌려준다."""
+    pack = approved["pack"]
+    if not isinstance(pack, Mapping) or not PACK_PLATFORM:
+        raise Refuse("pack servers are not supported on this platform")
+    digest, entry, python = pack.get("sha256"), pack.get("entry"), pack.get("python")
+    match = PACK_ENTRY.match(entry) if isinstance(entry, str) else None
+    if not (isinstance(digest, str) and SHA256_TEXT.match(digest) and match and python):
+        raise Refuse("pack contract is malformed")
+    runtime = check_runtime(approved["executable"], str(python), managed)
+    folder = os.path.join(packs_dir, digest[:16])
+    try:
+        with open(os.path.join(folder, READY_FILE), encoding="utf-8") as handle:
+            ready = json.load(handle)
+        seen = ready_state(folder, managed)
+    except (OSError, ValueError) as exc:
+        raise Refuse("pack is not prepared on this machine; run `mint get`") from exc
+    if (
+        not isinstance(ready, dict) or ready.get("pack_sha256") != digest
+        or ready.get("files") != seen or ready.get("content_sha256") != content_digest(seen)
+    ):
+        raise Refuse("prepared pack differs from the approved pack")
+    try:
+        with open(permits_path, encoding="utf-8") as handle:
+            permit = (json.load(handle).get("permits") or {}).get(server) or {}
+    except (OSError, ValueError, AttributeError):
+        permit = {}
+    until = parse_time(permit.get("permit_until"))
+    if permit.get("pack_sha256") != digest or until is None or until <= (now or time.time()):
+        raise Refuse("start permit is missing or expired; wait for the next report")
+    module, function = match.groups()
+    if function == "__main__":
+        code = (
+            f"import sys; sys.path[:0] = [{folder!r}]; import runpy; "
+            f"runpy.run_module({module!r}, run_name='__main__', alter_sys=True)"
+        )
+    else:
+        code = (
+            f"import sys; sys.path[:0] = [{folder!r}]; from {module} import {function}; "
+            f"sys.exit({function}())"
+        )
+    return {
+        **approved, "executable": runtime,
+        "argv": ["-I", "-B", "-c", code, *(approved.get("argv") or [])], "_pack_dir": folder,
+    }
+
+
 # --- 서버 격리(Linux bubblewrap) ------------------------------------------------------------
 # 승인된 실행 계약에서 격리 명령을 만든다. 네트워크는 전부 허용(any)·전부 차단(none)·선언한
 # 호스트만(hosts) 중 하나이다. hosts는 격리 안에 네트워크를 두지 않고 실행기가 띄운 거름 중계로만
@@ -1214,6 +1347,8 @@ def sandbox_mounts(approved: Mapping[str, Any], home: str) -> list[tuple[str, st
 
     for path in dict.fromkeys(link_chain(executable)):
         add(_runtime_dir(path, home), "ro")
+    if approved.get("_pack_dir"):
+        add(approved["_pack_dir"], "ro")
     script = script_path(approved)
     if script:
         folder = posixpath.dirname(script)
@@ -1285,7 +1420,7 @@ def bwrap_ready(bwrap: str) -> bool:
 # 끝나면 ACE와 프로필을 지우고, 실행기가 죽어 남은 것은 다음 시작 때 정리한다. 서버는 작업 개체에
 # 들어가므로 실행기가 끝나면 함께 끝난다. 네트워크는 ``none``이면 기능이 없고, ``hosts``이면
 # ``internetClient``에 방화벽 규칙을 더해(아래 「호스트 허용 목록 집행」) 선언한 호스트로만 나가게
-# 하며(규칙을 못 걸면 거름 없음: 기록과 출력에 ``egress_unfiltered``), 그 밖에는
+# 하며(규칙을 못 걸면 시작하지 않고 기록과 출력에 ``egress_unfiltered``), 그 밖에는
 # ``internetClient``·``privateNetworkClientServer``를 준다. 한계: AppContainer의 루프백(localhost)
 # 차단은 기본값이고 이 실행기는 시스템 설정을 바꾸지 않으므로, 선언이 ``any``여도 같은 단말의 로컬
 # 수신기에는 닿지 못한다.
@@ -1307,7 +1442,7 @@ APPCONTAINER_MAPPINGS = (
     r"\CurrentVersion\AppContainer\Mappings"
 )
 EGRESS_UNFILTERED_LINE = (
-    "mint-egress unfiltered: 허용 호스트 목록을 집행하지 못해 인터넷 전체에 열려 있음"
+    "mint-egress unfiltered: 허용 호스트 목록을 집행하지 못해 시작하지 않음"
 )
 EGRESS_FILTERED_LINE = "mint-egress firewall: 선언한 호스트 밖 주소는 방화벽이 막음"
 ALREADY_EXISTS = 0x800700B7
@@ -1322,7 +1457,7 @@ def win_capabilities(contract: Mapping[str, Any]) -> list[str]:
     """계약의 네트워크 선언에서 AppContainer 기능 SID. ``none``이면 없다.
 
     ``hosts``는 AppContainer가 실행기의 루프백 중계에 닿지 못하므로 사설망 기능 없이
-    ``internetClient``만 주고, 선언한 호스트 밖은 방화벽 규칙이 막는다(못 걸면 거름 없음).
+    ``internetClient``만 주고, 선언한 호스트 밖은 방화벽 규칙이 막는다(못 걸면 시작하지 않음).
     """
     mode = network_mode(contract)
     if mode == "none":
@@ -2565,6 +2700,7 @@ def run_server(
     execve: Callable[..., Any] | None = None,
     state_dir: str | None = None,
     sandbox: Sandbox | None = None,
+    packs_dir: str | None = None,
 ) -> None:
     """승인된 서버만 시작한다. 검증을 통과하지 못하면 ``Refuse``이고 서버는 시작되지 않는다.
 
@@ -2575,12 +2711,20 @@ def run_server(
     if state_dir is not None and server in load_retired(state_dir):
         raise Refuse(f"server {server} was retired by MINT")
     approved = load_contract(contracts, server)
+    if approved.get("pack") is not None:
+        approved = verify_pack(
+            server, approved,
+            packs_dir=packs_dir or PACKS_DIR,
+            permits_path=os.path.join(os.path.dirname(os.path.abspath(contracts)), PERMITS_FILE),
+            managed=bool(sandbox and sandbox.managed),
+        )  # fmt: skip
     executable = approved["executable"]
     try:
         fd = os.open(executable, os.O_RDONLY | getattr(os, "O_BINARY", 0))
     except OSError as exc:
         raise Refuse(f"server executable cannot be opened ({type(exc).__name__})") from exc
-    verify_launch(approved, fd)
+    if approved.get("_pack_dir") is None:  # 묶음 서버의 런타임은 위에서 경로·판본으로 확인했다.
+        verify_launch(approved, fd)
     argv = [executable, *[str(item) for item in approved.get("argv") or []]]
     env = launch_env(approved, environ)
     if approved.get("cwd"):
@@ -2607,6 +2751,8 @@ def run_server(
                     f"AppContainer 격리를 만들지 못해 서버를 시작하지 않았습니다({exc}). "
                     "관리자에게 알려 주세요.",
                 )
+        if sandbox is not None and status == "none" and network_mode(approved) == "hosts":
+            raise Refuse("격리를 쓸 수 없어 허용 호스트 제한을 걸지 못해 시작하지 않았습니다.")
         extra = None
         if wrapped is not None and hosts:
             extra = {"egress_refused": 0}
@@ -2616,8 +2762,12 @@ def run_server(
                 extra = {"egress_filtered": True}
                 sys.stderr.write(EGRESS_FILTERED_LINE + "\n")
             else:
-                extra = {"egress_unfiltered": True}
+                # 승인한 호스트 제한을 걸지 못하면 인터넷 전체에 열어 두지 않고 시작하지 않는다.
+                if state_dir is not None:
+                    record_launch(state_dir, server, status, {"egress_unfiltered": True})
                 sys.stderr.write(f"{EGRESS_UNFILTERED_LINE} ({why})\n")
+                box.close()
+                raise Refuse(f"허용 호스트 제한을 걸지 못해 서버를 시작하지 않았습니다({why}).")
         record = record_launch(state_dir, server, status, extra) if state_dir is not None else None
         if box is not None:
             os.close(fd)

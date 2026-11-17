@@ -12,13 +12,16 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from collections.abc import Callable, Mapping
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -29,7 +32,15 @@ from pydantic import (
 )
 
 from mint_litellm.compat.litellm_1_106 import HookData
-from mint_litellm.endpoint.routes import DECIDE_PATH, OUTCOMES_PATH, REPORT_PATH, RESULT_PATH
+from mint_litellm.endpoint.routes import (
+    DECIDE_PATH,
+    INTAKES_PATH,
+    ME_PATH,
+    OUTCOMES_PATH,
+    PACKS_PATH,
+    REPORT_PATH,
+    RESULT_PATH,
+)
 from mint_litellm.plugin.pipeline import CallRequest, build_request, evaluate_request
 from mint_litellm.plugin.result import observe_response, observe_unknown_outcome
 from mint_litellm.types.decision import (
@@ -46,7 +57,7 @@ log = logging.getLogger("mint_litellm.endpoint")
 MAX_BODY_BYTES = 64 * 1024
 # 경로마다 정상 본문이 이보다 작다(결과 보고는 참조와 결과 종류, 설치 보고는 서버 이름 목록).
 BODY_LIMITS = {DECIDE_PATH: MAX_BODY_BYTES, RESULT_PATH: 4 * 1024, REPORT_PATH: 192 * 1024,
-    OUTCOMES_PATH: 1024}
+    OUTCOMES_PATH: 1024, INTAKES_PATH: 256 * 1024}
 NOT_READY_CODE = "MINT-ENDPOINT-NOT-READY"
 _REFERENCE = re.compile(r"^([0-9a-f-]{36}):([1-9][0-9]{0,8})$")
 
@@ -185,6 +196,63 @@ class ToolListItem(BaseModel):
     tools: list[ToolItem] = Field(max_length=100)
 
 
+_NAME = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+MAX_OBSERVED_TOOLS = 200
+
+
+class IntakeSpec(BaseModel):
+    """신청할 PyPI 패키지와 실행 명령. 인자 값에 비밀을 넣지 않는다."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    index: Literal["pypi"]
+    name: str = Field(pattern=_NAME)
+    version: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._+!-]{0,63}$")
+    extras: list[Annotated[str, Field(pattern=r"^[A-Za-z0-9._-]{1,64}$")]] = Field(
+        default_factory=list, max_length=16
+    )
+    command: str = Field(min_length=1, max_length=128)
+    argv: list[Annotated[str, Field(max_length=512)]] = Field(default_factory=list, max_length=64)
+
+
+class FileAccessItem(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    path: str = Field(min_length=1, max_length=1024)
+    mode: str = Field(min_length=1, max_length=16)
+
+
+class IntakeBody(BaseModel):
+    """단말 신청. 사용자·조직·키 필드는 받지 않는다(알 수 없는 필드는 거부)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    request_id: UUID
+    server_id: str = Field(pattern=_NAME)
+    spec: IntakeSpec
+    file_access: list[FileAccessItem] = Field(default_factory=list, max_length=64)
+    network: Literal["none", "hosts"] = "none"
+    allowed_hosts: list[Annotated[str, Field(min_length=1, max_length=253)]] = Field(
+        default_factory=list, max_length=64
+    )
+    env_names: list[Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")]] = Field(
+        default_factory=list, max_length=64
+    )
+    purpose: str = Field(min_length=1, max_length=2000)
+    data_grade: str = Field(min_length=1, max_length=64)
+    resources: list[Annotated[str, Field(min_length=1, max_length=256)]] = Field(
+        default_factory=list, max_length=32
+    )
+    # 단말이 본 도구 목록(참고용, 단말의 주장).
+    observed_tools: list[ToolItem] | None = Field(default=None, max_length=MAX_OBSERVED_TOOLS)
+
+    @model_validator(mode="after")
+    def _hosts_match_network(self) -> IntakeBody:
+        if (self.network == "hosts") != bool(self.allowed_hosts):
+            raise ValueError("allowed_hosts does not match network")
+        return self
+
+
 class ReportBody(BaseModel):
     """설치 묶음이 설치·제거를 마치고 보내는 상태 보고. 파일 경로나 키는 받지 않는다."""
 
@@ -195,7 +263,7 @@ class ReportBody(BaseModel):
     mode: Literal["managed", "user", "none"]
     claude_version: str | None = Field(default=None, max_length=64)
     mcp_servers: list[Annotated[str, Field(min_length=1, max_length=128)]] = Field(
-        default_factory=list, max_length=64
+        default_factory=list, max_length=256
     )
     # 이전 묶음은 보내지 않는다(None = 보고 없음). 단말의 주장이며 MINT가 관측한 값이 아니다.
     processes: list[ProcessItem] | None = Field(default=None, max_length=64)
@@ -427,7 +495,9 @@ def make_router(
         except Exception:
             retired = None  # 목록을 못 만들면 싣지 않는다(단말은 마지막 목록을 그대로 쓴다)
         try:
-            desired = await runtime.database.desired_servers(runtime.config.instance_id)
+            desired = await runtime.database.desired_servers(
+                runtime.config.instance_id, who.key_id
+            )
         except Exception:
             desired = None  # 마찬가지로 못 만들면 싣지 않는다(단말은 설정을 바꾸지 않는다)
         answer: dict[str, Any] = {"recorded": True, "renewed": outcome == "renewed"}
@@ -435,6 +505,15 @@ def make_router(
             answer["retired"] = retired
         if desired is not None:
             answer["desired"] = desired
+            try:
+                answer["revoke"] = await runtime.database.revoke_servers(
+                    runtime.config.instance_id,
+                    [*body.mcp_servers, *(i.server for i in body.processes or ()),
+                     *(i.server for i in body.autostart or () if i.server)],
+                    [d["name"] for d in desired],
+                )
+            except Exception:
+                log.exception("revoke list could not be built")
         return answer
 
     @router.post(OUTCOMES_PATH)
@@ -453,7 +532,121 @@ def make_router(
             raise HTTPException(status_code=503, detail="approval store is not ready") from exc
         return {"cursor": cursor, "items": items}
 
+    @router.get(ME_PATH)
+    async def me(auth: Any = Depends(auth_dependency)) -> dict[str, Any]:
+        """키가 닿는 묶음 서버와 최근 신청 20건."""
+        runtime = ready()
+        who = principal_factory(auth, instance_id=runtime.config.instance_id)
+        if who.key_id is None:
+            raise HTTPException(status_code=404, detail="no such kit key")
+        try:
+            scope = await runtime.database.endpoint_scope(runtime.config.instance_id, who.key_id)
+            rows = await runtime.database.endpoint_my_intakes(
+                runtime.config.instance_id, who.key_id
+            )
+        except Exception as exc:
+            log.exception("endpoint scope could not be read")
+            raise HTTPException(status_code=503, detail="endpoint store is not ready") from exc
+        return {
+            "user": who.principal_id if who.principal_type == "user" else None,
+            "servers": [
+                {"server_id": r["server_id"], "pack_sha256": r["pack_sha256"],
+                 "permit_until": _iso(r["permit_until"]), "status": "approved"}
+                for r in scope
+            ],
+            "intakes": [
+                {"id": str(r["id"]), "server_id": r["server_id"], "status": r["status"],
+                 "decision": r["decision"], "reason": r["reason"],
+                 "next": "none" if r["decision"] else "wait", "created_at": _iso(r["created_at"])}
+                for r in rows[:20]
+            ],
+        }
+
+    @router.post(INTAKES_PATH, status_code=201)
+    async def intakes(request: Request, auth: Any = Depends(auth_dependency)) -> dict[str, Any]:
+        runtime = ready()
+        body = await _body(request, IntakeBody)
+        who = principal_factory(auth, instance_id=runtime.config.instance_id)
+        if who.key_id is None:
+            raise HTTPException(status_code=404, detail="no such kit key")
+        payload = body.model_dump(mode="json", exclude={"request_id"}, exclude_none=True)
+        try:
+            made = await runtime.database.endpoint_submit_intake(
+                who.key_id, body.request_id, payload
+            )
+        except Exception as exc:
+            status = _intake_status(exc)
+            if status is None:
+                log.exception("endpoint intake could not be stored")
+                raise HTTPException(status_code=503, detail="intake store is not ready") from exc
+            raise HTTPException(status_code=status, detail=_intake_detail(exc)) from exc
+        return {"id": str(made)}
+
+    @router.get(PACKS_PATH)
+    async def pack_file(
+        server_id: str, pack_sha256: str, file: str, auth: Any = Depends(auth_dependency)
+    ) -> FileResponse:
+        """범위에 닿는 (서버, 묶음) 쌍의 manifest 또는 manifest에 적힌 파일만 보낸다."""
+        runtime = ready()
+        who = principal_factory(auth, instance_id=runtime.config.instance_id)
+        if who.key_id is None or not _SHA256.fullmatch(pack_sha256):
+            raise HTTPException(status_code=404, detail="no such pack")
+        try:
+            scope = await runtime.database.endpoint_scope(runtime.config.instance_id, who.key_id)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="endpoint store is not ready") from exc
+        row = next(
+            (r for r in scope if r["server_id"] == server_id and r["pack_sha256"] == pack_sha256),
+            None,
+        )
+        path = _pack_path(row, file)
+        if path is None:
+            raise HTTPException(status_code=404, detail="no such pack")
+        kind = "application/json" if file == "manifest.json" else "application/octet-stream"
+        return FileResponse(path, media_type=kind)
+
     return router
+
+
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+PACKS_ROOT_ENV = "MINT_PACKS_DIR"
+DEFAULT_PACKS_ROOT = "/var/lib/mint/packs"
+
+
+def _iso(value: Any) -> Any:
+    return value.isoformat() if hasattr(value, "isoformat") else value
+
+
+def _pack_path(row: Mapping[str, Any] | None, file: str) -> Path | None:
+    """묶음 파일의 실제 경로. 이름이 manifest에 없거나 볼륨 밖으로 나가면 ``None``."""
+    if row is None:
+        return None
+    files = (row.get("pack_manifest") or {}).get("files") or ()
+    names = {"manifest.json", *(f.get("name") for f in files if isinstance(f, Mapping))}
+    if file not in names or file != Path(file).name or file in ("", ".", ".."):
+        return None
+    base = Path(os.environ.get(PACKS_ROOT_ENV, DEFAULT_PACKS_ROOT)).resolve() / row["pack_sha256"]
+    path = (base / file).resolve()
+    return path if path.is_relative_to(base) and path.is_file() else None
+
+
+_INTAKE_SQLSTATE = {"23505": 409, "MT429": 429, "42501": 404, "23514": 400}
+
+
+def _intake_status(exc: Exception) -> int | None:
+    """DB 함수가 낸 예외의 종류. 충돌 409, 한도 429, 키 없음 404, 그 밖의 MINT 예외는 형식 400."""
+    text = str(exc)
+    if "MINT-" not in text:
+        return None
+    return _INTAKE_SQLSTATE.get(getattr(exc, "sqlstate", None) or "") or next(
+        (status for marker, status in (("MINT-CONFLICT", 409), ("MINT-QUOTA", 429),
+                                       ("MINT-KEY", 404)) if marker in text), 400)
+
+
+def _intake_detail(exc: Exception) -> str:
+    """예외 본문에서 MINT 코드가 든 줄만 돌려준다(SQL 문맥은 싣지 않는다)."""
+    line = next((ln for ln in str(exc).splitlines() if "MINT-" in ln), "invalid request")
+    return line.strip()[:200]
 
 
 def _dump(items: list[Any] | None) -> list[dict[str, Any]] | None:

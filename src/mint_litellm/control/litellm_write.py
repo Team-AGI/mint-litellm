@@ -131,6 +131,16 @@ def check_write(method: str, path: str, body: Any) -> None:
         ):
             raise WriteRefused(f"{path} 본문은 비어 있지 않은 {field}만 보낼 수 있습니다.")
         return
+    if (
+        path == "/key/update"
+        and isinstance(body, dict)
+        and set(body) == {"key", "allowed_routes"}
+    ):
+        # 설치 묶음 사용자 키의 경로 갱신: 훅 경로 목록 그대로만 쓴다
+        if (not isinstance(body["key"], str) or not body["key"]
+                or body["allowed_routes"] != list(KIT_KEY_ROUTES)):
+            raise WriteRefused("/key/update의 allowed_routes는 훅 경로만 보낼 수 있습니다.")
+        return
     id_field = _ID_FIELD.get(path)
     if id_field is None:
         if body is not None:
@@ -253,6 +263,12 @@ class LiteLLMSync(LiteLLMAdmin):
                     "mcp_tool_permissions": {k: list(v) for k, v in mcp_tool_permissions.items()},
                 },
             },
+        )
+
+    def update_key_routes(self, key: str) -> dict:
+        """설치 묶음 사용자 키의 ``allowed_routes``를 지금의 훅 경로 목록으로 바꾼다."""
+        return self._write(
+            "POST", "/key/update", {"key": key, "allowed_routes": list(KIT_KEY_ROUTES)}
         )
 
     def update_team_permission(

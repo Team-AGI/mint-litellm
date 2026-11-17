@@ -32,8 +32,8 @@ def migrated_database() -> Iterator[str]:
     try:
         with psycopg.connect(url, autocommit=True) as conn:
             for migration in sorted(MIGRATIONS.glob("*.sql")):
-                if migration.name.startswith(("004_", "054_", "056_", "057_")):
-                    continue  # 직원 함수와 관련 도입·철회 변경은 해당 시험이 직접 적용한다.
+                if migration.name.startswith(("004_", "054_", "056_", "057_", "058_")):
+                    continue  # 직원 함수와 관련 변경은 해당 시험이 직접 적용한다.
                 conn.execute(migration.read_text(encoding="utf-8"))
         yield url
     finally:

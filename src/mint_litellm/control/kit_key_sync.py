@@ -15,6 +15,7 @@ from mint_litellm.control.sync_state import (
     target_gone,
     target_ref,
 )
+from mint_litellm.endpoint.routes import KIT_KEY_ROUTES
 
 Permission = tuple[list[str], dict[str, list[str]]]
 
@@ -74,6 +75,24 @@ def sync_kit_keys(conn: psycopg.Connection, instance_id: str, client: LiteLLMSyn
         (instance_id,),
     )
     changed = 0
+    # 설치 묶음 사용자 키: 새로 생긴 단말 경로가 이미 발급된 키에도 열리게 한다.
+    for row in fetchall(
+        conn,
+        "SELECT key_token FROM mint.endpoint_installs WHERE instance_id = %s"
+        " AND revoked_at IS NULL",
+        (instance_id,),
+    ):
+        key = client.get_key(row["key_token"])
+        if (key is None or "allowed_routes" not in key
+                or sorted(key["allowed_routes"] or ()) == sorted(KIT_KEY_ROUTES)):
+            continue
+        try:
+            client.update_key_routes(row["key_token"])
+        except LiteLLMHttpError as error:
+            if error.status == 404:
+                continue
+            raise
+        changed += 1
     for row in rows:
         servers, tools = desired_permission(
             conn, instance_id, row["user_id"], row["team_id"], row["mcp_key_token"]

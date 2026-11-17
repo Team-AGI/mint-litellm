@@ -234,7 +234,7 @@ def test_the_migrations_apply_for_a_role_that_is_not_a_superuser():
         admin.execute(f"CREATE ROLE {migrator} LOGIN PASSWORD 'pw' CREATEROLE")
         # 클러스터에 이미 있는 그룹 역할은 클러스터 관리자가 실행자에게 관리 권한을 준다.
         for role in ("mint_ledger_writer", "mint_sealer", "mint_plugin", "mint_control",
-                     "mint_staff", "mint_worker", OWNER):
+                     "mint_staff", "mint_worker", OWNER, "mint_endpoint_owner"):
             if scalar(admin, "SELECT count(*) FROM pg_roles WHERE rolname = %s", role):
                 admin.execute(f"GRANT {role} TO {migrator} WITH ADMIN OPTION, SET TRUE,"
                               " INHERIT TRUE")

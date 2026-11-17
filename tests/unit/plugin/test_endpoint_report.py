@@ -88,7 +88,7 @@ def test_a_key_the_kit_did_not_issue_is_not_recorded(tmp_path, stored):
     report(action="removed", mode="managed"),
     report(mode="root"),
     report(key="sk-x"),
-    report(mcp_servers=["a"] * 65),
+    report(mcp_servers=["a"] * 257),
     report(processes=[{"server": "a", "count": 0}]),
     report(processes=[{"server": "a", "count": 1, "pid": 4}]),
     report(autostart=[{"kind": "registry", "name": "x"}]),
@@ -219,7 +219,7 @@ def test_a_local_mcp_entry_cannot_carry_credentials_or_arguments(tmp_path, store
 def test_the_answer_carries_the_approved_server_list(tmp_path, stored, monkeypatch):
     desired = [{"name": "srv-1", "version": "v", "contract": {"executable": "/usr/bin/x"}}]
 
-    async def desired_servers(self, instance_id):
+    async def desired_servers(self, instance_id, key_token):
         return desired
 
     monkeypatch.setattr(FakeDatabase, "desired_servers", desired_servers, raising=False)

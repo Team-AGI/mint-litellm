@@ -30,6 +30,34 @@ def desired_servers(contracts: Mapping[str, Mapping[str, Any]]) -> list[dict[str
     ]
 
 
+def scoped_desired(scope: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """범위 함수가 낸 서버(묶음 서버와 1판 로컬 서버 모두)를 응답에 실을 목록(이름 순)으로 만든다.
+
+    범위에 닿지 않는 서버는 승인되어 있어도 싣지 않는다.
+    """
+    rows = {row["server_id"]: row for row in scope}
+    checked = approved_contracts({n: r["exec_contract"] for n, r in rows.items()})
+    items = []
+    for name, contract in list(checked.items())[:MAX_DESIRED]:
+        item = {"name": name, "version": contract_version(contract), "contract": contract}
+        if rows[name]["pack_sha256"]:
+            until = rows[name]["permit_until"]
+            item["pack_sha256"] = rows[name]["pack_sha256"]
+            item["permit_until"] = until.isoformat() if hasattr(until, "isoformat") else until
+        items.append(item)
+    return items
+
+
+def revoke_names(
+    statuses: Mapping[str, str], reported: Iterable[str], desired: Iterable[str]
+) -> list[str]:
+    """단말이 보고한 MINT 서버(등록된 승인 상태) 중 범위에 없는 이름."""
+    keep = set(desired)
+    return sorted(
+        {n for n in reported if statuses.get(n) == "approved" and n not in keep}
+    )[:MAX_DESIRED]
+
+
 def merge_local_mcp(
     reported: Iterable[Mapping[str, Any]], previous: Iterable[Mapping[str, Any]] | None, now: str
 ) -> list[dict[str, Any]]:
