@@ -6,6 +6,7 @@ from urllib.parse import quote
 
 from mint_litellm.console import labels
 from mint_litellm.console.templating import local_time
+from mint_litellm.control.services import evidence as evidence_service
 
 KEY = {
     "server_id": "서버", "tool": "도구", "calls": "최근 호출 수", "window_seconds": "관측 구간(초)",
@@ -44,6 +45,9 @@ AXIS = {"file": "파일 접근", "exec": "실행", "network": "네트워크"}
 # 값이 코드인 항목의 표시명
 VALUE = {
     "hook_trust": {"untrusted": "훅 미신뢰(Codex가 훅을 신뢰하기 전에는 실행되지 않음)"},
+    "label": {k: e.label for k, e in evidence_service.KINDS.items()},
+    "evidence": {k: e.label for k, e in evidence_service.KINDS.items()},
+    "subject_kind": {"server": "서버", "intake": "신청", "relation": "이용 관계"},
     "state": {"due": "기한 임박", "overdue": "기한 초과", "missing": "없음", "expired": "만료",
               "expiring": "만료 임박"},
     "source": {"approvals": "승인", "call_approvals": "호출별 승인", "intakes": "신청",
@@ -64,7 +68,9 @@ VALUE = {
     "reason": {
         "control_key_not_set": "제어 키 미설정", "forbidden": "권한 없음", "held": "보류됨",
         "not_active": "활성 상태 아님", "not_completed_within_one_hour": "한 시간 안에 끝나지 않음",
-        "pin_mismatch": "고정 도구 불일치", "readback_mismatch": "다시 읽은 값 불일치",
+        "block_released": "MINT가 건 키 차단이 풀림", "pin_mismatch": "고정 도구 불일치",
+        "server_replaced": "서버 주소가 승인값과 다름",
+        "unapproved_server": "승인 없는 서버 추가", "readback_mismatch": "다시 읽은 값 불일치",
         "reapproval_conflict": "재승인 충돌", "registry_missing": "레지스트리에 없음",
         "target_missing": "대상이 삭제됨", "unpin_failed": "고정 해제 실패",
     },
@@ -80,6 +86,7 @@ SUMMARY = {
         "최근 {window_seconds}초 동안 결과 {calls}건이 검사에 걸렸지만 막지 못했습니다."
     ),
     "key_block_proposed": "키 {key_alias}의 LiteLLM 차단 제안이 승인을 기다립니다.",
+    "defense_verify_failed": "서버 {server_id}의 방어 검증에서 {failed}건이 기대와 달랐습니다.",
     "siem_forward_failing": "SIEM 대상 {target}에 {minutes}분 넘게 전달하지 못했습니다.",
     "config_plaintext_secret": "LiteLLM 설정 {count}곳에 비밀이 평문으로 적혀 있습니다.",
     "call_spike": "서버 {server_id}의 {tool} 호출이 최근 {calls}건입니다(평소 {baseline_calls}건).",
@@ -140,7 +147,11 @@ def summary(kind: str, subject: dict[str, Any]) -> str:
         return labels.pick(labels.ALERT_KIND, kind)
     known = {k: v for k, v in (subject or {}).items() if v not in (None, "")}
     values = defaultdict(lambda: "—", known)
+    if kind == "sync_divergence" and "server_id" not in known:
+        text = "LiteLLM 설정이 MINT와 다릅니다."
     out = text.format_map(values)
+    if kind == "sync_divergence" and known.get("key_alias"):
+        out += f" (키 {known['key_alias']})"
     path = (subject or {}).get("path") if kind.startswith("package_vuln") else None
     return f"{out} (의존 경로: {path})" if path else out
 

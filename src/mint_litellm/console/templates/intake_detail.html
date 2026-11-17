@@ -85,7 +85,7 @@
 </form>
 {% endif %}
 
-{% if i.status in ('passed', 'indeterminate') %}
+{% if i.status in ('passed', 'indeterminate') and actor.session.user_id and actor.session.user_id != i.requested_by %}
 <h2>결정</h2>
 <form method="post" action="/intakes/{{ i.id }}/decision" class="form" id="decision">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ i.state_version }}">
@@ -98,11 +98,12 @@
   {% if i.status == 'indeterminate' %}<label>두 번째 승인자 토큰<input type="password" name="second_approver_token" autocomplete="off"></label>{% endif %}
   <input type="hidden" name="decision" value="{{ 'except' if i.status == 'indeterminate' else 'approve' }}">
 </form>
+{% set verb = '예외 승인' if i.status == 'indeterminate' else '승인' %}
+{% if lacking and i.status == "indeterminate" %}<p>부족한 증빙: {{ lacking | join }}. <a href="?tab=evidence">증빙 첨부</a> · 예외 승인 시 누락이 기록됩니다.</p>{% endif %}
+{% if (lacking and i.status == "passed") or stale %}<p>승인할 수 없습니다: {% if lacking %}필수 증빙 부족 ({{ lacking | join }}). <a href="?tab=evidence">증빙 첨부</a>{% endif %}{% if stale %} 재검사하세요.{% endif %}</p>{% endif %}
 <div class="actions">
-  {% set verb = '예외 승인' if i.status == 'indeterminate' else '승인' %}
-  {% if lacking and i.status == "indeterminate" %}<p>부족한 증빙: {{ lacking | join }}. <a href="?tab=evidence">증빙 첨부</a> · 예외 승인 시 누락이 기록됩니다.</p>{% endif %}
-  {% if (lacking and i.status == "passed") or stale %}<button type="button" class="primary" disabled>{{ verb }}</button><p>승인할 수 없습니다: {% if lacking %}필수 증빙 부족 ({{ lacking | join }}). <a href="?tab=evidence">증빙 첨부</a>{% endif %}{% if stale %} 재검사하세요.{% endif %}</p>{% else %}
-  {{ m.confirm_submit('decide-approve', verb, '신청 ' ~ verb, server_name ~ ' 신청을 ' ~ verb ~ '합니다. 이용 관계와 승인 대기 항목이 만들어집니다.', 'decision', verb, danger=false, trigger_class='primary') }}
+  {% if (lacking and i.status == "passed") or stale %}<button type="button" class="primary" disabled>{{ verb }}</button>{% else %}
+  {{ m.confirm_submit('decide-approve', verb, '신청 ' ~ verb, server_name ~ ' 신청을 ' ~ verb ~ '합니다. 입력한 대상의 이용 승인이 바로 만들어집니다.', 'decision', verb, danger=false, trigger_class='primary') }}
   {% endif %}
   {% call m.confirm_dialog('decide-reject', '거절', '신청 거절', server_name ~ ' 신청을 거절합니다. 입력한 사유가 신청 기록에 남습니다.', '/intakes/' ~ i.id ~ '/decision', actor, '거절') %}
   <input type="hidden" name="state_version" value="{{ i.state_version }}"><input type="hidden" name="decision" value="reject">

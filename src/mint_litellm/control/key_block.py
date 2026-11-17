@@ -64,6 +64,8 @@ ENDPOINT_ALERTS = (
     AlertKind.ENDPOINT_EGRESS_REFUSED.value,
 )
 INPUT_SECRET = "input_secret"
+# 방어 검증기(``verify run``)가 쓰는 전용 키의 이름 접두사. 이 키는 차단 제안에서 제외한다.
+VERIFY_ALIAS_PREFIX = "mint-verify-"
 APPROVERS = ("admin", "approver")
 OPEN = ("proposed", "approved", "unblocking")
 
@@ -247,6 +249,8 @@ def _propose(job: JobContext, found: dict, cache: dict) -> bool:
         info = client.get_key(token)
         if info is None or info.get("blocked") is True:
             return False  # 없거나 이미 막혀 있으면 제안할 것이 없다
+        if str(info.get("key_alias") or "").startswith(VERIFY_ALIAS_PREFIX):
+            return False  # 방어 검증 전용 키는 일부러 막힐 입력을 보낸다
         keys, members = _team_impact(client, info.get("team_id"), cache)
     except LiteLLMError:
         return False
@@ -295,10 +299,41 @@ def _expire(conn: psycopg.Connection, instance: str) -> None:
             )
 
 
+def _watch_released(job: JobContext) -> None:
+    """MINT가 건 차단이 LiteLLM에서 외부로 풀렸으면 경보를 연다(다시 차단하지 않는다)."""
+    conn, instance = job.conn, job.instance_id
+    for row in fetchall(
+        conn,
+        "SELECT * FROM mint.key_block_proposals WHERE instance_id = %s AND status = 'applied'"
+        " AND mint_blocked",
+        (instance,),
+    ):
+        try:
+            state = _state_of(job.litellm, row["scope"], row)
+        except LiteLLMError:
+            continue
+        key = f"sync_divergence:key_block_released:{row['id']}"
+        released = state is not None and state.get("blocked") is not True
+        with conn.transaction():
+            conn.execute(
+                "UPDATE mint.key_block_proposals SET last_error = %s WHERE instance_id = %s"
+                " AND id = %s", ("released_externally" if released else None, instance, row["id"]),
+            )
+            if not released:
+                alerts.resolve(conn, instance, key)
+                continue
+            alerts.raise_alert(
+                conn, instance, kind="sync_divergence", severity="high", dedup_key=key,
+                subject={"reason": "block_released", "key_alias": row["key_alias"],
+                         "scope": row["scope"], "proposal_id": str(row["id"])},
+            )
+
+
 def run(job: JobContext) -> None:
     _expire(job.conn, job.instance_id)
     if job.litellm is None:
         return  # 키가 LiteLLM에 있는지 확인할 수 없으면 제안하지 않는다
+    _watch_released(job)
     cache: dict = {}
     for found in candidates(job.conn, job.instance_id).values():
         _propose(job, found, cache)
@@ -399,6 +434,12 @@ def approve(
     return {"id": str(row["id"]), "status": "approved"}
 
 
+def _not_own_key(ctx: Context, row: dict, what: str) -> None:
+    """자기 키에 대한 제안은 승인뿐 아니라 거절·해제도 다른 사람이 한다."""
+    if row.get("user_id") and row["user_id"] == ctx.operator.user_id:
+        raise separation_of_duties(f"자기 키의 차단 제안은 {what}할 수 없습니다.")
+
+
 def reject(
     ctx: Context, proposal_id: str, *, reason: str = "", expected_version: int | None = None
 ) -> dict:
@@ -409,6 +450,7 @@ def reject(
     if row["status"] != "proposed":
         raise conflict(f"이미 {row['status']} 상태인 제안은 거절할 수 없습니다.")
     _check_version(row, expected_version)
+    _not_own_key(ctx, row, "거절")
     with ctx.conn.transaction():
         _decide(ctx, row, "rejected", EventKind.KEY_BLOCK_REJECTED, reason)
     return {"id": str(row["id"]), "status": "rejected"}
@@ -450,6 +492,7 @@ def request_unblock(
     if row["status"] != "applied" or not row["mint_blocked"]:
         raise conflict("MINT가 제안해 차단한 대상만 여기서 해제할 수 있습니다.")
     _check_version(row, expected_version)
+    _not_own_key(ctx, row, "해제")
     current = _state_of(litellm, row["scope"], row)
     if current is None:
         raise stale_evidence("LiteLLM에서 차단 대상을 찾을 수 없습니다.")

@@ -12,8 +12,8 @@
 {% if waiting %}
 <table><thead><tr><th>서버</th><th>도구</th><th>목적</th><th>표시 값</th><th>만료</th><th>상태</th><th></th></tr></thead><tbody>
 {% for c in waiting %}<tr>
-<td>{{ c.server_id }}</td><td>{{ c.tool }}</td><td>{{ c.purpose }}</td>
-<td>{% if c.display %}<dl class="detail">{% for k, v in c.display.items() %}<dt>{{ k }}</dt><dd>{{ v | clip }}</dd>{% endfor %}</dl>{% else %}—{% endif %}</td>
+<td>{{ c.server_name }}</td><td>{{ c.tool }}</td><td>{{ c.purpose }}</td>
+<td>{% if c.display %}<dl class="detail">{% for k, v in c.display.items() %}<dt>{{ {'keys': '입력 항목', 'sizes': '크기'}.get(k, k) }}</dt><dd>{{ v | clip }}</dd>{% endfor %}</dl>{% else %}—{% endif %}</td>
 <td class="nowrap">{{ c.expires_at | when }}</td><td>{{ m.badge(L.SELF_CONFIRMATION, c.view) }}</td>
 <td>
 <form method="post" class="actions" id="staff-{{ c.id }}">
@@ -32,7 +32,7 @@
 <h2>처리 내역</h2>
 <table><thead><tr><th>서버</th><th>도구</th><th>목적</th><th>요청</th><th>상태</th></tr></thead><tbody>
 {% for c in history %}<tr>
-<td>{{ c.server_id }}</td><td>{{ c.tool }}</td><td>{{ c.purpose }}</td>
+<td>{{ c.server_name }}</td><td>{{ c.tool }}</td><td>{{ c.purpose }}</td>
 <td class="nowrap">{{ c.created_at | when }}</td><td>{{ m.badge(L.SELF_CONFIRMATION, c.view) }}</td>
 </tr>{% endfor %}
 </tbody></table>
@@ -41,14 +41,14 @@
 {% if mine %}
 <table class="clickable"><thead><tr><th>서버</th><th>도구</th><th>요청</th><th>상태</th><th>남은 시간</th></tr></thead><tbody>
 {% for c in mine %}<tr>
-<td><a href="/staff/confirmations?tab=mine&open={{ c.id }}">{{ c.server_id }}</a></td><td>{{ c.tool }}</td>
+<td><a href="/staff/confirmations?tab=mine&open={{ c.id }}">{{ c.server_name }}</a></td><td>{{ c.tool }}</td>
 <td class="nowrap">{{ c.requested_at | when if c.requested_at else '—' }}</td>
 <td>{{ m.badge(L.MY_CALL_APPROVAL, c.view) }}{% if c.view == 'pending' and c.hold_timed_out_at %}<br><span class="muted nowrap">승인 후 다시 요청</span>{% endif %}</td>
 <td class="nowrap">{% if c.remaining_seconds is not none %}{{ c.remaining_seconds | span }} · {{ c.uses_left }}회 남음{% else %}—{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
 {% else %}{{ m.empty('승인 요청이 없습니다', '/staff', '내 서버') }}{% endif %}
-{% if selected %}{% call m.drawer(selected.server_id ~ ' · ' ~ selected.tool, '/staff/confirmations?tab=mine') %}
+{% if selected %}{% call m.drawer(selected.server_name ~ ' · ' ~ selected.tool, '/staff/confirmations?tab=mine') %}
 <dl class="detail">
   <dt>상태</dt><dd>{{ m.badge(L.MY_CALL_APPROVAL, selected.view) }}{% if selected.view == 'pending' and selected.hold_timed_out_at %}<br><span class="muted">호출은 시간 초과로 끝남 — 승인되면 같은 작업을 다시 요청하세요</span>{% endif %}</dd>
   <dt>요청</dt><dd>{{ selected.requested_at | when if selected.requested_at else '—' }}</dd>

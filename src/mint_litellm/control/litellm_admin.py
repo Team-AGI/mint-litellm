@@ -144,6 +144,13 @@ class LiteLLMAdmin:
         body = self._ok("/key/info", {"key": key_id}, missing_ok=True, key="info")
         return None if body is None else body["info"]
 
+    def key_listed(self, key_id: str) -> bool:
+        """``/key/list``에 키가 있는가(``/key/info``는 지운 키도 캐시로 답할 수 있다)."""
+        params = {"return_full_object": "true", "key_hash": key_id, "size": 5}
+        body = self._ok("/key/list", params, key="keys", shape=list)
+        return any(isinstance(k, dict) and key_id in (k.get("token"), k.get("key"))
+                   for k in body["keys"])
+
     def get_team(self, team_id: str) -> dict | None:
         body = self._ok("/team/info", {"team_id": team_id}, missing_ok=True, key="team_info")
         return None if body is None else body["team_info"]

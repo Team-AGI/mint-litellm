@@ -70,6 +70,7 @@ from mint_litellm.types.decision import (
     apply_record_failure,
     conclude,
     entries_from_results,
+    is_builtin_server,
     relation_state_result,
     server_state_result,
 )
@@ -250,7 +251,9 @@ def state_results(
     if principal.org_id is None:
         return [StageResult.stop(Reason.ORG_BOUNDARY)]
     server = snapshot.server
-    results = []
+    results: list[StageResult] = []
+    if is_builtin_server(resolved.server_id):
+        return results  # 가상 서버: 등록·계약 상태가 없다
     state = server_state_result(server.status if server is not None else None)
     if state.status is not StageStatus.PASS:
         results.append(state)
@@ -292,6 +295,9 @@ def denial_and_approval(
         )
         if applies:
             return ApprovalSelection([StageResult.stop(Reason.DENIED)], None)
+
+    if is_builtin_server(resolved.server_id):
+        return ApprovalSelection([], None)  # 승인 없이 기본 허용(관측), 거부만 막는다
 
     matched = [
         a
@@ -500,11 +506,15 @@ def observed_contract(snapshot: Snapshot, tool: str) -> ToolContractRow | None:
 
 
 def tool_traits(
-    snapshot: Snapshot, tool: str, arguments: Mapping[str, Any]
+    snapshot: Snapshot, tool: str, arguments: Mapping[str, Any], *, builtin: bool = False
 ) -> tuple[str | None, str | None, bool]:
     """(행위 유형, 위험 등급, 임시 계약 여부). 승인된 계약이 있으면 그 값, 계약 관리 서버가 아니면
     관측한 도구 목록의 승인본·임시 계약, 그것도 없으면 도구 이름·인자로 추정한 값(임시 계약).
     계약 관리 서버인데 승인된 계약이 없으면 값이 없다. 임시 계약은 승인 규칙을 넓히지 않는다."""
+    if builtin:
+        # 하네스 내장 도구는 이름 추정(셸 = 실행 = 고위험)을 쓰지 않는다. 그대로 두면 셸을 쓸 때마다
+        # 호출별 승인을 요구한다. 위험한 내장 도구는 관리자가 거부·MINT_HIGH_RISK_TOOLS로 고른다.
+        return None, None, False
     contract = current_contract(snapshot, tool)
     if contract is not None:
         return contract.action_type, contract.risk_grade, False
@@ -742,8 +752,16 @@ def build_policy_input(
     if server is not None and server.exec_contract_sha256 is not None:
         # 서버 행에 등록된 승인 대상 실행 계약. 보고된 계약과의 대조는 정책 규칙이 한다.
         server_doc["exec_approved_sha256"] = server.exec_contract_sha256
+    if is_builtin_server(resolved.server_id):
+        # 하네스 내장 도구의 가상 서버는 서버 행이 없지만 미등록 서버가 아니다. 고정 실행 계약을
+        # 승인본으로 두어 로컬 서버 규칙(POL-R-18·R-20)에 걸리지 않게 하고, 통제는 거부·호출별
+        # 승인·인자 검사가 맡는다(기본은 허용하고 기록).
+        server_doc["status"] = "approved"
+        server_doc["exec_approved_sha256"] = resolved.exec_contract_sha256
     managed = server is not None and server.contract_status == "managed"
-    action_type, risk_grade, provisional = tool_traits(snapshot, tool, arguments)
+    action_type, risk_grade, provisional = tool_traits(
+        snapshot, tool, arguments, builtin=is_builtin_server(resolved.server_id)
+    )
     server_doc["contract_status"] = (
         "managed" if managed else "provisional" if provisional else "none"
     )
@@ -755,9 +773,16 @@ def build_policy_input(
     if action_type is not None:
         tool_doc["action_type"] = action_type
 
-    if selected is None:
-        approval: dict[str, Any] = {"present": False}
+    if selected is None and is_builtin_server(resolved.server_id):
+        # 하네스 내장 도구는 승인 행 없이 기본으로 허용한다(관리자 거부·호출별 승인 지정이 통제).
+        # 승인 없음으로 넘기면 정책의 승인 범위 규칙(R1)이 모든 내장 도구 호출을 막는다.
+        approval: dict[str, Any] = {"present": True, "id": resolved.server_id,
+                                    "class": "standard", "scope_type": "org",
+                                    "expires_in_days": 0, "conditions": {}}
         consent: dict[str, Any] = {"status": "not_applicable", "source": None}
+    elif selected is None:
+        approval = {"present": False}
+        consent = {"status": "not_applicable", "source": None}
     else:
         approval = {
             "present": True,
@@ -989,7 +1014,8 @@ def match_call_approval(
             Reason.CALL_APPROVAL_REQUIRED, detail="arguments cannot be fingerprinted"
         ), None
 
-    one_shot_only = tool_traits(snapshot, tool, arguments)[0] in ONE_SHOT_ACTIONS
+    builtin = is_builtin_server(resolved.server_id)
+    one_shot_only = tool_traits(snapshot, tool, arguments, builtin=builtin)[0] in ONE_SHOT_ACTIONS
 
     def same_call(row: CallApprovalRow) -> bool:
         # 기간 승인은 인자 지문을 풀고 나머지 결속은 그대로 둔다. 1회 승인과 삭제·외부 전송·자격

@@ -43,7 +43,8 @@ def changes(info: dict[str, Any]) -> list[dict[str, Any]]:
         (o["scope"], o["name"]): o for o in info["observations"] if o["kind"] == "tool"
     }
     rows = []
-    for key in sorted(set(approved) | set(observed)):
+    # 아직 관측한 것이 하나도 없으면 비교할 현재본이 없으므로 삭제로 보지 않는다
+    for key in sorted(set(approved) | set(observed)) if info["observations"] else ():
         a, o = approved.get(key), observed.get(key)
         if a is not None and (o is None or a["drift"] == "removed"):
             kind = "removed"

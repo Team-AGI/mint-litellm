@@ -221,6 +221,8 @@ def grant_approval(
     actor: Actor = Depends(page_actor),
 ):
     def action():
+        if approval_class == "exception" and not basis.strip():
+            raise ControlError("예외 승인은 승인 사유를 입력해야 합니다.")
         body = api.ApprovalBody(
             state_version=state_version, relation_id=relation_id, scope_type=scope_type,
             scope_id=scope_id, tools=lines(tools), approval_class=approval_class,
@@ -548,11 +550,16 @@ def add_allowlist(
     actor: Actor = Depends(page_actor),
 ):
     now = datetime.now(UTC)
+
+    def action():
+        api.check_days(valid_days)
+        allowlist_service.add(
+            actor.ctx, kind, value, now, now + timedelta(days=valid_days), None, note or None
+        )
+
     return act(
         actor,
-        lambda: allowlist_service.add(
-            actor.ctx, kind, value, now, now + timedelta(days=valid_days), None, note or None
-        ),
+        action,
         "allowlist_added", "/access?tab=allowlists",
         lambda **kw: access_page(request, actor, tab="allowlists", **kw),
     )

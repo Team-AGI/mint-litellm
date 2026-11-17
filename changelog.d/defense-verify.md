@@ -1,0 +1,1 @@
+- 방어 검증기(`mint-litellm verify run`)가 승인된 읽기 도구에 합성 위험 입력(경로·주소·비밀·식별번호·대조군)을 보내 원장 판정이 기대와 같은지 대조하고, 결과를 `defense_verify_run` 사건과 실패 경보 `defense_verify_failed`로 남긴다(시험 전용 `mint-verify-` 키는 키 차단 제안에서 제외).

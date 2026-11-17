@@ -327,6 +327,7 @@ def test_a_different_key_confirms_the_request(sworld):
     client = logged_in(sworld, CONSOLE)
     response = decide(client, cid, "confirm")
     assert response.status_code == 303 and "ok=staff_confirmed" in response.headers["location"]
+    assert response.headers["location"].count("?") == 1  # 물음표를 두 번 쓰지 않는다
     assert status_of(sworld, cid) == "confirmed"
     row = sworld.query("SELECT confirmed_by_user_id, confirmed_by_key_token"
                        " FROM mint.self_confirmations WHERE id = %s", cid)[0]
@@ -652,7 +653,7 @@ def kits(sworld):
 
     from ctl_fixtures import make_ctx
 
-    from mint_litellm.control import servers
+    from mint_litellm.control import relations, servers
     from mint_litellm.types.exec_contract import ExecContract
 
     contract = ExecContract(
@@ -661,6 +662,8 @@ def kits(sworld):
     with psycopg.connect(sworld.admin_url) as admin:
         servers.register_local(make_ctx(admin), "local-1", contract)
         admin.execute("UPDATE mint.servers SET status = 'approved' WHERE server_id = 'local-1'")
+        relations.add(make_ctx(admin), "acme", "local-1", "ops", None)
+    add_approval(sworld, "user", STAFFER, tools=("read_file",), server_id="local-1")
     issuer = KitIssuer()
     sworld.stub.own(CONSOLE, STAFFER, team_id="team-a")  # 세션의 첫 팀이 키에 걸린다.
     sworld.app.state.config = dataclasses.replace(
@@ -704,6 +707,11 @@ def test_the_download_hands_out_a_kit_with_the_users_own_key_and_the_approved_se
     assert (stored_token, owner, stored_alias) == (token_of(config["key"]), STAFFER, alias)
 
 
+def test_a_kit_carries_only_the_local_servers_approved_for_that_staff_member(kits):
+    assert list(unpack(download(logged_in(kits)))["servers"]) == ["local-1"]
+    assert list(unpack(download(logged_in(kits, OTHER_KEY)))["servers"]) == []
+
+
 def test_a_second_download_replaces_the_first_key_and_other_users_are_untouched(kits):
     first = download(logged_in(kits))
     other = download(logged_in(kits, OTHER_KEY))
@@ -713,6 +721,15 @@ def test_a_second_download_replaces_the_first_key_and_other_users_are_untouched(
     rows = kits.query(
         "SELECT user_id, revoked_at IS NOT NULL FROM mint.endpoint_installs ORDER BY issued_at")
     assert rows == [(STAFFER, True), (OTHER, False), (STAFFER, False)]
+
+
+def test_downloading_the_kit_again_asks_for_confirmation(kits):
+    client = logged_in(kits)
+    assert "kit-confirm" not in client.get("/staff/endpoint").text
+    download(client)
+    page = client.get("/staff/endpoint").text
+    assert 'data-dialog-open="kit-confirm"' in page and "다른 단말의 연결이 끊깁니다" in page
+    assert 'form="kit-form"' in page
 
 
 def test_the_page_shows_the_managed_and_the_unmanaged_state_in_korean(kits):
@@ -757,6 +774,11 @@ def test_without_key_issuance_or_approved_servers_there_is_no_kit(sworld):
     sworld.app.state.config = dataclasses.replace(
         sworld.config, kit_issuer=KitIssuer(), endpoint_routes=True
     )
+    unreachable = download(client)  # 단말이 부를 주소가 없으면 묶음을 내주지 않는다
+    assert unreachable.status_code == 503 and "MINT_ENDPOINT_PUBLIC_URL" in unreachable.text
+    sworld.app.state.config = dataclasses.replace(
+        sworld.app.state.config, endpoint_url="https://mint.test"
+    )
     empty = download(client)  # 승인된 로컬 서버가 없어도 게이트웨이 항목·키만으로 묶음을 받는다.
     assert empty.status_code == 200 and empty.headers["content-type"] == "application/gzip"
 
@@ -788,7 +810,7 @@ def test_the_download_follows_the_chosen_system_and_tool(kits):
     client = logged_in(kits)
     agent = {"user-agent": "Mozilla/5.0 (Windows NT 10.0)"}
     page = client.get("/staff/endpoint", headers=agent).text
-    assert 'value="windows" selected' in page and "Claude Code + Codex" in page
+    assert 'value="windows" selected' in page and "모든 도구" in page
     response = client.post(
         "/staff/endpoint/kit", data={"csrf": csrf(client), "platform": "windows", "harness": "all"}
     )
@@ -797,7 +819,8 @@ def test_the_download_follows_the_chosen_system_and_tool(kits):
     with zipfile.ZipFile(io.BytesIO(response.content)) as bundle:
         config = json.loads(bundle.read("mint-kit/kit.json"))
         assert "mint-kit/install.ps1" in bundle.namelist()
-    assert config["harnesses"] == ["claude", "codex"] and list(config["servers"]) == ["local-1"]
+    assert config["harnesses"] == ["claude", "codex", "cursor", "grok"]
+    assert list(config["servers"]) == ["local-1"]
     for bad in ({"platform": "macos"}, {"harness": "vim"}):
         refused = client.post("/staff/endpoint/kit", data={"csrf": csrf(client), **bad})
         assert refused.status_code == 400
@@ -895,8 +918,15 @@ def test_the_menu_has_three_staff_screens_and_a_badge_for_requests_to_confirm(sw
     assert 'aria-current="page"' in page and "본인 확인 대기" in page and "내 승인 요청" in page
 
 
+def test_a_server_without_a_consent_requirement_is_not_shown_as_needing_consent(sworld):
+    add_approval(sworld, "user", STAFFER, tools=("t1",))
+    page = logged_in(sworld).get("/staff").text
+    assert "동의 불필요" in page and "동의가 필요한 서버가" not in page
+
+
 def test_the_my_servers_screen_shows_consent_state_and_opens_the_consent_form(sworld):
     add_approval(sworld, "user", STAFFER, tools=("t1",))
+    sworld.query("UPDATE mint.servers SET data_grade = 'confidential' WHERE server_id = 'srv-ok'")
     client = logged_in(sworld)
     page = client.get("/staff").text
     assert "동의 필요" in page and "내 기록" in page and "/staff/consents" not in page
@@ -920,3 +950,12 @@ def test_empty_staff_page_shows_pending_call_requests(sworld, monkeypatch):
     html = logged_in(sworld).get("/staff").text
     assert "처리 대기 중인 호출 승인 요청이 1건" in html
     assert "/staff/confirmations?tab=mine" in html
+
+
+def test_parallel_requests_of_one_staff_session_do_not_deadlock(sworld):
+    import concurrent.futures
+
+    client = logged_in(sworld)
+    with concurrent.futures.ThreadPoolExecutor(8) as pool:
+        codes = list(pool.map(lambda _: client.get("/staff").status_code, range(16)))
+    assert codes == [200] * 16

@@ -319,3 +319,51 @@ def test_only_our_block_can_be_unblocked_here(conn, fake):
     key_block.approve(approver(conn), reader(fake), str(row["id"]))  # 이미 차단: 우리 것이 아니다
     with pytest.raises(ControlError):
         key_block.request_unblock(make_ctx(conn), reader(fake), str(row["id"]), reason="x")
+
+
+def test_the_key_owner_cannot_reject_or_unblock_a_proposal_about_their_own_key(conn, fake):
+    row = secret_proposal(conn, fake)  # tok2는 bob의 키
+    owner_approver = make_ctx(conn, "bob-op", "approver", "bob")
+    with pytest.raises(AdminError, match="자기 키"):
+        key_block.reject(owner_approver, str(row["id"]), reason="오탐")
+    pid = blocked_proposal_of(conn, fake, row)
+    owner_admin = make_ctx(conn, "bob-admin", "admin", "bob")
+    with pytest.raises(AdminError, match="자기 키"):
+        key_block.request_unblock(owner_admin, reader(fake), pid, reason="풀어 줘")
+
+
+def blocked_proposal_of(conn, fake, row):
+    key_block.approve(approver(conn), reader(fake), str(row["id"]))
+    apply(conn, fake, row["id"], "block")
+    return str(row["id"])
+
+
+def test_a_verify_key_is_never_proposed_for_blocking(conn, fake):
+    fake.add_key("tok-verify", user_id="verifier", key_alias="mint-verify-run")
+    response(conn, decision(conn, "tok-verify", enforced="allow", policy=()),
+             sensitive_findings={"private_key": 1})
+    scan(conn, fake)
+    assert not [p for p in proposals(conn) if p["key_token"] == "tok-verify"]
+
+
+def test_a_block_released_outside_mint_opens_an_alert_and_is_not_blocked_again(conn, fake):
+    row = secret_proposal(conn, fake)
+    key_block.approve(approver(conn), reader(fake), str(row["id"]))
+    apply(conn, fake, row["id"], "block")
+    scan(conn, fake)
+    assert fetchall(conn, "SELECT 1 FROM mint.alerts WHERE kind = 'sync_divergence'") == []
+    fake.keys["tok2"]["blocked"] = False  # 다른 관리자가 LiteLLM에서 직접 해제
+    writes = len(fake.writes())
+    scan(conn, fake)
+    scan(conn, fake)
+    (alert,) = fetchall(conn, "SELECT * FROM mint.alerts WHERE kind = 'sync_divergence'")
+    assert (alert["severity"], alert["subject"]["reason"], alert["subject"]["key_alias"]) == (
+        "high", "block_released", "bob-key")
+    assert len(fake.writes()) == writes  # 자동으로 다시 차단하지 않는다
+    done = proposals(conn)[0]
+    assert (done["status"], done["last_error"]) == ("applied", "released_externally")
+    fake.keys["tok2"]["blocked"] = True
+    scan(conn, fake)
+    assert fetchone(conn, "SELECT status FROM mint.alerts WHERE kind = 'sync_divergence'")[
+        "status"] == "resolved"
+    assert proposals(conn)[0]["last_error"] is None

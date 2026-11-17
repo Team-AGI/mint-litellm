@@ -21,7 +21,7 @@ LOCK_COLUMN = {"orgs": "state_version", "org_bindings": "state_version",
                "servers": "state_version", "usage_relations": "state_version",
                "settings": "settings_version"}
 SELECTABLE = READ_ONLY | {"console_sessions", "self_confirmations", "consents", "events",
-                          "intakes", "deployment_contracts"}
+                          "intakes", "deployment_contracts", "tool_contracts", "jobs", "approvals"}
 INSERTABLE = {
     "intakes": {"id", "instance_id", "org_id", "server_id", "source", "purpose", "data_grade",
                 "allowed_resources", "provider", "owner_user_id", "readiness", "data_return_terms",
@@ -44,6 +44,10 @@ UPDATABLE = {
                            "confirmed_at"},
     "consents": {"revoked_at"},
     **{table: {column} for table, column in LOCK_COLUMN.items()},
+    "servers": {"state_version", "status"},
+    "intakes": {"status", "decision", "decided_by", "decision_reason", "decided_at"},
+    "tool_contracts": {"status"},
+    "deployment_contracts": {"status"},
 }
 
 
@@ -258,7 +262,7 @@ def test_the_staff_login_can_execute_only_the_public_staff_functions(world):
     expected = {"staff_confirm", "staff_reject", "staff_cancel", "staff_grant_consent",
                 "staff_revoke_consent", "staff_start_session", "staff_touch_session",
                 "staff_end_session", "staff_list_confirmations", "staff_list_consents",
-                "staff_list_events", "staff_submit_intake"}
+                "staff_list_events", "staff_submit_intake", "staff_withdraw_intake"}
     with psycopg.connect(world[0]) as conn:
         rows = conn.execute(
             "SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace"

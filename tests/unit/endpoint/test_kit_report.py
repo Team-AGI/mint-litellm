@@ -161,3 +161,54 @@ def test_the_server_launcher_starts_the_start_report_without_waiting_for_it(
     (command, options), = launched
     assert command[-4:] == ["report", "--kit", str(tmp_path), "--if-due"]
     assert options["stdout"] == subprocess.DEVNULL
+
+
+def test_a_rejected_key_shows_up_in_check_and_makes_report_fail(
+    tmp_path, monkeypatch, reports, capsys
+):
+    programs, home = stage(tmp_path, monkeypatch)
+
+    def rejected(url, key, payload, ca_file):
+        kit_module.last_http_error[:] = [401]
+        return None
+
+    monkeypatch.setattr(kit_module, "post", rejected)
+    assert kit_module.report_installed(programs, sleep=lambda s: None) == 1
+    assert (home / ".cache/mint/key_rejected").exists()
+    kit = make_kit(programs, tmp_path, managed=False)
+    kit.home = home
+    _, problems = kit.check({"mode": "managed"})
+    assert kit_module.KEY_REJECTED_TEXT in problems
+    # 다시 보고가 닿으면 표시가 사라진다.
+    monkeypatch.setattr(kit_module, "post", lambda *args: True)
+    assert kit_module.report_installed(programs, sleep=lambda s: None) == 0
+    assert not (home / ".cache/mint/key_rejected").exists()
+
+
+def test_http_401_prints_korean_guidance(monkeypatch, capsys):
+    import io
+    import urllib.error
+    import urllib.request
+
+    def refuse(*args, **kw):
+        raise urllib.error.HTTPError("http://x", 401, "no", {}, io.BytesIO())
+
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    assert kit_module.post("http://x", "k", {}, None) is None
+    assert "설치 묶음을 다시 받아" in capsys.readouterr().err
+
+
+def test_a_reinstall_forgets_the_reported_tool_lists(folder, tmp_path, reports):
+    kit = make_kit(folder, tmp_path, managed=False)
+    cache = kit.home / ".cache/mint"
+    cache.mkdir(parents=True)
+    (cache / "tools_sent.json").write_text("{}")
+    (cache / "key_rejected").write_text("1")
+    kit.install()
+    assert not (cache / "tools_sent.json").exists()
+    assert not (cache / "key_rejected").exists()
+
+
+def test_the_hook_shows_korean_guidance_on_http_401():
+    with pytest.raises(agent.Refuse, match="설치 묶음을 다시 받으세요"):
+        agent._call(lambda *a: (401, b""), "http://x", "/p", "k", {}, 1.0)

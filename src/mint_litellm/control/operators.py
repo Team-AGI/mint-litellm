@@ -25,6 +25,9 @@ HUMAN_ROLES = frozenset(
 )
 
 
+MAX_TOKEN_DAYS = 3650  # 10년
+
+
 def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
@@ -68,6 +71,8 @@ def _insert(
     emitted: list | None = None,
 ) -> tuple[str, int]:
     name = name.strip()
+    if expires_in_days is not None and not 1 <= expires_in_days <= MAX_TOKEN_DAYS:
+        raise ControlError(f"토큰 유효 기간은 1일에서 {MAX_TOKEN_DAYS}일 사이여야 합니다.")
     token = issue_token()
     expires_at = None if expires_in_days is None else datetime.now(UTC) + timedelta(
         days=expires_in_days

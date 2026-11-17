@@ -26,6 +26,7 @@ from mint_litellm import (
     cli_restore,
     cli_siem,
     cli_upgrade,
+    cli_verify,
 )
 from mint_litellm.control import (
     allowlists,
@@ -669,11 +670,14 @@ def _server_register_local(run: Run) -> None:
     for hint in network_hints(contract):
         print(hint, file=sys.stderr)
     server_service.register_local(run.context(), run.args.server_id, contract)
+    run.say(f"로컬 서버를 등록했습니다: {run.args.server_id}")
 
 
-def _done(call: Callable[..., Any], *names: str) -> Handler:
+def _done(call: Callable[..., Any], *names: str, said: str | None = None) -> Handler:
     def handler(run: Run) -> None:
         call(run.context(), *[getattr(run.args, n) for n in names])
+        if said:
+            run.say(said.format(**vars(run.args)))
 
     return handler
 
@@ -945,7 +949,9 @@ HANDLERS: dict[str, Handler] = {
     "alert resolve": _done(alert_service.resolve, "alert_id"),
     "server suspend": _done(server_service.suspend, "server_id"),
     "server resume": _done(server_service.resume, "server_id"),
-    "server terminate": _done(server_service.terminate, "server_id"),
+    "server terminate": _done(
+        server_service.terminate, "server_id", said="서버 종료를 시작했습니다: {server_id}"
+    ),
     "relation add": lambda r: _created(
         r, relation_service.add(r.context(), r.args.org, r.args.server, r.args.purpose,
                                 r.args.team)
@@ -970,7 +976,9 @@ HANDLERS: dict[str, Handler] = {
     "consent add": _consent_add,
     "consent revoke": _done(consent_service.revoke, "consent_id"),
     "call-approval-rule add": _rule_add,
-    "call-approval-rule disable": _done(call_approval_rule_service.disable, "rule_id"),
+    "call-approval-rule disable": _done(
+        call_approval_rule_service.disable, "rule_id", said="호출 승인 규칙을 껐습니다: {rule_id}"
+    ),
     "allowlist add": _allowlist_add,
     "allowlist lift": _done(allowlist_service.lift, "allowlist_id"),
     "org add": lambda r: org_service.add(r.context(), r.args.org_id, r.args.name),
@@ -1151,7 +1159,8 @@ ARGUMENTS: dict[str, list[Any]] = {
            "observe(기록만)"),
         _a("--allow-input-secret", action="append",
            help="인자에서 비밀을 찾아도 이 승인의 도구에 한해 허용할 탐지 종류(반복 가능). "
-           "기본은 인자에 비밀이 있으면 막는다"),
+           "기본은 인자에 비밀이 있으면 막는다(계약 관리 서버. 그 밖의 서버는 "
+           "MINT_SCAN_UNMANAGED=enforce일 때만 막는다)"),
         _a("--allow-token-forward", action="store_true",
            help="호출자 토큰을 업스트림에 그대로 전달하는 서버(true_passthrough·oauth_delegate)의 "
            "호출을 이 승인에서 허용한다. 기본은 막는다"),
@@ -1342,7 +1351,8 @@ ARGUMENTS.update(INTAKE_ARGUMENTS)
 def _add_arguments(parser: argparse.ArgumentParser, name: str) -> None:
     for spec in {**ARGUMENTS, **cli_restore.ARGUMENTS, **cli_evidence.ARGUMENTS,
                  **cli_upgrade.ARGUMENTS, **cli_backup.ARGUMENTS,
-                 **cli_siem.ARGUMENTS, **cli_keyblock.ARGUMENTS}.get(name, []):
+                 **cli_siem.ARGUMENTS, **cli_keyblock.ARGUMENTS,
+                 **cli_verify.ARGUMENTS}.get(name, []):
         if spec == "SUBJECT":
             group = parser.add_mutually_exclusive_group(required=True)
             group.add_argument("--team")
@@ -1393,7 +1403,8 @@ def build_parser() -> argparse.ArgumentParser:
     tree: dict[tuple[str, ...], argparse._SubParsersAction] = {(): root.add_subparsers(
         dest="group0", metavar="명령", required=True)}
     commands = [*COMMANDS, *cli_restore.COMMANDS, *cli_evidence.COMMANDS, *cli_upgrade.COMMANDS,
-                *cli_backup.COMMANDS, *cli_siem.COMMANDS, *cli_keyblock.COMMANDS]
+                *cli_backup.COMMANDS, *cli_siem.COMMANDS, *cli_keyblock.COMMANDS,
+                *cli_verify.COMMANDS]
     # 하위 명령도 가진 명령(``org suggest``)은 하위 명령 없이 부르면 자기 자신이 실행된다.
     parents = {c.path for c in commands if any(o.path[:len(c.path)] == c.path != o.path
                                               for o in commands)}
@@ -1429,7 +1440,7 @@ def build_parser() -> argparse.ArgumentParser:
 COMMAND_INDEX: dict[str, CliCommand] = {
     c.name: c for c in [*COMMANDS, *cli_restore.COMMANDS, *cli_evidence.COMMANDS,
                         *cli_upgrade.COMMANDS, *cli_backup.COMMANDS, *cli_siem.COMMANDS,
-                        *cli_keyblock.COMMANDS]
+                        *cli_keyblock.COMMANDS, *cli_verify.COMMANDS]
 }
 
 
@@ -1557,7 +1568,7 @@ def run_command(args: argparse.Namespace, environ: dict[str, str]) -> None:
             expand_ids(run)
         extra = {**cli_restore.HANDLERS, **cli_evidence.HANDLERS,
                  **cli_upgrade.HANDLERS, **cli_backup.HANDLERS, **cli_siem.HANDLERS,
-                 **cli_keyblock.HANDLERS}
+                 **cli_keyblock.HANDLERS, **cli_verify.HANDLERS}
         (HANDLERS.get(command.name) or extra[command.name])(run)
     if args.json:
         print(json.dumps(_result(run, command), ensure_ascii=False, default=str))

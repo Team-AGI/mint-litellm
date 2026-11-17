@@ -253,6 +253,16 @@ def test_the_logout_form_also_needs_the_csrf_token(world):
     assert live[0][0] == 1
 
 
+def test_a_fake_bearer_header_does_not_skip_the_csrf_check_of_a_cookie_session(world):
+    client = world.session_client()
+    fake = {"Authorization": "Bearer x", "Origin": "https://evil.example"}
+    assert client.post("/logout", data={"csrf": "bad"}, headers=fake).status_code == 403
+    live = world.query("SELECT count(*) FROM mint.console_sessions WHERE revoked_at IS NULL")
+    assert live[0][0] == 1
+    assert_error(post_suspend(world, client, fake), 403, AdminCode.FORBIDDEN)
+    assert server_row(world, "srv-ok")[0] == "approved"
+
+
 # --- 승인 ------------------------------------------------------------------------------------
 
 
@@ -296,7 +306,7 @@ def test_granting_with_the_control_key_prefills_the_period_and_approves_the_serv
     world.stub.routes[("/v1/mcp/server", "control-plane-key", None)] = (200, [server])
     world.stub.routes[("/key/info", "control-plane-key", "k-token")] = (200, {
         "key": "k-token",
-        "info": {"user_id": "human-1", "team_id": None,
+        "info": {"user_id": "human-9", "team_id": None,
                  "object_permission": {"mcp_servers": ["srv-wait"]}}})
     response = grant(world, relation_of(world, "srv-wait"))
     assert response.status_code == 200, response.text
@@ -350,7 +360,7 @@ def approval_conditions_of(world, **overrides):
         200, [{"server_id": "srv-wait", "mcp_access_groups": []}])
     world.stub.routes[("/key/info", "control-plane-key", "k-token")] = (200, {
         "key": "k-token",
-        "info": {"user_id": "human-1", "team_id": None,
+        "info": {"user_id": "human-9", "team_id": None,
                  "object_permission": {"mcp_servers": ["srv-wait"]}}})
     response = grant(world, relation_of(world, "srv-wait"), **overrides)
     return response, world.query("SELECT conditions FROM mint.approvals")

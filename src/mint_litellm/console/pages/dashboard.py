@@ -292,7 +292,7 @@ def ledger_cards(series, previous):
     )
     return [
         card(
-            "호출 수", total, None, f"전 기간 {before}" if before else None, None, series["total"]
+            "호출 수", total, None, f"이전 기간 {before}" if before else None, None, series["total"]
         ),
         card(
             "차단",
@@ -343,6 +343,7 @@ def ledger(
         return (parsed + timedelta(days=1)) if end and "T" not in text else parsed
 
     error = None
+    bad_filter = False
     try:
         begin, finish = day(since), day(until, end=True)
     except ValueError:
@@ -354,6 +355,7 @@ def ledger(
     except ValueError:
         invocation_id, invocation = None, ""
         error = "호출 식별자 형식이 올바르지 않습니다."
+        bad_filter = True
     now = datetime.now(zone)
     first = now - timedelta(days=reads.LEDGER_DEFAULT_DAYS)
     picked = range_value if range_value in dashboard_reads.HOURS and not begin else ""
@@ -368,6 +370,7 @@ def ledger(
     except ValueError:
         ref = ""
         error = "판정 참조 형식이 올바르지 않습니다."
+        bad_filter = True
     # 판정 참조로 찾을 때 기간을 바꾸지 않았다면 기간 제한 없이 찾는다.
     unbounded = bool(ref) and (not begin or since == first.strftime("%Y-%m-%d"))
     rows = reads.ledger(
@@ -382,7 +385,11 @@ def ledger(
         ref=ref or None,
         page=page,
         invocation_id=invocation_id,
+        peek=True,
     )
+    more = len(rows) > reads.PAGE_SIZE
+    rows = [] if bad_filter else rows[: reads.PAGE_SIZE]  # 잘못된 조건이면 표를 비운다
+    more = more and not bad_filter
     query = {
         "since": since,
         "until": until,
@@ -395,6 +402,14 @@ def ledger(
     }
     params = {**query, "range": picked}
     qs = urlencode({k: v for k, v in params.items() if v})
+    # 내보내기는 화면과 같은 조건(해석된 시작·끝 시각 포함)으로 받는다.
+    exported = {
+        "since": None if unbounded else start.isoformat(),
+        "until": finish.isoformat() if finish else None,
+        "kind": kind, "actor": actor_name, "server_id": server_id, "result": result,
+        "ref": ref, "invocation": invocation_id,
+    }
+    export_qs = urlencode({k: v for k, v in exported.items() if v})
     # 시간대 차트는 지금까지의 같은 길이 기간이다. 날짜를 직접 정했으면 그 날짜부터 지금까지다.
     if picked:
         hours = dashboard_reads.hours_of(picked)
@@ -404,8 +419,11 @@ def ledger(
         hours = dashboard_reads.hours_of(dashboard_reads.DEFAULT_RANGE)
     current = picked or ("" if begin else dashboard_reads.DEFAULT_RANGE)
     conn, instance, name = actor.conn, actor.instance, actor.config.time_zone
-    series = dashboard_reads.decision_series(conn, instance, hours, name)
-    previous = dashboard_reads.decision_series(conn, instance, hours, name, shift=hours)
+    # 카드·차트도 표와 같은 조건(주체·서버·결과·호출)을 따른다
+    cond = {"actor": actor_name, "server_id": server_id, "result": result,
+            "invocation_id": invocation_id}
+    series = dashboard_reads.decision_series(conn, instance, hours, name, **cond)
+    previous = dashboard_reads.decision_series(conn, instance, hours, name, shift=hours, **cond)
     blocked = sum(series["block"])
     shown = None
     if open_id:
@@ -424,6 +442,7 @@ def ledger(
         shown["spend_records"] = _spend_records(actor.config, shown.get("payload"))
     ctx = {
         "rows": rows,
+        "more": more,
         "filters": reads.ledger_filters(actor.conn, actor.instance),
         "q": query,
         "start": start,
@@ -432,6 +451,7 @@ def ledger(
         "servers": [s["server_id"] for s in reads.servers(actor.conn, actor.instance)],
         "error": error,
         "qs": qs,
+        "export_qs": export_qs,
         "range": current,
         "ranges": choices("/ledger", params, "range", RANGES, current),
         "results": choices(
@@ -440,7 +460,9 @@ def ledger(
         "cards": ledger_cards(series, previous),
         "trend": trend_chart(series, previous),
         "trend_has_data": sum(series["total"]) > 0,
-        "reasons": reason_donut(dashboard_reads.block_reasons(conn, instance, hours), blocked),
+        "reasons": reason_donut(
+            dashboard_reads.block_reasons(conn, instance, hours, **cond), blocked
+        ),
         "ev": shown,
     }
     return render(request, "ledger.html", ctx, actor=actor, status=400 if error else 200)

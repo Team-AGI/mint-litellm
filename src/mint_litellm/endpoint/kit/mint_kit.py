@@ -19,7 +19,10 @@
 항목과 묶음이 띄우지 않은 프로세스는 건드리지 않는다. 사용자 수준 설치는 지우지 않고 경보만 남는다.
 목록은 실행기가 읽도록 사용자 캐시에 남긴다.
 
-대상 도구는 묶음의 ``harnesses``(claude, codex)가 정한다. Codex는 관리형이면 관리자 요구 파일
+대상 도구는 묶음의 ``harnesses``(claude, codex, cursor, grok)가 정한다. Cursor는 관리형
+``hooks.json``(failClosed)과 사용자 ``mcp.json``, Grok Build CLI는 사용자 훅 파일과 서버 정의를
+쓴다.
+Codex는 관리형이면 관리자 요구 파일
 (``requirements.toml``: 승인 서버 외 차단, 호출 전·후 훅)을, 사용자 수준이면 ``config.toml``의 표식
 구간을 쓴다. 서버 표는 승인 서버가 없어도 항상 둔다(표가 없으면 Codex는 서버를 제한하지 않는다).
 
@@ -75,6 +78,11 @@ REPORTER_KEY = "reporter.key"  # Windows 관리형: SYSTEM 보고기가 읽는 �
 RETIRED_FILE = "retired.json"  # 마지막 보고 응답의 폐기 서버 목록(실행기가 읽는다)
 LAUNCHED = "launched"  # 실행기가 띄운 서버 프로세스의 기록
 TOOLS_DIR = "tools"  # 실행기가 본 서버별 도구 목록(이름·설명·입력 정의)
+KEY_REJECTED = "key_rejected"  # 서버가 키를 거절(401·403)했다는 표시. check가 문제로 보인다.
+KEY_REJECTED_TEXT = (
+    "MINT 키가 해제되었거나 교체되었습니다. 직원 화면에서 설치 묶음을 다시 받아 설치하세요."
+)
+last_http_error: list[int] = []  # 마지막 보고가 받은 HTTP 오류 코드(없으면 빈 목록)
 TOOLS_SENT = "tools_sent.json"  # 서버 -> 마지막으로 보고한 목록의 해시
 MAX_TOOL_LISTS = 4  # 보고 한 번에 싣는 서버 수(나머지는 다음 보고)
 SYSTEMD_DIR = "/etc/systemd/system"
@@ -120,6 +128,7 @@ def post(url: str, key: str, payload: dict, ca_file: str | None) -> dict | None:
     """보고를 보내고 응답 본문(JSON 객체)을 돌려준다. 닿지 못했거나 거절되면 None."""
     import ssl
 
+    last_http_error.clear()
     request = urllib.request.Request(
         url,
         data=json.dumps(payload).encode(),
@@ -137,8 +146,9 @@ def post(url: str, key: str, payload: dict, ca_file: str | None) -> dict | None:
                 answer = None
             return answer if isinstance(answer, dict) else {"recorded": True}
     except urllib.error.HTTPError as error:
-        if error.code == 403:
-            sys.stderr.write("MINT 키가 만료되었습니다. 설치 묶음 재발급을 요청하세요." + NL)
+        last_http_error[:] = [error.code]
+        if error.code in (401, 403):
+            sys.stderr.write(KEY_REJECTED_TEXT + NL)
         return None
     except OSError:
         return None
@@ -642,9 +652,16 @@ def codex_servers(mcp: dict) -> str:
     )
 
 
+# 판정 대상: MCP 도구와 하네스 내장 도구. Codex는 셸(Bash)과 apply_patch(파일 편집)에만 훅이
+# 걸리고 웹 검색 같은 호스팅 도구에는 걸리지 않는다.
+CLAUDE_MATCHER = "mcp__.*|Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|WebFetch|WebSearch"
+CODEX_MATCHER = "^(mcp__.*|Bash|apply_patch)$"
+
+
 def codex_hooks(commands: dict) -> str:
     return "".join(
-        f'{NL}[[hooks.{event}]]{NL}matcher = "^mcp__"{NL}{NL}[[hooks.{event}.hooks]]{NL}'
+        f"{NL}[[hooks.{event}]]{NL}matcher = {toml(CODEX_MATCHER)}{NL}{NL}"
+        f'[[hooks.{event}.hooks]]{NL}'
         f'type = "command"{NL}command = {toml(line)}{NL}timeout = {timeout}{NL}'
         for event, (line, timeout) in commands.items()
     )
@@ -657,12 +674,18 @@ def codex_identities(mcp: dict) -> str:
     )
 
 
+# 게이트웨이는 승인을 기다리는 호출을 최대 300초(MINT_APPROVAL_HOLD_SECONDS 상한) 붙잡는다.
+# 하네스의 도구 시간 제한이 그보다 짧으면 승인되기 전에 하네스가 호출을 끊는다.
+TOOL_WAIT_SECONDS = 330
+
+
 def codex_gateway_server(gateway: dict) -> str:
     """Codex의 게이트웨이 서버 표(주소와, 사용자에 결속된 MCP 전용 키를 담은 인증 머리글)."""
     bearer = toml("Bearer " + gateway["key"])
     return (
         f"{NL}[mcp_servers.{toml(gateway['name'])}]{NL}url = {toml(gateway['url'])}{NL}"
         f"http_headers = {{ Authorization = {bearer} }}{NL}"
+        f"tool_timeout_sec = {TOOL_WAIT_SECONDS}{NL}"
     )
 
 
@@ -794,6 +817,56 @@ def put_block_tables(text: str, mcp: dict) -> tuple[str, list[str]]:
     return text[: found.start()] + body + END + text[found.end() :], done
 
 
+# --- Cursor·Grok Build CLI: 훅 파일·MCP 설정 조각 ---
+
+CURSOR_DIR = "/etc/cursor"
+GROK_DIR = "/etc/grok"
+CURSOR_EVENT = "beforeMCPExecution"
+
+
+def cursor_hooks_text(existing: str | None, line: str, timeout: int) -> str:
+    """Cursor 훅 파일: 기존 내용은 두고 MINT 항목만 더한다. 기본이 fail-open이라 failClosed."""
+    try:
+        data = json.loads(existing) if existing else {}
+    except ValueError:
+        data = {}
+    data = data if isinstance(data, dict) else {}
+    data["version"] = 1
+    hooks = data["hooks"] if isinstance(data.get("hooks"), dict) else {}
+    data["hooks"] = hooks
+    kept = [
+        h for h in hooks.get(CURSOR_EVENT) or []
+        if not (isinstance(h, dict) and AGENT in str(h.get("command")))
+    ]
+    kept.append({"command": line, "timeout": timeout, "failClosed": True})
+    hooks[CURSOR_EVENT] = kept
+    return json.dumps(data, indent=2, ensure_ascii=False) + NL
+
+
+def grok_hooks_text(line: str, timeout: int) -> str:
+    """Grok Build CLI 사용자 훅 파일(``~/.grok/hooks/*.json``). 도구 이름 필터는 두지 않는다."""
+    hook = {"type": "command", "command": line, "timeout": timeout}
+    return json.dumps({"hooks": {"PreToolUse": [{"hooks": [hook]}]}}, indent=2) + NL
+
+
+def cursor_mcp_entries(mcp: dict, gateway: dict | None) -> dict:
+    found = {n: {"command": i["command"], "args": i["args"]} for n, i in mcp.items()}
+    if gateway:
+        found[gateway["name"]] = {
+            "url": gateway["url"], "headers": {"Authorization": "Bearer " + gateway["key"]},
+        }
+    return found
+
+
+def grok_gateway_server(gateway: dict) -> str:
+    """Grok의 게이트웨이 서버 표(주소와 인증 머리글)."""
+    bearer = toml("Bearer " + gateway["key"])
+    return (
+        f"{NL}[mcp_servers.{toml(gateway['name'])}]{NL}url = {toml(gateway['url'])}{NL}"
+        f"headers = {{ Authorization = {bearer} }}{NL}"
+    )
+
+
 # --- 단말의 하네스 설정에서 찾은, 이 묶음이 관리하지 않는 MCP 항목(자격 증명이 없는 값만) ---
 
 HOST_NAME = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
@@ -863,7 +936,27 @@ def scan_local_mcp(home: Path) -> list[dict]:
             add("codex", tomllib.loads(text).get("mcp_servers"))
     except (ImportError, OSError, ValueError):
         pass  # tomllib은 Python 3.11부터라 이전 판본에서는 Codex 설정을 읽지 않는다.
+    scan_cursor_grok(home, add)
     return sorted(found.values(), key=lambda i: (i["harness"], i["name"]))[:MAX_ITEMS]
+
+
+def scan_cursor_grok(home: Path, add) -> None:
+    """Cursor(``~/.cursor/mcp.json``)와 Grok Build CLI(``~/.grok/config.toml``)의 MCP 항목."""
+    try:
+        path = home / ".cursor/mcp.json"
+        if path.stat().st_size <= MAX_CONFIG:
+            add("cursor", json.loads(path.read_text(encoding="utf-8-sig")).get("mcpServers"))
+    except (OSError, ValueError, AttributeError):
+        pass
+    try:
+        import tomllib
+
+        path = home / ".grok/config.toml"
+        if path.stat().st_size <= MAX_CONFIG:
+            add("grok", tomllib.loads(strip_block(path.read_bytes().decode("utf-8-sig")))
+                .get("mcp_servers"))
+    except (ImportError, OSError, ValueError):
+        pass
 
 
 def scan_tool_lists(home: Path) -> list[dict]:
@@ -1191,12 +1284,15 @@ class Kit:
             data = os.environ.get("ProgramData", "C:/ProgramData").replace("\\", "/")
             managed_programs = f"{files}/MintEndpoint"
             self.claude_dir, self.codex_dir = f"{files}/ClaudeCode", f"{data}/OpenAI/Codex"
+            self.cursor_dir, self.grok_dir = f"{data}/Cursor", f"{data}/grok"
             user_programs = str(self.home / "AppData/Local/MintEndpoint").replace("\\", "/")
         else:
             managed_programs, self.claude_dir, self.codex_dir = PROGRAMS, MANAGED_DIR, CODEX_DIR
+            self.cursor_dir, self.grok_dir = CURSOR_DIR, GROK_DIR
             user_programs = str(self.home / ".local/lib/mint-endpoint")
         self.system_paths = (
-            managed_programs, self.claude_dir, self.codex_dir, SYSTEMD_DIR, APPARMOR_DIR, BIN_DIR
+            managed_programs, self.claude_dir, self.codex_dir, SYSTEMD_DIR, APPARMOR_DIR, BIN_DIR,
+            self.cursor_dir, self.grok_dir,
         )
         self.answer: dict = {}  # 마지막 보고의 응답
 
@@ -1204,6 +1300,8 @@ class Kit:
         self.programs = self.physical(self.logical_programs)
         self.managed_dir = self.physical(self.claude_dir)
         self.codex_managed_dir = self.physical(self.codex_dir)
+        self.cursor_managed_dir = self.physical(self.cursor_dir)
+        self.grok_managed_dir = self.physical(self.grok_dir)
         self.owner = (account.uid, account.gid) if chown else None
 
     # Windows SYSTEM 보고기: 사용자 프로필은 읽지도 쓰지도 않는다(경로 점검과 사용 사이의 경합을
@@ -1270,19 +1368,20 @@ class Kit:
         write_atomic(path, data, mode, owner)
         state["files"][logical] = sha256_bytes(data)
 
-    def hook_common(self, contracts: str) -> list[str]:
+    def hook_common(self, contracts: str, harness: str) -> list[str]:
         common = [
             "--url", self.config["decide_url"],
             "--key-file", f"~/{KEY_REL}",
             "--contracts", contracts,
             "--state-dir", f"~/{STATE_REL}",
+            "--harness", harness,
         ]  # fmt: skip
         if self.config.get("ca_pem"):
             common += ["--ca-file", f"{self.logical_programs}/ca.pem"]
         return common
 
     def hook_commands(self, python: str, agent: str, contracts: str) -> dict:
-        common = self.hook_common(contracts)
+        common = self.hook_common(contracts, "claude")
         before = {
             "type": "command", "command": python, "args": [agent, "pre", *common],
             "timeout": 3, "onFailure": "block",
@@ -1292,11 +1391,13 @@ class Kit:
         }  # fmt: skip
         failed = {**after, "args": [agent, "post-failure", *common]}
         hooks = {"PreToolUse": before, "PostToolUse": after, "PostToolUseFailure": failed}
-        return {event: [{"matcher": "mcp__.*", "hooks": [hook]}] for event, hook in hooks.items()}
+        return {
+            event: [{"matcher": CLAUDE_MATCHER, "hooks": [hook]}] for event, hook in hooks.items()
+        }
 
     def codex_hook_commands(self, python: str, agent: str, contracts: str) -> dict:
         """Codex에는 실패 호출 훅이 없다. 보고되지 않은 호출은 MINT가 결과 미확인으로 남긴다."""
-        common = self.hook_common(contracts)
+        common = self.hook_common(contracts, "codex")
         return {
             "PreToolUse": (self.shell_line([python, agent, "pre", *common]), 3),
             "PostToolUse": (self.shell_line([python, agent, "post", *common]), 5),
@@ -1414,7 +1515,9 @@ class Kit:
             "mcp_servers": [],
             "python": "",
         }
-        for kept in ("settings_backup", "codex_config_backup"):
+        for kept in (
+            "settings_backup", "codex_config_backup", "grok_config_backup", "cursor_mcp_created"
+        ):
             if kept in previous:
                 state[kept] = previous[kept]
         self.ensure_sandbox_tool(state)
@@ -1470,6 +1573,10 @@ class Kit:
         if "codex" in self.harnesses:
             hooks = self.codex_hook_commands(python, agent, contracts)
             names |= set(self.install_codex(state, mcp, hooks))
+        if "cursor" in self.harnesses:
+            names |= set(self.install_cursor(state, mcp, python, agent, contracts))
+        if "grok" in self.harnesses:
+            names |= set(self.install_grok(state, mcp, python, agent, contracts))
         state["mcp_servers"] = sorted(names)
         self.install_reporter(state, python)
         self.install_shim(state, python)
@@ -1481,6 +1588,8 @@ class Kit:
         if self.owner is not None:
             os.chown(key_path.parent, *self.owner)
         write_atomic(self.state_file, json.dumps(state, indent=1).encode(), 0o644)
+        for stale in (TOOLS_SENT, KEY_REJECTED):  # 새 키로 도구 목록을 다시 보고하게 한다
+            (self.home / STATE_REL / stale).unlink(missing_ok=True)
         return state
 
     def install_reporter(self, state: dict, python: str) -> None:
@@ -1717,6 +1826,7 @@ class Kit:
                 "type": "http", "url": gateway["url"],
                 "headers": {"Authorization": "Bearer " + gateway["key"]},
             }
+            settings["env"] = {"MCP_TOOL_TIMEOUT": str(TOOL_WAIT_SECONDS * 1000)}
         self.write_tracked(
             state,
             self.managed_dir / "managed-mcp.json",
@@ -1839,6 +1949,159 @@ class Kit:
         state["codex_config_sha"] = sha256_bytes(text.encode())
         return sorted(mine)
 
+    def hook_line(self, python: str, agent: str, command: str, contracts: str) -> str:
+        """Cursor·Grok가 셸로 실행하는 훅 한 줄(Windows 셸 종류는 공식 문서에 없어 cmd 규칙)."""
+        harness = command.removesuffix("-pre")  # cursor-pre -> cursor, grok-pre -> grok
+        parts = [python, agent, command, *self.hook_common(contracts, harness)]
+        return subprocess.list2cmdline(parts) if self.windows else shlex.join(parts)
+
+    def own_new_dirs(self, path: Path) -> None:
+        """루트가 홈 아래에 새로 만든 폴더·파일을 사용자 소유로 맞춘다."""
+        if self.owner is None:
+            return
+        for item in (path, *path.parents):
+            if item == self.home or not item.is_relative_to(self.home):
+                break
+            os.chown(item, *self.owner)
+
+    def install_cursor(
+        self, state: dict, mcp: dict, python: str, agent: str, contracts: str
+    ) -> list[str]:
+        """Cursor: 관리형이면 시스템 hooks.json, 아니면 사용자 hooks.json에 beforeMCPExecution 훅
+        (failClosed). 게이트웨이·승인 서버는 사용자 ``~/.cursor/mcp.json``에 둔다."""
+        line = self.hook_line(python, agent, "cursor-pre", contracts)
+        if self.managed:
+            path, logical = self.cursor_managed_dir / "hooks.json", f"{self.cursor_dir}/hooks.json"
+        else:
+            path = self.home / ".cursor/hooks.json"
+            logical = str(path)
+        before = path.read_bytes().decode("utf-8-sig") if path.exists() else None
+        if before is not None and sha256_bytes(before.encode()) == state["files"].get(logical):
+            before = None  # 우리가 쓴 것: 새로 쓴다
+        self.write_tracked(
+            state, path, logical, cursor_hooks_text(before, line, 5).encode(), 0o644,
+            None if self.managed else self.owner,
+        )
+        if not self.managed:
+            self.own_new_dirs(path)
+        config = self.home / ".cursor/mcp.json"
+        try:
+            data = json.loads(config.read_text(encoding="utf-8-sig")) if config.exists() else {}
+        except (OSError, ValueError):
+            data = None  # 읽지 못하는 파일은 건드리지 않는다.
+        if not isinstance(data, dict):
+            return []
+        listed = data["mcpServers"] if isinstance(data.get("mcpServers"), dict) else {}
+        data["mcpServers"] = listed
+        mine = {
+            name: entry
+            for name, entry in cursor_mcp_entries(mcp, self.gateway()).items()
+            if name not in listed
+            or is_ours_entry(listed[name], name)
+            or listed[name].get("url") == entry.get("url")
+        }
+        listed.update(mine)
+        state["cursor_mcp_created"] = state.get("cursor_mcp_created", not config.exists())
+        state["cursor_mcp"] = sorted(mine)
+        mode = (config.stat().st_mode & 0o777) if config.exists() else 0o600
+        write_atomic(
+            config, json.dumps(data, indent=2, ensure_ascii=False).encode(), mode, self.owner
+        )
+        self.own_new_dirs(config)
+        return sorted(set(mine) & set(mcp))
+
+    def uninstall_cursor_mcp(self, state: dict) -> None:
+        config = self.home / ".cursor/mcp.json"
+        try:
+            data = json.loads(config.read_text(encoding="utf-8-sig"))
+            listed = data["mcpServers"]
+            for name in state.get("cursor_mcp", []):
+                listed.pop(name, None)
+            if not listed and len(data) == 1 and state.get("cursor_mcp_created"):
+                config.unlink()
+            else:
+                write_atomic(
+                    config, json.dumps(data, indent=2, ensure_ascii=False).encode(),
+                    config.stat().st_mode & 0o777, self.owner,
+                )
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            pass
+
+    def grok_config(self) -> Path:
+        return self.home / ".grok/config.toml"
+
+    def install_grok(
+        self, state: dict, mcp: dict, python: str, agent: str, contracts: str
+    ) -> list[str]:
+        """Grok Build CLI: PreToolUse 훅은 사용자 ``~/.grok/hooks/mint.json``(관리형 훅 위치는
+        문서에 없다). 서버 정의는 Linux 관리형이면 ``/etc/grok/managed_config.toml``, 그 밖은
+        ``~/.grok/config.toml`` 표식 구간."""
+        line = self.hook_line(python, agent, "grok-pre", contracts)
+        hooks = self.home / ".grok/hooks/mint.json"
+        self.write_tracked(
+            state, hooks, str(hooks), grok_hooks_text(line, 5).encode(), 0o644, self.owner
+        )
+        self.own_new_dirs(hooks)
+        gateway = self.gateway()
+        gateway_toml = grok_gateway_server(gateway) if gateway else ""
+        if self.managed and not self.windows:
+            self.write_tracked(
+                state, self.grok_managed_dir / "managed_config.toml",
+                f"{self.grok_dir}/managed_config.toml",
+                (codex_servers(mcp) + gateway_toml).lstrip(NL).encode(),
+                0o640 if gateway else 0o644, self.secret_owner() if gateway else None,
+            )  # fmt: skip
+            return sorted(mcp)
+        path = self.grok_config()
+        raw = path.read_bytes() if path.exists() else None
+        original = raw.decode("utf-8-sig") if raw is not None else None
+        rest = strip_block(original or "")
+
+        def taken(name: str) -> bool:
+            return bool(re.search(rf"(?m)^\[mcp_servers\.[\"']?{re.escape(name)}[\"']?\]", rest))
+
+        mine = {n: i for n, i in mcp.items() if not taken(n)}
+        body = codex_servers(mine)
+        if gateway and not taken(gateway["name"]):
+            body += gateway_toml
+        state.setdefault("grok_config_backup", original)
+        text = with_block(original or "", body)
+        mode = (path.stat().st_mode & 0o777) if raw else 0o600
+        write_atomic(path, text.encode(), mode, self.owner)
+        self.own_new_dirs(path)
+        state["grok_config_sha"] = sha256_bytes(text.encode())
+        return sorted(mine)
+
+    def uninstall_grok_config(self, state: dict) -> None:
+        path = self.grok_config()
+        if not path.exists():
+            return
+        current = path.read_bytes().decode("utf-8-sig")
+        backup = state.get("grok_config_backup")
+        mode = path.stat().st_mode & 0o777
+        if sha256_bytes(current.encode()) != state["grok_config_sha"]:
+            write_atomic(path, strip_block(current).encode(), mode, self.owner)
+        elif backup is None:
+            path.unlink()
+        else:
+            write_atomic(path, backup.encode(), mode, self.owner)
+
+    def harness_problems(self, state: dict) -> list[str]:
+        """Cursor·Grok 훅 파일이 우리가 쓴 그대로 있는가."""
+        found = []
+        for logical, digest in state.get("files", {}).items():
+            tail = logical.replace("\\", "/")
+            if "cursor" in self.harnesses and tail.lower().endswith("cursor/hooks.json"):
+                label = "Cursor"
+            elif "grok" in self.harnesses and tail.endswith(".grok/hooks/mint.json"):
+                label = "Grok Build CLI"
+            else:
+                continue
+            path = self.physical(logical)
+            if not path.exists() or sha256_file(path) != digest:
+                found.append(f"{label} 훅 파일이 없거나 바뀌었습니다: {logical}")
+        return found
+
     # -- 제거 -------------------------------------------------------------------------------------
 
     def user_timer(self, state: dict) -> bool:
@@ -1898,9 +2161,14 @@ class Kit:
             self.uninstall_user(state)
         if "codex_config_sha" in state:
             self.uninstall_codex_config(state)
+        if "grok_config_sha" in state:
+            self.uninstall_grok_config(state)
+        if state.get("cursor_mcp"):
+            self.uninstall_cursor_mcp(state)
         shutil.rmtree(self.programs, ignore_errors=True)
         shutil.rmtree(self.home / STATE_REL, ignore_errors=True)
         extra = [self.codex_managed_dir.parent] if self.windows else []
+        extra += [self.cursor_managed_dir, self.grok_managed_dir]
         wants = self.physical(SYSTEMD_DIR) / "timers.target.wants"
         folders = (
             self.managed_dir, self.codex_managed_dir, *extra, wants, self.home / ".config/mint"
@@ -2018,7 +2286,10 @@ class Kit:
         """설치한 도구의 판본. 도구가 알려 준 글자 그대로(둘이면 가운뎃점으로 잇는다)."""
         found = [
             version
-            for name, probe in (("claude", claude_version), ("codex", codex_version))
+            for name, probe in (
+                ("claude", claude_version), ("codex", codex_version),
+                ("cursor", cursor_version), ("grok", grok_version),
+            )
             if name in self.harnesses and (version := probe(self.home))
         ]
         return " · ".join(found)[:64] or None
@@ -2070,6 +2341,8 @@ class Kit:
         trust = self.hook_trust(state) if installed else None
         if trust:
             payload["hook_trust"] = trust
+        if not self.config.get("key"):
+            return False  # 키를 모르면 보고하지 않는다(설치·제거 자체는 그대로).
         url = self.config["decide_url"].rstrip("/") + REPORT_PATH
         ca_pem = self.config.get("ca_pem")
         if not ca_pem:
@@ -2122,12 +2395,15 @@ class Kit:
                 problems.append(
                     "Codex 서버 정의가 승인 서버 목록과 다릅니다. `install.cmd sync`로 맞추세요."
                 )
+        problems += self.harness_problems(state)
         trust = self.hook_trust(state)
         if trust == "untrusted":
             problems.append(
                 "Codex가 MINT 훅을 아직 신뢰하지 않아 호출 전 판정이 실행되지 않습니다. "
                 "Codex에서 훅을 검토해 신뢰하세요."
             )
+        if any((d / KEY_REJECTED).exists() for d in (self.home / STATE_REL, self.programs)):
+            problems.append(KEY_REJECTED_TEXT)
         if state.get("mode") == "user":
             problems.append("사용자 수준 설치라 관리되지 않습니다. 관리자 권한으로 재설치하세요.")
         return {**state, "problems": problems, "hook_trust": trust}, problems
@@ -2524,9 +2800,13 @@ def report_installed(
     kit.config["key"] = key
     kit.run_as_user = run
     kit.system_mode = system
+    marker = stamp.parent / KEY_REJECTED
     if not kit.report(state, "installed"):
         run(lambda: stamp.unlink(missing_ok=True))  # 닿지 못했으면 다음 기회에 다시 보낸다.
+        if set(last_http_error) & {401, 403}:
+            run(lambda: marker.write_text("1"))
         return 1
+    run(lambda: marker.unlink(missing_ok=True))
     retired = kit.answer.get("retired")
     names: list[str] = []
     changed = False
@@ -2582,6 +2862,14 @@ def tool_version(path: str | None) -> str | None:
 
 def claude_version(home: Path) -> str | None:
     return tool_version(find_claude(home))
+
+
+def cursor_version(home: Path) -> str | None:
+    return tool_version(find_tool("cursor", home))
+
+
+def grok_version(home: Path) -> str | None:
+    return tool_version(find_tool("grok", home))
 
 
 def codex_version(home: Path) -> str | None:
@@ -2684,6 +2972,12 @@ def main(argv: list[str] | None = None) -> int:
                 "검토해 신뢰해야 호출 전 판정이 시작됩니다(`mint check`로 확인)."
             )
         return 0
+    if not kit.config.get("key"):
+        # 설치된 복사본(`mint uninstall`)의 kit.json에는 키가 없다. 지우기 전에 키 파일에서 읽는다.
+        try:
+            kit.config["key"] = (kit.home / KEY_REL).read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
     result = kit.uninstall()
     reported = kit.report({"mode": result.get("mode")}, "removed")
     kept = result.get("kept") or []

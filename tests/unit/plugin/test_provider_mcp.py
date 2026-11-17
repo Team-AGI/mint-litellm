@@ -83,6 +83,15 @@ class TestExternalMcp:
         data = {"tools": [{"type": "mcp", "server_label": "drive", "connector_id": "x"}]}
         assert external_mcp(data, "aresponses") == "tools"
 
+    @pytest.mark.parametrize("tool", [
+        {"type": "mcp_server", "name": "x", "url": EXTERNAL},                # Gemini Interactions
+        {"type": "connector", "connector_id": "c-1"},                         # Mistral
+        {"type": "mcp_toolset", "mcp_server_name": "x"},                      # Anthropic
+        {"type": "mcp", "server_label": "x", "project_connection_id": "p"},  # Azure Foundry
+    ])
+    def test_other_providers_hosted_mcp_forms_are_found(self, tool):
+        assert external_mcp({"tools": [tool]}, "aresponses") == "tools"
+
     def test_anthropic_mcp_servers_are_found_even_beside_other_tools(self):
         data = {"mcp_servers": [{"type": "url", "url": EXTERNAL, "name": "x"}], "tools": []}
         assert external_mcp(data, "anthropic_messages") == "mcp_servers"

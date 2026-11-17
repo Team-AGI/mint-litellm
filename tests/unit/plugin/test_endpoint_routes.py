@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from plugin_helpers import (
     KEY,
     call_approval,
+    denial,
     evaluator,
     harness,
     server_row,
@@ -286,3 +287,65 @@ def test_outcomes_are_asked_for_the_user_of_the_key_only(tmp_path):
     assert post(client, "/mint/v1/endpoint/outcomes", {"user_id": "u2"}).status_code == 422
     assert post(client, "/mint/v1/endpoint/outcomes", {}, headers={}).status_code == 401
     assert [u for u, _ in FakeDatabase.outcome_calls[-2:]] == ["u1", "u2"]
+
+
+def builtin_body(**override):
+    data = {"server": "builtin:claude", "tool": "Bash", "arguments": {"command": "ls"},
+            "tool_use_id": "toolu_b"}
+    return data | override
+
+
+def test_a_built_in_tool_is_allowed_and_recorded_under_the_virtual_server(tmp_path):
+    client, h = build(tmp_path, snapshot(server=None, approvals=()))
+    answer = post(client, "/mint/v1/decide", builtin_body()).json()
+    assert answer["decision"] == "allow"
+    (event,) = h.store.of_kind("decision_evaluated")
+    assert event.payload["resolved_server_id"] == "builtin:claude"
+    assert event.payload["tool"] == "Bash"
+    report = {"reference": answer["reference"], "outcome": "success", "size_bytes": 3}
+    assert post(client, "/mint/v1/result", report).json() == {"recorded": True}
+
+
+def test_an_admin_denial_by_tool_name_blocks_one_built_in_tool_only(tmp_path):
+    deny = denial(scope_type="org", scope_id="org1", tools=("Bash",))
+    client, _ = build(tmp_path, snapshot(server=None, approvals=(), denials=(deny,)))
+    blocked = post(client, "/mint/v1/decide", builtin_body()).json()
+    assert blocked["decision"] == "deny"
+    assert post(client, "/mint/v1/decide", builtin_body(tool="Edit")).json()["decision"] == "allow"
+
+
+def test_a_built_in_tool_the_policy_marks_risky_waits_for_a_call_approval(tmp_path):
+    client, _ = build(
+        tmp_path, snapshot(server=None, approvals=()),
+        evaluate=evaluator("RequireApproval", obligations=REQUIRE),
+    )
+    answer = post(client, "/mint/v1/decide", builtin_body()).json()
+    assert answer["decision"] == "deny"
+    assert answer["error"]["code"] == "MINT-CALL-APPROVAL-REQUIRED"
+
+
+def test_the_contract_is_required_for_registered_servers_and_forbidden_for_built_ins(tmp_path):
+    client, _ = build(tmp_path)
+    assert post(client, "/mint/v1/decide", builtin_body(server="srv-1")).status_code == 422
+    no_contract = {k: v for k, v in body().items() if k != "contract"}
+    assert post(client, "/mint/v1/decide", no_contract).status_code == 422
+    forged = builtin_body(contract=CONTRACT.model_dump(mode="json"))
+    assert post(client, "/mint/v1/decide", forged).status_code == 422
+
+
+def test_a_built_in_tool_reaches_the_policy_as_an_approved_server_with_its_fixed_contract(
+    tmp_path,
+):
+    calls: list = []
+    snap = snapshot(server=None, approvals=())
+    client, _ = build(tmp_path, snap, evaluate=evaluator(calls=calls))
+    post(client, "/mint/v1/decide", builtin_body())
+    server = calls[-1]["server"]
+    # 로컬 서버 규칙(승인된 실행 계약 없음·불일치)에 걸리지 않도록 고정 계약을 승인본으로 둔다
+    assert server["status"] == "approved"
+    assert server["exec_approved_sha256"] == server["exec_contract_sha256"]
+    # 이름 추정(셸 = 실행 = 고위험)으로 셸마다 호출별 승인을 요구하지 않는다
+    assert "risk_grade" not in calls[-1]["tool"] and server["contract_status"] == "none"
+    # 승인 행 없이 기본 허용: 승인 없음(R1)으로 막히지 않게 정책 형식에 맞는 기본 승인을 넘긴다
+    approval = calls[-1]["approval"]
+    assert approval["present"] is True and approval["class"] == "standard"

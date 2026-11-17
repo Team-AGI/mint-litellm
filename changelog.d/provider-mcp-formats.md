@@ -1,0 +1,1 @@
+- 공급자 쪽 호스티드 MCP 차단에 Gemini `mcp_server`, Anthropic `mcp_toolset`, Mistral `connector` 형식을 더했습니다.

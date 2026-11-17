@@ -18,14 +18,14 @@
 {% elif rows %}
 <table class="clickable"><thead><tr><th>서버</th><th>조직</th><th>전송</th><th>인증</th><th>도구</th><th>승인 만료</th><th>동의</th></tr></thead><tbody>
 {% for r in rows %}<tr>
-<td><a href="/staff?open={{ r.ref | urlencode }}">{{ r.server_id }}</a></td><td>{{ r.org_name }}</td>
+<td><a href="/staff?open={{ r.ref | urlencode }}">{{ r.server_name }}</a></td><td>{{ r.org_name }}</td>
 <td>{{ L.pick(L.TRANSPORT, r.transport) if r.transport else '—' }}</td><td>{{ L.pick(L.AUTH_TYPE, r.auth_type) if r.auth_type else '—' }}</td>
 <td>{{ (r.tools | join) or '—' }}</td><td class="nowrap">{{ r.valid_until | when if r.valid_until else '—' }}</td>
 <td>{{ m.badge(L.CONSENT_STATE, r.state) }}{% if r.expiring %} · <span class="nowrap">{{ r.consent_until | when }}</span>{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
 {% else %}{% if pending_calls %}<p>처리 대기 중인 호출 승인 요청이 {{ pending_calls }}건 있습니다. <a href="/staff/confirmations?tab=mine">요청 상태 확인</a></p>{% endif %}{{ m.empty('쓸 수 있는 서버가 없습니다', '/staff/confirmations', '내 요청 확인') }}<p>담당자에게 서버 접근을 요청하세요. 내 요청에서 처리 상태를 확인하세요.</p>{% endif %}
-{% if selected %}{% call m.drawer(selected.server_id, '/staff', has_input=selected.can_consent) %}
+{% if selected %}{% call m.drawer(selected.server_name, '/staff', has_input=selected.can_consent) %}
 <dl class="detail">
   <dt>조직</dt><dd>{{ selected.org_name }}</dd>
   <dt>전송</dt><dd>{{ L.pick(L.TRANSPORT, selected.transport) if selected.transport else '—' }}</dd>

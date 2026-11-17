@@ -14,11 +14,11 @@
 <table><thead><tr><th>이름</th><th>역할</th><th>사용자</th><th>Slack</th><th>만료</th><th></th></tr></thead><tbody>
 {% for o in operators %}<tr><td>{{ o.name }}</td><td>{{ L.pick(L.ROLE, o.role) }}</td><td>{{ o.user_id | blank }}</td><td>{{ o.slack_user | blank }}</td><td class="nowrap">{{ o.expires_at | when }}</td>
 <td>{% if actor.role == 'admin' %}<div class="row-actions">
-<form method="post" action="/operators/{{ o.name | urlencode }}/role" class="row-actions">
+{% set role_choices = ['admin', 'approver', 'viewer'] | reject('equalto', o.role) | select('in', ['admin', 'approver', 'viewer'] if o.user_id else ['viewer']) | list %}{% if role_choices %}<form method="post" action="/operators/{{ o.name | urlencode }}/role" class="row-actions">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ o.state_version }}">
-  <select name="role" aria-label="{{ o.name }} 역할">{% for k in ['admin', 'approver', 'viewer'] %}<option value="{{ k }}"{% if o.role == k %} selected{% endif %}>{{ L.pick(L.ROLE, k) }}</option>{% endfor %}</select>
+  <select name="role" aria-label="{{ o.name }} 역할">{% for k in role_choices %}<option value="{{ k }}">{{ L.pick(L.ROLE, k) }}</option>{% endfor %}</select>
   <button type="submit">역할 변경</button>
-</form>
+</form>{% endif %}
 {% if o.role != 'viewer' %}<form method="post" action="/operators/{{ o.name | urlencode }}/chat-bind" class="row-actions">
   {{ m.csrf(actor) }}<input name="slack_user" value="{{ o.slack_user or '' }}" placeholder="Slack 사용자" pattern="[UW][A-Z0-9]{2,31}" aria-label="{{ o.name }} Slack 사용자">
   <button type="submit">Slack 결속</button>
@@ -66,7 +66,7 @@
 {% else %}<div class="empty"><h3>백업·이전 기록이 없습니다</h3></div>{% endif %}
 <h2>SIEM 전달</h2>
 {{ m.copy_cmd('mint-litellm siem add 이름 --kind syslog --endpoint tls://호스트:6514') }}
-{{ m.copy_cmd('mint-litellm siem add 이름 --kind hec --endpoint https://호스트:8088 --token-env 토큰변수') }}
+{{ m.copy_cmd('mint-litellm siem add 이름 --kind hec --endpoint https://호스트:8088 --token-env MINT_SIEM_HEC_TOKEN') }}
 {% if siem %}
 <table><thead><tr><th>이름</th><th>종류</th><th>주소</th><th>상태</th><th>마지막 전달</th><th class="num">밀린 사건</th><th class="num">보낸 사건</th><th>마지막 시험</th><th></th></tr></thead><tbody>
 {% for s in siem %}{% set st = 'error' if s.failing_since else ('ok' if s.last_delivered_at else 'wait') %}<tr><td>{{ s.name }}</td><td>{{ L.pick(L.SIEM_KIND, s.kind) }}</td><td>{{ s.address }}</td>

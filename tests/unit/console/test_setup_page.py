@@ -164,7 +164,9 @@ def test_every_role_can_open_the_checklist_and_the_menu_lists_it(world, role):
 def test_setup_shows_ordered_introduction_and_configured_gateway_link(world, admin, monkeypatch):
     monkeypatch.setenv("MINT_LITELLM_UI_URL", "https://gateway.example.test/ui")
     html = admin.get("/setup").text
-    labels = ["LiteLLM에서 서버 등록", "MINT 신청", "검사·증빙", "도입 승인", "이용 승인"]
+    labels = ["LiteLLM에서 서버 등록", "허용 목록에 제공자 추가", "MINT 신청", "검사·증빙",
+              "도입 승인", "이용 승인"]
     assert [html.index(label) for label in labels] == sorted(html.index(label) for label in labels)
     assert 'href="https://gateway.example.test/ui"' in html
     assert "운영자에게 알림 주소 설정 요청" in html
+    assert "object_permission.mcp_servers" in html and "evidence attach" in html

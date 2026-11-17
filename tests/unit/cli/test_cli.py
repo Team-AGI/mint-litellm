@@ -216,7 +216,7 @@ def test_token_file_option(mint):
 def test_full_activation_path_through_the_cli(mint):
     boss = bootstrap(mint)
     appr = mint.token(mint.run("operator", "add", "ap", "--role", "approver", "--user-id",
-                               "human-1", token=boss)[1])
+                               "human-3", token=boss)[1])  # 키(GOOD_KEY) 주인과 다른 승인자
     assert mint.run("org", "add", "acme", "--name", "ACME", token=boss)[0] == 0
     assert mint.run("org", "bind", "--org", "acme", "--user", "human-1", token=boss)[0] == 0
     code, _, err = mint.run("server", "register", "ctl-everything", token=boss)
@@ -229,7 +229,7 @@ def test_full_activation_path_through_the_cli(mint):
     # 신청자와 승인자가 같은 사용자이면 거부, --second-approver로 다른 사용자가 확인하면 허용
     args = ["approve", "--relation", relation, "--scope", "key", "--scope-id", GOOD_KEY,
             "--tools", "echo", "--valid-until", FAR_FUTURE, "--basis", "근거",
-            "--requested-by", "human-1"]
+            "--requested-by", "human-3"]
     code, _, err = mint.run(*args, token=appr)
     assert code == 1 and "--second-approver" in err
     boss_file = mint.tmp / "boss"
@@ -312,7 +312,7 @@ def test_json_output_names_the_created_object_version_and_event_keys(mint):
     assert relation["id"] == relation["events"][0]["entity_id"]
     assert relation["events"][0]["source_key"] == f"relation:{relation['id']}:1:relation_created"
     appr = mint.token(mint.run("operator", "add", "ap", "--role", "approver", "--user-id",
-                               "human-1", token=boss)[1])
+                               "human-3", token=boss)[1])  # 키(GOOD_KEY) 주인과 다른 승인자
     approval = json.loads(mint.run(
         "approve", "--relation", relation["id"], "--scope", "key", "--scope-id", GOOD_KEY,
         "--tools", "echo", "--valid-until", FAR_FUTURE, "--basis", "b", "--requested-by", "x",
@@ -397,7 +397,7 @@ def test_check_exits_with_three_when_a_required_row_cannot_be_verified(mint):
 def test_approve_flags_store_conditions_and_org_scope_is_refused(mint):
     boss = bootstrap(mint)
     appr = mint.token(mint.run("operator", "add", "ap", "--role", "approver", "--user-id",
-                               "human-1", token=boss)[1])
+                               "human-3", token=boss)[1])  # 키(GOOD_KEY) 주인과 다른 승인자
     mint.run("org", "add", "acme", "--name", "ACME", token=boss)
     mint.run("org", "bind", "--org", "acme", "--user", "human-1", token=boss)
     mint.run("server", "register", "ctl-everything", "--url", "http://u.test/mcp", token=boss)
@@ -879,3 +879,19 @@ def test_init_fix_config_adds_the_missing_modes_once_and_refuses_what_it_cannot_
     )
     code, _, err = mint.run("init", "--fix-config", str(config))
     assert code == 1 and "직접 고친 뒤" in err
+
+
+def test_register_local_and_terminate_print_a_result_line(mint):
+    boss = bootstrap(mint)
+    path = mint.tmp / "contract.json"
+    path.write_text(json.dumps({"executable": "/usr/bin/node", "argv": ["/opt/srv/index.js"],
+                                "executable_sha256": "ab" * 32}), encoding="utf-8")
+    code, out, err = mint.run("server", "register-local", "local-1", "--contract", str(path),
+                              token=boss)
+    assert code == 0, err
+    assert "로컬 서버를 등록했습니다: local-1" in out
+    with psycopg.connect(mint.env["MINT_DATABASE_URL"]) as conn:
+        conn.execute("UPDATE mint.servers SET status = 'approved' WHERE server_id = 'local-1'")
+    code, out, err = mint.run("server", "terminate", "local-1", token=boss)
+    assert code == 0, err
+    assert "서버 종료를 시작했습니다: local-1" in out

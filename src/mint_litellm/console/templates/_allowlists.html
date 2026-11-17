@@ -10,7 +10,7 @@
 {% call m.drawer('허용 추가', '/access?tab=allowlists', true) %}
 <form method="post" action="/allowlists" class="form">
   {{ m.csrf(actor) }}
-  <label>종류<select name="kind">{% for k, v in L.ALLOWLIST_KIND.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></label>
+  <label>종류<select name="kind">{% for k, v in L.ALLOWLIST_KIND.items() %}<option value="{{ k }}">{{ v }} - {{ L.ALLOWLIST_KIND_HELP[k] }}</option>{% endfor %}</select></label>
   <label>값<input name="value" required></label>
   <label>유효 기간(일)<input type="number" name="valid_days" value="90" min="1" max="365"></label>
   <label>메모<input name="note"></label>

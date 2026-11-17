@@ -32,14 +32,14 @@ from mint_litellm.console.core import (
     too_many_attempts,
 )
 from mint_litellm.console.oidc import login_context
-from mint_litellm.console.pages.common import see_other
+from mint_litellm.console.pages.common import see_other, server_names
 from mint_litellm.console.templating import render
-from mint_litellm.control import endpoint_kits, links
+from mint_litellm.control import endpoint_kits, kit_key_sync, links
 from mint_litellm.control.db.connection import connect
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.litellm_admin import LiteLLMError
 from mint_litellm.control.services import console_sessions, reads, staff, staff_intakes
-from mint_litellm.endpoint.kit_build import build_kit
+from mint_litellm.endpoint.kit_build import HARNESSES, build_kit
 from mint_litellm.plugin.snapshot import WINDOW_MAX_USES
 from mint_litellm.types.ids import new_uuid7
 
@@ -125,7 +125,7 @@ def act(
         )
     except psycopg.errors.CheckViolation:
         return rebuild(error="이미 처리되었거나 만료된 요청입니다.", status=409)
-    return RedirectResponse(f"{back}?ok={ok}", status_code=303)
+    return RedirectResponse(f"{back}{'&' if '?' in back else '?'}ok={ok}", status_code=303)
 
 
 def staff_render(
@@ -295,6 +295,14 @@ def logout(request: Request, actor: StaffActor = Depends(staff_actor)) -> Respon
 # --- 11 내 서버(동의 포함) --------------------------------------------------------------------
 
 
+def name_servers(actor: StaffActor, *groups: list[dict]) -> None:
+    """행의 ``server_name``에 LiteLLM 별칭을 넣는다(없으면 식별자)."""
+    names = server_names(actor.config.litellm_admin)
+    for rows in groups:
+        for row in rows:
+            row["server_name"] = names.get(row["server_id"]) or row["server_id"]
+
+
 def event_label(row: dict) -> str:
     payload = row.get("payload") or {}
     if payload.get("kind") == "confirmation" and row["kind"] in labels.CONFIRMATION_EVENT:
@@ -325,10 +333,12 @@ def servers_page(request: Request, actor: StaffActor, error=None, status=200, fo
         row["ref"] = f"{key[0]}|{key[1]}"
         row["consents"] = by_server.get(key, [])
         active = [c for c in row["consents"] if c["view"] == "active"]
-        row["state"] = "active" if active else "none"
+        required = row.get("consent_required", True)
+        row["state"] = "active" if active else ("none" if required else "free")
         row["consent_until"] = max((c["valid_until"] for c in active), default=None)
         row["expiring"] = bool(active) and row["consent_until"] < now + EXPIRING
         row["can_consent"] = key in can_consent
+    name_servers(actor, rows)
     tab = "records" if request.query_params.get("tab") == "records" else "servers"
     records = [
         {"at": e["inserted_at"], "label": event_label(e)}
@@ -426,6 +436,7 @@ def requests_page(request: Request, actor: StaffActor, error=None, status=200, t
     waiting = [r for r in rows if r["view"] in ("pending", "confirmed")]
     history = [r for r in rows if r["view"] not in ("pending", "confirmed")][:RECENT_RECORDS]
     mine = my_approvals(actor)
+    name_servers(actor, waiting, history, mine)
     now = datetime.now(UTC)
     pending = [r for r in waiting if r["view"] == "pending"]
     opened = request.query_params.get("open")
@@ -548,6 +559,13 @@ def endpoint_kit(
         return endpoint_page(request, actor, "설치 묶음의 종류가 올바르지 않습니다.", 400)
     if config.kit_issuer is None:
         return endpoint_page(request, actor, "단말 설치 묶음을 발급할 수 없습니다.", 503)
+    if not config.endpoint_url:
+        # 비어 있으면 묶음에 컨테이너 안 주소가 적혀 단말에서 판정을 부를 수 없다.
+        return endpoint_page(
+            request, actor,
+            "단말이 부를 판정 주소가 정해지지 않아 설치 묶음을 발급할 수 없습니다. 운영자가 "
+            "MINT_ENDPOINT_PUBLIC_URL(단말에서 닿는 LiteLLM 주소)을 정한 뒤 다시 시도하세요.", 503,
+        )
     if not config.endpoint_routes:
         return endpoint_page(
             request, actor,
@@ -555,8 +573,11 @@ def endpoint_kit(
             "MINT_ENDPOINT_ROUTES=true로 켠 뒤 다시 시도하세요.", 503,
         )
     # 승인된 로컬 서버가 없어도 게이트웨이 항목과 키만으로 의미가 있어 묶음을 낸다.
-    contracts = endpoint_kits.approved_contracts(sctx.control, sctx.instance_id)
     team_id = sctx.team_ids[0] if sctx.team_ids else None
+    # 묶음에는 이 직원에게 승인된 로컬 서버만 넣는다(다른 직원의 서버 계약이 새지 않게).
+    mine = kit_key_sync.local_servers_for(sctx.control, sctx.instance_id, actor.user_id, team_id)
+    every = endpoint_kits.approved_contracts(sctx.control, sctx.instance_id)
+    contracts = {name: contract for name, contract in every.items() if name in mine}
     try:
         key = endpoint_kits.issue_key(
             sctx.control, config.kit_issuer, sctx.instance_id, user_id=actor.user_id,
@@ -572,7 +593,7 @@ def endpoint_kit(
     kit = build_kit(
         contracts, decide_url=config.endpoint_url or config.litellm_url, key=key,
         ca_pem=config.endpoint_ca_pem, platform=platform,
-        harnesses=("claude", "codex") if harness == "all" else (harness,),
+        harnesses=tuple(HARNESSES) if harness == "all" else (harness,),
         allow_unsandboxed=config.endpoint_allow_unsandboxed, gateway_key=gateway_key,
     )
     media, name = (

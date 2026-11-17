@@ -97,6 +97,10 @@ def join(values: Any) -> str:
 
 def clip(value: Any, limit: int = 256) -> str:
     """표시 값은 필드당 256자까지만 화면에 낸다."""
+    if isinstance(value, dict):
+        value = ", ".join(f"{k}: {v}" for k, v in value.items())
+    elif isinstance(value, (list, tuple)):
+        value = ", ".join(str(v) for v in value)
     text = "—" if value is None or value == "" else str(value)
     return text if len(text) <= limit else text[:limit] + "…"
 

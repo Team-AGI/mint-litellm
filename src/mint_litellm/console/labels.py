@@ -89,6 +89,7 @@ KEY_BLOCK_ERROR = {
     "target_missing": "대상을 찾을 수 없음",
     "not_confirmed": "차단을 확인하지 못함",
     "route_forbidden": "제어 키에 차단 경로 권한 없음",
+    "released_externally": "MINT 밖에서 차단이 풀림",
 }
 CALL_APPROVAL_RULE = {
     "active": Status("사용 중", "ok"),
@@ -119,6 +120,7 @@ CONSENT = {
 CONSENT_STATE = {
     "active": Status("동의함", "ok"),
     "none": Status("동의 필요", "wait"),
+    "free": Status("동의 불필요", "off"),
 }
 RELATION = {
     "active": Status("이용 중", "ok"),
@@ -179,6 +181,8 @@ EVIDENCE_GATE = {
     "finish": "이용 관계 종료 완료",
     "periodic": "주기 확인",
     "retire": "서버 종료",
+    "unpinned": "버전 미고정 패키지 사용",
+    "exception": "예외 승인",
 }
 ENFORCEMENT = {
     "enforcement_verified": Status("정상", "ok"),
@@ -290,7 +294,10 @@ PRINCIPAL = {"user": "사용자", "team_key": "팀 키", "service_account": "서
 KIT_PLATFORM = {"linux": "Linux", "windows": "Windows"}
 # 단말 설정에서 발견한 MCP 항목의 전송 방식
 LOCAL_TRANSPORT = {"stdio": "로컬 실행", "http": "원격(HTTP)", "sse": "원격(SSE)"}
-KIT_HARNESS = {"claude": "Claude Code", "codex": "Codex", "all": "Claude Code + Codex"}
+KIT_HARNESS = {
+    "claude": "Claude Code", "codex": "Codex", "cursor": "Cursor", "grok": "Grok Build CLI",
+    "all": "모든 도구",
+}
 ORG_RULE = {
     "team_metadata": "팀 메타데이터",
     "team_alias": "팀 별칭",
@@ -301,6 +308,12 @@ ALLOWLIST_KIND = {
     "auth_server": "인증 서버",
     "egress_target": "외부 전송 대상",
     "registry_source": "레지스트리 출처",
+}
+ALLOWLIST_KIND_HELP = {
+    "provider": "서버를 운영하는 업체의 호스트 주소",
+    "auth_server": "OAuth 인증 서버의 발급자 주소",
+    "egress_target": "공개 주소가 아니어도 연결을 허용할 내부 대상",
+    "registry_source": "패키지를 받아 올 레지스트리",
 }
 TRANSPORT = {"http": "HTTP", "sse": "SSE", "streamable_http": "스트리밍 HTTP", "stdio": "로컬 실행"}
 AUTH_TYPE = {
@@ -399,6 +412,7 @@ ALERT_KIND = {
     "server_address_internal": "서버 주소 내부 대역",
     "result_unenforced": "결과를 막지 못함",
     "key_block_proposed": "키 차단 제안",
+    "defense_verify_failed": "방어 검증 실패",
     "token_audience_mismatch": "토큰 대상 불일치",
     "token_scope_exceeded": "토큰 범위 초과",
     "config_plaintext_secret": "설정의 평문 비밀",
@@ -537,6 +551,7 @@ EVENT_KIND = {
     "key_block_failed": "LiteLLM 차단 실패",
     "key_block_unblock_requested": "키 차단 해제 요청",
     "key_block_unblocked": "키 차단 해제",
+    "defense_verify_run": "방어 검증 실행",
     "event_partition_exported": "원장 월 구간 내보냄",
     "event_partition_dropped": "원장 월 구간 삭제",
 }

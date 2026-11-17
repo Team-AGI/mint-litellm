@@ -1,6 +1,6 @@
 """SIEM 전달 대상 관리 명령(``siem add|list|remove|test``). 1단계 명령 표는 건드리지 않고 따로 둔다.
 
-토큰은 저장하지 않는다. ``--token-env``(환경 변수 이름)나 ``--token-file``(파일 경로)로 읽을
+토큰은 저장하지 않는다. ``--token-env``(환경 변수 이름)나 ``--secret-file``(파일 경로)로 읽을
 곳만 적고, 작업 실행기가 보낼 때 읽는다.
 """
 
@@ -58,7 +58,7 @@ ARGUMENTS: dict[str, list[Any]] = {
             },
         ),
         (("--token-env",), {"help": "토큰이 든 환경 변수 이름(작업 실행기의 환경)"}),
-        (("--token-file",), {"help": "토큰이 든 파일 경로(작업 실행기가 읽는다)"}),
+        (("--secret-file",), {"help": "토큰이 든 파일 경로(/run/secrets 아래)"}),
         (("--index",), {"help": "hec·elastic의 색인 이름"}),
         (("--ca-file",), {"help": "수신 쪽 인증서를 확인할 CA 파일"}),
         (
@@ -90,13 +90,13 @@ def _stamp() -> str:
 
 def _add(run) -> None:
     a = run.args
-    if a.token_env and a.token_file:
-        raise ControlError("--token-env와 --token-file 중 하나만 쓰십시오.")
+    if a.token_env and a.secret_file:
+        raise ControlError("--token-env와 --secret-file 중 하나만 쓰십시오.")
     ref = (
         f"env:{a.token_env}"
         if a.token_env
-        else f"file:{Path(a.token_file).resolve()}"
-        if a.token_file
+        else f"file:{Path(a.secret_file).resolve()}"
+        if a.secret_file
         else None
     )
     options = {

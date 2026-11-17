@@ -10,6 +10,7 @@ from mint_litellm.console import api, compare, labels
 from mint_litellm.console.core import Actor, page_actor, require_csrf
 from mint_litellm.console.pages.common import act, server_display
 from mint_litellm.console.templating import render
+from mint_litellm.control.db.connection import fetchall
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import contracts as contract_service
 from mint_litellm.control.services import evidence as evidence_service
@@ -421,6 +422,13 @@ def intake_page(
 
 
 INTAKE_FIELDS = ("server_id", "provider", "owner_user_id", "purpose")
+NO_ADDRESS = ("서버 URL이 응답되지 않습니다", "서버 주소로")  # 화면용 문구로 바뀐 뒤의 오류 문구
+
+
+def no_address(error) -> bool:
+    return any(part in str(error or "") for part in NO_ADDRESS)
+
+
 NEW_STEPS = ("대상", "데이터", "종료 준비")
 NEW_DEFAULTS = {"data_grade": "internal", "audit_access_days": "90"}
 
@@ -439,6 +447,17 @@ def intake_new_page(
         servers = actor.litellm().list_servers()
     except ControlError:
         servers = []
+    # 이미 승인·중지·종료·검사 중인 서버는 새 수용검증을 시작할 수 없으므로 고르는 목록에서 뺀다
+    closed = {
+        r["server_id"]
+        for r in fetchall(
+            actor.conn,
+            "SELECT server_id FROM mint.servers WHERE instance_id = %s"
+            " AND status NOT IN ('pending', 'awaiting_approval', 'rejected')",
+            (actor.instance,),
+        )
+    }
+    servers = [r for r in servers if (r.get("server_id") or r.get("id")) not in closed]
     ctx = {
         "available_servers": servers,
         "available_ids": [r.get("server_id") or r.get("id") for r in servers],
@@ -457,6 +476,19 @@ def intake_new(request: Request, actor: Actor = Depends(page_actor)):
     """단말 MCP 목록의 항목에서 신청을 시작한다. 쿼리 값으로 입력란을 미리 채운다."""
     query = request.query_params
     return intake_new_page(request, actor, {key: query.get(key, "")[:256] for key in INTAKE_FIELDS})
+
+
+def address_missing(actor: Actor, server_id: str, server_url: str) -> bool:
+    """등록 정보에도 입력에도 서버 주소가 없어 신청을 끝낼 수 없는가."""
+    if server_url.strip() or not server_id.strip():
+        return False
+    try:
+        entry = actor.litellm().get_server(server_id.strip())
+    except ControlError:
+        return False
+    if not entry or entry.get("url") or entry.get("spec_path"):
+        return False
+    return entry.get("transport") not in ("stdio", "openapi")
 
 
 @router.post("/intakes/new")
@@ -490,6 +522,11 @@ def intake_new_step(
         "revocation_record": revocation_record,
         "data_return_terms": data_return_terms,
     }
+    if step == 1 and go == "next" and address_missing(actor, server_id, server_url):
+        return intake_new_page(
+            request, actor, form, status=400, step=1, resources=resource,
+            error="이 서버는 등록된 주소가 없습니다. 서버 주소를 입력하십시오.",
+        )
     step = min(max(step + {"next": 1, "prev": -1}.get(go, 0), 1), len(NEW_STEPS))
     rows = resource + [""] if go == "add" else resource
     return intake_new_page(request, actor, form, step=step, resources=rows)
@@ -562,13 +599,13 @@ def create_intake(
             request,
             actor,
             form,
-            step=1 if "--url" in str(kw.get("error", "")) else len(NEW_STEPS),
+            step=1 if no_address(kw.get("error")) else len(NEW_STEPS),
             resources=resource,
             **{
                 **kw,
                 "error": (
                     "서버 주소를 입력하세요."
-                    if "--url" in str(kw.get("error", ""))
+                    if no_address(kw.get("error"))
                     else "기본 조직을 설정하도록 담당자에게 요청하세요."
                     if "--org" in str(kw.get("error", ""))
                     else kw.get("error")

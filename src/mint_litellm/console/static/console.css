@@ -113,7 +113,7 @@ th {
   position: sticky; top: 48px; background: var(--bg-subtle); font-weight: 600; z-index: 1;
   white-space: nowrap;
 }
-td { overflow-wrap: break-word; }
+td { overflow-wrap: anywhere; }
 .ident { font-family: monospace; }
 td .nowrap, td button, td .badge { white-space: nowrap; }
 button > span[aria-hidden="true"] { margin-right: 4px; }
@@ -159,6 +159,9 @@ a:focus-visible {
 .form { display: grid; gap: var(--s3); max-width: 640px; }
 .form.cols { max-width: var(--w-form); }
 @media (min-width: 1100px) { .form.cols { grid-template-columns: 1fr 1fr; } .form.cols .full { grid-column: 1 / -1; } }
+.form > * { min-width: 0; }
+.form input, .form select, .form textarea { max-width: 100%; box-sizing: border-box; }
+.drawer-body .form input, .drawer-body .form select, .drawer-body .form textarea { width: 100%; min-width: 0; }
 .form .row { display: flex; gap: var(--s3); flex-wrap: wrap; }
 
 button, .button {
@@ -172,7 +175,8 @@ button.primary:hover { filter: brightness(1.1); }
 button.danger { background: var(--danger); border-color: var(--danger); color: var(--on-accent); }
 button.danger:hover { filter: brightness(1.1); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
-.actions { display: flex; gap: var(--s2); justify-content: flex-start; }
+.actions { display: flex; flex-wrap: wrap; gap: var(--s2); justify-content: flex-start; }
+.actions button, .actions .button { white-space: nowrap; }
 .actions .danger { order: 99; margin-left: auto; }
 .danger-zone { border: 1px solid var(--danger); border-radius: 6px; padding: var(--s3); margin-top: var(--s3); }
 .danger-zone h3 { color: var(--danger); margin-top: 0; }
@@ -247,7 +251,15 @@ dialog.confirm h3 { margin: 0; }
 dialog.confirm .actions { justify-content: flex-end; }
 
 @media (max-width: 1100px) {
-  table { display: block; max-width: 100%; overflow-x: auto; }
+  table {
+    display: block; max-width: 100%; overflow-x: auto;
+    /* 가로로 더 넘기면 보이는 내용이 있다는 표시(양끝 그림자) */
+    background:
+      linear-gradient(to right, var(--bg) 30%, rgb(0 0 0 / 0)) left center / 24px 100% no-repeat local,
+      linear-gradient(to left, var(--bg) 30%, rgb(0 0 0 / 0)) right center / 24px 100% no-repeat local,
+      linear-gradient(to right, rgb(0 0 0 / 0.18), rgb(0 0 0 / 0)) left center / 10px 100% no-repeat scroll,
+      linear-gradient(to left, rgb(0 0 0 / 0.18), rgb(0 0 0 / 0)) right center / 10px 100% no-repeat scroll;
+  }
   th { position: static; }
 }
 

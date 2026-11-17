@@ -286,3 +286,13 @@ def test_unknown_response_scan_is_a_schema_error(tmp_path, bad):
     snap = snapshot(approvals=(approval(conditions={"response_scan": bad}),))
     outcome = decide(harness(tmp_path, snap, evaluate=evaluator()))
     assert not outcome.allowed and outcome.error.code == "MINT-SCHEMA-ERROR"
+
+
+@pytest.mark.parametrize(("text", "outside"), [
+    ("~/.ssh/id_rsa", True), ("~", True), ("~root/.bashrc", True),
+    ("~5 minutes", False), ("~ roughly", False),
+])
+def test_a_home_relative_path_is_outside_an_unlisted_folder(text, outside):
+    from mint_litellm.plugin.policy.patterns import compute_patterns
+
+    assert compute_patterns({"path": text}, allowed_paths=())["path_traversal"] is outside

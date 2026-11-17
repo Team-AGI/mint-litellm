@@ -117,6 +117,7 @@ class EventKind(StrEnum):
     KEY_BLOCK_FAILED = "key_block_failed"
     KEY_BLOCK_UNBLOCK_REQUESTED = "key_block_unblock_requested"
     KEY_BLOCK_UNBLOCKED = "key_block_unblocked"
+    DEFENSE_VERIFY_RUN = "defense_verify_run"
 
 
 CALL_KINDS: frozenset[EventKind] = frozenset(
@@ -224,6 +225,7 @@ CONTROL_ENTITY: dict[EventKind, str] = {
     EventKind.KEY_BLOCK_FAILED: "key_block",
     EventKind.KEY_BLOCK_UNBLOCK_REQUESTED: "key_block",
     EventKind.KEY_BLOCK_UNBLOCKED: "key_block",
+    EventKind.DEFENSE_VERIFY_RUN: "defense_verify",
 }
 
 _ENTITY_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
@@ -500,3 +502,4 @@ class AlertKind(StrEnum):
     RESULT_UNENFORCED = "result_unenforced"
     CONFIG_PLAINTEXT_SECRET = "config_plaintext_secret"
     KEY_BLOCK_PROPOSED = "key_block_proposed"
+    DEFENSE_VERIFY_FAILED = "defense_verify_failed"

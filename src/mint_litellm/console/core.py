@@ -1,6 +1,7 @@
 """콘솔 공통: 설정, 요청마다 여는 DB 연결, 인증(세션 쿠키 또는 운영자 토큰), 오류 변환."""
 
 import hmac
+import re
 import time
 from collections import deque
 from collections.abc import Iterator, Mapping
@@ -14,6 +15,7 @@ from fastapi import Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from mint_litellm.console.cookies import read_cookie
+from mint_litellm.console.labels import SERVER
 from mint_litellm.console.oidc import OidcConfig
 from mint_litellm.control import operators
 from mint_litellm.control.config import ControlConfig
@@ -38,6 +40,78 @@ STATUS = {
     AdminCode.STALE_EVIDENCE: 409,
 }
 INVALID = "MINT-ADMIN-INVALID-INPUT"
+
+# 화면에 보이는 입력 항목 이름. 요청 값 검증 오류가 영문 필드명 대신 이 이름으로 나간다.
+FIELD_LABELS = {
+    "valid_days": "유효 기간(일)", "scope_type": "범위 종류", "scope_id": "범위 대상",
+    "tools": "도구", "kind": "증빙 종류", "summary": "확인한 내용", "ref": "문서 위치",
+    "sha256": "문서 해시", "basis": "근거", "reason": "사유", "org_id": "조직 식별자",
+    "name": "이름", "class": "구분", "requested_by": "신청자", "state_version": "화면 상태",
+    "max_result_bytes": "결과 크기 상한", "max_result_items": "결과 항목 수 상한",
+    "second_approver_token": "두 번째 승인자 토큰", "allowed_hosts": "허용 호스트",
+    "window_minutes": "사용 기간", "purpose": "목적", "data_scope": "자료 범위",
+}
+# 명령줄 옵션 이름이 화면에 그대로 나오지 않게 하는 화면용 이름과 역할 이름.
+OPTION_LABELS = {
+    "second-approver": "두 번째 승인자 토큰", "allowed-host": "허용 호스트",
+    "allowed-arg-key": "허용 인자 키", "allowed-path": "허용 경로", "reason": "사유",
+    "tools": "도구", "basis": "근거", "scope": "범위", "email": "이메일", "url": "서버 주소",
+    "user-id": "LiteLLM 사용자", "token-file": "운영자 토큰", "evidence-ref": "문서 위치",
+    "evidence-sha256": "문서 해시", "valid-until": "유효 기한", "valid-from": "유효 시작",
+}
+ROLE_WORDS = {"admin": "관리자", "approver": "승인자", "viewer": "조회자"}
+_OPTION = re.compile(r"--([a-z][a-z-]*)(으로|로|은|는|이|가|을|를|에는|에)?")
+_SERVER_STATE = re.compile(
+    r"서버 (\S+)는 (" + "|".join(SERVER) + r") 상태라 새 수용검증을 시작할 수 없습니다\."
+)
+_ROLE = re.compile(r"(?<![A-Za-z-])(admin|approver|viewer)(?![A-Za-z-])")
+
+
+def _batchim(word: str) -> bool:
+    return "가" <= word[-1] <= "힣" and (ord(word[-1]) - 0xAC00) % 28 != 0
+
+
+def _particle(word: str, particle: str) -> str:
+    pairs = {"으로": ("으로", "로"), "로": ("으로", "로"), "은": ("은", "는"), "는": ("은", "는"),
+             "이": ("이", "가"), "가": ("이", "가"), "을": ("을", "를"), "를": ("을", "를")}
+    if particle not in pairs:
+        return particle
+    with_final, without = pairs[particle]
+    return with_final if _batchim(word) else without
+
+
+def screen_message(message: str) -> str:
+    """서비스 오류 문구를 화면용으로 바꾼다. 명령줄 옵션과 영문 역할 코드는 한글 이름으로."""
+
+    def option(match: re.Match) -> str:
+        label = OPTION_LABELS.get(match.group(1))
+        if label is None:
+            return match.group(0)
+        return label + _particle(label, match.group(2) or "")
+
+    message = message.replace(
+        "토큰을 --second-approver로 함께 제시하십시오",
+        "토큰을 「두 번째 승인자 토큰」 칸에 함께 입력하십시오",
+    )
+    message = message.replace("object_permission.mcp_servers", "MCP 서버 권한")
+    message = _OPTION.sub(option, message)
+    message = _SERVER_STATE.sub(
+        lambda m: f"서버 {m.group(1)}는 {SERVER[m.group(2)].text} 상태라 "
+        "새 수용검증을 시작할 수 없습니다.",
+        message,
+    )
+    return _ROLE.sub(lambda m: ROLE_WORDS[m.group(1)], message)
+
+
+def invalid_fields(errors: list[dict]) -> str:
+    """검증 오류 목록에서 항목 이름을 한글로 모은다(알 수 없는 이름은 「입력 항목」)."""
+    names = []
+    for e in errors:
+        loc = [str(p) for p in e["loc"] if p not in ("body", "form", "query")]
+        label = FIELD_LABELS.get(loc[0], "입력 항목") if loc else "입력 항목"
+        if label not in names:
+            names.append(label)
+    return ", ".join(names)
 DEFAULT_TIME_ZONE = "Asia/Seoul"
 class ReadOnlyLiteLLM:
     """제어 평면 키의 읽기 경로 전용 클라이언트. 쓰기 메서드가 없고 확인 읽기만 낸다."""
@@ -241,11 +315,20 @@ def db(request: Request) -> Iterator[psycopg.Connection]:
         yield conn
 
 
+def _token_only(request: Request) -> bool:
+    """운영자 토큰만으로 인증하는 요청인가(세션 쿠키가 함께 오면 쿠키 요청으로 보고 검사한다).
+
+    화면 경로는 Authorization 헤더를 보지 않고 쿠키로 인증하므로, 헤더가 있다는 것만으로 출처·CSRF
+    검사를 건너뛰면 쿠키 세션에 가짜 헤더를 붙여 검사를 피할 수 있다.
+    """
+    if not request.headers.get("authorization", "").lower().startswith("bearer "):
+        return False
+    return not (read_cookie(request, COOKIE) or read_cookie(request, STAFF_COOKIE))
+
+
 def require_origin(request: Request) -> None:
     """변경 요청은 같은 출처에서 와야 한다(Fetch Metadata가 있으면 그것을, 없으면 Origin을 본다)."""
-    if request.method not in UNSAFE:
-        return
-    if request.headers.get("authorization", "").lower().startswith("bearer "):
+    if request.method not in UNSAFE or _token_only(request):
         return
     site = request.headers.get("sec-fetch-site")
     origin = request.headers.get("origin")
@@ -262,9 +345,7 @@ def require_origin(request: Request) -> None:
 async def require_csrf(request: Request) -> None:
     """세션 쿠키로 인증한 변경 요청은 CSRF 토큰(헤더 또는 폼 필드)과 출처가 맞아야 한다."""
     require_origin(request)
-    if request.method not in UNSAFE:
-        return
-    if request.headers.get("authorization", "").lower().startswith("bearer "):
+    if request.method not in UNSAFE or _token_only(request):
         return
     cookie = read_cookie(request, STAFF_COOKIE if is_staff_path(request) else COOKIE)
     if not cookie:
@@ -319,11 +400,12 @@ def error_response(error: ControlError, request_id: str) -> JSONResponse:
     if isinstance(error, AdminError):
         status = 401 if isinstance(error, Unauthenticated) else STATUS[error.code]
         body = error.body()
+        body["message"] = screen_message(body["message"])
         if ":" not in body["reference"]:  # 사건 키(source_key)가 없으면 요청 식별자이다
             body["reference"] = request_id
     else:
         status = 400
-        body = {"code": INVALID, "message": str(error), "reference": request_id}
+        body = {"code": INVALID, "message": screen_message(str(error)), "reference": request_id}
     return JSONResponse(body, status_code=status, headers={"X-Request-Id": request_id})
 
 

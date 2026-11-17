@@ -163,7 +163,13 @@ def _bare_host(text: str) -> str:
     return head if sep and tail.isdigit() and ":" not in head else text
 
 
+_HOME_PATH = re.compile(r"~(?:[A-Za-z0-9._-]*)(?:[/\\]|$)")
+
+
 def _is_absolute(text: str) -> bool:
+    # ``~``·``~user``로 시작하면 셸·도구가 홈 폴더로 펼친다(허용 폴더 밖의 절대 경로와 같다).
+    if _HOME_PATH.match(text):
+        return True
     return text[:1] in ("/", "\\") or (len(text) > 2 and text[1] == ":" and text[2] in ("/", "\\"))
 
 
