@@ -891,8 +891,7 @@ def _require_separation(
             or second.user_id in (None, user, row["requested_by"],
                                   _assigner_user_id(ctx, row["id"]))):
         raise separation_of_duties(
-            "두 번째 승인자는 결정자·신청자·신청자 지정자와 다른 사용자에 결속된 "
-            "approver 이상이어야 합니다."
+            "요청한 사람과 다른 승인자가 확인해야 합니다."
         )
     return {"name": second.name, "user_id": second.user_id}
 

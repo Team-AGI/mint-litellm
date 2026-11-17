@@ -3250,8 +3250,11 @@ class Gateway:
             return 0, None
 
 
-def fetch_pack(gateway: Gateway, server: str, digest: str) -> dict:
-    """승인된 묶음의 manifest와 wheel을 받아 열린 임시 파일 목록(이름 -> 파일)으로."""
+def fetch_pack(gateway: Gateway, server: str, digest: str, progress=None) -> dict:
+    """승인된 묶음의 manifest와 wheel을 받아 열린 임시 파일 목록(이름 -> 파일)으로.
+
+    ``progress``가 있으면 파일 하나를 받을 때마다 「묶음 받는 중 n/m」을 알린다.
+    """
     base = f"{PACK_PATH}/{urllib.parse.quote(server, safe='')}/{digest}/"
     blobs: dict = {}
     try:
@@ -3265,7 +3268,10 @@ def fetch_pack(gateway: Gateway, server: str, digest: str) -> dict:
             raise PackError("묶음 목록을 읽을 수 없습니다") from exc
         if manifest_digest(manifest) != digest:
             raise PackError("묶음 목록이 승인된 해시와 다릅니다")
-        for item in manifest_files(manifest):
+        files = list(manifest_files(manifest))
+        for number, item in enumerate(files, 1):
+            if progress:
+                progress(f"묶음 받는 중 {number}/{len(files)}")
             status, handle = gateway.download(base + item["name"], item["size"])
             if status != 200:
                 raise PackError(pack_http_text(status))
@@ -3716,16 +3722,20 @@ def tab3_lines(model: dict, ui: dict) -> list[str]:
     for i, row in enumerate(intakes):
         mark = ">" if i == ui["cursor"] else " "
         need = model.get("inspections", {}).get(row.get("id"))
-        later = inspect_text(need, model.get("now") or time.time()) if need else next_text(row)
+        later = inspect_text(need) if need else next_text(row)
         out.append(
             f"{mark} {pad(clip(str(row.get('server_id', '')), 25), 26)}{pad(row_label(row), 14)}"
             f"{clip(later, 36)}"
         )
     if ui["detail"] and ui["cursor"] < len(intakes):
         row = intakes[ui["cursor"]]
+        need = model.get("inspections", {}).get(row.get("id"))
+        reason, later = str(row.get("reason") or "-"), next_text(row)
+        if need:  # 검사 상태가 서버 사유보다 앞선다
+            reason = "단말 검사 제출함" if need.get("phase") == "submitted" else "단말 검사 필요"
+            later = inspect_text(need, detail=True)
         out += ["", f"진행  {clip(stage_path(row.get('stage')), 70)}",
-                f"사유  {clip(str(row.get('reason') or '-'), 70)}",
-                f"다음  {clip(next_text(row), 70)}"]  # fmt: skip
+                f"사유  {clip(reason, 70)}", f"다음  {clip(later, 70)}"]  # fmt: skip
     if found:
         out += ["", "이 PC의 관리되지 않는 로컬 MCP (Enter로 신청)"]
         for j, item in enumerate(found):
@@ -4017,10 +4027,12 @@ def save_inspections(home: Path, remote: object, now: float | None = None) -> No
         item = valid_inspection(raw, now)
         if item is None:
             continue
-        before = old.get(item["id"]) or {}
+        before = old.pop(item["id"], None) or {}
         if before.get("pack_sha256") == item["pack_sha256"]:
             item.update({k: before[k] for k in ("phase", "body") if k in before})
         kept.append(item)
+    # 제출한 검사는 서버 목록에서 빠져도 만료까지 「제출함」으로 남긴다.
+    kept += [i for i in old.values() if i.get("phase") == "submitted"][: INSPECT_KEEP - len(kept)]
     write_inspections(home, kept)
 
 
@@ -4036,12 +4048,11 @@ def set_inspection(home: Path, ident: str, **fields: object) -> None:
     write_inspections(home, items)
 
 
-def inspect_text(item: dict, now: float) -> str:
+def inspect_text(item: dict, detail: bool = False) -> str:
     """탭 3의 「다음 할 일」 칸."""
     if item.get("phase") == "submitted":
-        return "검사 제출함"
-    until = parse_time(item.get("expires_at")) or now
-    return f"단말 검사 필요 · 남은 {max(int((until - now) // 60), 1)}분"
+        return "단말 검사 제출함" + (" · 관리자 검토 중" if detail else "")
+    return "단말 검사 필요 · s로 시작"
 
 
 def inspect_ready(bwrap: str | None = None) -> str | None:
@@ -4293,7 +4304,9 @@ def find_inspection(home: Path, target: str) -> dict | None:
     return None
 
 
-def run_inspect(kit, gateway: Gateway | None, target: str, out=print, body_of=inspect_body) -> int:
+def run_inspect(
+    kit, gateway: Gateway | None, target: str, out=print, body_of=inspect_body, progress=None
+) -> int:
     """``mint inspect``: 검사 권한 하나를 받기·검증·격리 실행·제출까지 한 번에."""
     if gateway is None:
         out("키가 없습니다. 설치 묶음을 다시 받아 설치하십시오")
@@ -4309,6 +4322,7 @@ def run_inspect(kit, gateway: Gateway | None, target: str, out=print, body_of=in
         out(NO_INSPECT_TEXT)
         return 1
     ident = item["id"]
+    progress = progress or (lambda text: None)
     base = f"{INSPECT_PATH}/{urllib.parse.quote(ident, safe='')}"
     digest = item["pack_sha256"]
     folder = kit.home / STATE_REL / INSPECT_PACKS / digest[:16]
@@ -4317,8 +4331,9 @@ def run_inspect(kit, gateway: Gateway | None, target: str, out=print, body_of=in
         blobs: dict = {}
         try:
             if ready_status(folder, digest) != "ok":
-                blobs = fetch_pack(gateway, item["server"], digest)
+                blobs = fetch_pack(gateway, item["server"], digest, progress)
                 install_blobs(digest, blobs, folder.parent)
+            progress("검사 시작")
             status, _ = gateway.json("POST", base + "/start")
             if status == 409:
                 out("이미 시작했거나 만료되었습니다")
@@ -4327,6 +4342,7 @@ def run_inspect(kit, gateway: Gateway | None, target: str, out=print, body_of=in
                 out(pack_http_text(status) if status in (0, -1) else f"시작 실패({status})")
                 return 1
             set_inspection(kit.home, ident, phase="started")
+            progress("도구 목록 받는 중")
             body = body_of(item, folder, kit.home)
             set_inspection(kit.home, ident, phase="result", body=body)
         except (PackError, OSError) as exc:
@@ -4337,6 +4353,7 @@ def run_inspect(kit, gateway: Gateway | None, target: str, out=print, body_of=in
                 handle.close()
             shutil.rmtree(folder, ignore_errors=True)
     # 응답을 잃으면 저장해 둔 같은 본문을 다시 보낸다.
+    progress("제출 중")
     status, _ = gateway.json("POST", base + "/result", body)
     if status == 200:
         set_inspection(kit.home, ident, phase="submitted", body=None)
@@ -4387,7 +4404,7 @@ def can_write(path: Path) -> bool:
     return os.access(path, os.W_OK)
 
 
-def run_get(kit, gateway: Gateway | None, server: str, out=print) -> int:
+def run_get(kit, gateway: Gateway | None, server: str, out=print, progress=None) -> int:
     """``mint get``: 승인된 묶음을 받아 검증하고 풀어 준비한다. 반쯤 된 상태는 남기지 않는다."""
     if gateway is None:
         out("키가 없습니다. 설치 묶음을 다시 받아 설치하십시오")
@@ -4413,7 +4430,7 @@ def run_get(kit, gateway: Gateway | None, server: str, out=print) -> int:
         return 0
     blobs: dict = {}
     try:
-        blobs = fetch_pack(gateway, server, digest)
+        blobs = fetch_pack(gateway, server, digest, progress)
         check_blobs(digest, blobs)
         if can_write(kit.programs):
             install_blobs(digest, blobs, packs)
@@ -4505,13 +4522,13 @@ def cli_main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     kit, state, gateway = open_installed(Path(args.kit))
     if args.command_name == "get":
-        return run_get(kit, gateway, args.server)
+        return run_get(kit, gateway, args.server, progress=print)
     if args.command_name == "requests":
         return run_requests(gateway)
     if args.command_name == "inspect":
         if gateway is not None and find_inspection(kit.home, args.target) is None and state:
             kit.report(state, "installed")  # 받아 둔 검사 권한이 없으면 한 번 보고해서 받는다
-        return run_inspect(kit, gateway, args.target)
+        return run_inspect(kit, gateway, args.target, progress=print)
     if args.command_name == "add":
         if gateway is None:
             print("키가 없습니다. 설치 묶음을 다시 받아 설치하십시오")
@@ -4522,17 +4539,21 @@ def cli_main(argv: list[str]) -> int:
         print(json.dumps(state or {"mode": "none"}, indent=1))
         return 0
 
+    def live(text: str) -> None:  # 오래 걸리는 동안 화면 맨 아래 줄에 진행을 보인다
+        sys.stdout.write("\r\x1b[K" + clip(text, 78))
+        sys.stdout.flush()
+
     def get_action(model, ui):
         if not model["servers"]:
             return ""
         lines: list[str] = []
-        run_get(kit, gateway, model["servers"][ui["cursor"]]["name"], out=lines.append)
+        run_get(kit, gateway, model["servers"][ui["cursor"]]["name"], lines.append, live)
         return lines[-1] if lines else ""
 
     def inspect_action(model, ui):
         lines: list[str] = []
         row = model["intakes"][ui["cursor"]]
-        run_inspect(kit, gateway, row["id"], out=lines.append)
+        run_inspect(kit, gateway, row["id"], out=lines.append, progress=live)
         return lines[-1] if lines else ""
 
     def check_action(model, ui):

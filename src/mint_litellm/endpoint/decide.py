@@ -601,6 +601,14 @@ def make_router(
         except Exception as exc:
             log.exception("endpoint scope could not be read")
             raise HTTPException(status_code=503, detail="endpoint store is not ready") from exc
+        try:  # 검사 권한이 열린 신청은 사유·다음 할 일을 단말 검사 기준으로 낸다
+            open_checks = {
+                str(i["intake_id"]) for i in await runtime.database.endpoint_inspections(
+                    runtime.config.instance_id, who.key_id)
+            }
+        except Exception:
+            open_checks = set()
+        rows = [{**r, "inspect": str(r["id"]) in open_checks} for r in rows]
         return {
             "user": who.principal_id if who.principal_type == "user" else None,
             "servers": [

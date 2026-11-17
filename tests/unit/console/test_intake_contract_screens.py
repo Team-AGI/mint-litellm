@@ -404,7 +404,7 @@ def test_the_requester_assigner_cannot_be_the_second_approver_of_an_exception(wo
                       second_approver_token=TOKENS["approver"])
     assert response.status_code == 403
     assert response.json()["code"] == AdminCode.SEPARATION_OF_DUTIES
-    assert "지정자" in response.json()["message"]
+    assert "다른 승인자" in response.json()["message"]
     assert world.query("SELECT status FROM mint.intakes")[0][0] == "indeterminate"
 
 

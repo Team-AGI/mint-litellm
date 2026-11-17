@@ -142,6 +142,7 @@ a.card:hover, a.card:focus-visible { border-color: var(--accent); }
 .card .value { font-size: 28px; line-height: 1.2; font-weight: 600; font-variant-numeric: tabular-nums; }
 .card .label { color: var(--muted); font-size: 12px; }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); margin-bottom: var(--gap); }
+.grid > * { min-width: 0; }
 @media (min-width: 1800px) { .page.wide .grid.panels { grid-template-columns: repeat(4, 1fr); } }
 @media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } }
 .chart { height: 280px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
@@ -194,6 +195,8 @@ dl.detail { display: grid; grid-template-columns: 160px 1fr; gap: var(--s2) var(
 dl.detail dt { color: var(--muted); }
 dl.detail dd { margin: 0; word-break: break-all; }
 .pager { display: flex; gap: var(--s2); }
+pre.out { max-width: 100%; max-height: 16rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 6px; padding: var(--s2); font-size: 12px; }
+tr.skipped td { color: var(--muted); }
 pre.json { background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 6px; padding: var(--s3); overflow: auto; }
 
 .login { max-width: 400px; margin: 96px auto; padding: var(--s4); border: 1px solid var(--border); border-radius: 6px; }

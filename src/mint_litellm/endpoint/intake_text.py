@@ -40,6 +40,8 @@ NEXT_REVIEW = "관리자 검토 중"
 NEXT_VERSION = "판본을 바꿔 다시 신청"
 NEXT_FIX = "신청 내용을 고쳐 다시 신청"
 NEXT_NONE = "없음"
+NEXT_INSPECT = "단말 검사 필요 · s로 시작"
+REASON_INSPECT = "단말 검사가 필요합니다"
 UNKNOWN = "자동 검사로 판별하지 못했습니다"
 
 
@@ -65,6 +67,8 @@ def _code(row: dict[str, Any]) -> str | None:
 
 def reason_of(row: dict[str, Any]) -> str | None:
     code, stage = _code(row), stage_of(row)
+    if row.get("inspect") and stage in ("passed", "indeterminate", "failed"):
+        return REASON_INSPECT
     if stage in ("indeterminate", "failed", "rejected") and code:
         return REASON.get(code, UNKNOWN)
     if stage in ("approved", "rejected", "withdrawn"):
@@ -74,6 +78,8 @@ def reason_of(row: dict[str, Any]) -> str | None:
 
 def next_of(row: dict[str, Any]) -> str:
     stage, code = stage_of(row), _code(row)
+    if row.get("inspect") and stage in ("passed", "indeterminate", "failed"):
+        return NEXT_INSPECT
     if stage in ("received", "pack", "inspect"):
         return NEXT_WAIT
     if stage in ("passed", "indeterminate"):

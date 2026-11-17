@@ -36,7 +36,7 @@ def test_local_check_names_and_inspection_stages_are_translated():
 def cell(**inputs) -> str:
     source = (ROOT / "src/mint_litellm/console/templates/intake_detail.html").read_text(
         encoding="utf-8")
-    start = source.index("<td>{{ L.pick(L.CHECK_REASON, c.reason_code) }}")
+    start = source.index("<td>{% if skip %}")
     template = templates.env.from_string(source[start: source.index("</td>", start) + 5])
     check = {"reason_code": "INSPECTION_FAILED", "inputs": inputs}
     return template.render(c=check, L=labels)
