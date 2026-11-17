@@ -7,7 +7,7 @@
 <td>{{ L.pick(L.SCOPE, h.params.scope_type) }} {{ h.params.scope_id or '' }}</td>
 <td>{{ h.params.valid_days or 30 }}일</td><td>{{ h.params.reason | masked }}</td>
 <td class="nowrap">{{ h.expires_at | when }}</td>
-<td>{% if actor.role in ('admin', 'approver') %}<form method="post" class="actions">{{ m.csrf(actor) }}
+<td>{% if actor.role in ('admin', 'approver') and actor.session.user_id in (h.first_user_id, h.requested_by) %}<span class="muted">다른 승인자 확인 필요</span>{% elif actor.role in ('admin', 'approver') %}<form method="post" class="actions">{{ m.csrf(actor) }}
 <button type="submit" formaction="/exceptions/{{ h.id }}/confirm" class="primary">확인</button>
 <button type="submit" formaction="/exceptions/{{ h.id }}/reject">거절</button></form>{% endif %}</td>
 </tr>{% endfor %}

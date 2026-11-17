@@ -458,12 +458,12 @@ def screen_model(phase=None):
 def test_tab_three_shows_the_remaining_time_and_s_starts_the_inspection():
     model, ui = screen_model(), {"tab": 2, "cursor": 0, "detail": False, "message": ""}
     lines = kit_module.render_screen(model, ui, 80, 24)
-    assert any("단말 검사 필요 · 남은 4" in line for line in lines)
+    assert any("단말 검사 필요 · s로 시작" in line for line in lines)
     assert all(kit_module.cell_width(line) <= 80 for line in lines)
     assert kit_module.handle_key("s", ui, model) == "inspect"
     done = screen_model("submitted")
     lines = kit_module.render_screen(done, ui, 80, 24)
-    assert any("검사 제출함" in line for line in lines)
+    assert any("단말 검사 제출함" in line for line in lines)
     assert kit_module.handle_key("s", ui, done) is None
     plain = {**model, "inspections": {}}
     assert kit_module.handle_key("s", ui, plain) is None
@@ -492,3 +492,23 @@ def test_the_model_reads_stored_inspections_and_the_screen_runs_the_action(
     )
     assert called == [0] and "검사 제출함" in out.getvalue()
     assert "inspect" in kit_module.CLI_COMMANDS
+
+
+def test_the_inspection_reports_each_step_and_keeps_the_submitted_mark(tmp_path, folder, linux):
+    kit, digest, data = prepared(tmp_path, folder)
+    body = {"pack_sha256": digest, "complete": True, "tools": [], "detail": {}}
+    steps = []
+    gateway = InspectGateway(packs=data)
+    code = kit_module.run_inspect(
+        kit, gateway, "ins-1", out=lambda t: 0, body_of=lambda *a: body, progress=steps.append)
+    assert code == 0 and steps[0].startswith("묶음 받는 중 1/")
+    assert steps[-3:] == ["검사 시작", "도구 목록 받는 중", "제출 중"]
+    kit_module.save_inspections(kit.home, [])  # 서버 목록에서 빠져도 제출 표시는 남는다
+    assert kit_module.load_inspections(kit.home)[0]["phase"] == "submitted"
+    row = {**screen_model("submitted")["intakes"][0], "reason": "x"}
+    model = {**screen_model("submitted"), "intakes": [row]}
+    ui = {"tab": 2, "cursor": 0, "detail": True, "message": ""}
+    text = "\n".join(kit_module.render_screen(model, ui, 80, 24))
+    assert "단말 검사 제출함 · 관리자 검토 중" in text
+    open_text = "\n".join(kit_module.render_screen(screen_model(), ui, 80, 24))
+    assert "단말 검사 필요 · s로 시작" in open_text

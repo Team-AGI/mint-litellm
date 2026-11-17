@@ -328,7 +328,8 @@ PACK_TAB = ("pack", "실행 묶음")
 
 
 def intake_progress(
-    intake: dict, lacking: list[str], checks: list[dict] | None = None
+    intake: dict, lacking: list[str], checks: list[dict] | None = None,
+    hold: bool = False, cause: bool = False,
 ) -> list[tuple[str, str]]:
     """진행 표시 4단계(접수·검사·증빙·결정)를 (심각도, 이름)으로."""
     st = intake["status"]
@@ -346,12 +347,14 @@ def intake_progress(
             checked = ("error", "검사 실패")
         elif not checks or any(c["result"] == "indeterminate" for c in checks):
             checked = ("wait", "검사 판별 불가")
-    if st in ("received", "checking", "failed") or checked[0] == "error":
+    if st in ("received", "checking", "failed") or checked[0] == "error" or cause:
         proof = ("off", "증빙")
     else:
         proof = ("error", f"증빙 {len(lacking)}건 부족") if lacking else ("ok", "증빙 충족")
     if st == "decided":
         decision = ("ok", "결정 완료")
+    elif hold:
+        decision = ("wait", "두 번째 승인 대기")
     else:
         decision = (
             ("off", "결정") if st in ("received", "checking", "failed") else ("wait", "결정 대기")
@@ -418,6 +421,13 @@ def intake_page(
         next_step = "증빙 첨부" if lacking else "결정"
     else:
         next_step = None
+    hold = next(iter(exception_holds.pending(actor.conn, actor.instance, intake_id)), None)
+    if hold and next_step == "결정":
+        next_step = "다른 승인자의 확인"
+    # 검사로 도구 목록을 못 받았으면 설명 검사·위험 등급은 파생 결과다.
+    bad = next((c for c in checks if c["check"] == "inspection" and c["result"] != "pass"), None)
+    why = labels.pick(labels.CHECK_REASON, bad["reason_code"]) if bad else ""
+    cause = f"검사로 도구 목록을 받지 못했습니다 · {why}" if bad and not tools else None
     inspections = (
         inspection_service.for_intake(actor.conn, actor.instance, intake["id"]) if local else []
     )
@@ -454,9 +464,10 @@ def intake_page(
             (key, label, len(lacking) if key == "evidence" else 0) for key, label in intake_tabs
         ],
         "pack": pack,
-        "progress": intake_progress(intake, lacking, checks),
+        "progress": intake_progress(intake, lacking, checks, hold is not None, cause is not None),
+        "cause": cause,
         "decision_form": decision_form or {},
-        "hold": next(iter(exception_holds.pending(actor.conn, actor.instance, intake_id)), None),
+        "hold": hold,
         "provider_blocked": any(c["reason_code"] == "PROVIDER_NOT_ALLOWED" for c in checks),
         "passed": sum(1 for c in checks if c["result"] == "pass"),
         "failed": sum(1 for c in checks if c["result"] == "fail"),

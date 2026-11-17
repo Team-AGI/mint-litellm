@@ -16,7 +16,9 @@
 {% if i.decision == 'withdrawn' %}<div class="effect">철회된 신청입니다. 사유: {{ i.decision_reason }} · 승인이나 사용 권한은 부여되지 않았습니다.</div>{% endif %}
 {% if i.status == 'checking' and i.requested_by == actor.ctx.operator.user_id %}<p>검사 진행 중에는 철회할 수 없습니다. 검사가 끝난 뒤 새로고침하십시오.</p>{% endif %}
 {% if server_url %}<p>{{ server_url }}</p>{% endif %}<p>서버 식별자 {{ m.ident(i.server_id) }} <button type="button" class="copy" data-copy="{{ i.server_id }}">복사</button></p>
+{% if cause %}<div class="banner error" role="alert">원인: {{ cause }}</div>{% endif %}
 <ol class="steps" aria-label="진행 단계">{% for level, text in progress %}<li class="{{ level }}"><span class="icon" aria-hidden="true">{{ ICONS[level] }}</span>{{ text }}</li>{% endfor %}</ol>
+{% if hold %}<div class="effect">두 번째 승인 대기 · 요청자 {{ hold.first_name }} · 만료 {{ hold.expires_at | when }}</div>{% endif %}
 {% if stale and i.status in ('passed', 'indeterminate') %}<div class="banner error" role="alert">연결·도구 정의 증거가 24시간을 넘었습니다</div>{% endif %}
 {% if lacking and (i.status == 'indeterminate' or i.decision == 'exception') %}<div class="banner error" role="alert">증빙 누락: {{ lacking | join }}</div>{% endif %}
 {% if provider_blocked %}<div class="banner error">제공자가 허용되지 않았습니다. <a href="/access?tab=allowlists">제공자 허용</a> 후 {% if i.status == "indeterminate" %}재검사하세요.{% else %}<a href="/intakes/new?server_id={{ i.server_id | urlencode }}">다시 신청</a>하세요.{% endif %}</div>{% endif %}
@@ -54,7 +56,7 @@
 {% else %}
 {% if checks %}
 <table><thead><tr><th>단계</th><th>결과</th><th>실행 시각</th><th>증거 만료</th><th>사유</th></tr></thead><tbody>
-{% for c in checks %}<tr><td>{{ L.pick(L.CHECK, c.check) }}{% if c.method.startswith('endpoint:') %} <span class="badge off">단말 검사</span>{% endif %}</td><td>{{ m.badge(L.CHECK_RESULT, c.result) }}</td><td class="nowrap">{{ c.ran_at | when }}</td><td class="nowrap">{{ c.evidence_valid_until | when }}</td><td>{{ L.pick(L.CHECK_REASON, c.reason_code) }}{% set d = c.inputs.detail if c.inputs is mapping and c.inputs.detail is mapping else none %}{% if d %}<details><summary>상세</summary><p>{{ L.pick(L.INSPECTION_STAGE, d.stage) }}{% if d.exit_code is not none %} · 종료 코드 {{ d.exit_code }}{% endif %}</p>{% if d.stderr_tail %}<pre>{{ d.stderr_tail }}</pre>{% endif %}</details>{% endif %}</td></tr>{% endfor %}
+{% for c in checks %}{% set skip = cause and c.check in ('description_scan', 'risk_grade') and c.reason_code in ('NO_DEFINITIONS', 'INPUT_MISSING') %}<tr{% if skip %} class="skipped"{% endif %}><td>{{ L.pick(L.CHECK, c.check) }}{% if c.method.startswith('endpoint:') %} <span class="badge off">단말 검사</span>{% endif %}</td><td>{{ m.badge(L.CHECK_RESULT, c.result) }}</td><td class="nowrap">{{ c.ran_at | when }}</td><td class="nowrap">{{ c.evidence_valid_until | when }}</td><td>{% if skip %}도구 목록이 없어 건너뜀{% else %}{{ L.pick(L.CHECK_REASON, c.reason_code) }}{% endif %}{% set d = c.inputs.detail if c.inputs is mapping and c.inputs.detail is mapping else none %}{% if d %}<details><summary>상세</summary><p>{{ L.pick(L.INSPECTION_STAGE, d.stage) }}{% if d.exit_code is not none %} · 종료 코드 {{ d.exit_code }}{% endif %}</p>{% if d.stderr_tail %}<pre class="out">{{ d.stderr_tail }}</pre>{% endif %}</details>{% endif %}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}<p class="muted">아직 검사 결과가 없습니다.</p>{% endif %}
 <h2>도구와 위험 등급</h2>
@@ -104,7 +106,6 @@
 
 {% if i.status in ('passed', 'indeterminate') and actor.session.user_id and actor.session.user_id != i.requested_by %}
 <h2>결정</h2>
-{% if hold %}<p>두 번째 승인 대기 · 요청 {{ hold.first_name }} · 만료 {{ hold.expires_at | when }}</p>{% endif %}
 <form method="post" action="/intakes/{{ i.id }}/decision" class="form" id="decision">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ i.state_version }}">
   <div class="row">
