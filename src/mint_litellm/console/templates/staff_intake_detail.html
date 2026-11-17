@@ -4,7 +4,7 @@
 <h1>{{ i.server_id }} {{ m.badge(L.DECISION, i.decision) if i.decision == 'withdrawn' else m.badge(L.INTAKE, i.status) }}</h1>
 {% if i.status in ('received','passed','indeterminate') %}
 <details><summary>신청 철회</summary>
-<p>승인 전 신청을 철회합니다. 기존 검사 이력은 보존되며 새로 신청할 수 있습니다.</p>
+<p>승인 전 신청을 철회합니다. 검사 이력은 남습니다.</p>
 <form method="post" action="/staff/intakes/{{ i.id }}/withdraw" class="form">
 {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ i.state_version }}">
 <label>철회 사유<textarea name="reason" required maxlength="500"></textarea></label>
