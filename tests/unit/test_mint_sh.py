@@ -120,7 +120,7 @@ def test_up_hands_worker_and_staff_passwords_to_init_and_starts_the_worker(tmp_p
     assert "-e MINT_WORKER_DB_PASSWORD" in log and "-e MINT_STAFF_DB_PASSWORD" in log
     values = dict(ln.split("=", 1) for ln in env_file.read_text(encoding="utf-8").splitlines())
     assert values["MINT_WORKER_DB_PASSWORD"] not in log  # 값은 인자가 아니라 환경으로 간다
-    assert "--profile worker up -d worker" in log
+    assert "--profile worker up -d worker inspector" in log
     assert "--profile console up -d console" in log
     assert "--user 0 --entrypoint chown control -R 65532:65532 /var/lib/mint/export /bundles" in log
     assert "--user 0 --entrypoint chown litellm -R 65532:65532 /var/lib/mint/buffer" in log
@@ -396,7 +396,7 @@ def test_upgrade_runs_every_mechanical_step_in_order(tmp_path):
     assert result.returncode == 0, result.stderr
     log = (tmp_path / "docker.log").read_text(encoding="utf-8")
     order = positions(
-        log, " build litellm", "pg_dump", "stop litellm worker console", "init --out",
+        log, " build litellm", "pg_dump", "stop litellm worker inspector console", "init --out",
         "upgrade policy", "up -d litellm", "up -d console", " check", " doctor", "upgrade report",
     )
     assert order == sorted(order)

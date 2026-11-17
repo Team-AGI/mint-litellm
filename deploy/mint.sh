@@ -344,7 +344,7 @@ cmd_up() {
     wait_litellm
     ensure_kit_issuer_key
     ensure_control_key
-    "${COMPOSE[@]}" --profile worker up -d worker
+    "${COMPOSE[@]}" --profile worker up -d worker inspector
     "${COMPOSE[@]}" --profile console up -d console
     echo "기동했습니다."
     next_step
@@ -491,7 +491,7 @@ upgrade_backup() { cmd_backup; }
 upgrade_stop() {
     # 이전 판본이 루트로 쓰는 중에 소유자를 바꾸면 그 사이에 만든 파일이 루트로 남는다.
     UPGRADE_STOPPED=1
-    "${COMPOSE[@]}" --profile worker --profile console stop litellm worker console
+    "${COMPOSE[@]}" --profile worker --profile console stop litellm worker inspector console
 }
 upgrade_migrate() {
     fix_volume_owners
@@ -514,7 +514,7 @@ upgrade_litellm() { "${COMPOSE[@]}" up -d litellm; }
 upgrade_rest() {
     ensure_kit_issuer_key
     ensure_control_key
-    "${COMPOSE[@]}" --profile worker up -d worker
+    "${COMPOSE[@]}" --profile worker up -d worker inspector
     "${COMPOSE[@]}" --profile console up -d console
 }
 # 방금 띄운 서비스가 응답하기까지 몇 번 다시 시도한다.
