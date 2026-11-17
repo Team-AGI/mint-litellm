@@ -17,7 +17,7 @@ import psycopg
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
-from mint_litellm.console import labels, login
+from mint_litellm.console import labels, login, pack_view
 from mint_litellm.console.cookies import delete_cookie, set_cookie
 from mint_litellm.console.core import (
     STAFF_COOKIE,
@@ -35,7 +35,7 @@ from mint_litellm.console.oidc import login_context
 from mint_litellm.console.pages.common import see_other, server_names
 from mint_litellm.console.templating import render
 from mint_litellm.control import endpoint_kits, kit_key_sync, links
-from mint_litellm.control.db.connection import connect
+from mint_litellm.control.db.connection import connect, fetchall
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.litellm_admin import LiteLLMError
 from mint_litellm.control.services import console_sessions, reads, staff, staff_intakes
@@ -147,8 +147,21 @@ def staff_render(
 
 @router.get("/staff/intakes")
 def intake_list(request: Request, actor: StaffActor = Depends(staff_actor)):
-    return staff_render(request, "staff_intakes.html",
-                        {"rows": staff_intakes.listing(actor.sctx)}, actor)
+    rows = staff_intakes.listing(actor.sctx)
+    sources = source_of(actor, [r["id"] for r in rows])
+    for r in rows:
+        r["source"] = sources.get(r["id"], "staff")
+    return staff_render(request, "staff_intakes.html", {"rows": rows}, actor)
+
+
+def source_of(actor: StaffActor, ids: list) -> dict:
+    """신청별 출처. 단말 신청에만 배지를 단다."""
+    if not ids:
+        return {}
+    rows = fetchall(actor.sctx.control,
+                    "SELECT id, source FROM mint.intakes WHERE instance_id=%s AND id = ANY(%s)",
+                    (actor.sctx.instance_id, ids))
+    return {r["id"]: r["source"] for r in rows}
 
 
 def intake_form(request: Request, actor: StaffActor, form=None, error=None, status=200):
@@ -200,8 +213,14 @@ def intake_detail(intake_id: str, request: Request, actor: StaffActor = Depends(
     if reason.startswith("check_failed:"):
         _, check, code = reason.split(":", 2)
         reason = labels.pick(labels.CHECK, check) + ": " + labels.pick(labels.CHECK_REASON, code)
+    source = source_of(actor, [row["id"]]).get(row["id"], "staff")
+    stages = None
+    if source == "endpoint":
+        pack = pack_view.read(actor.sctx.control, actor.sctx.instance_id, row["server_id"])
+        stages = pack_view.stages(row["status"], bool(pack and pack.get("pack_sha256")))
     return staff_render(request, "staff_intake_detail.html",
-                        {"i": row, "decision_reason": reason}, actor)
+                        {"i": row, "decision_reason": reason, "source": source,
+                         "stages": stages}, actor)
 
 
 # --- 로그인·로그아웃 --------------------------------------------------------------------------

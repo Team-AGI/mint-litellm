@@ -1,0 +1,37 @@
+{% import "macros.html" as m %}
+<ol class="steps" aria-label="묶음 단계">{% for level, text in pack.stages %}<li class="{{ level }}"><span class="icon" aria-hidden="true">{{ ICONS[level] }}</span>{{ text }}</li>{% endfor %}</ol>
+{% if pack.ready %}
+<dl class="detail">
+  <dt>패키지</dt><dd>{{ pack.name | blank }} {{ pack.version | blank }}</dd>
+  <dt>묶음 해시</dt><dd>{{ m.ident(pack.sha12) }} <button type="button" class="copy" data-copy="{{ pack.sha }}">복사</button></dd>
+  <dt>진입점</dt><dd>{{ pack.entry | blank }}</dd>
+  <dt>네트워크</dt><dd>{% if pack.network == 'none' %}차단{% elif pack.network == 'hosts' %}허용 호스트만: {{ pack.hosts | join }}{% else %}제한 없음{% endif %}</dd>
+</dl>
+<h2>의존성</h2>
+<table><thead><tr><th>이름</th><th>크기</th><th>해시</th></tr></thead><tbody>
+{% for f in pack.files %}<tr><td>{{ f.name }}</td><td class="nowrap">{{ f.size | blank }}</td><td>{{ m.ident(f.sha) }}</td></tr>{% endfor %}
+</tbody></table>
+<h2>선언 권한</h2>
+{% if pack.access %}<table><thead><tr><th>경로</th><th>권한</th></tr></thead><tbody>
+{% for a in pack.access %}<tr><td>{{ a.path }}</td><td>{{ '읽기·쓰기' if a.mode == 'rw' else '읽기' }}</td></tr>{% endfor %}
+</tbody></table>{% else %}<p class="muted">선언된 경로 없음</p>{% endif %}
+<h2>실제 마운트</h2>
+<table><thead><tr><th>대상</th><th>권한</th></tr></thead><tbody>
+<tr><td>묶음 폴더</td><td>읽기</td></tr>
+<tr><td>임시 폴더</td><td>읽기·쓰기</td></tr>
+<tr><td>런타임 {{ pack.runtime | blank }}</td><td>읽기</td></tr>
+{% for a in pack.access %}<tr><td>{{ a.path }}</td><td>{{ '읽기·쓰기' if a.mode == 'rw' else '읽기' }}</td></tr>{% endfor %}
+</tbody></table>
+{% endif %}
+<h2>검사 컨테이너 도구</h2>
+{% if tools %}
+<table><thead><tr><th>도구</th><th>위험 등급</th><th>동작 유형</th><th>상태</th></tr></thead><tbody>
+{% for t in tools %}<tr><td>{{ t.tool }}</td><td>{{ L.pick(L.RISK, t.risk_grade) }}</td><td>{{ L.pick(L.ACTION, t.action_type) }}</td><td>{{ '승인됨' if t.status == 'approved' else '후보' }}</td></tr>{% endfor %}
+</tbody></table>
+{% else %}<p class="muted">검사로 받은 도구가 없습니다.</p>{% endif %}
+{% if pack.reported_tools %}
+<h2>단말이 보낸 참고 도구</h2>
+<table><thead><tr><th>도구</th><th>구분</th></tr></thead><tbody>
+{% for t in pack.reported_tools %}<tr><td>{{ t.name | blank }}</td><td><span class="badge off">단말 보고</span></td></tr>{% endfor %}
+</tbody></table>
+{% endif %}

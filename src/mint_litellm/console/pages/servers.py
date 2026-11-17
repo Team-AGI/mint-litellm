@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Form, Request
 
-from mint_litellm.console import api, compare, labels
+from mint_litellm.console import api, compare, labels, pack_view
 from mint_litellm.console.core import Actor, page_actor, require_csrf
 from mint_litellm.console.pages.common import act, server_display
 from mint_litellm.console.templating import render
@@ -155,6 +155,11 @@ def server_page(
         "active_approvals": sum(1 for a in row["approvals"] if a["status"] == "active"),
         "provisional": row["contract_status"] != "managed",
         "c": contract_context(request, actor, server_id) if tab == "contract" else None,
+        "pack": pack_view.view(
+            pack_view.read(actor.conn, actor.instance, server_id, approved=True), "decided"
+        )
+        if row["identity_kind"] == "stdio" and tab == "overview"
+        else None,
     }
     return render(request, "server_detail.html", ctx, actor=actor, status=status)
 
@@ -271,7 +276,13 @@ STALL = timedelta(hours=24)
 
 def intakes_page(request: Request, actor: Actor, error=None, status=200):
     wanted = request.query_params.get("status") or ""
+    source = request.query_params.get("source") or ""
     rows = intake_service.list_intakes(actor.ctx)
+    source_counts = {k: sum(1 for r in rows if r["source"] == k) for k in labels.SOURCE}
+    if source in labels.SOURCE:
+        rows = [r for r in rows if r["source"] == source]
+    else:
+        source = ""
     server_display(actor, rows)
     rows.sort(key=lambda r: (r["created_at"], str(r["id"])))  # 오래된 것 먼저
     now = datetime.now(UTC)
@@ -295,6 +306,8 @@ def intakes_page(request: Request, actor: Actor, error=None, status=200):
     ctx = {
         "rows": shown,
         "wanted": wanted,
+        "source": source,
+        "sources": [(k, labels.SOURCE[k], n) for k, n in source_counts.items() if n],
         "error": error,
         "total": len(rows),
         "funnel": funnel,
@@ -310,6 +323,7 @@ def intakes(request: Request, actor: Actor = Depends(page_actor)):
 
 
 INTAKE_TABS = (("overview", "검사 결과"), ("info", "신청 내용"), ("evidence", "증빙"))
+PACK_TAB = ("pack", "실행 묶음")
 
 
 def intake_progress(
@@ -362,8 +376,17 @@ def intake_page(
         entry = {}
     candidate = intake_service.deployment_candidate(actor.conn, actor.instance, intake["server_id"])
     server_name = entry.get("server_name") or entry.get("alias") or intake["server_id"]
+    local = intake["source"] == "endpoint"
+    intake_tabs = INTAKE_TABS[:1] + (PACK_TAB,) + INTAKE_TABS[1:] if local else INTAKE_TABS
+    pack = (
+        pack_view.view(
+            pack_view.read(actor.conn, actor.instance, intake["server_id"]), intake["status"]
+        )
+        if local
+        else None
+    )
     tab = tab or request.query_params.get("tab", "")
-    tab = tab if tab in dict(INTAKE_TABS) else "overview"
+    tab = tab if tab in dict(intake_tabs) else "overview"
     stale = any(
         c["check"] in ("connection", "definitions")
         and now - c["ran_at"] > intake_service.EVIDENCE_MAX_AGE
@@ -407,8 +430,9 @@ def intake_page(
         "tab": tab,
         "next_step": next_step,
         "tabs": [
-            (key, label, len(lacking) if key == "evidence" else 0) for key, label in INTAKE_TABS
+            (key, label, len(lacking) if key == "evidence" else 0) for key, label in intake_tabs
         ],
+        "pack": pack,
         "progress": intake_progress(intake, lacking, checks),
         "decision_form": decision_form or {},
         "provider_blocked": any(c["reason_code"] == "PROVIDER_NOT_ALLOWED" for c in checks),
@@ -710,10 +734,15 @@ def decide_intake(
     scope_type: str = Form("user"),
     scope_id: str = Form(""),
     second_approver_token: str = Form(""),
+    narrow_network: str = Form(""),
+    narrow_files: str = Form(""),
+    narrow_file_access: list[str] = Form([]),
     actor: Actor = Depends(page_actor),
 ):
     def action():
         body = api.IntakeDecisionBody(
+            narrow_network="none" if narrow_network == "none" else None,
+            narrow_file_access=narrow_file_access if narrow_files else None,
             state_version=state_version,
             decision=decision,
             reason=reason or None,
