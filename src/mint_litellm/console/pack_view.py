@@ -77,6 +77,7 @@ def view(row: dict | None, intake_status: str) -> dict:
         "access": [a for a in access if isinstance(a, dict)],
         "network": network,
         "hosts": contract.get("allowed_hosts", spec.get("allowed_hosts")) or [],
+        "env": sorted((contract.get("env") or spec.get("env") or {}).items()),
         "runtime": contract.get("executable"),
         "reported_tools": [t for t in spec.get("observed_tools") or [] if isinstance(t, dict)],
         "network_choices": narrower_networks(network),

@@ -26,6 +26,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictBool,
     ValidationError,
     field_validator,
     model_validator,
@@ -35,6 +36,8 @@ from mint_litellm.compat.litellm_1_106 import HookData
 from mint_litellm.endpoint import intake_text
 from mint_litellm.endpoint.routes import (
     DECIDE_PATH,
+    INSPECTION_RESULT_PATH,
+    INSPECTION_START_PATH,
     INTAKES_PATH,
     ME_PATH,
     OUTCOMES_PATH,
@@ -59,6 +62,8 @@ MAX_BODY_BYTES = 64 * 1024
 # 경로마다 정상 본문이 이보다 작다(결과 보고는 참조와 결과 종류, 설치 보고는 서버 이름 목록).
 BODY_LIMITS = {DECIDE_PATH: MAX_BODY_BYTES, RESULT_PATH: 4 * 1024, REPORT_PATH: 192 * 1024,
     OUTCOMES_PATH: 1024, INTAKES_PATH: 256 * 1024}
+INSPECTION_BODY_BYTES = 256 * 1024
+MAX_INSPECTION_TOOLS = 200
 NOT_READY_CODE = "MINT-ENDPOINT-NOT-READY"
 _REFERENCE = re.compile(r"^([0-9a-f-]{36}):([1-9][0-9]{0,8})$")
 
@@ -239,6 +244,11 @@ class IntakeBody(BaseModel):
     env_names: list[Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")]] = Field(
         default_factory=list, max_length=64
     )
+    # 비밀이 아닌 환경 변수 값. 허용 여부(제어 변수·비밀 이름·경로 값)는 서버가 판정한다.
+    env: dict[
+        Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")],
+        Annotated[str, Field(max_length=1024)],
+    ] = Field(default_factory=dict, max_length=32)
     purpose: str = Field(min_length=1, max_length=2000)
     data_grade: str = Field(min_length=1, max_length=64)
     resources: list[Annotated[str, Field(min_length=1, max_length=256)]] = Field(
@@ -252,6 +262,34 @@ class IntakeBody(BaseModel):
         if (self.network == "hosts") != bool(self.allowed_hosts):
             raise ValueError("allowed_hosts does not match network")
         return self
+
+
+class InspectionDetail(BaseModel):
+    """검사 실패 상세(관리자에게만 보인다)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    stage: str | None = Field(default=None, max_length=32)
+    exit_code: int | None = Field(default=None, ge=-(2**31), le=2**31)
+    stderr_tail: str = Field(default="", max_length=2048)
+
+
+class InspectionResultBody(BaseModel):
+    """단말이 검사용 승인으로 올리는 결과. 목록은 서버가 단말의 주장으로만 본다."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    pack_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    complete: StrictBool
+    tools: list[dict[str, Any]] = Field(max_length=MAX_INSPECTION_TOOLS)
+    detail: InspectionDetail | None = None
+
+    def document(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"pack_sha256": self.pack_sha256, "complete": self.complete,
+                               "tools": self.tools}
+        if self.detail is not None:
+            out["detail"] = self.detail.model_dump()
+        return out
 
 
 class ReportBody(BaseModel):
@@ -277,6 +315,10 @@ class ReportBody(BaseModel):
     tool_lists: list[ToolListItem] | None = Field(default=None, max_length=8)
     # 사용자 수준 Codex 훅을 Codex가 신뢰했는가(단말 설정에서 읽은 값). 이전 묶음은 보내지 않는다.
     hook_trust: Literal["trusted", "untrusted"] | None = None
+    # 키트가 할 수 있는 일(예: 검사용 승인 수행). 모르는 이름은 무시한다.
+    capabilities: list[Annotated[str, Field(min_length=1, max_length=32)]] | None = Field(
+        default=None, max_length=8
+    )
 
     @model_validator(mode="after")
     def _mode_matches_action(self) -> ReportBody:
@@ -378,8 +420,8 @@ async def _read_limited(request: Request, limit: int) -> bytes:
     return b"".join(chunks)
 
 
-async def _body(request: Request, model: type[BaseModel]) -> Any:
-    raw = await _read_limited(request, BODY_LIMITS[request.url.path])
+async def _body(request: Request, model: type[BaseModel], limit: int | None = None) -> Any:
+    raw = await _read_limited(request, limit or BODY_LIMITS[request.url.path])
     if b"\u0000" in raw or b"\x00" in raw:  # NUL 문자는 DB 텍스트에 들어갈 수 없다
         raise HTTPException(status_code=422, detail="invalid request")
     try:
@@ -502,6 +544,17 @@ def make_router(
         except Exception:
             desired = None  # 마찬가지로 못 만들면 싣지 않는다(단말은 설정을 바꾸지 않는다)
         answer: dict[str, Any] = {"recorded": True, "renewed": outcome == "renewed"}
+        if "inspect" in (body.capabilities or ()):
+            try:
+                answer["inspections"] = [
+                    {"id": str(i["id"]), "intake_id": str(i["intake_id"]), "server": i["server_id"],
+                     "pack_sha256": i["pack_sha256"], "contract": i["contract"],
+                     "expires_at": _iso(i["expires_at"])}
+                    for i in await runtime.database.endpoint_inspections(
+                        runtime.config.instance_id, who.key_id)
+                ]
+            except Exception:
+                log.exception("inspection list could not be built")
         if retired is not None:
             answer["retired"] = retired
         if desired is not None:
@@ -584,6 +637,33 @@ def make_router(
             raise HTTPException(status_code=status, detail=_intake_detail(exc)) from exc
         return {"id": str(made)}
 
+    @router.post(INSPECTION_START_PATH)
+    async def inspection_start(
+        inspection_id: UUID, auth: Any = Depends(auth_dependency)
+    ) -> dict[str, Any]:
+        """검사용 승인의 실행권을 원자적으로 한 번 소비한다(같은 키만)."""
+        runtime = ready()
+        who = principal_factory(auth, instance_id=runtime.config.instance_id)
+        if who.key_id is None:
+            raise HTTPException(status_code=404, detail="no such kit key")
+        await _inspection_call(runtime.database.endpoint_inspection_start(
+            runtime.config.instance_id, who.key_id, inspection_id))
+        return {"started": True}
+
+    @router.post(INSPECTION_RESULT_PATH)
+    async def inspection_result(
+        inspection_id: UUID, request: Request, auth: Any = Depends(auth_dependency)
+    ) -> dict[str, Any]:
+        """소비된 검사용 승인의 결과를 받는다. 같은 본문의 재전송은 같은 응답이다."""
+        runtime = ready()
+        body = await _body(request, InspectionResultBody, INSPECTION_BODY_BYTES)
+        who = principal_factory(auth, instance_id=runtime.config.instance_id)
+        if who.key_id is None:
+            raise HTTPException(status_code=404, detail="no such kit key")
+        await _inspection_call(runtime.database.endpoint_inspection_submit(
+            runtime.config.instance_id, who.key_id, inspection_id, body.document()))
+        return {"recorded": True}
+
     @router.get(PACKS_PATH)
     async def pack_file(
         server_id: str, pack_sha256: str, file: str, auth: Any = Depends(auth_dependency)
@@ -601,6 +681,12 @@ def make_router(
             (r for r in scope if r["server_id"] == server_id and r["pack_sha256"] == pack_sha256),
             None,
         )
+        if row is None:  # 범위가 아니면 이 키·이 묶음의 유효한 검사용 승인이 있는가
+            try:
+                row = await runtime.database.endpoint_inspection_pack(
+                    runtime.config.instance_id, who.key_id, server_id, pack_sha256)
+            except Exception as exc:
+                raise HTTPException(status_code=503, detail="endpoint store is not ready") from exc
         path = _pack_path(row, file)
         if path is None:
             raise HTTPException(status_code=404, detail="no such pack")
@@ -632,7 +718,7 @@ def _pack_path(row: Mapping[str, Any] | None, file: str) -> Path | None:
     return path if path.is_relative_to(base) and path.is_file() else None
 
 
-_INTAKE_SQLSTATE = {"23505": 409, "MT429": 429, "42501": 404, "23514": 400}
+_INTAKE_SQLSTATE = {"23505": 409, "MT429": 429, "42501": 404, "23514": 400, "P0002": 404}
 
 
 def _intake_status(exc: Exception) -> int | None:
@@ -642,13 +728,26 @@ def _intake_status(exc: Exception) -> int | None:
         return None
     return _INTAKE_SQLSTATE.get(getattr(exc, "sqlstate", None) or "") or next(
         (status for marker, status in (("MINT-CONFLICT", 409), ("MINT-QUOTA", 429),
-                                       ("MINT-KEY", 404)) if marker in text), 400)
+                                       ("MINT-KEY", 404), ("MINT-NOTFOUND", 404))
+         if marker in text), 400)
 
 
 def _intake_detail(exc: Exception) -> str:
     """예외 본문에서 MINT 코드가 든 줄만 돌려준다(SQL 문맥은 싣지 않는다)."""
     line = next((ln for ln in str(exc).splitlines() if "MINT-" in ln), "invalid request")
     return line.strip()[:200]
+
+
+async def _inspection_call(call: Any) -> None:
+    """검사용 승인 DB 함수의 예외를 응답 코드로 바꾼다(없음 404, 충돌 409, 형식 400)."""
+    try:
+        await call
+    except Exception as exc:
+        status = _intake_status(exc)
+        if status is None:
+            log.exception("endpoint inspection could not be stored")
+            raise HTTPException(status_code=503, detail="inspection store is not ready") from exc
+        raise HTTPException(status_code=status, detail=_intake_detail(exc)) from exc
 
 
 def _dump(items: list[Any] | None) -> list[dict[str, Any]] | None:

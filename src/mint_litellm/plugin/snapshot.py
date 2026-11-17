@@ -1302,6 +1302,59 @@ class PluginDatabase:
 
         return await self._run(write)  # type: ignore[no-any-return]
 
+    async def endpoint_inspections(self, instance_id: str, key_token: str) -> list[dict[str, Any]]:
+        """이 설치 키에 유효한(발급·소비) 검사용 승인."""
+
+        async def read(conn: Any) -> Any:
+            cursor = await conn.execute(
+                "SELECT id, intake_id, server_id, pack_sha256, contract, expires_at"
+                " FROM mint.endpoint_inspections_list(%s, %s)", (instance_id, key_token))
+            return await cursor.fetchall()
+
+        keys = ("id", "intake_id", "server_id", "pack_sha256", "contract", "expires_at")
+        return [dict(zip(keys, row, strict=True)) for row in await self._run(read)]
+
+    async def endpoint_inspection_start(
+        self, instance_id: str, key_token: str, inspection_id: UUID
+    ) -> None:
+        """실행권을 한 번 소비한다. 없음·충돌은 DB 함수가 예외로 알린다."""
+
+        async def write(conn: Any) -> Any:
+            async with conn.transaction():
+                await conn.execute("SELECT mint.endpoint_inspection_start(%s, %s, %s)",
+                                   (instance_id, key_token, inspection_id))
+
+        await self._run(write)
+
+    async def endpoint_inspection_submit(
+        self, instance_id: str, key_token: str, inspection_id: UUID, body: Mapping[str, Any]
+    ) -> None:
+        """검사 결과를 기록한다(처리는 작업이 한다). 같은 본문은 멱등이다."""
+        from psycopg.types.json import Jsonb
+
+        async def write(conn: Any) -> Any:
+            async with conn.transaction():
+                await conn.execute("SELECT mint.endpoint_inspection_submit(%s, %s, %s, %s)",
+                                   (instance_id, key_token, inspection_id, Jsonb(dict(body))))
+
+        await self._run(write)
+
+    async def endpoint_inspection_pack(
+        self, instance_id: str, key_token: str, server_id: str, pack_sha256: str
+    ) -> dict[str, Any] | None:
+        """이 키·이 묶음의 유효한 검사용 승인이 가리키는 후보 묶음(없으면 None)."""
+
+        async def read(conn: Any) -> Any:
+            cursor = await conn.execute(
+                "SELECT server_id, pack_sha256, pack_manifest"
+                " FROM mint.endpoint_inspection_pack(%s, %s, %s, %s)",
+                (instance_id, key_token, server_id, pack_sha256))
+            return await cursor.fetchone()
+
+        row = await self._run(read)
+        return None if row is None else dict(
+            zip(("server_id", "pack_sha256", "pack_manifest"), row, strict=True))
+
     async def desired_servers(self, instance_id: str, key_token: str) -> list[dict[str, Any]]:
         """설치 보고 응답에 실을 승인된 로컬 서버 목록(이름·계약·판본). 이 키의 범위에 닿는 것만."""
         return scoped_desired(await self.endpoint_scope(instance_id, key_token))

@@ -454,6 +454,17 @@ COMMANDS: tuple[CliCommand, ...] = (
         roles=ADMIN_ONLY,
     ),
     CliCommand(
+        path=("intake", "inspect"),
+        summary="판별 불가인 단말 신청에 검사용 승인을 준다. 신청자의 설치 키 하나에만 "
+        "도구 목록을 받아 올릴 권한을 주며 승인이 아니다.",
+        roles=APPROVER_UP,
+    ),
+    CliCommand(
+        path=("intake", "inspect-revoke"),
+        summary="검사용 승인을 철회한다.",
+        roles=APPROVER_UP,
+    ),
+    CliCommand(
         path=("intake", "assign"),
         summary="신청자가 비어 있는 제출 신청에 사람 사용자를 신청자로 지정한다. "
         "지정한 운영자는 그 신청을 결정할 수 없다.",

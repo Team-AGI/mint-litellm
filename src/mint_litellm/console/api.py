@@ -23,7 +23,14 @@ from mint_litellm.console.core import Actor, api_actor, public, require_csrf
 from mint_litellm.control import endpoint_kits, operators
 from mint_litellm.control.approvals import build_conditions
 from mint_litellm.control.context import Operator
-from mint_litellm.control.errors import AdminCode, AdminError, AuthError, ControlError, forbidden
+from mint_litellm.control.errors import (
+    AdminCode,
+    AdminError,
+    AuthError,
+    ControlError,
+    conflict,
+    forbidden,
+)
 from mint_litellm.control.services import allowlists as allowlist_service
 from mint_litellm.control.services import approval_metrics, metrics, reads
 from mint_litellm.control.services import approvals as approval_service
@@ -806,7 +813,11 @@ def confirm_exception(actor: Actor, hold_id: str) -> dict:
             actor, ctx=dataclasses.replace(actor.ctx, operator=first))
         return decide_intake(decider, str(hold["intake_id"]), body, second=actor.ctx.operator)
 
-    return exception_hold_service.confirm(actor.ctx, hold_id, run)
+    result = exception_hold_service.confirm(actor.ctx, hold_id, run)
+    if result.get("expired"):
+        actor.conn.commit()  # 만료로 닫은 것은 남긴다
+        raise conflict("요청이 만료되었습니다. 첫 승인자가 다시 요청해야 합니다.")
+    return result
 
 
 @router.get("/intakes")

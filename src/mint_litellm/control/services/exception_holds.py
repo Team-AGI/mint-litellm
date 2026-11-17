@@ -1,7 +1,7 @@
 """예외 승인의 두 번째 승인 대기: 첫 승인자가 요청하고, 다른 승인자가 화면에서 확인한다."""
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 from mint_litellm.control.context import Context
 from mint_litellm.control.db.connection import fetchall, fetchone
@@ -63,7 +63,7 @@ def request(ctx: Context, intake_id: str, params: dict, *, expected_version: int
             raise conflict(f"{row['status']} 상태의 신청은 except할 수 없습니다.")
         intakes._require_separation(ctx, row, None, False)
         intakes._require_fresh_evidence(ctx, row)
-        now = datetime.now(UTC)
+        now = fetchone(ctx.conn, "SELECT now() AS t")["t"]  # 만료는 DB 시계 기준
         for old in fetchall(  # 열린 요청은 새 요청이 대체한다(만료된 것은 만료로 닫는다)
                 ctx.conn, "SELECT * FROM mint.exception_holds WHERE instance_id = %s"
                 " AND intake_id = %s AND status = 'pending'", (ctx.instance_id, row["id"])):
@@ -107,7 +107,8 @@ def confirm(ctx: Context, hold_id: str, run) -> dict:
         hold = _get(ctx, hold_id)
         if hold["status"] != "pending":
             raise conflict("이미 처리된 요청입니다.")
-        if hold["expires_at"] <= datetime.now(UTC):
+        # 만료 비교는 DB 시계로 한다(만료 시각을 쓰고 읽는 쪽과 같은 시계).
+        if fetchone(ctx.conn, "SELECT %s <= now() AS due", (hold["expires_at"],))["due"]:
             _close(ctx, hold, "expired", "expired")
             expired = True
         else:
@@ -117,4 +118,5 @@ def confirm(ctx: Context, hold_id: str, run) -> dict:
                 " closed_at = now() WHERE id = %s", (ctx.operator.name, hold["id"]))
             return result
     if expired:
-        raise conflict("요청이 만료되었습니다. 첫 승인자가 다시 요청해야 합니다.")
+        # 화면은 오류 때 연결을 되돌리므로, 만료 표시를 남기려면 부른 쪽이 확정한 뒤 알린다.
+        return {"expired": True}

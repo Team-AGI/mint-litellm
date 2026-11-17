@@ -18,6 +18,7 @@ from mint_litellm.control.errors import ControlError
 from mint_litellm.control.jobs import JobContext
 from mint_litellm.control.litellm_admin import LiteLLMError
 from mint_litellm.control.services import evidence, intakes
+from mint_litellm.control.services import intake_inspections as inspections
 from mint_litellm.control.services.base import enqueue_job, transact
 from mint_litellm.types.jobs import intake_run_job_key
 
@@ -342,6 +343,8 @@ def _record_pack(job: JobContext, ctx: Context, contract: dict, spec: dict,
                 checks.local_exec_contract(spec, digest, manifest, python)),
              job.instance_id, contract["id"]),
         )
+        # 묶음·계약이 바뀌면 열린 검사용 승인은 쓸 수 없다
+        inspections.invalidate_changed(ctx.conn, job.instance_id, contract["id"])
 
 
 def _run_local_checks(job: JobContext, ctx: Context, row: dict, attempt: int) -> None:

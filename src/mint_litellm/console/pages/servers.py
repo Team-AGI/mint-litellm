@@ -15,6 +15,7 @@ from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import contracts as contract_service
 from mint_litellm.control.services import evidence as evidence_service
 from mint_litellm.control.services import exception_holds, reads
+from mint_litellm.control.services import intake_inspections as inspection_service
 from mint_litellm.control.services import intakes as intake_service
 from mint_litellm.control.services import servers as server_service
 
@@ -358,6 +359,11 @@ def intake_progress(
     return [("ok", "접수"), checked, proof, decision]
 
 
+def minutes_left(inspection: dict, now: datetime) -> str:
+    """검사용 승인의 남은 시간(분 단위, 1분 미만은 1분)."""
+    return f"{max(1, int((inspection['expires_at'] - now).total_seconds() // 60))}분"
+
+
 def intake_page(
     request: Request,
     actor: Actor,
@@ -388,7 +394,7 @@ def intake_page(
     tab = tab or request.query_params.get("tab", "")
     tab = tab if tab in dict(intake_tabs) else "overview"
     stale = any(
-        c["check"] in ("connection", "definitions")
+        c["check"] in ("connection", "definitions", "inspection")
         and now - c["ran_at"] > intake_service.EVIDENCE_MAX_AGE
         for c in checks
     )
@@ -412,8 +418,23 @@ def intake_page(
         next_step = "증빙 첨부" if lacking else "결정"
     else:
         next_step = None
+    inspections = (
+        inspection_service.for_intake(actor.conn, actor.instance, intake["id"]) if local else []
+    )
+    open_inspection = next((x for x in inspections if x["status"] in inspection_service.OPEN), None)
     ctx = {
         "i": intake,
+        "inspect": {
+            "open": open_inspection,
+            "left": None if open_inspection is None else minutes_left(open_inspection, now),
+            "latest": inspections[0] if inspections else None,
+            "history": inspections,
+            "can": local and status_now == "indeterminate" and open_inspection is None
+            and bool(pack and pack["ready"]),
+            "source": "단말 검사" if any(
+                c["method"] == "endpoint:tools_list" and c["reason_code"] == "ENDPOINT_INSPECTED"
+                for c in checks) else "검사 컨테이너",
+        },
         "server_name": server_name,
         "server_url": candidate["url"] if candidate else entry.get("url"),
         "checks": checks,
@@ -677,6 +698,21 @@ def assign_requester(
         f"/intakes/{intake_id}",
         lambda **kw: intake_page(request, actor, intake_id, **kw),
     )
+
+
+@router.post("/intakes/{intake_id}/inspect")
+def inspect_intake(intake_id: str, request: Request, actor: Actor = Depends(page_actor)):
+    return act(actor, lambda: inspection_service.issue(actor.ctx, intake_id),
+               "inspection_issued", f"/intakes/{intake_id}",
+               lambda **kw: intake_page(request, actor, intake_id, **kw))
+
+
+@router.post("/intakes/{intake_id}/inspect-revoke")
+def revoke_inspection(intake_id: str, request: Request, inspection_id: str = Form(...),
+                      actor: Actor = Depends(page_actor)):
+    return act(actor, lambda: inspection_service.revoke(actor.ctx, inspection_id),
+               "inspection_revoked", f"/intakes/{intake_id}",
+               lambda **kw: intake_page(request, actor, intake_id, **kw))
 
 
 @router.post("/intakes/{intake_id}/evidence")

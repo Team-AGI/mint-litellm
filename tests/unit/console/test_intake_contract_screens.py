@@ -782,7 +782,7 @@ def test_the_first_approver_and_the_requester_cannot_confirm(world):
     mine = add_intake(world, status="indeterminate", result="indeterminate", server="srv-ok",
                       requested_by="human-2")
     hold_it(world, mine)
-    held = str(world.query("SELECT id FROM mint.exception_holds h JOIN mint.intakes i"
+    held = str(world.query("SELECT h.id FROM mint.exception_holds h JOIN mint.intakes i"
                            " ON i.id = h.intake_id WHERE i.id = %s", mine)[0][0])
     assert hold_step(world, held, "approver", "confirm").status_code == 403
     state = world.query("SELECT status FROM mint.intakes WHERE id = %s", mine)[0][0]

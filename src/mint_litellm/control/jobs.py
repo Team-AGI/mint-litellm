@@ -34,6 +34,7 @@ class JobKind:
 KINDS: dict[str, JobKind] = {
     "submission_poll": JobKind(),
     "intake_run": JobKind(),
+    "endpoint_inspection": JobKind(),
     "contract_observe": JobKind(convergent=True),
     "sync_server": JobKind(convergent=True, external_write=True),
     "sync_target": JobKind(convergent=True, external_write=True),
