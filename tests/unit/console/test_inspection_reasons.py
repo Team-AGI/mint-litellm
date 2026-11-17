@@ -30,7 +30,8 @@ def test_every_check_reason_code_in_the_source_has_a_korean_name():
 def test_local_check_names_and_inspection_stages_are_translated():
     for name in ("exec_shape", "pack_build", "inspection"):
         assert re.search("[가-힣]", labels.CHECK[name])
-    assert set(labels.INSPECTION_STAGE) == {"start", "initialize", "tools_list"}
+    assert set(labels.INSPECTION_STAGE) == {"start", "initialize", "tools_list", "sandbox"}
+    assert all(re.search("[가-힣]", v) for v in labels.INSPECTION_STAGE.values())
 
 
 def cell(**inputs) -> str:
