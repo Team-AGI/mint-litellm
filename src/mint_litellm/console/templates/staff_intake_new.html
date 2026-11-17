@@ -1,0 +1,20 @@
+{% extends "staff_base.html" %}{% import "macros.html" as m %}
+{% block title %}MCP 서버 도입 신청 등록 · MINT{% endblock %}
+{% block page_class %}narrow{% endblock %}
+{% block body %}
+<h1>MCP 서버 도입 신청</h1>
+<form method="post" action="/staff/intakes" class="form cols">
+{{ m.csrf(actor) }}<input type="hidden" name="request_id" value="{{ f.request_id }}">
+<label>서버 식별자<input name="server_id" value="{{ f.server_id }}" maxlength="128" placeholder="company-docs" required></label>
+<label>전송 방식<select name="transport"><option value="http"{% if f.transport == 'http' %} selected{% endif %}>HTTP</option><option value="sse"{% if f.transport == 'sse' %} selected{% endif %}>SSE</option></select></label>
+<label class="full">MCP 서버 주소<input type="url" name="url" value="{{ f.url }}" maxlength="2048" placeholder="https://mcp.example.com/mcp" required></label>
+<label class="full">도입 목적<textarea name="purpose" maxlength="256" required>{{ f.purpose }}</textarea></label>
+<label>자료 등급<select name="data_grade">{% for key in ('public','internal','confidential','restricted') %}<option value="{{ key }}"{% if f.data_grade == key %} selected{% endif %}>{{ L.pick(L.DATA_GRADE, key) }}</option>{% endfor %}</select></label>
+<label>감사 열람 기간(일)<input type="number" name="audit_access_days" min="1" max="3650" value="{{ f.audit_access_days }}" required></label>
+<label class="full">취급 자원(한 줄에 하나)<textarea name="resources" maxlength="4000">{{ f.resources }}</textarea></label>
+<label>자격 증명 변경 안내<input name="credential_notice" value="{{ f.credential_notice }}" maxlength="1000" required></label>
+<label>철회 기록 방법<input name="revocation_record" value="{{ f.revocation_record }}" maxlength="1000" required></label>
+<label class="full">자료 삭제·반환 조건<textarea name="data_return_terms" maxlength="2000" required>{{ f.data_return_terms }}</textarea></label>
+<div class="actions full"><button type="submit" class="primary">신청 제출</button><a class="button" href="/staff/intakes">취소</a></div>
+</form>
+{% endblock %}

@@ -94,6 +94,12 @@ class ControlStub:
                         (i for i in stub.submissions if i["server_id"] == sid), None
                     )
                     return self._send(200, entry) if entry else self._send(404, {"detail": "no"})
+                if self.command == "POST" and path == "/v1/mcp/server":
+                    sid = body["server_id"]
+                    if sid in stub.servers:
+                        return self._send(400, {"detail": "server already exists"})
+                    stub.servers[sid] = {**body, "approval_status": "active"}
+                    return self._send(201, stub.servers[sid])
                 if self.command == "PUT" and path == "/v1/mcp/server":
                     item = next(
                         (

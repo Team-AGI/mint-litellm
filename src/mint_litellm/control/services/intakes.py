@@ -186,6 +186,8 @@ def deployment_candidate(conn: Any, instance_id: str, server_id: str) -> dict | 
 
 def _enqueue_run(ctx: Context, row: dict, mode: str = "") -> str:
     """수용검증 작업을 등록한다. 시도 번호가 같으면 한 작업이다."""
+    if not mode and row.get("source") == "staff":
+        mode = "staff"
     target = f"{row['id']}/{mode}" if mode else str(row["id"])
     if mode == "reject":  # 같은 신청의 LiteLLM 거절 전달은 어느 경로에서든 한 작업이다
         return enqueue_job(ctx, "intake_run", target, intake_reject_job_key(row["id"]))

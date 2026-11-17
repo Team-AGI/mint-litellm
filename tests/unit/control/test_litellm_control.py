@@ -71,7 +71,6 @@ def test_with_guard_returns_a_copy_with_the_same_connection(stub):
 @pytest.mark.parametrize(
     ("method", "path"),
     [
-        ("POST", "/v1/mcp/server"),  # 서버 등록
         ("DELETE", "/v1/mcp/server/x"),  # 서버 삭제
         ("POST", "/v1/mcp/server/import"),
         ("POST", "/v1/mcp/server/register"),

@@ -2,7 +2,19 @@
 {% block title %}신청 상세 · MINT{% endblock %}
 {% block page_class %}wide{% endblock %}
 {% block body %}
-<h1>{{ server_name }} {{ m.badge(L.INTAKE, i.status) }}</h1>
+<h1>{{ server_name }} {{ m.badge(L.DECISION, i.decision) if i.decision == 'withdrawn' else m.badge(L.INTAKE, i.status) }}</h1>
+{% if i.requested_by == actor.ctx.operator.user_id and i.source in ('operator','staff') and i.status in ('received','passed','indeterminate') %}
+<details><summary>신청 철회</summary>
+<p>신청자 본인의 승인 전 신청을 철회합니다. 검사 이력은 보존하며, 철회 후 새로 신청할 수 있습니다.</p>
+<form method="post" action="/intakes/{{ i.id }}/withdraw" class="form">
+{{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ i.state_version }}">
+<label>철회 사유<textarea name="reason" required maxlength="500"></textarea></label>
+<label><input type="checkbox" name="confirm" value="yes" required>이 신청을 철회하겠습니다.</label>
+<button type="submit">신청 철회</button>
+</form></details>
+{% endif %}
+{% if i.decision == 'withdrawn' %}<div class="effect">철회된 신청입니다. 사유: {{ i.decision_reason }} · 승인이나 사용 권한은 부여되지 않았습니다.</div>{% endif %}
+{% if i.status == 'checking' and i.requested_by == actor.ctx.operator.user_id %}<p>검사 진행 중에는 철회할 수 없습니다. 검사가 끝난 뒤 새로고침하십시오.</p>{% endif %}
 {% if server_url %}<p>{{ server_url }}</p>{% endif %}<p>서버 식별자 {{ m.ident(i.server_id) }} <button type="button" class="copy" data-copy="{{ i.server_id }}">복사</button></p>
 <ol class="steps" aria-label="진행 단계">{% for level, text in progress %}<li class="{{ level }}"><span class="icon" aria-hidden="true">{{ ICONS[level] }}</span>{{ text }}</li>{% endfor %}</ol>
 {% if stale and i.status in ('passed', 'indeterminate') %}<div class="banner error" role="alert">연결·도구 정의 증거가 24시간을 넘었습니다</div>{% endif %}
@@ -12,7 +24,7 @@
 <div class="cards">
   {{ m.kpi('검사 통과', passed ~ ' / ' ~ (checks | length), level='danger' if failed else ('wait' if passed != (checks | length) else none)) }}
   {{ m.kpi('높음 이상 도구', high_risk, note='낮음 ' ~ risk.low ~ ' · 보통 ' ~ risk.medium ~ ' · 높음 ' ~ risk.high ~ ' · 심각 ' ~ risk.critical, level='wait' if high_risk) }}
-  {{ m.kpi('증빙 충족', proof[0] ~ ' / ' ~ proof[1], '?tab=evidence', level='danger' if lacking) }}
+  {% if i.decision == 'withdrawn' %}{{ m.kpi('증빙', '승인 심사 종료') }}{% else %}{{ m.kpi('증빙 충족', proof[0] ~ ' / ' ~ proof[1], '?tab=evidence', level='danger' if lacking) }}{% endif %}
 </div>
 <div class="{{ 'grid' if can(actor, 'intake approve') }}">
 <div>
