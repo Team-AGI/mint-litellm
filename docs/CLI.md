@@ -14,6 +14,8 @@
 
 ## 명령
 
+`approve --reuse-read-confirmations`로 승인된 `read/low` URL 조회의 최초 두 확인을 재사용할 수 있다. 기본은 꺼짐이며 [적용 조건과 재사용 기한](읽기-재확인-재사용.md)을 먼저 확인한다.
+
 | 명령 | 역할 | 설명 | LiteLLM 읽기 | 사건 |
 | --- | --- | --- | --- | --- |
 | `mint-litellm contract show` | 모든 역할 | 서버의 승인본·후보 계약을 조회한다. | - | - |

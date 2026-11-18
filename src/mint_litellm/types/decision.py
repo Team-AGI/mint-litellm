@@ -562,6 +562,9 @@ class DecisionSnapshot(BaseModel):
     enforced_action: Action
     selected_approval_id: str | None = None
     consumed_call_approval_id: str | None = None
+    # Initial dual-check scope and the immutable event reused on later exact reads.
+    read_reconfirmation_scope: str | None = None
+    read_reconfirmation_proof_event_id: str | None = None
     revoked_after_snapshot: bool | None = None
     revocation_check: RevocationCheck | None = None
     missing_reasons: dict[str, str] = {}

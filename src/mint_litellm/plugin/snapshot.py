@@ -23,6 +23,7 @@ from uuid import UUID
 from mint_litellm.endpoint.refresh import merge_local_mcp, revoke_names, scoped_desired
 from mint_litellm.endpoint.remediation import remediation_events, retired_names
 from mint_litellm.plugin.buffer import ConsumeRequest, ConsumptionLost
+from mint_litellm.plugin.read_reconfirmation import PROOFS_SQL
 from mint_litellm.types.canonical import sha256
 from mint_litellm.types.events import Event
 from mint_litellm.types.identity import OrgStatus, SubjectType
@@ -170,6 +171,16 @@ CONFIRMATION_SNAPSHOT_SQL = STAGE2_SNAPSHOT_SQL.replace(
           AND c.server_id = %(server_id)s AND c.tool = %(tool)s
           AND c.principal_id = %(user_id)s
     ),
+    'consents', (""",
+)
+
+CONFIRMATION_SNAPSHOT_SQL = CONFIRMATION_SNAPSHOT_SQL.replace(
+    "'consents', (",
+    """'read_reconfirmations', CASE WHEN EXISTS (
+        SELECT 1 FROM ap WHERE conditions->'reuse_read_confirmations' = 'true'::jsonb
+    ) THEN (SELECT coalesce(jsonb_agg(to_jsonb(proof)), '[]'::jsonb)
+            FROM (""" + PROOFS_SQL.replace("%(proof_event_id)s", "NULL") + """) proof)
+            ELSE '[]'::jsonb END,
     'consents', (""",
 )
 
@@ -491,6 +502,7 @@ class Snapshot:
     auto_profile: str | None = None
     # 서버의 마지막 승인된 수용 신청이 적은 자료 등급. 수용 신청 없이 등록된 서버는 None.
     data_grade: str | None = None
+    read_reconfirmations: tuple[Mapping[str, Any], ...] = ()
 
 
 def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
@@ -500,6 +512,7 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
     policy = doc.get("policy_version")
     basis = doc.get("deployment_basis") or {}
     return Snapshot(
+        read_reconfirmations=tuple(doc.get("read_reconfirmations", ())),
         now=_time(doc["now"]),
         epoch=doc.get("epoch"),
         settings=None
@@ -852,6 +865,7 @@ class PluginDatabase:
             "key_id": query.key_id,
             "user_id": query.user_id,
             "team_id": query.team_id,
+            "proof_event_id": None,
         }
 
         async def read(conn: Any) -> Any:
@@ -890,6 +904,7 @@ class PluginDatabase:
         )
         consumes = consume is not None and (
             consume.call_approval_id is not None or consume.confirmation is not None
+            or consume.read_reconfirmation is not None
         )
 
         async def write(conn: Any) -> bool:
@@ -900,6 +915,21 @@ class PluginDatabase:
             await conn.set_isolation_level(None)
             await conn.set_read_only(False)
             async with conn.transaction():
+                if consume is not None and consume.read_reconfirmation is not None:
+                    proof = consume.read_reconfirmation
+                    cursor = await conn.execute(PROOFS_SQL, {
+                        "iid": event.instance_id, "user_id": consume.principal_id,
+                        "server_id": consume.server_id, "tool": consume.tool,
+                        "key_id": proof.key_id, "proof_event_id": proof.event_id,
+                    })
+                    rows = await cursor.fetchall()
+                    # Cursor rows are tuples. Match identity and scope again in the
+                    # same transaction as the new decision's durable audit record.
+                    if not any(str(r[1]) == proof.approval_id and r[8] == consume.args_fp
+                               and r[9] == proof.fp_key_version
+                               and str(r[10]) == consume.policy_version_id
+                               and str(r[11]) == consume.contract_id for r in rows):
+                        raise ConsumptionLost("CALL_APPROVAL_REQUIRED")
                 cursor = await conn.execute(INSERT_EVENT_SQL, row)
                 inserted = cursor.rowcount == 1
                 if consume is not None and consume.call_approval_id is not None:
