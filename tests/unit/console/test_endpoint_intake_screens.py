@@ -2,6 +2,7 @@
 
 import json
 import re
+import uuid
 from pathlib import Path
 
 from mint_litellm.console import labels, pack_view
@@ -61,8 +62,8 @@ def test_the_staff_form_offers_local_run_with_a_command_example():
         encoding="utf-8")
 
 
-def make_local(world):
-    intake = add_intake(world)
+def make_local(world, **intake_fields):
+    intake = add_intake(world, **intake_fields)
     world.query("ALTER TABLE mint.intakes DISABLE TRIGGER USER")
     world.query("UPDATE mint.intakes SET source = 'endpoint', endpoint_key_token = 'k'"
                 " WHERE id = %s",
@@ -111,6 +112,36 @@ def make_inspectable(world, intake=None):
 
 def post_form(world, client, path, **data):
     return client.post(path, data={"csrf": world.csrf(client), **data})
+
+
+def test_an_operator_can_withdraw_their_own_endpoint_intake_from_its_detail(world):
+    intake = make_local(world, requested_by="human-1")
+    path = f"/intakes/{intake}"
+    action = f'action="{path}/withdraw"'
+    owner = world.session_client("admin")
+    reviewer = world.session_client("approver")
+    assert path in owner.get("/intakes?source=endpoint").text
+    assert action not in reviewer.get(path).text
+    page = owner.get(path)
+    assert page.status_code == 200
+    assert action in page.text
+    version = re.search(r'name="state_version" value="(\d+)"', page.text).group(1)
+    withdrawal = post_form(world, owner, path + "/withdraw", state_version=version,
+                           reason="단말 신청 중복", confirm="yes")
+    assert withdrawal.status_code == 303, withdrawal.text
+    for client in (owner, reviewer):
+        detail = client.get(path).text
+        assert "철회됨" in detail and "단말 신청 중복" in detail
+        assert action not in detail
+
+    submitted = str(uuid.uuid4())
+    world.query("INSERT INTO mint.intakes (id, instance_id, org_id, server_id, source,"
+                " requested_by) VALUES (%s, 'inst1', 'acme', 'srv-wait', 'submission', 'human-1')",
+                submitted)
+    submission_path = f"/intakes/{submitted}"
+    submission = owner.get(submission_path)
+    assert submission.status_code == 200
+    assert f'action="{submission_path}/withdraw"' not in submission.text
 
 
 def test_an_admin_grants_and_withdraws_an_inspection_approval_from_the_intake_screen(world):
