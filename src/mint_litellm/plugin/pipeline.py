@@ -24,7 +24,12 @@ from uuid import UUID
 
 from mint_litellm.compat.litellm_1_106 import HookData, ServerResolutionError
 from mint_litellm.control import links
-from mint_litellm.plugin.buffer import ConfirmationConsume, ConsumeRequest, EvidenceRecorder
+from mint_litellm.plugin.buffer import (
+    ConfirmationConsume,
+    ConsumeRequest,
+    EvidenceRecorder,
+    ReadReconfirmationConsume,
+)
 from mint_litellm.plugin.call_display import call_display
 from mint_litellm.plugin.config import PluginConfig
 from mint_litellm.plugin.list_seen import ListSeen, list_key
@@ -41,6 +46,8 @@ from mint_litellm.plugin.policy.opa_client import Evaluation
 from mint_litellm.plugin.policy.patterns import compute_patterns
 from mint_litellm.plugin.policy.provisional import infer as infer_provisional
 from mint_litellm.plugin.policy.sensitive_scan import INPUT_SECRET_KINDS, scan_arguments
+from mint_litellm.plugin.read_reconfirmation import NOTICE, eligible
+from mint_litellm.plugin.read_reconfirmation import match as match_read_reconfirmation
 from mint_litellm.plugin.resolve_guard import ResolveGuard
 from mint_litellm.plugin.snapshot import (
     WINDOW_MAX_USES,
@@ -1256,6 +1263,8 @@ class _Run:
     # 전달되는 호출자 토큰이 승인된 범위를 넘은 범위 이름, 확인하지 않은 이유
     scope_exceeded: list[str] = field(default_factory=list)
     scope_unchecked_reason: str | None = None
+    read_reconfirmation_scope: str | None = None
+    read_reconfirmation_proof_event_id: str | None = None
 
 
 def _decision_snapshot(
@@ -1301,6 +1310,8 @@ def _decision_snapshot(
     values["target_profile_source"] = run.profile[1] if run.profile else None
     values["bound_target"] = run.binding.target if run.binding else None
     values["bound_action"] = run.binding.action if run.binding else None
+    values["read_reconfirmation_scope"] = run.read_reconfirmation_scope
+    values["read_reconfirmation_proof_event_id"] = run.read_reconfirmation_proof_event_id
     reasons["revoked_after_snapshot"] = _MISSING["revoked_after_snapshot"]
     reasons["revocation_check"] = _MISSING["revocation_check"]
     if snap is not None:
@@ -1603,6 +1614,40 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         return
     run.binding = binding
     obligations = run.policy.obligations
+    read_proof = None
+    contract = current_contract(snapshot, tool)
+    if (run.mode is Mode.ENFORCE and config.fingerprint_key is not None
+            and tool not in config.high_risk_tools
+            and (binding is None or binding.effect == READ)
+            and eligible(snapshot, run.principal, run.selected, contract, hook.arguments)):
+        assert run.selected is not None and contract is not None
+        assert snapshot.policy_version is not None
+        run.read_reconfirmation_scope = run.selected.id
+        read_proof = match_read_reconfirmation(
+            snapshot.read_reconfirmations, now=snapshot.now,
+            expected={"approval_id": run.selected.id, "key_id": run.principal.key_id,
+                      "org_id": run.principal.org_id, "principal_id": run.principal.principal_id,
+                      "server_id": resolved.server_id, "tool": tool,
+                      "args_fp": argument_fingerprint(hook.arguments, config.fingerprint_key),
+                      "fp_key_version": config.fingerprint_key_version,
+                      "policy_version_id": snapshot.policy_version.id, "contract_id": contract.id},
+        )
+        remaining = tuple(o for o in obligations
+                          if not isinstance(o, (RequireCallApproval, RequireUserConfirmation)))
+        if read_proof is None:
+            # First use always gets both checks. Show the reuse scope to the user.
+            original_confirmation = next(
+                (o for o in obligations if isinstance(o, RequireUserConfirmation)), None)
+            obligations = (RequireCallApproval(), RequireUserConfirmation(
+                purpose=original_confirmation.purpose if original_confirmation else NOTICE,
+                display_fields=tuple(dict.fromkeys([
+                    *(original_confirmation.display_fields if original_confirmation else ()),
+                    *hook.arguments,
+                ]))), *remaining)
+        else:
+            obligations = remaining
+            run.read_reconfirmation_proof_event_id = str(read_proof["event_id"])
+        run.policy = replace(run.policy, obligations=obligations)
     # 프로필이 있는 서버의 변경·실행 호출은 정책이 요구하지 않아도 대상에 묶인 승인이 있어야 한다.
     if (
         binding is not None
@@ -1622,6 +1667,18 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         req.invocation_id,
         binding,
     )
+    if read_proof is not None and not check.results:
+        assert run.principal.key_id is not None and run.selected is not None
+        assert contract is not None and snapshot.policy_version is not None
+        check = ObligationCheck([], ConsumeRequest(
+            call_approval_id=None, invocation_id=req.invocation_id, principal_type="user",
+            principal_id=run.principal.principal_id, server_id=resolved.server_id, tool=tool,
+            args_fp=str(read_proof["args_fp"]), policy_version_id=snapshot.policy_version.id,
+            state_version=0, contract_id=contract.id,
+            read_reconfirmation=ReadReconfirmationConsume(
+                str(read_proof["event_id"]), run.selected.id, run.principal.key_id,
+                config.fingerprint_key_version),
+        ))
     timing.since("fingerprint", started)
     check = await _previous_outcome(run, deps, check, resolved, tool, hook.arguments)
     for result in check.results:
@@ -1652,7 +1709,11 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
                     "fp_key_version": config.fingerprint_key_version,
                     "policy_version_id": snapshot.policy_version.id,
                     "purpose": obligation.purpose, "key_token": run.principal.key_id,
-                    "display": confirmation_display(hook.arguments, obligation.display_fields),
+                    "display": {
+                        **confirmation_display(hook.arguments, obligation.display_fields),
+                        **({"재확인 재사용": NOTICE + " / " + run.selected.valid_until.isoformat()}
+                           if run.read_reconfirmation_scope and run.selected else {}),
+                    },
                     "contract_id": contract.id if contract is not None else None,
                     "exec_contract_sha256": resolved.exec_contract_sha256,
                 })
@@ -1736,7 +1797,10 @@ async def _open_call_approval(
                 "fp_key_version": config.fingerprint_key_version,
                 "policy_version_id": snapshot.policy_version.id,
                 "requested_by": AUTO_REQUESTER, "minutes": AUTO_REQUEST_MINUTES,
-                "display": call_display(arguments),
+                "display": {**call_display(arguments), **(
+                    {"재확인 재사용": NOTICE + " / " + run.selected.valid_until.isoformat()}
+                    if run.read_reconfirmation_scope and run.selected else {}
+                )},
                 "contract_id": contract.id if contract is not None else None,
                 "exec_contract_sha256": resolved.exec_contract_sha256,
                 "target": binding.target if binding is not None else None,

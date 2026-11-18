@@ -91,6 +91,15 @@ def _conditions(**kwargs):
     )
 
 
+def test_read_confirmation_reuse_requires_explicit_flag():
+    assert not cli.build_parser().parse_args(BASE).reuse_read_confirmations
+    args = cli.build_parser().parse_args([*BASE, "--reuse-read-confirmations"])
+    assert _conditions(reuse_read_confirmations=args.reuse_read_confirmations) == {
+        "reuse_read_confirmations": True
+    }
+    assert "reuse_read_confirmations" not in _conditions()
+
+
 @pytest.mark.parametrize(
     "host", ["*", "com", "a..test", ".test", "a.test.", "*.com", "bad host.test", "", "-a.test"]
 )

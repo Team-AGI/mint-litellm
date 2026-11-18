@@ -466,6 +466,7 @@ def _approve(run: Run) -> None:
             allow_input_secrets=a.allow_input_secret,
             allow_token_forward=a.allow_token_forward,
             allow_internal_address=a.allow_internal_address,
+            reuse_read_confirmations=a.reuse_read_confirmations,
         ),
     )
     _created(run, approval_id)
@@ -1174,6 +1175,9 @@ ARGUMENTS: dict[str, list[Any]] = {
            "운영하는 서버용이며 기본은 서버 주소 재확인이 막거나 알린다"),
         _a("--confirm-tool", action="append",
            help="호출 때 본인 확인을 요구할 도구(반복 가능, 승인 도구 안에 있어야 한다)"),
+        _a("--reuse-read-confirmations", action="store_true",
+           help="read/low URL 조회에서 최초 관리자·본인 확인 후 동일 인자 요청의 확인을 "
+           "승인 유효기간 안에서 재사용한다(최대 30일, 기본 꺼짐)"),
         _a("--confirm-purpose", help="본인 확인의 목적(--confirm-tool과 함께)"),
         _a("--confirm-field", action="append", help="확인 화면에 보일 인자 이름(반복 가능)"),
         _SECOND,

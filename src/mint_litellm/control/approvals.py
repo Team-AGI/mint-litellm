@@ -100,9 +100,12 @@ def build_conditions(
     allow_input_secrets: list[str] | None = None,
     allow_token_forward: bool = False,
     allow_internal_address: bool = False,
+    reuse_read_confirmations: bool = False,
 ) -> dict:
     """정책이 읽는 승인 조건. 지정하지 않은 조건은 키를 넣지 않는다."""
     conditions: dict = {}
+    if reuse_read_confirmations:
+        conditions["reuse_read_confirmations"] = True
     for name, limit in (("max_result_bytes", max_result_bytes),
                         ("max_result_items", max_result_items)):
         if limit is not None:
@@ -410,6 +413,26 @@ def approve(
         if not found:
             raise ControlError(f"유효한 허용 목록 항목이 아닙니다: {ref}")
     require_package_acceptance(ctx, relation["server_id"])
+    if "reuse_read_confirmations" in conditions:
+        if type(conditions["reuse_read_confirmations"]) is not bool:
+            raise ControlError("reuse_read_confirmations는 불리언이어야 합니다.")
+        if conditions["reuse_read_confirmations"]:
+            if scope_type != "user" or not conditions.get("allowed_hosts"):
+                raise ControlError("읽기 확인 재사용에는 사용자 범위와 명시적 목적지가 필요합니다.")
+            if conditions.get("scan_result") is False or conditions.get("allow_input_secrets"):
+                raise ControlError(
+                    "읽기 확인 재사용은 결과 검사와 입력 비밀 차단을 유지해야 합니다.")
+            contracts = fetchall(ctx.conn,
+                "SELECT t.tool FROM mint.tool_contracts t JOIN mint.servers s"
+                " ON s.instance_id=t.instance_id AND s.server_id=t.server_id"
+                " WHERE t.instance_id=%s AND t.server_id=%s"
+                " AND t.status='approved' AND t.drift='none' AND t.action_type='read'"
+                " AND t.risk_grade='low' AND 'url'=ANY(t.input_keys)"
+                " AND s.contract_status='managed' AND s.identity_kind='remote'",
+                (ctx.instance_id, relation["server_id"]))
+            if not set(tools) <= {row["tool"] for row in contracts}:
+                raise ControlError(
+                    "읽기 확인 재사용은 URL을 받는 승인된 read/low 도구만 가능합니다.")
     twin = fetchone(
         ctx.conn,
         "SELECT 1 AS x FROM mint.approvals WHERE instance_id = %s AND server_id = %s"

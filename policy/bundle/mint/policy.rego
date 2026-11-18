@@ -85,6 +85,7 @@ missing contains "tool.risk_grade" if {
 	"risk_grade" in object.keys(input.tool)
 	not input.tool.risk_grade in {"low", "medium", "high", "critical"}
 }
+
 missing contains "arguments.keys" if not valid_strings(input.arguments.keys)
 missing contains "arguments.sizes" if not valid_sizes(input.arguments.sizes)
 
@@ -247,6 +248,11 @@ valid_hours if {
 
 conditions := object.get(object.get(input, "approval", {}), "conditions", {})
 
+missing contains "approval.conditions.reuse_read_confirmations" if {
+	value := object.get(conditions, "reuse_read_confirmations", false)
+	not is_boolean(value)
+}
+
 applied contains "R1" if input.approval.present == false
 applied contains "R2" if input.tool.name in input.settings.high_risk_tools
 applied contains "R2" if input.tool.name in object.get(conditions, "high_risk_tools", [])
@@ -254,6 +260,14 @@ applied contains "R2" if input.tool.name in object.get(conditions, "high_risk_to
 # 승인된 도구 계약의 위험 등급(정책 입력 tool.risk_grade)이 높으면 승인 조건과 무관하게 건다.
 # 승인 조건의 high_risk_tools는 의무를 더하기만 한다.
 applied contains "R2" if object.get(input.tool, "risk_grade", null) in {"high", "critical"}
+
+# Explicit read reuse still requires an initial administrator check. The plugin
+# satisfies later repetitions from bound, durable dual-check evidence only.
+applied contains "R2" if {
+	object.get(conditions, "reuse_read_confirmations", false) == true
+	object.get(input.tool, "action_type", null) == "read"
+	object.get(input.tool, "risk_grade", null) == "low"
+}
 
 applied contains "R3" if {
 	object.get(conditions, "business_hours_only", false) == true

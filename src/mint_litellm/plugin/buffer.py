@@ -77,6 +77,14 @@ class ConfirmationConsume:
 
 
 @dataclass(frozen=True)
+class ReadReconfirmationConsume:
+    event_id: str
+    approval_id: str
+    key_id: str
+    fp_key_version: int
+
+
+@dataclass(frozen=True)
 class ConsumeRequest:
     """승인된 호출별 승인을 한 번 소비하는 조건. 모든 항목이 현재 호출과 일치해야 한다."""
 
@@ -99,6 +107,7 @@ class ConsumeRequest:
     exec_contract_sha256: str | None = None
     # 기간을 고른 승인이면 소비하지 않고 사용 기록만 남긴다.
     windowed: bool = False
+    read_reconfirmation: ReadReconfirmationConsume | None = None
 
 
 class EventStore(Protocol):
