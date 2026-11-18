@@ -789,16 +789,20 @@ def test_the_first_approver_and_the_requester_cannot_confirm(world):
     assert state == "indeterminate"
 
 
-def test_a_viewer_cannot_confirm_and_an_expired_request_is_cancelled(world):
+@pytest.mark.parametrize("step", ["confirm", "reject"])
+def test_an_expired_exception_request_is_closed_without_a_decision(world, step):
     intake = exception_intake(world)
     hold_it(world, intake)
     hold = hold_id(world)
-    assert hold_step(world, hold, "viewer", "confirm").status_code == 403
+    assert hold_step(world, hold, "viewer", step).status_code == 403
     world.query("UPDATE mint.exception_holds SET expires_at = now() - interval '1 minute'")
     assert "srv-wait" not in world.session_client("approver").get("/approvals?tab=second").text
-    assert hold_step(world, hold, "approver", "confirm").status_code == 409
+    assert hold_step(world, hold, "approver", step).status_code == 409
     assert world.query("SELECT status FROM mint.exception_holds")[0][0] == "expired"
     assert world.query("SELECT status FROM mint.intakes")[0][0] == "indeterminate"
+    assert hold_step(world, hold, "approver", step).status_code == 409
+    assert world.query("SELECT payload->>'reason' FROM mint.events"
+                       " WHERE kind = 'intake_exception_cancelled'") == [("expired",)]
     assert hold_it(world, intake).status_code == 303  # 만료 뒤 다시 요청할 수 있다
 
 

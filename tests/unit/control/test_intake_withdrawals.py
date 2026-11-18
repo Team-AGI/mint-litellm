@@ -5,9 +5,9 @@ import psycopg
 import pytest
 from ctl_fixtures import INSTANCE, as_login
 
-from mint_litellm.control.errors import ControlError
+from mint_litellm.control.errors import AdminCode, AdminError, ControlError
+from mint_litellm.control.services import exception_holds, reads, staff
 from mint_litellm.control.services import intake_withdrawals as svc
-from mint_litellm.control.services import staff
 
 from . import test_intakes as base
 from .test_staff_intake_flow import submit
@@ -125,3 +125,81 @@ def test_terminal_approval_or_rejection_cannot_be_withdrawn(world, decision):
     with pytest.raises(ControlError):
         withdraw(world, identifier)
     assert world.intake(identifier)["decision"] in ("approved", "rejected")
+
+
+@pytest.mark.parametrize("decision", ["withdrawn", "rejected"])
+def test_terminal_intake_leaves_the_second_approval_queue(world, decision):
+    identifier = base.passed(world, readiness={**base.READINESS, "audit_access_days": 0})
+    version = world.intake(identifier)["state_version"]
+    hold = world.call(
+        lambda ctx: exception_holds.request(
+            ctx, identifier, {"reason": "예외 검토"}, expected_version=version
+        ),
+        name="boss",
+        user="boss-1",
+        role="approver",
+    )
+    assert [item["id"] for item in exception_holds.pending(world.conn, INSTANCE)] == [hold["id"]]
+    assert reads.menu_counts(world.conn, INSTANCE) == {"approvals": 2, "intakes": 1}
+    if decision == "withdrawn":
+        withdraw(world, identifier, version=version)
+    else:
+        world.decide(identifier, "reject", name="boss2", user="boss-2", reason="심사 종료")
+
+    intake = world.intake(identifier)
+    assert (intake["status"], intake["decision"]) == ("decided", decision)
+    assert exception_holds.pending(world.conn, INSTANCE, identifier) == []
+    assert exception_holds.count(world.conn, INSTANCE) == 0
+    assert reads.menu_counts(world.conn, INSTANCE) == {"approvals": 0, "intakes": 0}
+
+    def unexpected_approval(_hold):
+        pytest.fail("a terminal intake cannot proceed to approval")
+
+    for action in (
+        lambda ctx: exception_holds.confirm(ctx, hold["id"], unexpected_approval),
+        lambda ctx: exception_holds.reject(ctx, hold["id"]),
+    ):
+        with pytest.raises(AdminError) as raised:
+            world.call(action, name="boss2", user="boss-2", role="approver")
+        assert raised.value.code == AdminCode.CONFLICT
+
+    assert world.intake(identifier) == intake
+    assert len(world.events("intake_exception_requested")) == 1
+    assert world.events("intake_exception_cancelled") == []
+
+
+def test_rechecked_intake_needs_a_new_second_approval_request(world):
+    identifier = base.passed(world, readiness={**base.READINESS, "audit_access_days": 0})
+    version = world.intake(identifier)["state_version"]
+
+    def request(expected_version):
+        return world.call(
+            lambda ctx: exception_holds.request(
+                ctx, identifier, {"reason": "예외 검토"}, expected_version=expected_version
+            ),
+            name="boss",
+            user="boss-1",
+            role="approver",
+        )
+
+    old = request(version)
+    world.call(lambda ctx: base.svc.recheck(ctx, identifier, expected_version=version))
+    world.drain()
+    checked = world.intake(identifier)
+    assert checked["status"] == "indeterminate"
+    assert checked["state_version"] > version
+    assert exception_holds.pending(world.conn, INSTANCE, identifier) == []
+    assert reads.menu_counts(world.conn, INSTANCE) == {"approvals": 1, "intakes": 1}
+
+    current = request(checked["state_version"])
+    assert [item["id"] for item in exception_holds.pending(world.conn, INSTANCE)] == [current["id"]]
+    world.call(lambda ctx: exception_holds.reject(ctx, current["id"]),
+               name="boss2", user="boss-2", role="approver")
+    assert world.intake(identifier) == checked
+    assert exception_holds.count(world.conn, INSTANCE) == 0
+    assert reads.menu_counts(world.conn, INSTANCE) == {"approvals": 1, "intakes": 1}
+    cancellations = world.events("intake_exception_cancelled")
+    assert {e["payload"]["hold_id"]: e["payload"]["reason"] for e in cancellations} == {
+        str(old["id"]): "superseded", str(current["id"]): "rejected"
+    }
+    assert old["id"] != current["id"]

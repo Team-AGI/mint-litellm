@@ -39,6 +39,56 @@ def test_employee_withdrawal_owner_csrf_confirmation_and_resubmission(sworld):
     assert client.post("/staff/intakes", data=staff_tests.form(client)).status_code == 303
 
 
+def test_staff_withdrawal_removes_the_second_approval_from_the_reviewer_console(sworld):
+    applicant = staff_tests.staff_tests.logged_in(sworld)
+    values = staff_tests.form(applicant)
+    identifier = values["request_id"]
+    submission = applicant.post("/staff/intakes", data=values)
+    assert submission.status_code == 303, submission.text
+    staff_path = "/staff/intakes/" + identifier
+    review_path = "/intakes/" + identifier
+    queue_path = "/approvals?tab=second"
+
+    reviewer = sworld.session_client("approver")
+    assert review_path in reviewer.get("/intakes?source=staff").text
+    # Model an inconclusive inspection locally so the dummy provider is never contacted.
+    sworld.query("UPDATE mint.intakes SET status='checking' WHERE id=%s", identifier)
+    sworld.query("UPDATE mint.intakes SET status='indeterminate' WHERE id=%s", identifier)
+    first_decision = screens.hold_it(sworld, identifier)
+    assert first_decision.status_code == 303, first_decision.text
+    confirm_path = f"/exceptions/{screens.hold_id(sworld)}/confirm"
+    assert confirm_path in reviewer.get(queue_path).text
+    assert "두 번째 승인 대기" in reviewer.get(review_path).text
+    assert f'action="{staff_path}/withdraw"' in applicant.get(staff_path).text
+
+    withdrawal = applicant.post(staff_path + "/withdraw", data={
+        "csrf": staff_tests.staff_tests.csrf(applicant),
+        "state_version": screens.version(sworld, identifier),
+        "reason": "업무 범위 변경",
+        "confirm": "yes",
+    })
+    assert withdrawal.status_code == 303, withdrawal.text
+    applicant_page = applicant.get(withdrawal.headers["location"]).text
+    assert "철회됨" in applicant_page and "업무 범위 변경" in applicant_page
+    assert f'action="{staff_path}/withdraw"' not in applicant_page
+
+    reviewer_page = reviewer.get(review_path).text
+    assert "철회됨" in reviewer_page and "업무 범위 변경" in reviewer_page
+    assert "두 번째 승인 대기" not in reviewer_page
+    assert f'action="{review_path}/decision"' not in reviewer_page
+    queue = reviewer.get(queue_path).text
+    assert confirm_path not in queue
+    assert "두 번째 승인을 기다리는 요청이 없습니다" in queue
+
+    # A reviewer may still have the pre-withdrawal form open in a different tab.
+    stale = reviewer.post(confirm_path, data={"csrf": sworld.csrf(reviewer)})
+    assert stale.status_code == 409
+    assert confirm_path not in stale.text
+    assert sworld.query("SELECT status,decision FROM mint.intakes WHERE id=%s", identifier) == [
+        ("decided", "withdrawn")]
+    assert sworld.query("SELECT count(*) FROM mint.approvals") == [(0,)]
+
+
 def test_admin_requester_can_withdraw_own_application_but_not_other_users(world):
     identifier = screens.add_intake(world, requested_by="human-1")
     admin = world.session_client("admin")

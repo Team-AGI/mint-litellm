@@ -12,19 +12,24 @@ from mint_litellm.types.events import EventKind
 from mint_litellm.types.ids import new_uuid7
 
 HOLD_HOURS = 24
-_LIST = (
-    "SELECT h.id, h.intake_id, h.first_name, h.first_user_id, h.params, h.expires_at,"
-    " h.created_at, i.server_id, i.requested_by, i.purpose FROM mint.exception_holds h"
+PENDING_SQL = (
+    " FROM mint.exception_holds h"
     " JOIN mint.intakes i ON i.instance_id = h.instance_id AND i.id = h.intake_id"
-    " WHERE h.instance_id = %s AND h.status = 'pending' AND h.expires_at > now()"
+    " WHERE h.instance_id = %(instance)s AND h.status = 'pending'"
+    " AND h.expires_at > statement_timestamp()"
+    " AND i.status = 'indeterminate' AND h.params->'state_version' = to_jsonb(i.state_version)"
 )
 
 
 def pending(conn, instance: str, intake_id: str | None = None) -> list[dict]:
-    extra, args = ("", (instance,))
-    if intake_id:
-        extra, args = " AND h.intake_id = %s", (instance, intake_id)
-    return fetchall(conn, _LIST + extra + " ORDER BY h.created_at", args)
+    extra = " AND h.intake_id = %(intake_id)s" if intake_id else ""
+    return fetchall(
+        conn,
+        "SELECT h.id, h.intake_id, h.first_name, h.first_user_id, h.params, h.expires_at,"
+        " h.created_at, i.server_id, i.requested_by, i.purpose"
+        + PENDING_SQL + extra + " ORDER BY h.created_at",
+        {"instance": instance, "intake_id": intake_id},
+    )
 
 
 def count(conn, instance: str) -> int:
@@ -33,19 +38,48 @@ def count(conn, instance: str) -> int:
 
 def _close(ctx: Context, hold: dict, status: str, reason: str) -> None:
     ctx.conn.execute(
-        "UPDATE mint.exception_holds SET status = %s, closed_by = %s, closed_at = now()"
+        "UPDATE mint.exception_holds SET status = %s, closed_by = %s, closed_at = clock_timestamp()"
         " WHERE id = %s", (status, ctx.operator.name, hold["id"]))
     ctx.emit(EventKind.INTAKE_EXCEPTION_CANCELLED, hold["id"], 1,
              {"intake_id": str(hold["intake_id"]), "hold_id": str(hold["id"]),
               "reason": reason, "first_approver": hold["first_name"]})
 
 
-def _get(ctx: Context, hold_id: str) -> dict:
-    hold = fetchone(ctx.conn, "SELECT * FROM mint.exception_holds WHERE instance_id = %s"
-                    " AND id = %s FOR UPDATE", (ctx.instance_id, hold_id))
+def _lock_pending(ctx: Context, hold_id: str) -> tuple[dict, dict]:
+    # Always lock the intake before the hold, as request() does when replacing a hold.
+    args = (ctx.instance_id, hold_id)
+    intake = fetchone(
+        ctx.conn,
+        "SELECT i.status, i.state_version FROM mint.intakes i JOIN mint.exception_holds h"
+        " ON i.instance_id = h.instance_id AND i.id = h.intake_id"
+        " WHERE h.instance_id = %s AND h.id = %s FOR UPDATE OF i",
+        args,
+    )
+    if intake is None:
+        raise not_found("두 번째 승인 요청이 없습니다.")
+    hold = fetchone(ctx.conn, "SELECT * FROM mint.exception_holds"
+                    " WHERE instance_id = %s AND id = %s FOR UPDATE",
+                    args)
     if hold is None:
         raise not_found("두 번째 승인 요청이 없습니다.")
-    return hold
+    if hold["status"] != "pending":
+        raise conflict("이미 처리된 요청입니다.")
+    return intake, hold
+
+
+def _require_current(intake: dict, hold: dict) -> None:
+    if (intake["status"] != "indeterminate"
+            or intake["state_version"] != hold["params"].get("state_version")):
+        raise conflict("신청 상태가 변경되어 이 두 번째 승인 요청을 처리할 수 없습니다.")
+
+
+def _close_if_expired(ctx: Context, hold: dict) -> bool:
+    # Read the database clock after any wait for the intake and hold locks.
+    expired = fetchone(ctx.conn, "SELECT %s <= clock_timestamp() AS expired",
+                       (hold["expires_at"],))["expired"]
+    if expired:
+        _close(ctx, hold, "expired", "expired")
+    return expired
 
 
 def request(ctx: Context, intake_id: str, params: dict, *, expected_version: int | None) -> dict:
@@ -63,7 +97,7 @@ def request(ctx: Context, intake_id: str, params: dict, *, expected_version: int
             raise conflict(f"{row['status']} 상태의 신청은 except할 수 없습니다.")
         intakes._require_separation(ctx, row, None, False)
         intakes._require_fresh_evidence(ctx, row)
-        now = fetchone(ctx.conn, "SELECT now() AS t")["t"]  # 만료는 DB 시계 기준
+        now = fetchone(ctx.conn, "SELECT clock_timestamp() AS t")["t"]
         for old in fetchall(  # 열린 요청은 새 요청이 대체한다(만료된 것은 만료로 닫는다)
                 ctx.conn, "SELECT * FROM mint.exception_holds WHERE instance_id = %s"
                 " AND intake_id = %s AND status = 'pending'", (ctx.instance_id, row["id"])):
@@ -86,37 +120,30 @@ def request(ctx: Context, intake_id: str, params: dict, *, expected_version: int
         return hold
 
 
-def reject(ctx: Context, hold_id: str) -> None:
+def reject(ctx: Context, hold_id: str) -> dict | None:
     """승인자(첫 승인자 본인 포함)가 요청을 거절·취소한다."""
     require_role(ctx, "intake except")
     with transact(ctx):
-        hold = _get(ctx, hold_id)
-        if hold["status"] != "pending":
-            raise conflict("이미 처리된 요청입니다.")
+        intake, hold = _lock_pending(ctx, hold_id)
+        if _close_if_expired(ctx, hold):
+            return {"expired": True}
+        _require_current(intake, hold)
         _close(ctx, hold, "rejected", "rejected")
 
 
 def confirm(ctx: Context, hold_id: str, run) -> dict:
     """다른 승인자가 확인하면 첫 승인자 이름으로 기존 예외 승인을 같은 트랜잭션에서 처리한다.
 
-    ``run(first_operator, hold)``는 두 번째 승인자를 ``ctx.operator``로 넘겨 승인 처리를 한다.
+    ``run(hold)``는 두 번째 승인자를 ``ctx.operator``로 넘겨 승인 처리를 한다.
     """
     require_role(ctx, "intake except")
-    expired = False
     with transact(ctx):
-        hold = _get(ctx, hold_id)
-        if hold["status"] != "pending":
-            raise conflict("이미 처리된 요청입니다.")
-        # 만료 비교는 DB 시계로 한다(만료 시각을 쓰고 읽는 쪽과 같은 시계).
-        if fetchone(ctx.conn, "SELECT %s <= now() AS due", (hold["expires_at"],))["due"]:
-            _close(ctx, hold, "expired", "expired")
-            expired = True
-        else:
-            result = run(hold)
-            ctx.conn.execute(
-                "UPDATE mint.exception_holds SET status = 'confirmed', closed_by = %s,"
-                " closed_at = now() WHERE id = %s", (ctx.operator.name, hold["id"]))
-            return result
-    if expired:
-        # 화면은 오류 때 연결을 되돌리므로, 만료 표시를 남기려면 부른 쪽이 확정한 뒤 알린다.
-        return {"expired": True}
+        intake, hold = _lock_pending(ctx, hold_id)
+        if _close_if_expired(ctx, hold):
+            return {"expired": True}
+        _require_current(intake, hold)
+        result = run(hold)
+        ctx.conn.execute(
+            "UPDATE mint.exception_holds SET status = 'confirmed', closed_by = %s,"
+            " closed_at = clock_timestamp() WHERE id = %s", (ctx.operator.name, hold["id"]))
+        return result

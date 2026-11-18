@@ -590,7 +590,7 @@ def decide_exception_hold(
         if decision == "confirm":
             api.confirm_exception(actor, hold_id)
         elif decision == "reject":
-            exception_holds.reject(actor.ctx, hold_id)
+            api.reject_exception(actor, hold_id)
         else:
             raise AdminError(AdminCode.NOT_FOUND, "알 수 없는 동작입니다.")
 
