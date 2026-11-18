@@ -9,6 +9,7 @@ import psycopg
 from mint_litellm.control.approvals import CALL_EXTEND_WITHIN_MINUTES
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.jobs import CURRENT_FAILED_SQL
+from mint_litellm.control.services import exception_holds
 
 PAGE_SIZE = 50
 EXPORT_LIMIT = 100_000
@@ -608,15 +609,14 @@ def menu_counts(conn: psycopg.Connection, instance: str) -> dict[str, int]:
     """좌측 메뉴 표지: 승인 대기(호출 + 서버 도입), 결정 대기 신청 수."""
     row = fetchone(
         conn,
-        "SELECT (SELECT count(*) FROM mint.call_approvals WHERE instance_id = %(i)s"
+        "SELECT (SELECT count(*) FROM mint.call_approvals WHERE instance_id = %(instance)s"
         " AND status = 'pending' AND expires_at > now())"
-        " + (SELECT count(*) FROM mint.servers WHERE instance_id = %(i)s"
+        " + (SELECT count(*) FROM mint.servers WHERE instance_id = %(instance)s"
         " AND status = 'awaiting_approval')"
-        " + (SELECT count(*) FROM mint.exception_holds WHERE instance_id = %(i)s"
-        " AND status = 'pending' AND expires_at > now()) AS approvals,"
-        " (SELECT count(*) FROM mint.intakes WHERE instance_id = %(i)s"
+        f" + (SELECT count(*){exception_holds.PENDING_SQL}) AS approvals,"
+        " (SELECT count(*) FROM mint.intakes WHERE instance_id = %(instance)s"
         " AND status IN ('received', 'checking', 'passed', 'indeterminate')) AS intakes",
-        {"i": instance},
+        {"instance": instance},
     )
     return {"approvals": row["approvals"], "intakes": row["intakes"]} if row else {}
 

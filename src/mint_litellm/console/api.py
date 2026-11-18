@@ -803,6 +803,16 @@ def hold_exception(actor: Actor, intake_id: str, body: IntakeDecisionBody) -> di
         actor.ctx, intake_id, params, expected_version=body.state_version)
 
 
+def _check_exception_expiry(actor: Actor, result: dict | None) -> None:
+    if result and result.get("expired"):
+        actor.conn.commit()  # 만료로 닫은 것은 남긴다
+        raise conflict("요청이 만료되었습니다. 첫 승인자가 다시 요청해야 합니다.")
+
+
+def reject_exception(actor: Actor, hold_id: str) -> None:
+    _check_exception_expiry(actor, exception_hold_service.reject(actor.ctx, hold_id))
+
+
 def confirm_exception(actor: Actor, hold_id: str) -> dict:
     def run(hold: dict) -> dict:
         first = Operator(hold["first_name"], hold["first_role"], hold["first_user_id"])
@@ -814,9 +824,7 @@ def confirm_exception(actor: Actor, hold_id: str) -> dict:
         return decide_intake(decider, str(hold["intake_id"]), body, second=actor.ctx.operator)
 
     result = exception_hold_service.confirm(actor.ctx, hold_id, run)
-    if result.get("expired"):
-        actor.conn.commit()  # 만료로 닫은 것은 남긴다
-        raise conflict("요청이 만료되었습니다. 첫 승인자가 다시 요청해야 합니다.")
+    _check_exception_expiry(actor, result)
     return result
 
 
