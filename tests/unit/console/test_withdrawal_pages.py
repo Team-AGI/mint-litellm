@@ -58,7 +58,7 @@ def test_staff_withdrawal_removes_the_second_approval_from_the_reviewer_console(
     review_path = "/intakes/" + identifier
     queue_path = "/approvals?tab=second"
 
-    reviewer = sworld.session_client("approver")
+    reviewer = sworld.session_client("admin")
     assert review_path in reviewer.get("/intakes?source=staff").text
     # Model an inconclusive inspection locally so the dummy provider is never contacted.
     sworld.query("UPDATE mint.intakes SET status='checking' WHERE id=%s", identifier)

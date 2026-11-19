@@ -9,6 +9,6 @@
 <h2>승인</h2>
 {% if s.approvals %}
 <table><thead><tr><th>대상</th><th>도구</th><th>구분</th><th>유효 기간</th><th>상태</th></tr></thead><tbody>
-{% for a in s.approvals %}<tr><td>{{ L.pick(L.SCOPE, a.scope_type) }} {% if a.status == 'active' %}<a href="/access?tab=approvals&amp;focus={{ a.id }}">{{ a.scope_id }}</a>{% else %}{{ a.scope_id }}{% endif %}</td><td>{{ a.tools | join }}</td><td>{{ L.pick(L.APPROVAL_CLASS, a.class) }}</td><td class="nowrap">{{ a.valid_from | when }} ~ {{ a.valid_until | when if a.valid_until else "기한 없음" }}</td><td>{{ m.badge(L.APPROVAL, a.status) }}</td></tr>{% endfor %}
+{% for a in s.approvals %}<tr><td>{{ L.pick(L.SCOPE, a.scope_type) }} {% if a.status == 'active' %}<a href="/access?tab=approvals&amp;focus={{ a.id }}">{{ a.scope_id }}</a>{% else %}{{ a.scope_id }}{% endif %}</td><td>{{ a.tools | tool_names }}</td><td>{{ L.pick(L.APPROVAL_CLASS, a.class) }}</td><td class="nowrap">{{ a.valid_from | when }} ~ {{ a.valid_until | when if a.valid_until and a.valid_until.year < 2999 else "기한 없음" }}</td><td>{{ m.badge(L.APPROVAL, a.status) }}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}<p class="muted">승인 없음</p>{% endif %}

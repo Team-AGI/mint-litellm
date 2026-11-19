@@ -20,6 +20,7 @@ from mint_litellm.control.services import exception_holds, reads
 from mint_litellm.control.services import intake_inspections as inspection_service
 from mint_litellm.control.services import intakes as intake_service
 from mint_litellm.control.services import servers as server_service
+from mint_litellm.types.contracts import ACTION_DENIAL_PREFIX, DENIABLE_ACTIONS
 
 router = APIRouter(dependencies=[Depends(require_csrf)])
 
@@ -169,21 +170,24 @@ def server_page(
 
 
 def tool_controls(actor: Actor, server_id: str) -> dict:
-    """도구별 차단(거부)과 호출별 검토 상태. 관리자에게만 조작 버튼이 보인다."""
+    """도구·행위별 차단(거부)과 호출별 검토 상태. 관리자에게만 조작 버튼이 보인다."""
     blocked: dict[str, dict] = {}
+    actions: dict[str, dict] = {}
+    whole = None
     for d in reads.denials(actor.conn, actor.instance, active_only=True):
-        if d["scope_type"] == "server" and d["scope_id"] == server_id:
-            for tool in d["tools"] or []:
+        if d["scope_type"] != "server" or d["scope_id"] != server_id:
+            continue
+        if not d["tools"]:
+            whole = whole or d
+        for tool in d["tools"] or []:
+            if tool.startswith(ACTION_DENIAL_PREFIX):
+                actions.setdefault(tool[len(ACTION_DENIAL_PREFIX):], d)
+            else:
                 blocked.setdefault(tool, d)
-    whole = next(
-        (
-            d for d in reads.denials(actor.conn, actor.instance, active_only=True)
-            if d["scope_type"] == "server" and d["scope_id"] == server_id and not d["tools"]
-        ),
-        None,
-    )
     return {
         "blocked": blocked,
+        "actions": actions,
+        "action_choices": [a for a in labels.ACTION if a in DENIABLE_ACTIONS],
         "whole": whole,
         "reviewed": review_service.marked(actor.conn, actor.instance, server_id),
         "can": actor.role == "admin",
@@ -202,6 +206,7 @@ def tool_control(
     request: Request,
     tool: str = Form(""),
     user: str = Form(""),
+    action_type: str = Form(""),
     reason: str = Form(""),
     next: str = Form(""),
     actor: Actor = Depends(page_actor),
@@ -216,13 +221,16 @@ def tool_control(
                 actor.ctx, scope_type="user" if user else "server",
                 scope_id=user or server_id, server_id=server_id,
                 tools=[tool] if tool else None, reason=reason.strip() or "관리자 차단",
-                org_id=None,
+                org_id=None, action_types=[action_type] if action_type else None,
             )
         elif operation == "unblock":
             for d in reads.denials(actor.conn, actor.instance, active_only=True):
                 if (
                     d["scope_type"] == "server" and d["scope_id"] == server_id
-                    and (d["tools"] == [tool] if tool else not d["tools"])
+                    and (
+                        d["tools"] == [ACTION_DENIAL_PREFIX + action_type] if action_type
+                        else d["tools"] == [tool] if tool else not d["tools"]
+                    )
                 ):
                     denial_service.lift(
                         actor.ctx, str(d["id"]), expected_version=d["state_version"]
@@ -345,7 +353,7 @@ STAGES = {
     "decided": ("decided",),
     "failed": ("failed",),
 }
-OPEN_STATUSES = ("received", "checking", "passed", "indeterminate")
+OPEN_STATUSES = ("received", "checking", "passed", "indeterminate", "failed")
 STALL = timedelta(hours=24)
 
 
@@ -431,7 +439,7 @@ def intake_progress(
         decision = ("wait", "두 번째 승인 대기")
     else:
         decision = (
-            ("off", "결정") if st in ("received", "checking", "failed") else ("wait", "결정 대기")
+            ("off", "결정") if st in ("received", "checking") else ("wait", "결정 대기")
         )
     return [("ok", "접수"), checked, proof, decision]
 
@@ -489,7 +497,7 @@ def intake_page(
         next_step = None
     elif status_now == "received" and not intake["requested_by"] and actor.role == "admin":
         next_step = "신청자 지정"
-    elif status_now in ("passed", "indeterminate"):
+    elif status_now in ("passed", "indeterminate", "failed"):
         next_step = "결정"
     else:
         next_step = None

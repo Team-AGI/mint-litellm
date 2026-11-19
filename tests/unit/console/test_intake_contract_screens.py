@@ -31,6 +31,12 @@ def litellm_permission(world, monkeypatch):
     return seen
 
 
+@pytest.fixture(autouse=True)
+def distinct_approver(monkeypatch):
+    """직무 분리를 켠 설치의 동작을 시험한다. 꺼진 기본 동작은 단독 승인 시험이 맡는다."""
+    monkeypatch.setenv("MINT_REQUIRE_DISTINCT_APPROVER", "1")
+
+
 def bearer(role: str) -> dict:
     return {"Authorization": f"Bearer {TOKENS[role]}"}
 
@@ -165,7 +171,7 @@ def test_assigning_a_requester_needs_the_control_key(world):
     assert response.status_code == 403 and "게이트웨이 관리 키" in response.json()["message"]
 
 
-def test_assigning_a_requester_from_the_screen_and_the_assigner_cannot_decide(world):
+def test_assigning_a_requester_from_the_screen_leaves_the_admin_able_to_decide(world):
     world.with_control_key()
     world.stub.routes[("/user/info", "control-plane-key", "human-9")] = (
         200, {"user_id": "human-9",
@@ -179,9 +185,7 @@ def test_assigning_a_requester_from_the_screen_and_the_assigner_cannot_decide(wo
     assert world.query("SELECT requested_by FROM mint.intakes")[0][0] == "human-9"
     world.query("UPDATE mint.intakes SET status = 'checking'")
     world.query("UPDATE mint.intakes SET status = 'passed'")
-    refused = decide(world, intake, decision="approve")
-    assert refused.status_code == 403
-    assert refused.json()["code"] == AdminCode.SEPARATION_OF_DUTIES
+    assert decide(world, intake, decision="approve").status_code == 200
 
 
 def test_the_requester_cannot_decide_their_own_intake(world):
@@ -212,19 +216,19 @@ def test_approving_registers_the_approval_with_the_default_period(world):
     response = decide(world, intake, decision="approve")
     assert response.status_code == 200, response.text
     assert world.query("SELECT status, decision FROM mint.intakes")[0] == ("decided", "approved")
-    span = world.query("SELECT extract(day FROM valid_until - valid_from) FROM mint.approvals")
-    assert 89 <= span[0][0] <= 90
+    year = world.query("SELECT extract(year FROM valid_until) FROM mint.approvals")
+    assert year[0][0] >= 2999  # 기한을 정하지 않으면 기한 없음
 
 
 def test_an_exception_needs_a_reason_a_second_approver_and_at_most_ninety_days(world):
     intake = add_intake(world, status="indeterminate", result="indeterminate")
     base = {"decision": "except", "reason": "수동 확인함"}
-    assert decide(world, intake, **base, valid_days=91).status_code == 400
-    alone = decide(world, intake, **base)
+    assert decide(world, intake, role="approver", **base, valid_days=91).status_code == 400
+    alone = decide(world, intake, role="approver", **base)
     assert alone.status_code == 403 and alone.json()["code"] == AdminCode.SEPARATION_OF_DUTIES
-    same = decide(world, intake, **base, second_approver_token=TOKENS["admin"])
+    same = decide(world, intake, role="approver", **base, second_approver_token=TOKENS["approver"])
     assert same.status_code == 403
-    ok = decide(world, intake, **base, second_approver_token=TOKENS["approver"])
+    ok = decide(world, intake, role="approver", **base, second_approver_token=TOKENS["admin"])
     assert ok.status_code == 200, ok.text
     assert world.query("SELECT decision FROM mint.intakes")[0][0] == "exception"
 
@@ -386,11 +390,11 @@ def test_the_requester_assigner_cannot_be_the_second_approver_of_an_exception(wo
     intake = add_intake(world, status="indeterminate", result="indeterminate")
     world.query(
         "INSERT INTO mint.events (event_id, instance_id, kind, source_key, actor, payload)"
-        " VALUES (%s, %s, 'intake_requester_assigned', %s, 'approver', %s)",
+        " VALUES (%s, %s, 'intake_requester_assigned', %s, 'admin', %s)",
         uuid.uuid4(), INSTANCE, f"intake:{intake}:2:intake_requester_assigned",
         json.dumps({"intake_id": intake}))
-    response = decide(world, intake, decision="except", reason="수동 확인함",
-                      second_approver_token=TOKENS["approver"])
+    response = decide(world, intake, role="approver", decision="except", reason="수동 확인함",
+                      second_approver_token=TOKENS["admin"])
     assert response.status_code == 403
     assert response.json()["code"] == AdminCode.SEPARATION_OF_DUTIES
     assert "다른 승인자" in response.json()["message"]
@@ -647,7 +651,7 @@ def test_intake_rejects_address_different_from_registry(world, monkeypatch):
 # --- 2인 예외 승인: 화면에서 두 번째 승인자 확인 ----------------------------------------------
 
 
-def hold_it(world, intake, role="admin", **extra):
+def hold_it(world, intake, role="approver", **extra):
     client = world.session_client(role)
     data = {"decision": "except", "reason": "수동 확인함", "csrf": world.csrf(client),
             "state_version": version(world, intake), **extra}
@@ -669,13 +673,13 @@ def exception_intake(world):
 
 def test_an_exception_request_waits_without_approving_and_the_form_has_no_token_field(world):
     intake = exception_intake(world)
-    html = world.session_client("admin").get(f"/intakes/{intake}").text
+    html = world.session_client("approver").get(f"/intakes/{intake}").text
     assert "second_approver_token" not in html and "두 번째 승인자 토큰" not in html
     response = hold_it(world, intake)
     assert response.status_code == 303 and "exception_requested" in response.headers["location"]
     assert world.query("SELECT status FROM mint.intakes")[0][0] == "indeterminate"
     assert world.query("SELECT count(*) FROM mint.approvals")[0][0] == 0
-    assert "두 번째 승인 대기" in world.session_client("admin").get(f"/intakes/{intake}").text
+    assert "두 번째 승인 대기" in world.session_client("approver").get(f"/intakes/{intake}").text
     assert world.query("SELECT count(*) FROM mint.events WHERE kind = 'intake_exception_requested'"
                        )[0][0] == 1
 
@@ -683,26 +687,28 @@ def test_an_exception_request_waits_without_approving_and_the_form_has_no_token_
 def test_the_other_approver_sees_the_waiting_request_and_confirming_approves_it(world):
     intake = exception_intake(world)
     hold_it(world, intake, valid_days=20)
-    page = world.session_client("approver").get("/approvals?tab=second").text
+    page = world.session_client("admin").get("/approvals?tab=second").text
     assert "srv-wait" in page and "확인" in page and "/exceptions/" in page
-    response = hold_step(world, hold_id(world), "approver", "confirm")
+    response = hold_step(world, hold_id(world), "admin", "confirm")
     assert response.status_code == 303 and "exception_confirmed" in response.headers["location"]
     assert world.query("SELECT status, decision, decided_by FROM mint.intakes")[0] == (
-        "decided", "exception", "admin")
+        "decided", "exception", "approver")
     row = world.query("SELECT class, granted_by, basis->>'second_approver',"
                       " extract(day FROM valid_until - valid_from) FROM mint.approvals")[0]
-    assert row[:3] == ("exception", "admin", "approver") and 19 <= row[3] <= 20
+    assert row[:3] == ("exception", "approver", "admin") and 19 <= row[3] <= 20
     assert world.query("SELECT status FROM mint.exception_holds")[0][0] == "confirmed"
 
 
 def test_the_first_approver_and_the_requester_cannot_confirm(world):
     intake = exception_intake(world)
     hold_it(world, intake)
-    assert hold_step(world, hold_id(world), "admin", "confirm").status_code == 403
+    assert hold_step(world, hold_id(world), "approver", "confirm").status_code == 403
     assert world.query("SELECT status FROM mint.exception_holds")[0][0] == "pending"
-    mine = add_intake(world, status="indeterminate", result="indeterminate", server="srv-ok",
-                      requested_by="human-2")
+    mine = add_intake(world, status="indeterminate", result="indeterminate", server="srv-ok")
     hold_it(world, mine)
+    world.query("ALTER TABLE mint.intakes DISABLE TRIGGER USER")
+    world.query("UPDATE mint.intakes SET requested_by = 'human-2' WHERE id = %s", mine)
+    world.query("ALTER TABLE mint.intakes ENABLE TRIGGER USER")
     held = str(world.query("SELECT h.id FROM mint.exception_holds h JOIN mint.intakes i"
                            " ON i.id = h.intake_id WHERE i.id = %s", mine)[0][0])
     assert hold_step(world, held, "approver", "confirm").status_code == 403
@@ -717,11 +723,11 @@ def test_an_expired_exception_request_is_closed_without_a_decision(world, step):
     hold = hold_id(world)
     assert hold_step(world, hold, "viewer", step).status_code == 403
     world.query("UPDATE mint.exception_holds SET expires_at = now() - interval '1 minute'")
-    assert "srv-wait" not in world.session_client("approver").get("/approvals?tab=second").text
-    assert hold_step(world, hold, "approver", step).status_code == 409
+    assert "srv-wait" not in world.session_client("admin").get("/approvals?tab=second").text
+    assert hold_step(world, hold, "admin", step).status_code == 409
     assert world.query("SELECT status FROM mint.exception_holds")[0][0] == "expired"
     assert world.query("SELECT status FROM mint.intakes")[0][0] == "indeterminate"
-    assert hold_step(world, hold, "approver", step).status_code == 409
+    assert hold_step(world, hold, "admin", step).status_code == 409
     assert world.query("SELECT payload->>'reason' FROM mint.events"
                        " WHERE kind = 'intake_exception_cancelled'") == [("expired",)]
     assert hold_it(world, intake).status_code == 303  # 만료 뒤 다시 요청할 수 있다
@@ -734,7 +740,7 @@ def test_rejecting_cancels_the_request_and_a_new_request_supersedes_the_old(worl
     hold_it(world, intake)
     assert world.query("SELECT status FROM mint.exception_holds WHERE id = %s", first)[0][0] \
         == "superseded"
-    assert hold_step(world, hold_id(world), "approver", "reject").status_code == 303
+    assert hold_step(world, hold_id(world), "admin", "reject").status_code == 303
     assert world.query("SELECT count(*) FROM mint.exception_holds WHERE status = 'rejected'"
                        )[0][0] == 1
     assert world.query("SELECT status FROM mint.intakes")[0][0] == "indeterminate"

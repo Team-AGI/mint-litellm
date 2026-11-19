@@ -89,7 +89,7 @@
 </form>
 {% endif %}
 
-{% if i.status in ('passed', 'indeterminate') %}
+{% if i.status in ('passed', 'indeterminate', 'failed') %}
 <h2>결정</h2>
 <form method="post" action="/intakes/{{ i.id }}/decision" class="form" id="decision">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ i.state_version }}">

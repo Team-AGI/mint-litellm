@@ -84,3 +84,23 @@ def test_the_intake_form_is_one_screen_with_address_and_purpose(world):
     assert 'name="purpose"' in html and 'name="server_url"' in html
     for name in ("provider", "owner_user_id", "credential_notice", "data_return_terms"):
         assert f'name="{name}"' not in html
+
+
+def test_action_block_shows_in_korean_and_lifts(world):
+    admin = world.session_client("admin")
+    page = "/servers/srv-ok?tab=contract"
+    assert form_post(world, admin, "/servers/srv-ok/tools/block", action_type="delete"
+                     ).status_code == 303
+    html = admin.get(page).text
+    assert "행위 차단: 삭제" in html
+    assert form_post(world, admin, "/servers/srv-ok/tools/unblock", action_type="delete"
+                     ).status_code == 303
+    assert "행위 차단: 삭제" not in admin.get(page).text
+    form_post(world, admin, "/servers/srv-ok/tools/block", action_type="delete")
+    assert "행위: 삭제" in admin.get("/access?tab=denials").text
+
+
+def test_a_failed_check_waits_for_the_admin_decision(world):
+    intake = add_intake(world, status="failed", result="fail", server="srv-ok")
+    html = world.session_client("admin").get(f"/intakes/{intake}").text
+    assert 'name="decision" value="approve"' in html and 'value="reject"' in html
