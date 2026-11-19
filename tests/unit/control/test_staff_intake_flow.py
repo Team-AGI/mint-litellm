@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from ctl_fixtures import INSTANCE, as_login
 
+from mint_litellm.control.db.connection import fetchall
 from mint_litellm.control.errors import AdminError
 from mint_litellm.control.services import intakes, staff, staff_intakes
 
@@ -12,9 +13,9 @@ from . import test_intakes as base
 world = base.world
 
 
-def submit(world, **changes):
+def submit(world, user="employee", **changes):
     with as_login(world.url, "mint_staff") as sc, as_login(world.url, "mint_control") as control:
-        sctx = staff.StaffContext(sc, control, INSTANCE, "employee")
+        sctx = staff.StaffContext(sc, control, INSTANCE, user)
         session = uuid.uuid4().hex * 2
         now = datetime.now(UTC)
         staff.start_session(sctx, session, "ab" * 32,
@@ -76,3 +77,22 @@ def test_an_unlisted_provider_waits_for_an_administrator_without_probing(world):
     assert "staff-docs" not in world.stub.servers
     assert not any(path in ("/v1/mcp/server", "/mcp-rest/test/connection",
                             "/mcp-rest/test/tools/list") for _, path, _ in world.stub.requests)
+
+
+def test_a_second_employee_joins_an_approved_server_without_new_checks(world):
+    first = submit(world)
+    world.drain()
+    world.decide(first, "approve")
+    world.drain()
+    assert world.server("staff-docs")["status"] == "approved"
+    second = submit(world, user="employee2", purpose="다른 업무")
+    world.drain()
+    row = world.intake(second)
+    assert row["status"] == "passed" and world.checks(second) == []  # 검사를 되풀이하지 않는다
+    assert world.decide(second, "approve")["decision"] == "approved"
+    world.drain()
+    scopes = {r["scope_id"]: r for r in fetchall(
+        world.conn, "SELECT scope_id, status, tools FROM mint.approvals")}
+    assert set(scopes) == {"employee", "employee2"}
+    assert scopes["employee2"]["status"] == "active"
+    assert world.server("staff-docs")["status"] == "approved"
