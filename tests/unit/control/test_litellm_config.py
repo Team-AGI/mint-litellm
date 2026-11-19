@@ -28,6 +28,23 @@ def test_snippet_has_the_required_guardrail_callback_and_server_entries():
     }
 
 
+def test_only_the_bundled_example_relaxes_the_password_policy_not_the_init_snippet():
+    from pathlib import Path
+
+    import mint_litellm
+
+    root = Path(mint_litellm.__file__).resolve().parents[2]
+    example = root / "deploy" / "litellm.config.example.yaml"
+    general = yaml.safe_load(example.read_text(encoding="utf-8"))["general_settings"]
+    assert general["password_policy_min_length"] == 12
+    for name in ("uppercase", "lowercase", "numbers", "special_characters"):
+        assert general[f"password_policy_require_{name}"] is False
+    assert general["password_policy_check_breached_passwords"] is False
+    # 이미 운영 중인 LiteLLM에 붙이는 init 조각은 전역 비밀번호 정책을 건드리지 않는다.
+    snippet = yaml.safe_load(litellm_config.snippet({}, no_spend_logs=False))["general_settings"]
+    assert not [k for k in snippet if k.startswith("password_policy")]
+
+
 def test_disable_spend_logs_only_with_the_option_and_servers_are_optional():
     on = yaml.safe_load(litellm_config.snippet({}, no_spend_logs=True))
     assert on["general_settings"]["disable_spend_logs"] is True
@@ -254,3 +271,28 @@ def test_oauth_servers_that_hold_the_upstream_token_get_the_resource_default(tmp
     assert servers["held"]["upstream_resource"] == "auto"
     assert servers["optout"]["upstream_resource"] == ""
     assert "upstream_resource" not in servers["forwarded"]
+
+
+def test_ensure_password_policy_adds_the_relaxed_rules_only_when_none_are_set(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("general_settings:\n  master_key: k\nmodel_list: []\n", encoding="utf-8")
+    added = litellm_config.ensure_password_policy(path)
+    assert added == list(litellm_config.PASSWORD_POLICY)
+    general = yaml.safe_load(path.read_text(encoding="utf-8"))["general_settings"]
+    assert general["master_key"] == "k" and general["password_policy_require_numbers"] is False
+    assert general["password_policy_min_length"] == 12
+    assert len(list(tmp_path.glob("config.yaml.bak-*"))) == 1
+    assert litellm_config.ensure_password_policy(path) == []  # 이미 있으면 그대로
+
+
+def test_ensure_password_policy_respects_an_operator_value_and_handles_a_missing_section(tmp_path):
+    strict = tmp_path / "strict.yaml"
+    text = "general_settings:\n  password_policy_min_length: 20\n"
+    strict.write_text(text, encoding="utf-8")
+    assert litellm_config.ensure_password_policy(strict) == []
+    assert strict.read_text(encoding="utf-8") == text
+    bare = tmp_path / "bare.yaml"
+    bare.write_text("model_list: []\n", encoding="utf-8")
+    litellm_config.ensure_password_policy(bare)
+    document = yaml.safe_load(bare.read_text(encoding="utf-8"))
+    assert document["general_settings"]["password_policy_check_breached_passwords"] is False

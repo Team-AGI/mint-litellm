@@ -55,6 +55,12 @@ def test_an_operator_signs_in_with_the_litellm_ui_credentials(pw):
     assert pw.client.get("/").status_code == 200
 
 
+def test_the_default_root_account_with_a_plain_email_signs_in(pw):
+    pw.stub.logins["root"] = (PASSWORD, claims("human-1", "root"))
+    assert attempt(pw, "root").status_code == 303
+    assert pw.client.get("/").status_code == 200
+
+
 def test_the_audit_event_says_password_and_no_password_is_stored(pw):
     attempt(pw, "admin@acme.test")
     [(payload,)] = pw.query(
