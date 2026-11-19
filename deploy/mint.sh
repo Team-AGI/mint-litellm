@@ -107,9 +107,33 @@ issue_key() {
     (umask 077; printf '%s\n' "$key" > "$file")
 }
 
+# DB를 비운 뒤 비밀 폴더에 남은 옛 키는 새 LiteLLM에 없다. 없다고 확인될 때만 치우고 새로 발급한다
+# (LiteLLM에 닿지 않으면 그대로 둔다).
+drop_stale_key() {
+    local file="$1" state
+    [ -s "$file" ] || return 0
+    state="$(env "LITELLM_MASTER_KEY=$(env_value LITELLM_MASTER_KEY)" "CHECK_KEY=$(head -n 1 "$file")"         "${COMPOSE[@]}" run --rm --no-deps -T -e LITELLM_MASTER_KEY -e CHECK_KEY         --entrypoint python control -c '
+import os, urllib.error, urllib.parse, urllib.request
+query = urllib.parse.urlencode({"key": os.environ["CHECK_KEY"]})
+request = urllib.request.Request("http://litellm:4000/key/info?" + query,
+    headers={"Authorization": "Bearer " + os.environ["LITELLM_MASTER_KEY"]})
+try:
+    urllib.request.urlopen(request, timeout=20)
+    print("present")
+except urllib.error.HTTPError as error:
+    print("missing" if error.code in (400, 404) else "unknown")
+except Exception:
+    print("unknown")
+' 2>/dev/null | tail -n 1)"
+    [ "$state" = "missing" ] || return 0
+    mv "$file" "$file.stale-$(date -u +%Y%m%dT%H%M%SZ)"
+    echo "$(basename "$file")가 LiteLLM에 없어 새로 발급합니다." >&2
+}
+
 ensure_kit_issuer_key() {
     local file
     file="$(env_value MINT_SECRETS_DIR)/kit_issuer.key"
+    drop_stale_key "$file"
     if ! issue_key kit "$file"; then
         echo "단말 설치 묶음 키를 만들지 못했습니다. 다음 up·upgrade에서 다시 시도합니다." >&2
         return 0
@@ -156,6 +180,7 @@ write_service_env() {
 ensure_control_key() {
     local file="$(env_value MINT_SECRETS_DIR)/control.key"
     [ -z "$(env_value MINT_LITELLM_KEY)" ] || return 0
+    drop_stale_key "$file"
     if [ ! -s "$file" ]; then
         if ! issue_key control "$file"; then
             echo "제어 평면 키를 만들지 못했습니다. 다음 up·upgrade에서 다시 시도합니다." >&2

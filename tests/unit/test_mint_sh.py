@@ -244,6 +244,21 @@ CONTROL_DOCKER = (
 )
 
 
+def test_keys_missing_from_a_reset_litellm_are_reissued(tmp_path):
+    # DB를 비우면 LiteLLM의 키도 사라진다. 없다고 확인된 옛 키는 치우고 새로 발급한다.
+    stale = 'case "$*" in *"CHECK_KEY"*) echo missing;; esac\n'
+    result, log, _ = up_with_issuer(
+        tmp_path, "up", docker_tail=stale + CONTROL_DOCKER,
+        existing="sk-old-kit", existing_control="sk-old-control",
+    )
+    assert result.returncode == 0, result.stderr
+    secrets = tmp_path / "secrets"
+    assert (secrets / "control.key").read_text(encoding="utf-8") == "sk-issued-control\n"
+    assert (secrets / "kit_issuer.key").read_text(encoding="utf-8") == "sk-issued-kit\n"
+    assert any(p.name.startswith("control.key.stale-") for p in secrets.iterdir())
+    assert "-e CHECK_KEY" in log and "sk-old-control" not in log
+
+
 @pytest.mark.parametrize("command", ["up", "upgrade"])
 def test_up_and_upgrade_make_the_control_key_once_store_it_and_hand_it_to_the_worker(
     tmp_path, command
