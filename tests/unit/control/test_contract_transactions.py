@@ -638,7 +638,7 @@ def test_intake_evidence_binding_matches_what_reapproval_demands(contract_db):
     ("tools", "severity"),
     [
         ({"read": NEW}, "high"),  # 입력 스키마
-        ({"read": {**TOOL, "description": "changed"}}, "medium"),  # 설명
+        ({"read": {**TOOL, "description": "changed"}}, "high"),  # 설명(재승인 전까지 차단)
         ({"read": TOOL, "extra": TOOL}, "low"),  # 도구 추가
         ({}, "low"),  # 도구 삭제
     ],
