@@ -5,6 +5,7 @@
 """
 
 import hashlib
+import os
 import secrets
 from datetime import UTC, datetime, timedelta
 
@@ -150,6 +151,17 @@ def bootstrap(
     return token
 
 
+def separation_enabled() -> bool:
+    """직무 분리 설정(``MINT_REQUIRE_DISTINCT_APPROVER``). 기본은 끔."""
+    on = os.environ.get("MINT_REQUIRE_DISTINCT_APPROVER", "").strip().lower()
+    return on in ("1", "true", "yes", "on")
+
+
+def separation_enforced(operator: Operator) -> bool:
+    """직무 분리를 이 운영자에게 거는가: 설정을 켰고 최상위 관리자(admin)가 아닐 때."""
+    return separation_enabled() and operator.role != OperatorRole.ADMIN.value
+
+
 def require_distinct_person(
     operator: Operator, other_user_id: str | None, second: Operator | None, what: str
 ) -> dict[str, str] | None:
@@ -157,7 +169,8 @@ def require_distinct_person(
 
     두 번째 승인자가 쓰였으면 그 이름과 사용자 식별자를 돌려준다.
     """
-    if other_user_id is None or operator.user_id != other_user_id:
+    if not separation_enforced(operator) or other_user_id is None or (
+            operator.user_id != other_user_id):
         return None
     if second is None:
         raise separation_of_duties(

@@ -251,9 +251,8 @@ applied contains "R1" if input.approval.present == false
 applied contains "R2" if input.tool.name in input.settings.high_risk_tools
 applied contains "R2" if input.tool.name in object.get(conditions, "high_risk_tools", [])
 
-# 승인된 도구 계약의 위험 등급(정책 입력 tool.risk_grade)이 높으면 승인 조건과 무관하게 건다.
-# 승인 조건의 high_risk_tools는 의무를 더하기만 한다.
-applied contains "R2" if object.get(input.tool, "risk_grade", null) in {"high", "critical"}
+# 호출별 승인(R2)은 관리자가 명시한 도구(settings.high_risk_tools, 승인 조건 high_risk_tools)만
+# 건다. 계약의 위험 등급이나 도구 이름만으로는 걸지 않는다.
 
 applied contains "R3" if {
 	object.get(conditions, "business_hours_only", false) == true

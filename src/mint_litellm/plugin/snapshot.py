@@ -372,6 +372,9 @@ class ApprovalRow:
     status: str
     # 재확인 유예가 지나 보류됐다(운영자가 재확인할 때까지 이 승인은 쓰지 않는다).
     recert_held: bool = False
+    # 신청 승인으로 만든 승인은 서버의 모든 도구(앞으로 생기는 도구 포함)에 적용한다.
+    all_tools: bool = False
+    requested_by: str | None = None
 
 
 @dataclass(frozen=True)
@@ -570,6 +573,8 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
                 conditions=a["conditions"],
                 status=a["status"],
                 recert_held=a.get("recert_held_at") is not None,
+                all_tools=bool((a.get("basis") or {}).get("intake_id")),
+                requested_by=a.get("requested_by"),
             )
             for a in doc["approvals"]
         ),

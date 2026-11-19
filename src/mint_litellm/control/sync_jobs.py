@@ -838,6 +838,11 @@ def _record_server(
 # --- activation_finalize -------------------------------------------------------------
 
 
+def _open_tools(approval: dict) -> bool:
+    """신청 승인이거나 도구에 ``*``가 있는 승인은 모든 도구를 허용한다(도구 권한 항목이 없다)."""
+    return "*" in approval["tools"] or bool((approval.get("basis") or {}).get("intake_id"))
+
+
 def _target_ready(client: LiteLLMSync, approval: dict) -> bool:
     """대상 권한에 이 승인의 서버와 도구가 지금 있는가(읽어서 확인)."""
     current = _read(client, approval["scope_type"], approval["scope_id"])
@@ -845,9 +850,11 @@ def _target_ready(client: LiteLLMSync, approval: dict) -> bool:
         return False
     servers, tools = permission_of(current)
     entry = tools.get(approval["server_id"])
-    return approval["server_id"] in servers and entry is not None and set(approval["tools"]) <= set(
-        entry
-    )
+    if approval["server_id"] not in servers:
+        return False
+    if _open_tools(approval):
+        return True  # 모든 도구 허용: 도구 목록을 따로 맞출 필요가 없다
+    return entry is not None and set(approval["tools"]) <= set(entry)
 
 
 @_reachable
@@ -882,7 +889,8 @@ def activation_finalize(ctx: JobContext) -> None:
             (r["item"], r["server_id"]): r
             for r in load_rows(conn, inst, approval["scope_type"], approval["scope_id"])
         }
-        for item in ("mcp_server", "tool_permission"):
+        for item in (("mcp_server",) if _open_tools(approval)
+                     else ("mcp_server", "tool_permission")):
             row = rows.get((item, server_id))
             if row is None or row["observed"] is not True:
                 return

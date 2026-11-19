@@ -39,10 +39,9 @@ test_pol_provisional_applies_path_and_url_patterns if {
 	d.policy_ids == ["POL-E-07", "POL-E-09"]
 }
 
-test_pol_provisional_high_risk_requires_call_approval if {
+test_pol_provisional_high_risk_alone_does_not_require_call_approval if {
 	d := evaluate(provisional)
-	d.decision == "RequireApproval"
-	d.policy_ids == ["R2"]
+	d.decision == "Allow"
 }
 
 test_pol_provisional_extra_key_blocked_when_the_approval_lists_keys if {
@@ -179,12 +178,11 @@ test_context_without_markers_is_empty if {
 
 with_grade(value, grade) := object.union(value, {"tool": {"name": "read", "risk_grade": grade}})
 
-test_r2_from_contract_grade_without_any_approval_condition if {
+test_contract_grade_alone_does_not_apply_r2 if {
 	every grade in {"high", "critical"} {
 		d := evaluate(with_grade(managed, grade))
-		d.decision == "RequireApproval"
-		d.policy_ids == ["R2"]
-		{"type": "require_call_approval"} in d.obligations
+		d.decision == "Allow"
+		d.obligations == []
 	}
 }
 
@@ -304,8 +302,7 @@ managed_firing := {
 		object.union(with_patterns({}), {"arguments": {"keys": ["extra"], "sizes": {"extra": 1}}}),
 		{"allowed_arg_keys": ["repo"]},
 	),
-	"R2": with_grade(managed, "high"),
-}
+	}
 
 local_firing := {
 	"POL-R-18": local_server({"exec_contract_sha256": sha_a}),

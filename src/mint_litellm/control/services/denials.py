@@ -15,10 +15,11 @@ def deny(
     tools: list[str] | None,
     reason: str,
     org_id: str | None,
+    action_types: list[str] | None = None,
 ) -> str:
     return domain.create_denial(
         ctx, scope_type=scope_type, scope_id=scope_id, server_id=server_id, tools=tools,
-        reason=reason, org_id=org_id,
+        reason=reason, org_id=org_id, action_types=action_types,
     )
 
 
