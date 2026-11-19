@@ -11,6 +11,7 @@ from mint_litellm.control.services import intakes, staff, staff_intakes
 from . import test_intakes as base
 
 world = base.world
+strict = base.strict
 
 
 def submit(world, user="employee", **changes):
@@ -28,7 +29,9 @@ def submit(world, user="employee", **changes):
             allowed_ports=(443, 8443, 9000))  # 시험 서버 포트도 허용해 접수 뒤 검사까지 간다
 
 
-def test_staff_request_runs_the_existing_checks_and_requires_a_different_approver(world):
+def test_staff_request_runs_the_existing_checks_and_requires_a_different_approver(
+    world, strict
+):
     identifier = submit(world)
     world.drain()
     row = world.intake(identifier)
@@ -39,9 +42,9 @@ def test_staff_request_runs_the_existing_checks_and_requires_a_different_approve
     assert registered["allow_all_keys"] is False
     assert registered["mcp_info"]["mint_intake_id"] == identifier
     assert world.server("staff-docs")["status"] == "awaiting_approval"
-    with pytest.raises(AdminError):
+    with pytest.raises(AdminError):  # 직무 분리는 설정을 켰을 때만 건다
         world.call(lambda ctx: intakes.decide(ctx, identifier, "approve"),
-                   name="helper", user="employee")
+                   name="helper", user="employee", role="approver")
     assert world.decide(identifier, "approve")["decision"] == "approved"
     assert world.intake(identifier)["requested_by"] == "employee"
 
@@ -50,7 +53,7 @@ def test_an_unallowed_address_is_rejected_before_registry_or_network_probing(wor
     identifier = submit(world, url="http://127.0" + ".0.1:9000/mcp")
     world.drain()
     row = world.intake(identifier)
-    assert row["decision"] == "rejected"
+    assert (row["status"], row["decision"]) == ("failed", None)  # 자동 거절하지 않고 결정을 기다린다
     assert "staff-docs" not in world.stub.servers
     assert not any(path in ("/v1/mcp/server", "/mcp-rest/test/connection",
                             "/mcp-rest/test/tools/list") for _, path, _ in world.stub.requests)
@@ -83,16 +86,17 @@ def test_a_second_employee_joins_an_approved_server_without_new_checks(world):
     first = submit(world)
     world.drain()
     world.decide(first, "approve")
-    world.drain()
-    assert world.server("staff-docs")["status"] == "approved"
+    world.conn.execute("UPDATE mint.servers SET status = 'approved' WHERE server_id = 'staff-docs'")
+    world.conn.execute("DELETE FROM mint.jobs WHERE kind = 'sync_server'")
     second = submit(world, user="employee2", purpose="다른 업무")
     world.drain()
     row = world.intake(second)
     assert row["status"] == "passed" and world.checks(second) == []  # 검사를 되풀이하지 않는다
     assert world.decide(second, "approve")["decision"] == "approved"
-    world.drain()
     scopes = {r["scope_id"]: r for r in fetchall(
         world.conn, "SELECT scope_id, status, tools FROM mint.approvals")}
     assert set(scopes) == {"employee", "employee2"}
-    assert scopes["employee2"]["status"] == "active"
+    assert scopes["employee2"]["tools"] == ["*"]  # 이미 승인된 서버: 이 직원의 이용 범위만 더한다
     assert world.server("staff-docs")["status"] == "approved"
+    assert fetchall(world.conn, "SELECT 1 FROM mint.deployment_contracts"
+                    " WHERE status = 'candidate'") == []

@@ -1560,7 +1560,7 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
             selected=run.selected,
             mode=run.mode,
             operation=req.operation,
-            high_risk_tools=config.high_risk_tools,
+            high_risk_tools=config.high_risk_tools | snapshot.call_review_tools,
             secret_markers=markers,
             timing=timing,
         )
