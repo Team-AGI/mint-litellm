@@ -648,10 +648,16 @@ def toml(value: object) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+# 실행기의 검증과 로컬 MCP 서버의 초기화가 끝날 시간을 확보한다.
+STARTUP_WAIT_SECONDS = 120
+
+
 def codex_servers(mcp: dict) -> str:
     return "".join(
         f"{NL}[mcp_servers.{toml(name)}]{NL}command = {toml(item['command'])}{NL}"
         f"args = {toml(item['args'])}{NL}"
+        f"startup_timeout_sec = {STARTUP_WAIT_SECONDS}{NL}"
+        f"tool_timeout_sec = {TOOL_WAIT_SECONDS}{NL}"
         for name, item in sorted(mcp.items())
     )
 
@@ -1841,14 +1847,15 @@ class Kit:
             state["net_task"] = NET_TASK_NAME
 
     def install_managed(self, state: dict, mcp: dict, hooks: dict) -> None:
-        settings = {"allowManagedHooksOnly": True, "hooks": hooks}
+        env = {"MCP_TIMEOUT": str(STARTUP_WAIT_SECONDS * 1000)}
+        settings = {"allowManagedHooksOnly": True, "hooks": hooks, "env": env}
         entries, gateway = dict(mcp), self.gateway()
         if gateway:
             entries[gateway["name"]] = {
                 "type": "http", "url": gateway["url"],
                 "headers": {"Authorization": "Bearer " + gateway["key"]},
             }
-            settings["env"] = {"MCP_TOOL_TIMEOUT": str(TOOL_WAIT_SECONDS * 1000)}
+            env["MCP_TOOL_TIMEOUT"] = str(TOOL_WAIT_SECONDS * 1000)
         self.write_tracked(
             state,
             self.managed_dir / "managed-mcp.json",
