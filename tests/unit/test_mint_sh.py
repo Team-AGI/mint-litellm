@@ -365,7 +365,8 @@ ROOT_DOCKER = BOOTSTRAP_DOCKER.replace(
 
 
 NO_OPERATORS = (
-    'case "$*" in *"control --json status"*) echo "운영자가 아직 없습니다";; esac\n'
+    'case "$*" in *"control --json status"*) echo "운영자가 아직 없습니다";;\n'
+    '  *"exec -T postgres psql"*) echo 0;; esac\n'
 )
 
 
