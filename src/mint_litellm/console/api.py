@@ -31,6 +31,7 @@ from mint_litellm.control.errors import (
     conflict,
     forbidden,
 )
+from mint_litellm.control.operators import separation_enforced
 from mint_litellm.control.services import allowlists as allowlist_service
 from mint_litellm.control.services import approval_metrics, metrics, reads
 from mint_litellm.control.services import approvals as approval_service
@@ -190,6 +191,7 @@ class DenialBody(BaseModel):
     scope_id: str
     server_id: str | None = None
     tools: list[str] | None = None
+    action_types: list[str] | None = None  # 행위 유형 단위 차단(read·write·delete 등)
     reason: str
     org_id: str | None = None
 
@@ -594,7 +596,7 @@ def revoke_approval(approval_id: str, body: RevokeBody, actor: Actor = Depends(a
 def create_denial(body: DenialBody, actor: Actor = Depends(api_actor)):
     did = denial_service.deny(
         actor.ctx, scope_type=body.scope_type, scope_id=body.scope_id, server_id=body.server_id,
-        tools=body.tools, reason=body.reason, org_id=body.org_id,
+        tools=body.tools, reason=body.reason, org_id=body.org_id, action_types=body.action_types,
     )
     return done(actor, id=did)
 
@@ -760,11 +762,9 @@ def decide_intake(
     actor: Actor, intake_id: str, body: IntakeDecisionBody, second: Operator | None = None
 ) -> dict:
     valid_until = None
-    if body.decision != "reject":
-        info = intake_service.show(actor.ctx, intake_id)
-        strict = any(t["risk_grade"] in ("high", "critical") for t in info["tool_contracts"])
+    if body.decision != "reject" and body.valid_days:  # 기한은 관리자가 명시했을 때만 둔다
         valid_until = datetime.now(UTC) + timedelta(
-            days=intake_days(body.decision, body.valid_days, strict)
+            days=intake_days(body.decision, body.valid_days, False)
         )
     narrowing = {
         key: value
@@ -796,7 +796,11 @@ HOLD_FIELDS = ("reason", "valid_days", "scope_type", "scope_id", "team_id", "all
 
 
 def hold_exception(actor: Actor, intake_id: str, body: IntakeDecisionBody) -> dict:
-    """예외 승인을 두 번째 승인 대기로 낸다. 승인 처리는 다른 승인자의 확인 때 한다."""
+    """예외 승인을 두 번째 승인 대기로 낸다. 승인 처리는 다른 승인자의 확인 때 한다.
+
+    직무 분리를 켜지 않았거나 최상위 관리자이면 대기 없이 바로 승인한다."""
+    if not separation_enforced(actor.ctx.operator):
+        return decide_intake(actor, intake_id, body)
     intake_days("except", body.valid_days, True)
     params = {k: getattr(body, k) for k in HOLD_FIELDS}
     return exception_hold_service.request(

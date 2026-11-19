@@ -15,6 +15,7 @@ from mint_litellm.control.errors import (
     separation_of_duties,
     stale_evidence,
 )
+from mint_litellm.control.operators import separation_enabled, separation_enforced
 from mint_litellm.control.services import evidence
 from mint_litellm.control.services.base import enqueue_job, require_role, service, transact
 from mint_litellm.types.canonical import (
@@ -256,7 +257,7 @@ def _exception_gate(
         (ctx.instance_id, server_id),
     )
     involved = [i for i in (intake, basis) if i is not None and i["decision"] == "exception"]
-    if not involved:
+    if not involved or not separation_enabled():
         return False
     barred = {i["requested_by"] for i in (intake, basis) if i is not None}
     barred |= {first.user_id, proposed_by}
@@ -322,10 +323,11 @@ def _plan(
         raise stale_evidence("통과한 재검사 신청이 필요합니다.")
     if intake["status"] == "decided" and intake["decision"] not in ("approved", "exception"):
         raise stale_evidence("승인되지 않은 신청의 증거입니다.")
-    if not ctx.operator.user_id or not intake["requested_by"]:
-        raise separation_of_duties("신청자와 승인자의 사용자 결속이 필요합니다.")
-    if ctx.operator.user_id == intake["requested_by"]:
-        raise separation_of_duties("신청자는 같은 계약을 재승인할 수 없습니다.")
+    if separation_enforced(ctx.operator):
+        if not ctx.operator.user_id or not intake["requested_by"]:
+            raise separation_of_duties("신청자와 승인자의 사용자 결속이 필요합니다.")
+        if ctx.operator.user_id == intake["requested_by"]:
+            raise separation_of_duties("신청자는 같은 계약을 재승인할 수 없습니다.")
     if not candidate_ids and deployment_id is None:
         raise conflict("새 후보 계약을 지정하십시오.")
     if len(set(candidate_ids)) != len(candidate_ids):
@@ -354,7 +356,8 @@ def _plan(
     )
     if deployment_id and deployment is None:
         raise conflict("후보 배포 계약이 없습니다.")
-    if deployment and deployment["proposed_by"] == ctx.operator.user_id:
+    if (deployment and deployment["proposed_by"] == ctx.operator.user_id
+            and separation_enforced(ctx.operator)):
         raise separation_of_duties("배포 후보를 제시한 운영자는 그 후보를 재승인할 수 없습니다.")
     exception_required = _exception_gate(
         ctx, server_id, intake, deployment["proposed_by"] if deployment else None, first, second)

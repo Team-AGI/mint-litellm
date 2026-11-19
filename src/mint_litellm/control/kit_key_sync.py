@@ -20,7 +20,9 @@ from mint_litellm.endpoint.routes import KIT_KEY_ROUTES
 Permission = tuple[list[str], dict[str, list[str]]]
 
 _APPLICABLE = """
-SELECT a.server_id, a.tools FROM mint.approvals a
+SELECT a.server_id, a.tools,
+  (a.basis->>'intake_id' IS NOT NULL OR '*' = ANY (a.tools)) AS open_tools
+FROM mint.approvals a
 JOIN mint.servers s ON s.instance_id = a.instance_id AND s.server_id = a.server_id
 WHERE a.instance_id = %(iid)s AND a.status = 'active'
   AND a.valid_from <= now() AND a.valid_until > now()
@@ -46,6 +48,7 @@ def desired_permission(
     """사용자·팀·키 범위의 활성 승인에서 게이트웨이 키가 가져야 할 서버 목록과 도구 맵."""
     servers: list[str] = []
     tools: dict[str, set[str]] = {}
+    open_servers: set[str] = set()  # 모든 도구를 허용하는 승인: 도구 제한을 걸지 않는다
     for row in fetchall(
         conn, _APPLICABLE,
         {"iid": instance_id, "key": key_token, "user": user_id, "team": team_id or "",
@@ -53,8 +56,10 @@ def desired_permission(
     ):
         if row["server_id"] not in servers:
             servers.append(row["server_id"])
+        if row["open_tools"]:
+            open_servers.add(row["server_id"])
         tools.setdefault(row["server_id"], set()).update(row["tools"] or ())
-    return servers, {s: sorted(t) for s, t in tools.items() if t}
+    return servers, {s: sorted(t) for s, t in tools.items() if t and s not in open_servers}
 
 
 def local_servers_for(

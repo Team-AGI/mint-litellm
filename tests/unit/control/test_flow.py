@@ -31,6 +31,13 @@ NOW = datetime.now(UTC)
 LATER = NOW + timedelta(days=30)
 
 
+@pytest.fixture(autouse=True)
+def _distinct_approver(monkeypatch):
+    """직무 분리는 설정을 켰을 때만 건다."""
+    monkeypatch.setenv("MINT_REQUIRE_DISTINCT_APPROVER", "1")
+
+
+
 def events(conn, kind=None):
     sql = "SELECT * FROM mint.events WHERE instance_id = %s"
     params = [INSTANCE]
@@ -328,8 +335,10 @@ def test_deny_and_lift(ctx, litellm, conn):
     approvals.lift_denial(ctx, denial)
     assert fetchone(conn, "SELECT lifted_by FROM mint.denials")["lifted_by"] == "root"
     assert count(conn, "denial_created") == 1 and count(conn, "denial_lifted") == 1
+    approvals.lift_denial(ctx, denial)  # 같은 해제를 다시 보내도 그대로 성공이다
+    assert count(conn, "denial_lifted") == 1
     with pytest.raises(ControlError, match="해제되지 않은"):
-        approvals.lift_denial(ctx, denial)
+        approvals.lift_denial(ctx, "00000000-0000-0000-0000-000000000000")
     with pytest.raises(ControlError, match="등록되지 않은 서버"):
         approvals.create_denial(ctx, scope_type="user", scope_id="u", server_id="ghost",
                                 tools=None, reason="r", org_id=None)

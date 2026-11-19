@@ -54,7 +54,7 @@ from mint_litellm.plugin.timing import OFF, StageClock
 from mint_litellm.plugin.token_audience import MISMATCH, UNCHECKED, audience_verdict
 from mint_litellm.plugin.token_scope import exceeded_scopes
 from mint_litellm.types.canonical import credential_scope
-from mint_litellm.types.contracts import ONE_SHOT_ACTIONS
+from mint_litellm.types.contracts import ONE_SHOT_ACTIONS, covers, denial_hits_tool
 from mint_litellm.types.decision import (
     UNSUPPORTED_STAGE,
     Action,
@@ -284,14 +284,15 @@ def _approval_expired(approval: ApprovalRow, now: datetime) -> bool:
 
 
 def denial_and_approval(
-    snapshot: Snapshot, principal: Principal, resolved: ResolvedServer, tool: str
+    snapshot: Snapshot, principal: Principal, resolved: ResolvedServer, tool: str,
+    action_type: str | None = None,
 ) -> ApprovalSelection:
     now = snapshot.now
     for denial in snapshot.denials:
         applies = (
             scope_matches(denial.scope_type, denial.scope_id, principal, resolved.server_id)
             and (denial.server_id is None or denial.server_id == resolved.server_id)
-            and (denial.tools is None or tool in denial.tools)
+            and denial_hits_tool(denial.tools, tool, action_type)
             and (denial.org_id is None or denial.org_id == principal.org_id)
         )
         if applies:
@@ -342,7 +343,7 @@ def denial_and_approval(
         in_scope = [a for a in valid if a.scope_type == scope]
         if not in_scope:
             continue
-        containing = [a for a in in_scope if tool in a.tools]
+        containing = [a for a in in_scope if a.all_tools or covers(a.tools, tool)]
         if not containing:
             return ApprovalSelection([StageResult.finding(Reason.TOOL_NOT_IN_APPROVAL)], None)
         ordered = sorted(containing, key=lambda a: a.id)
@@ -455,7 +456,8 @@ def scope_result(
 
 
 def control_listing_negative(
-    snapshot: Snapshot, principal: Principal, resolved: ResolvedServer, tool: str
+    snapshot: Snapshot, principal: Principal, resolved: ResolvedServer, tool: str,
+    action_type: str | None = None,
 ) -> StageResult | None:
     if principal.principal_type is PrincipalType.ANONYMOUS:
         return StageResult.stop(Reason.ANONYMOUS)
@@ -471,7 +473,7 @@ def control_listing_negative(
         if (
             scope_matches(denial.scope_type, denial.scope_id, principal, resolved.server_id)
             and (denial.server_id is None or denial.server_id == resolved.server_id)
-            and (denial.tools is None or tool in denial.tools)
+            and denial_hits_tool(denial.tools, tool, action_type)
             and (denial.org_id is None or denial.org_id == principal.org_id)
         ):
             return StageResult.stop(Reason.DENIED)
@@ -573,9 +575,8 @@ def contract_result(
     if server.approved_contracts == 0:
         return StageResult.finding(Reason.CONTRACT_DRIFT, "no_contract")
     contract = current_contract(snapshot, tool)
-    if contract is None:
-        return StageResult.finding(Reason.CONTRACT_DRIFT, "unapproved_tool")
-    if contract.drift in ("input_schema", "description"):
+    # 계약에 없던 새 도구는 막지 않는다(기본 통과). 관측 때 낮음 경보로 남는다.
+    if contract is not None and contract.drift in ("input_schema", "description"):
         # 승인 뒤 설명·annotations가 바뀐 도구(러그 풀)도 재승인 전까지 막는다(POL-O-01).
         return StageResult.finding(Reason.CONTRACT_DRIFT, contract.drift)
     if server.deployment_drift:
@@ -615,6 +616,14 @@ def consent_state(snapshot: Snapshot, principal: Principal, purpose: str) -> tup
     """목적에 대한 동의 상태와 출처. 동의는 사람 사용자에게만 있다."""
     if principal.principal_type is not PrincipalType.USER:
         return "absent", None
+    now = snapshot.now
+    if principal.user_id and any(
+        a.all_tools and a.status == "active" and a.requested_by == principal.user_id
+        and a.valid_from <= now < a.valid_until
+        for a in snapshot.approvals
+    ):
+        # 신청이 곧 동의다: 본인이 신청해 승인된 서버는 따로 동의를 받지 않는다.
+        return "granted", "request"
     rows = [c for c in snapshot.consents if c.purpose == purpose and c.org_id == principal.org_id]
     if not rows:
         return "absent", None
@@ -1456,7 +1465,9 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         )
         return
     if is_control and req.operation is OperationType.RUNTIME_DISCOVERY:
-        negative = control_listing_negative(snapshot, run.principal, resolved, tool)
+        negative = control_listing_negative(
+            snapshot, run.principal, resolved, tool,
+            tool_traits(snapshot, tool, {}, builtin=is_builtin_server(resolved.server_id))[0])
         if negative is not None:
             stages.add(Stage.STATE, negative)
         else:
@@ -1472,7 +1483,10 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         return
 
     run.current = Stage.DENIAL_APPROVAL
-    selection = denial_and_approval(snapshot, run.principal, resolved, tool)
+    selection = denial_and_approval(
+        snapshot, run.principal, resolved, tool,
+        tool_traits(snapshot, tool, hook.arguments or {},
+                    builtin=is_builtin_server(resolved.server_id))[0])
     for result in selection.results:
         stages.add(Stage.DENIAL_APPROVAL, result)
     if not selection.results:
@@ -1546,7 +1560,7 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
             selected=run.selected,
             mode=run.mode,
             operation=req.operation,
-            high_risk_tools=config.high_risk_tools,
+            high_risk_tools=config.high_risk_tools | snapshot.call_review_tools,
             secret_markers=markers,
             timing=timing,
         )

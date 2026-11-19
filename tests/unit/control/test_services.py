@@ -37,6 +37,13 @@ LATER = NOW + timedelta(days=30)
 
 
 @pytest.fixture(autouse=True)
+def _distinct_approver(monkeypatch):
+    """직무 분리는 설정을 켰을 때만 건다."""
+    monkeypatch.setenv("MINT_REQUIRE_DISTINCT_APPROVER", "1")
+
+
+
+@pytest.fixture(autouse=True)
 def handlers_for_the_job_kinds_used_here(monkeypatch):
     """작업 등록의 원자성·수렴만 보는 파일이라 처리기 없는 종류에는 빈 처리기를 둔다."""
     for kind in ("sync_server", "export_negative_state"):
@@ -201,9 +208,14 @@ def test_separation_of_duties_is_a_distinct_admin_error(ctx, litellm, conn):
 
 def test_requester_cannot_approve_without_a_second_person(ctx, litellm, conn):
     relation = prepare(ctx, litellm)
+    from dataclasses import replace
+
+    from mint_litellm.control.context import Operator
+
+    approver = replace(ctx, operator=Operator("root", "approver", ctx.operator.user_id))
     with pytest.raises(AdminError) as raised:
         approvals.approve(
-            ctx, litellm, relation_id=relation, scope_type="key", scope_id=GOOD_KEY,
+            approver, litellm, relation_id=relation, scope_type="key", scope_id=GOOD_KEY,
             tools=["echo"], valid_from=NOW, valid_until=LATER, approval_class="standard",
             basis_text="티켓", requested_by="root-user", allowlist_ids=[], second=None,
         )

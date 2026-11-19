@@ -31,6 +31,13 @@ NOW = datetime.now(UTC)
 LATER = NOW + timedelta(days=30)
 
 
+@pytest.fixture(autouse=True)
+def _distinct_approver(monkeypatch):
+    """직무 분리는 설정을 켰을 때만 건다."""
+    monkeypatch.setenv("MINT_REQUIRE_DISTINCT_APPROVER", "1")
+
+
+
 def events(conn, kind):
     return fetchall(
         conn, "SELECT * FROM mint.events WHERE instance_id = %s AND kind = %s"

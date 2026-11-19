@@ -20,6 +20,13 @@ HOOK = "https://hooks.slack.com/actions/T/1/x"
 USERS = {"approver": "U0APPROVER", "admin": "U0ADMIN"}
 
 
+@pytest.fixture(autouse=True)
+def _distinct_approver(monkeypatch):
+    """직무 분리는 설정을 켰을 때만 건다."""
+    monkeypatch.setenv("MINT_REQUIRE_DISTINCT_APPROVER", "1")
+
+
+
 @pytest.fixture
 def slack(world, monkeypatch):
     updates = []
@@ -141,13 +148,11 @@ def test_an_unbound_slack_account_is_refused_and_nothing_changes(slack):
     assert "결속되어 있지 않아" in slack.updates[0]["text"]
 
 
-def test_the_requesters_own_operator_cannot_approve(slack):
+def test_the_admin_can_approve_their_own_call(slack):
     bind(slack, "admin", USERS["admin"])  # 운영자 admin의 사용자는 human-1
     call_id = pending(slack, principal="human-1")
     click(slack, USERS["admin"], call_id)
-    assert row(slack)[0] == "pending"
-    assert slack.updates[0]["response_type"] == "ephemeral"
-    assert "권한이 없습니다" in slack.updates[0]["text"]
+    assert row(slack)[0] == "approved"  # 최상위 관리자는 직무 분리를 켜도 막지 않는다
 
 
 def test_a_viewer_cannot_be_bound_and_a_taken_slack_user_cannot_be_reused(slack):

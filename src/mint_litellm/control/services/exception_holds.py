@@ -96,7 +96,6 @@ def request(ctx: Context, intake_id: str, params: dict, *, expected_version: int
         if row["status"] != "indeterminate":
             raise conflict(f"{row['status']} 상태의 신청은 except할 수 없습니다.")
         intakes._require_separation(ctx, row, None, False)
-        intakes._require_fresh_evidence(ctx, row)
         now = fetchone(ctx.conn, "SELECT clock_timestamp() AS t")["t"]
         for old in fetchall(  # 열린 요청은 새 요청이 대체한다(만료된 것은 만료로 닫는다)
                 ctx.conn, "SELECT * FROM mint.exception_holds WHERE instance_id = %s"
