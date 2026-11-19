@@ -15,6 +15,13 @@ from mint_litellm.types.cli_commands import COMMANDS, OperatorRole  # noqa: E402
 FAR_FUTURE = (datetime.now(UTC) + timedelta(days=400)).isoformat()
 
 
+@pytest.fixture(autouse=True)
+def _distinct_approver(monkeypatch):
+    """직무 분리는 설정을 켰을 때만 건다."""
+    monkeypatch.setenv("MINT_REQUIRE_DISTINCT_APPROVER", "1")
+
+
+
 def test_every_command_in_the_table_has_a_handler_and_a_parser():
     names = {c.name for c in COMMANDS}
     assert names == set(cli.HANDLERS)

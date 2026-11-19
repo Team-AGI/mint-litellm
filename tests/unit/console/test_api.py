@@ -17,6 +17,13 @@ from mint_litellm.control.errors import AdminCode
 INSTANCE = "inst1"
 
 
+@pytest.fixture(autouse=True)
+def _distinct_approver(monkeypatch):
+    """직무 분리는 설정을 켰을 때만 건다."""
+    monkeypatch.setenv("MINT_REQUIRE_DISTINCT_APPROVER", "1")
+
+
+
 def bearer(role: str) -> dict:
     return {"Authorization": f"Bearer {TOKENS[role]}"}
 

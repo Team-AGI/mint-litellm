@@ -53,7 +53,7 @@ def test_an_unallowed_address_is_rejected_before_registry_or_network_probing(wor
     identifier = submit(world, url="http://127.0" + ".0.1:9000/mcp")
     world.drain()
     row = world.intake(identifier)
-    assert (row["status"], row["decision"]) == ("failed", None)  # 자동 거절하지 않고 결정을 기다린다
+    assert (row["status"], row["decision"]) == ("failed", None)  # 결정 대기
     assert "staff-docs" not in world.stub.servers
     assert not any(path in ("/v1/mcp/server", "/mcp-rest/test/connection",
                             "/mcp-rest/test/tools/list") for _, path, _ in world.stub.requests)

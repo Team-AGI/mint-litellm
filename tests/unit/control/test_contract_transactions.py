@@ -261,7 +261,8 @@ def test_pin_mismatch_keeps_approval_and_retry_releases_block(contract_db):
 
 
 @pytest.mark.parametrize("mode", ["stale", "requester", "viewer", "unbound", "version"])
-def test_reapproval_preconditions_do_not_pin(contract_db, mode):
+def test_reapproval_preconditions_do_not_pin(contract_db, mode, monkeypatch):
+    monkeypatch.setenv("MINT_REQUIRE_DISTINCT_APPROVER", "1")
     conn, ctx, old = contract_db
     candidate = add_tool(conn, NEW)
     iid = evidence(

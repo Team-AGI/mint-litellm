@@ -25,7 +25,7 @@ def find(conn: psycopg.Connection, instance_id: str, days: int) -> list[dict]:
         " SELECT a.id, a.server_id, a.tools, a.scope_type, a.scope_id, a.class, a.valid_from,"
         " a.valid_until, a.granted_by, a.status, a.state_version, a.recert_confirmed_at,"
         " a.recert_held_at FROM mint.approvals a WHERE a.instance_id = %(i)s"
-        " AND a.status = 'active' AND a.valid_until > now()"
+        " AND a.status = 'active' AND a.valid_until > now() AND a.valid_until < '2999-01-01'"
         " AND COALESCE(a.recert_confirmed_at, a.valid_from) <= now() - make_interval(days => %(d)s)"
         " AND NOT EXISTS (SELECT 1 FROM used u WHERE u.id = a.id::text)"
         " ORDER BY a.server_id, a.valid_from, a.id LIMIT %(n)s",

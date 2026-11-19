@@ -14,6 +14,13 @@ from mint_litellm.control.errors import AuthError, ControlError  # noqa: E402
 from mint_litellm.types.cli_commands import OperatorRole  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _distinct_approver(monkeypatch):
+    """직무 분리는 설정을 켰을 때만 건다."""
+    monkeypatch.setenv("MINT_REQUIRE_DISTINCT_APPROVER", "1")
+
+
+
 def test_bootstrap_only_works_on_an_empty_table_and_records_the_actor(conn, litellm):
     token = operators.bootstrap(conn, INSTANCE, litellm, "boss", "human-1")
     assert token.startswith(operators.TOKEN_PREFIX)

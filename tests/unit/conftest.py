@@ -33,7 +33,7 @@ def migrated_database() -> Iterator[str]:
         with psycopg.connect(url, autocommit=True) as conn:
             for migration in sorted(MIGRATIONS.glob("*.sql")):
                 if migration.name.startswith(
-                    ("004_", "054_", "056_", "057_", "058_", "059_", "060_", "062_")
+                    ("004_", "054_", "056_", "057_", "058_", "059_", "060_", "062_", "065_")
                 ):
                     # 직원·단말 신청 함수와 그 함수에 기대는 변경은 해당 시험이 직접 적용한다.
                     continue

@@ -1,7 +1,16 @@
+import pytest
+
 from . import test_intake_contract_screens as screens
 from . import test_staff_intakes as staff_tests
 
 sworld = staff_tests.sworld
+
+
+@pytest.fixture(autouse=True)
+def _distinct_approver(monkeypatch):
+    """직무 분리는 설정을 켰을 때만 건다."""
+    monkeypatch.setenv("MINT_REQUIRE_DISTINCT_APPROVER", "1")
+
 
 
 def test_employee_withdrawal_owner_csrf_confirmation_and_resubmission(sworld):
@@ -54,7 +63,7 @@ def test_staff_withdrawal_removes_the_second_approval_from_the_reviewer_console(
     # Model an inconclusive inspection locally so the dummy provider is never contacted.
     sworld.query("UPDATE mint.intakes SET status='checking' WHERE id=%s", identifier)
     sworld.query("UPDATE mint.intakes SET status='indeterminate' WHERE id=%s", identifier)
-    first_decision = screens.hold_it(sworld, identifier)
+    first_decision = screens.hold_it(sworld, identifier, role="approver")
     assert first_decision.status_code == 303, first_decision.text
     confirm_path = f"/exceptions/{screens.hold_id(sworld)}/confirm"
     assert confirm_path in reviewer.get(queue_path).text
