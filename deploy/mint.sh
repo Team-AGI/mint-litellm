@@ -430,9 +430,13 @@ cmd_bootstrap() {
 # 뜬 뒤에 root를 LiteLLM 사용자와 MINT 운영자로 만든다. 운영자가 있으면(업그레이드·재기동) 아무것도 하지 않는다.
 NEED_DEFAULT_ROOT=0
 prepare_default_root() {
-    local probe reply
-    probe="$("${COMPOSE[@]}" run --rm --no-deps -T control --json status 2>&1 || true)"
-    case "$probe" in *"운영자가 아직 없습니다"*) NEED_DEFAULT_ROOT=1 ;; *) return 0 ;; esac
+    local count reply
+    # 새 DB에서는 이 시점에 MINT 스키마가 아직 없어 상태 명령이 다른 오류를 낸다. DB에서 직접 센다
+    # (스키마나 표가 없으면 운영자 0명).
+    count="$("${COMPOSE[@]}" exec -T postgres psql -U postgres -d mint -Atc         "SELECT CASE WHEN to_regclass('mint.operators') IS NULL THEN 0
+         ELSE (SELECT count(*) FROM mint.operators) END" 2>/dev/null || echo 0)"
+    [ "$count" = "0" ] || return 0
+    NEED_DEFAULT_ROOT=1
     reply="$("${COMPOSE[@]}" run --rm --no-deps -T --entrypoint python control -c "
 from pathlib import Path
 from mint_litellm.control.litellm_config import ensure_password_policy
