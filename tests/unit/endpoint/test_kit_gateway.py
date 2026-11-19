@@ -31,12 +31,15 @@ def test_a_managed_install_puts_the_gateway_into_both_managed_lists_with_private
     assert entry == {"type": "http", "url": URL, "headers": {"Authorization": f"Bearer {KEY}"}}
     codex = root / "etc/codex"
     servers = tomllib.loads((codex / "managed_config.toml").read_text(encoding="utf-8"))
+    local = servers["mcp_servers"]["srv-1"]
+    assert local["startup_timeout_sec"] == 120
+    assert local["tool_timeout_sec"] == 330
     assert servers["mcp_servers"]["litellm_gateway"] == {
         "url": URL, "http_headers": {"Authorization": f"Bearer {KEY}"},
         "tool_timeout_sec": 330,  # 승인 보류(최대 300초)보다 길게: 하네스가 먼저 끊지 않는다
     }
     settings = json.loads((root / "etc/claude-code/managed-settings.json").read_text())
-    assert settings["env"] == {"MCP_TOOL_TIMEOUT": "330000"}
+    assert settings["env"] == {"MCP_TOOL_TIMEOUT": "330000", "MCP_TIMEOUT": "120000"}
     requirements = tomllib.loads((codex / "requirements.toml").read_text(encoding="utf-8"))
     assert requirements["mcp_servers"]["litellm_gateway"] == {"identity": {"url": URL}}
     assert KEY not in (codex / "requirements.toml").read_text(encoding="utf-8")

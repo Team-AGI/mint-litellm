@@ -124,15 +124,17 @@ def script_path(contract: Mapping[str, Any]) -> str | None:
 
 
 def observed_contract(approved: Mapping[str, Any], fd: int | None = None) -> dict[str, Any]:
-    """승인된 계약에 지금 디스크의 실행 파일·스크립트 해시를 넣은 계약.
+    """승인 계약에 있는 파일 해시를 디스크에서 다시 읽는다.
 
     ``fd``가 있으면 실행 파일은 그 기술자에서 읽는다(시작 직전 검증이 실행할 파일 그대로를 본다).
     """
     try:
         contract = {k: v for k, v in approved.items() if k != "identity_kind"}
-        contract["executable_sha256"] = (
-            sha256_file(approved["executable"]) if fd is None else sha256_fd(fd)
-        )
+        # 2판 묶음은 시작 검증에서 확인하는 pack 해시로 식별한다.
+        if approved.get("pack") is None or approved.get("executable_sha256") is not None:
+            contract["executable_sha256"] = (
+                sha256_file(approved["executable"]) if fd is None else sha256_fd(fd)
+            )
         if approved.get("script_sha256") is not None:
             script = script_path(approved)
             if script is None:

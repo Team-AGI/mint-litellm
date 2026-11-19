@@ -65,6 +65,7 @@ def test_a_managed_install_writes_settings_hooks_launchers_and_the_key(folder, t
     etc, programs = managed_files(tmp_path)
     settings = json.loads((etc / "managed-settings.json").read_text())
     assert settings["allowManagedHooksOnly"] is True
+    assert settings["env"] == {"MCP_TIMEOUT": "120000"}
     assert set(settings["hooks"]) == {"PreToolUse", "PostToolUse", "PostToolUseFailure"}
     before = settings["hooks"]["PreToolUse"][0]["hooks"][0]
     assert before["onFailure"] == "block" and before["timeout"] == 3

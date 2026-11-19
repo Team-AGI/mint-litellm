@@ -10,6 +10,9 @@ import time
 import pytest
 from kit_loader import KIT, load
 
+from mint_litellm.endpoint.decide import DecideBody
+from mint_litellm.types.exec_contract import ExecContract
+
 agent = load("mint_agent")
 LINUX = sys.platform.startswith("linux")
 
@@ -95,6 +98,35 @@ def test_a_server_file_that_changed_after_approval_is_reported_as_changed(world)
     world.exe.unlink()
     with pytest.raises(agent.Refuse, match="cannot be read"):
         decide(world, Wire())
+
+
+@pytest.mark.parametrize("pin_runtime", [False, True])
+def test_pack_hook_preserves_the_approved_contract_identity(world, pin_runtime):
+    pack = {
+        "sha256": sha(b"wheel bundle"),
+        "runtime": "python3",
+        "python": "3.12",
+        "entry": "demo:main",
+    }
+    runtime_hash = sha(world.exe.read_bytes()) if pin_runtime else None
+    approved = ExecContract(
+        schema_version=2, executable=str(world.exe), executable_sha256=runtime_hash, pack=pack,
+    )  # fmt: skip
+    world.tmp.joinpath("contracts.json").write_text(
+        json.dumps({"servers": {"ghidra-p4": approved.document()}})
+    )
+    wire = Wire()
+    tool_name = "mcp__ghidra_p4__list_project_binaries"
+    decide(world, wire, tool_name=tool_name, mcp_server=None)
+    body = DecideBody.model_validate(wire.requests[0][2])
+    assert (body.server, body.tool) == ("ghidra-p4", "list_project_binaries")
+    assert body.contract.sha256() == approved.sha256()
+    if pin_runtime:
+        world.exe.write_bytes(b"changed runtime")
+        decide(world, wire, tool_name=tool_name, mcp_server=None)
+        changed = DecideBody.model_validate(wire.requests[1][2]).contract
+        assert changed.executable_sha256 == sha(b"changed runtime")
+        assert changed.sha256() != approved.sha256()
 
 
 def test_an_allowed_call_leaves_a_reference_for_the_result_hook(world):
