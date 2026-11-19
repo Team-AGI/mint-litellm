@@ -165,20 +165,10 @@ def source_of(actor: StaffActor, ids: list) -> dict:
 
 
 def intake_form(request: Request, actor: StaffActor, form=None, error=None, status=200):
-    values = {"request_id": str(new_uuid7()), "transport": "http", "data_grade": "internal",
-              **INTAKE_DEFAULTS, **(form or {})}
+    values = {"request_id": str(new_uuid7()), **(form or {})}
     ports = ", ".join(map(str, actor.config.stage2.intake_allowed_ports))
     return staff_render(request, "staff_intake_new.html",
                         {"f": values, "error": error, "ports": ports}, actor, status)
-
-
-# 종료 준비 항목은 직원이 알기 어려워 조직 기본 문구로 채워 두고 필요할 때만 고친다.
-INTAKE_DEFAULTS = {
-    "audit_access_days": "90",
-    "credential_notice": "자격 증명이 바뀌면 관리자에게 알립니다",
-    "revocation_record": "철회는 MINT 기록으로 남깁니다",
-    "data_return_terms": "사용을 끝내면 서버에 남은 자료를 삭제합니다",
-}
 
 
 @router.get("/staff/intakes/new")
@@ -188,17 +178,10 @@ def intake_new(request: Request, actor: StaffActor = Depends(staff_actor)):
 
 @router.post("/staff/intakes")
 def intake_submit(
-    request: Request, request_id: str = Form(...), server_id: str = Form(...),
-    url: str = Form(...), transport: str = Form(...), purpose: str = Form(...),
-    data_grade: str = Form(...), resources: str = Form(""),
-    credential_notice: str = Form(...), revocation_record: str = Form(...),
-    audit_access_days: str = Form(...), data_return_terms: str = Form(...),
-    actor: StaffActor = Depends(staff_actor),
+    request: Request, request_id: str = Form(...), url: str = Form(...),
+    purpose: str = Form(...), actor: StaffActor = Depends(staff_actor),
 ):
-    form = dict(request_id=request_id, server_id=server_id, url=url, transport=transport,
-                purpose=purpose, data_grade=data_grade, resources=resources,
-                credential_notice=credential_notice, revocation_record=revocation_record,
-                audit_access_days=audit_access_days, data_return_terms=data_return_terms)
+    form = dict(request_id=request_id, url=url, purpose=purpose)
     ports = actor.config.stage2.intake_allowed_ports
     return act(actor, lambda: staff_intakes.submit(
                    actor.sctx, actor.id_hash, request_id, form, ports),
@@ -359,6 +342,7 @@ def servers_page(request: Request, actor: StaffActor, error=None, status=200, fo
          "tools": [], "valid_until": None}
         for (o, sid) in by_server if (o, sid) not in shown
     ]
+    seen = staff_intakes.observed(actor.sctx)
     for row in rows:
         key = (row["org_id"], row["server_id"])
         row["ref"] = f"{key[0]}|{key[1]}"
@@ -369,6 +353,7 @@ def servers_page(request: Request, actor: StaffActor, error=None, status=200, fo
         row["consent_until"] = max((c["valid_until"] for c in active), default=None)
         row["expiring"] = bool(active) and row["consent_until"] < now + EXPIRING
         row["can_consent"] = key in can_consent
+        row["seen"] = seen.get(row["server_id"])
     name_servers(actor, rows)
     tab = "records" if request.query_params.get("tab") == "records" else "servers"
     records = [

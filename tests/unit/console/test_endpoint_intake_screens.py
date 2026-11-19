@@ -54,12 +54,24 @@ def test_the_waiting_pack_tab_shows_only_the_steps():
     assert "묶음 준비" in html and "묶음 해시" not in html
 
 
-def test_the_staff_form_offers_local_run_with_a_command_example():
+def test_the_staff_form_asks_only_the_address_and_the_purpose_and_points_local_runs_to_mint_add():
     root = Path(pack_view.__file__).parent
     html = (root / "templates" / "staff_intake_new.html").read_text(encoding="utf-8")
-    assert 'value="stdio"' in html and "mint add" in html and "이 PC 터미널에서 신청" in html
-    assert "has(option[value=stdio]:checked)" in (root / "static" / "console.css").read_text(
-        encoding="utf-8")
+    assert 'name="url"' in html and 'name="purpose"' in html and "mint add" in html
+    for hidden in ("server_id", "transport", "data_grade", "resources", "audit_access_days",
+                   "credential_notice", "revocation_record", "data_return_terms"):
+        assert f'name="{hidden}"' not in html
+
+
+def test_the_staff_request_fills_the_name_the_transport_the_grade_and_the_exit_terms():
+    from mint_litellm.control.services import staff_intakes
+
+    payload, contract = staff_intakes.validate(
+        {"url": "https://mcp.example.com/sse", "purpose": "문서 조회"})
+    assert payload["server_id"] == "example-com" and payload["transport"] == "sse"
+    assert payload["data_grade"] == "internal"
+    assert payload["readiness"]["audit_access_days"] == 90 and payload["data_return_terms"]
+    assert '"transport":"sse"' in contract
 
 
 def make_local(world, **intake_fields):

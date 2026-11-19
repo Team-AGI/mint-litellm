@@ -2834,6 +2834,49 @@ class Kit:
                     handle.close()
         return made
 
+    def auto_fetch(self, state: dict, desired: list, dropped: set[str]) -> list[str]:
+        """승인된 묶음 서버의 묶음을 보고기가 받아 검증하고 푼다(관리형). 실패 사유를 남긴다."""
+        url, key = self.config.get("decide_url"), self.config.get("key")
+        if not self.writable() or not url or not key:
+            return []
+        gateway = Gateway(url, key, self.config.get("ca_pem"))
+        errors = self.pack_errors()
+        made: list[str] = []
+        for name, contract in sorted(self.desired_items(desired, dropped).items())[:MAX_FETCH]:
+            pack = contract.get("pack") if isinstance(contract.get("pack"), dict) else {}
+            digest = pack.get("sha256")
+            if not isinstance(digest, str) or not SHA256_HEX.match(digest):
+                continue
+            if ready_cached(self.programs / PACKS / digest[:16], digest,
+                            self.programs / PACK_VERIFIED, write=True) == "ok":
+                errors.pop(name, None)
+                continue
+            blobs: dict = {}
+            try:
+                blobs = fetch_pack(gateway, name, digest)
+                install_blobs(digest, blobs, self.programs / PACKS)
+                errors.pop(name, None)
+                made.append(name)
+            except (PackError, OSError) as exc:
+                errors[name] = {"sha256": digest, "reason": str(exc)[:120]}
+            finally:
+                for handle in blobs.values():
+                    handle.close()
+        wanted = {i.get("name") for i in desired if isinstance(i, dict)}
+        try:
+            write_atomic(self.programs / PACK_ERRORS, json.dumps(
+                {n: v for n, v in errors.items() if n in wanted}, sort_keys=True).encode(), 0o644)
+        except OSError:
+            pass
+        return made
+
+    def pack_errors(self) -> dict:
+        try:
+            doc = json.loads((self.programs / PACK_ERRORS).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return doc if isinstance(doc, dict) else {}
+
     def put_configs(self, state: dict, mcp: dict) -> set[str]:
         """관리형 설정 파일에 서버 항목을 더하거나 바꾼다(이 묶음의 것만). 반영한 이름."""
         done: set[str] = set()
@@ -2891,6 +2934,10 @@ class Kit:
 PACKS = "packs"  # 설치 폴더 아래: 준비된 묶음(<해시 앞 16>/)
 PERMITS = "permits.json"  # 계약 파일 옆: 서버별 시작 허가(만료 시각)
 READY = ".ready.json"
+PACK_VERIFIED = "pack-verified.json"  # 검증 작업이 남긴 묶음 검증 기록(목록이 읽는다)
+PACK_ERRORS = "pack-errors.json"  # 자동 받기가 실패한 서버의 사유(화면이 읽는다)
+MAX_FETCH = 8  # 보고 한 번에 받는 묶음 수
+CALLED = "called"  # 서버별 첫 호출 성공 표지(실행기 훅이 남긴다)
 PACK_MAX_FILES = 10_000
 PACK_MAX_BYTES = 512 << 20
 PACK_MAX_WHEELS = 256
@@ -2900,6 +2947,8 @@ SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 S_NEED, S_WORK, S_READY = "받기 필요", "준비 중", "사용 가능"
 S_EXPIRED, S_NOPROG = "실행 허가 만료", "필요한 프로그램 없음"
 S_BAD, S_WAIT = "묶음 불일치", "반영 대기"
+S_FAILED, S_START = "받기 실패", "시작 대기"
+STEP_NAMES = ("시작 검증 통과", "도구 목록 받음", "첫 호출 성공")
 
 
 class PackError(Exception):
@@ -3038,6 +3087,41 @@ def ready_status(folder: Path, digest: str) -> str:
     return "ok" if good else "bad"
 
 
+def tree_signature(folder: Path) -> list:
+    """준비 폴더의 (경로, 크기, 수정 시각) 목록. 내용을 읽지 않는다."""
+    rows = []
+    for base, _dirs, names in os.walk(folder, followlinks=False):
+        for name in names:
+            path = Path(base) / name
+            info = path.lstat()
+            rows.append([path.relative_to(folder).as_posix(), info.st_size, info.st_mtime_ns])
+    return sorted(rows)
+
+
+def ready_cached(folder: Path, digest: str, record: Path, write: bool = False) -> str:
+    """목록용 ``ready_status``. 검증 작업이 남긴 기록(판본·시각·파일 크기와 수정 시각)이 지금과
+    같으면 파일을 다시 읽지 않는다. 설치·변경·실행 때의 전체 검증은 그대로이다."""
+    key = digest[:16]
+    try:
+        docs = json.loads(record.read_text(encoding="utf-8"))
+        docs = docs if isinstance(docs, dict) else {}
+    except (OSError, ValueError):
+        docs = {}
+    sig = tree_signature(folder) if folder.is_dir() else None
+    held = docs.get(key)
+    if sig is not None and isinstance(held, dict) and (
+            held.get("pack_sha256") == digest and held.get("sig") == sig):
+        return "ok"
+    status = ready_status(folder, digest)
+    if write and status == "ok" and sig is not None:
+        docs[key] = {"pack_sha256": digest, "sig": sig, "at": time.time()}
+        try:
+            write_atomic(record, json.dumps(docs, sort_keys=True).encode(), 0o644)
+        except OSError:
+            pass
+    return status
+
+
 def check_blobs(digest: str, blobs: dict) -> dict:
     """받은 manifest·wheel(열린 파일 객체)을 승인 해시와 대조한다. 맞으면 manifest."""
     handle = blobs.get("manifest.json")
@@ -3158,7 +3242,7 @@ def pack_state(
     digest = str(pack.get("sha256", ""))
     if not os.path.exists(str(contract.get("executable", ""))):
         return S_NOPROG
-    found = ready_status(programs / PACKS / digest[:16], digest)
+    found = ready_cached(programs / PACKS / digest[:16], digest, programs / PACK_VERIFIED)
     if found == "bad":
         return S_BAD
     if found == "missing":
@@ -3168,6 +3252,25 @@ def pack_state(
     if permit.get("pack_sha256") != digest or until is None or until <= now:
         return S_EXPIRED
     return S_READY
+
+
+def server_evidence(home: Path, name: str) -> list[bool]:
+    """서버 하나의 단계 근거(실행기 기록): 시작 검증 통과, 도구 목록 받음, 첫 호출 성공."""
+    base = home / STATE_REL
+
+    def listed(folder: str) -> bool:
+        try:
+            for path in (base / folder).glob("*.json"):
+                try:
+                    if json.loads(path.read_text(encoding="utf-8")).get("server") == name:
+                        return True
+                except (OSError, ValueError, AttributeError):
+                    continue
+        except OSError:
+            pass
+        return False
+
+    return [listed(LAUNCHED), listed(TOOLS_DIR), (base / CALLED / name).is_file()]
 
 
 def parse_time(text: object) -> float | None:
@@ -3484,120 +3587,160 @@ def ask(question: str, default: str, read=input) -> str:
 
 
 def confirm(read=input, key=None) -> bool:
-    """키 하나로 확정(``key``가 있을 때) 또는 줄 입력으로 y와 Enter."""
+    """키 하나로 확정: Enter나 y는 신청, 그 밖은 취소. 줄 입력이면 Enter가 신청이다."""
     if key is not None:
-        print("이대로 신청할까요? (y/n) ", end="", flush=True)
+        print("신청할까요? (Enter 신청, n 취소) ", end="", flush=True)
         answer = key()
         print(answer if len(answer) == 1 else "")
-        return answer == "y"
-    return ask("이대로 신청할까요? (y/n, Enter)", "n", read).lower() == "y"
+        return answer in ("y", "enter")
+    return ask("신청할까요? (Enter 신청, n 취소)", "y", read).lower() in ("y", "yes")
+
+
+LAUNCHERS = ("uvx", "uv", "pipx", "python", "python3", "py")
+REMOTE_PORTS = (443, 8443)  # 서버 기본값. 관리자가 넓혔다면 서버가 받아 준다
+
+
+def is_url(text: object) -> bool:
+    return isinstance(text, str) and re.match(r"^https?://", text, re.IGNORECASE) is not None
+
+
+def remote_problem(url: str) -> str | None:
+    """원격 주소 규칙을 어긴 사유(사람 문구). 맞으면 None."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return "주소 형식이 올바르지 않습니다"
+    if parts.scheme != "https":
+        return "주소는 https로 시작해야 합니다"
+    if not parts.hostname or len(url) > 2048 or any(c.isspace() or c == "\\" for c in url):
+        return "주소 형식이 올바르지 않습니다"
+    if parts.username is not None or parts.password is not None or "?" in url or "#" in url:
+        return "주소에 계정·쿼리·조각을 넣을 수 없습니다"
+    if (port or 443) not in REMOTE_PORTS:
+        return f"포트 {port}은(는) 쓸 수 없습니다. 허용 포트: " + ", ".join(map(str, REMOTE_PORTS))
+    return None
+
+
+def remote_name(url: str) -> str:
+    """주소에서 서버 이름: 맨 앞 mcp·www·api 칸을 빼고 점을 하이픈으로."""
+    labels = (urllib.parse.urlsplit(url).hostname or "server").split(".")
+    while len(labels) > 2 and labels[0] in ("mcp", "www", "api"):
+        labels.pop(0)
+    return re.sub(r"[^A-Za-z0-9._-]", "-", "-".join(labels))[:128] or "server"
+
+
+def inferred_hosts(argv: list[str], env_values: dict[str, str]) -> list[str]:
+    """인자·환경 변수 값에 주소가 있으면 그 호스트(host:port). 없으면 빈 목록."""
+    found: list[str] = []
+    for value in [*argv, *env_values.values()]:
+        if not is_url(value):
+            continue
+        try:
+            parts = urllib.parse.urlsplit(value)
+            host = f"{parts.hostname}:{parts.port or (443 if parts.scheme == 'https' else 80)}"
+        except ValueError:
+            continue
+        if parts.hostname and host not in found:
+            found.append(host)
+    return found
+
+
+def resolve_target(args, home: Path) -> tuple[str | None, str | None, list[str], list[str]]:
+    """(서버 이름, 원격 주소, 명령 토큰, 하네스 항목의 환경 변수 이름). 대상은 주소 아니면 명령."""
+    name, tokens = args.name, list(args.command or [])
+    if args.source:
+        harness, _, item = args.source.partition(":")
+        entry = harness_entry(home, harness, item)
+        if entry is None:
+            raise AddError("그 하네스 설정에서 항목을 찾지 못했습니다")
+        name = name or item
+        if is_url(entry.get("url")) and not entry.get("command"):
+            return name, entry["url"], [], []
+        env_names = sorted(k for k in (entry.get("env") or {}) if isinstance(k, str))
+        return name, None, entry_tokens(entry), env_names
+    if is_url(name) and not tokens:
+        return None, name, [], []
+    if len(tokens) == 1 and is_url(tokens[0]):
+        return name, tokens[0], [], []
+    if name and name.lower() in LAUNCHERS:  # 이름 없이 명령만 적은 경우
+        name, tokens = None, [args.name, *tokens]
+    return name, None, tokens, []
 
 
 def run_add(
     args, home: Path, gateway: Gateway, out=print, read=input, tty: bool = False, key=None
 ) -> int:
-    """``mint add``. 해석 -> 확인 -> 제출. 서버는 실행하지 않는다."""
+    """``mint add``. 대상(명령 또는 원격 주소)과 목적만 받는다. 서버는 실행하지 않는다."""
     try:
-        if args.source:
-            harness, _, item = args.source.partition(":")
-            entry = harness_entry(home, harness, item)
-            if entry is None:
-                raise AddError("그 하네스 설정에서 항목을 찾지 못했습니다")
-            tokens = entry_tokens(entry)
-            env_names = sorted(k for k in (entry.get("env") or {}) if isinstance(k, str))
-            server_id = args.name or item
-        else:
-            tokens, entry, env_names, server_id = args.command, {}, [], args.name
-        if not server_id or not SERVER_NAME.match(server_id):
+        server_id, url, tokens, env_names = resolve_target(args, home)
+        spec = None if url else parse_command(tokens, home)
+        server_id = server_id or (remote_name(url) if url else spec["name"])
+        if not SERVER_NAME.match(server_id):
             raise AddError("서버 이름은 영문·숫자·._-로 적으십시오")
-        spec = parse_command(tokens, home)
-    except AddError as exc:
-        out(str(exc))
-        return 2
-    try:
+        if url and (why := remote_problem(url)):
+            raise AddError(why)
         env_values, plain = parse_env(args.env or [])
     except AddError as exc:
         out(str(exc))
         return 2
-    env_names = sorted({*env_names, *plain})
-    candidates = path_candidates(spec["argv"])
-    access = {p: "ro" for p in candidates}
-    access.update({p: "ro" for p in args.ro or []})
-    access.update({p: "rw" for p in args.rw or []})
     interactive = tty and not args.yes
-    if interactive:
-        for path in candidates:
-            if path in (args.rw or []):
-                continue
-            pick = ask(f"파일 접근 {path[:50]} (r 읽기, w 쓰기, n 제외)", "r", read).lower()
-            if pick.startswith("n"):
-                access.pop(path, None)
-            elif pick.startswith("w"):
-                access[path] = "rw"
-    while interactive:  # 비밀이 아닌 환경 변수(예: 프로그램이 설치된 폴더)
-        typed = ask("환경 변수 이름=값 (끝내려면 Enter)", "", read)
-        if not typed:
-            break
-        if "=" not in typed:
-            out("이름=값 형식으로 적으십시오")
-            continue
-        try:
-            env_values.update(parse_env([typed])[0])
-        except AddError as exc:
-            out(str(exc))
-    for path in env_paths(env_values):
-        if path in access:
-            continue
-        if not interactive or ask(f"경로 {path[:40]}를 읽기로 더할까요? (y/n)", "y", read) != "n":
-            access[path] = "ro"
-            out(f"파일 접근에 읽기로 더했습니다: {path[:50]}")
-    hosts = list(args.host or [])
-    network = args.network or ("hosts" if hosts else "none")
-    if interactive and not args.network and not hosts:
-        if ask("네트워크 (none 없음, hosts 호스트 지정)", "none", read).lower().startswith("h"):
-            network = "hosts"
-    if network == "hosts" and not hosts and interactive:
-        typed = ask("허용 호스트(쉼표로 구분)", "", read).replace(" ", "")
-        hosts = [h for h in typed.split(",") if h]
-    if network == "hosts" and not hosts:
-        out("hosts에는 허용 호스트(--host)가 필요합니다")
-        return 2
     purpose = args.purpose or (ask("목적", "", read) if interactive else "")
     if not purpose:
         out("목적을 적으십시오" if interactive else "목적(--purpose)을 적으십시오")
         return 2
-    typed = args.grade or (
-        ask(f"자료 등급 ({GRADE_CHOICES})", GRADE_TEXT["internal"], read) if interactive
-        else "internal")
-    grade = parse_grade(typed)
-    if grade is None:
-        out(f"자료 등급은 {GRADE_CHOICES} 중 하나입니다")
-        return 2
-    package = spec["name"] + (f"[{','.join(spec['extras'])}]" if spec["extras"] else "")
-    rows = [
-        ("이름", server_id), ("패키지", f"{package}=={spec['version']}"),
-        ("명령", " ".join([spec["command"], *spec["argv"]])[:70]),
-        ("파일 접근", ", ".join(
-            f"{p} ({'쓰기' if m == 'rw' else '읽기'})" for p, m in access.items()) or "없음"),
-        ("네트워크", "없음" if network == "none" else ", ".join(hosts)),
-        ("환경 변수", ", ".join([*env_names, *(f"{k}={v}" for k, v in env_values.items())])[:70]
-         or "없음"), ("목적", purpose[:70]),
-        ("자료 등급", GRADE_TEXT[grade]),
-    ]  # fmt: skip
+    secrets: list[str] = []
+    if url:
+        rows = [("이름", server_id), ("주소", url), ("목적", purpose[:70])]
+        body = {"request_id": args.request_id or str(uuid.uuid4()), "server_id": server_id,
+                "url": url, "transport": "sse" if url.rstrip("/").endswith("/sse") else "http",
+                "purpose": purpose[:256]}  # fmt: skip
+    else:
+        env_names = sorted({*env_names, *plain})
+        secrets = [n for n in env_names if SECRET_NAME.search(n)]
+        candidates = path_candidates(spec["argv"])
+        access = {p: "ro" for p in candidates}
+        access.update({p: "ro" for p in args.ro or []})
+        access.update({p: "rw" for p in args.rw or []})
+        for path in env_paths(env_values):  # 경로처럼 보이는 환경 변수 값은 읽기로 자동
+            if path not in access:
+                access[path] = "ro"
+                out(f"파일 접근에 읽기로 더했습니다: {path[:50]}")
+        hosts = list(args.host or []) or (
+            [] if args.network == "none" else inferred_hosts(spec["argv"], env_values))
+        network = args.network or ("hosts" if hosts else "none")
+        if network == "hosts" and not hosts:
+            out("hosts에는 허용 호스트(--host)가 필요합니다")
+            return 2
+        grade = parse_grade(args.grade or "internal")  # 등급은 내부 값이다(--grade로만 바꾼다)
+        if grade is None:
+            out(f"자료 등급은 {GRADE_CHOICES} 중 하나입니다")
+            return 2
+        package = spec["name"] + (f"[{','.join(spec['extras'])}]" if spec["extras"] else "")
+        rows = [
+            ("이름", server_id), ("패키지", f"{package}=={spec['version']}"),
+            ("명령", " ".join([spec["command"], *spec["argv"]])[:70]),
+            ("파일 접근", ", ".join(
+                f"{p} ({'쓰기' if m == 'rw' else '읽기'})" for p, m in access.items()) or "없음"),
+            ("네트워크", "없음" if network == "none" else ", ".join(hosts)),
+            ("환경 변수", ", ".join([*env_names, *(f"{k}={v}" for k, v in env_values.items())])[:70]
+             or "없음"), ("목적", purpose[:70]),
+        ]  # fmt: skip
+        if grade != "internal":
+            rows.append(("자료 등급", GRADE_TEXT[grade]))
+        body = build_intake(
+            args.request_id or str(uuid.uuid4()), server_id, spec, list(access.items()), network,
+            hosts, env_names, purpose, grade,
+        )
+        if env_values:
+            body["env"] = env_values  # 서버 본문의 최상위 env(명세 안이 아니다)
     for label, value in rows:
         out(f"{pad(label, 10)}{value}")
-    for name in env_names:
-        if SECRET_NAME.search(name):
-            out(f"{name}은(는) 비밀로 보입니다. 관리자가 비밀 참조로 등록합니다")
+    for name in secrets:
+        out(f"{name}은(는) 비밀로 보입니다. 관리자가 비밀 참조로 등록합니다")
     if not args.yes and not (tty and confirm(read, key)):
         out("신청하지 않았습니다. 확인 없이 하려면 --yes를 쓰십시오" if not tty else "취소했습니다")
         return 1
-    body = build_intake(
-        args.request_id or str(uuid.uuid4()), server_id, spec, list(access.items()), network,
-        hosts, env_names, purpose, grade,
-    )
-    if env_values:
-        body["env"] = env_values  # 서버 본문의 최상위 env(명세 안이 아니다)
     status, doc = gateway.json("POST", INTAKES_PATH, body)
     out(submit_text(status, doc))
     if status == 201:
@@ -3673,7 +3816,9 @@ def intake_label(status: object, decision: object) -> str:
 
 
 NEXT_BY_STATE = {
-    S_NEED: "s 키로 묶음을 받으십시오",
+    S_NEED: "곧 자동으로 받습니다. 급하면 s 키",
+    S_FAILED: "s 키로 다시 받으십시오",
+    S_START: "하네스에서 서버를 시작하면 확인됩니다",
     S_WORK: "관리자 단계가 마칠 때까지 기다리십시오",
     S_EXPIRED: "r 키로 다시 보고하십시오",
     S_NOPROG: "관리자에게 런타임 설치를 요청하십시오",
@@ -3716,8 +3861,13 @@ def tab2_lines(model: dict, ui: dict) -> list[str]:
         out += ["", f"{row['name']}  {row['state']}"]
         if row.get("pack_sha256"):
             out.append(f"  묶음 {row['pack_sha256'][:16]}")
+        if row.get("reason") and row["state"] == S_FAILED:
+            out.append("  사유 " + clip(str(row["reason"]), 70))
         if row["state"] in NEXT_BY_STATE:
             out.append("  " + NEXT_BY_STATE[row["state"]])
+        if row.get("kind") == "묶음" and row.get("steps"):
+            steps = zip(STEP_NAMES, row["steps"], strict=False)
+            out += [f"  {n} {'예' if ok else '-'}" for n, ok in steps]
     return out
 
 
@@ -3850,9 +4000,18 @@ def build_model(kit, state: dict, gateway: Gateway | None) -> dict:
         else:
             row_state = pack_state(name, contract, kit.programs, staged, permits, now)
             kind = "묶음" if contract.get("pack") else "로컬"
+            failed = kit.pack_errors().get(name)
+            digest = (contract.get("pack") or {}).get("sha256")
+            if row_state in (S_NEED, S_WORK) and isinstance(failed, dict) and (
+                    failed.get("sha256") == digest):
+                row_state = S_FAILED
+            steps = server_evidence(kit.home, name) if kind == "묶음" else [True, True, False]
+            if row_state == S_READY and kind == "묶음" and not steps[0]:
+                row_state = S_START  # 준비만으로는 사용 가능이 아니다
         pack = contract.get("pack") if contract else None
         servers.append({
-            "name": name, "kind": kind, "state": row_state,
+            "name": name, "kind": kind, "state": row_state, "steps": steps,
+            "reason": (kit.pack_errors().get(name) or {}).get("reason", "") if contract else "",
             "pack_sha256": (pack or {}).get("sha256") or info.get("pack_sha256"),
             "permit_until": (permits.get(name) or {}).get("permit_until")
             or info.get("permit_until"),
@@ -3860,9 +4019,7 @@ def build_model(kit, state: dict, gateway: Gateway | None) -> dict:
     mode = {"managed": "관리형", "user": "사용자 수준(관리되지 않음)"}.get(
         state.get("mode"), "설치 안 됨")
     intakes = [i for i in (me or {}).get("intakes", []) if isinstance(i, dict)]
-    inspections = {
-        i["intake_id"]: i for i in (load_inspections(kit.home, now) if kit.home.exists() else [])
-    }
+    inspections: dict = {}  # 승인이 한 번이라 단말 검사 안내는 기본 흐름에 없다
     applied = {  # 진행 중이거나 승인된 신청은 다시 신청할 항목이 아니다
         i.get("server_id") for i in intakes
         if i.get("decision") not in ("rejected", "withdrawn") and i.get("stage") not in (
@@ -4484,14 +4641,14 @@ def check_lines(result: dict, problems: list[str]) -> list[str]:
 
 
 def interactive_add(kit, gateway, home: Path, source: str | None, read=input, key=None) -> str:
-    """화면에서 고른 신청. 결과의 마지막 줄을 돌려준다."""
+    """화면에서 고른 신청: 대상 하나와 목적만 묻는다. 결과의 마지막 줄을 돌려준다."""
     lines: list[str] = []
     name, tokens = None, []
     if source is None:
-        name = ask("서버 이름", "", read)
         import shlex
 
-        tokens = shlex.split(ask("명령(예: uvx 패키지==판본)", "", read))
+        typed = ask("대상(명령 또는 https 주소)", "", read)
+        name, tokens = (typed, []) if is_url(typed) else (None, shlex.split(typed))
     args = argparse.Namespace(
         source=source, name=name, command=tokens, purpose=None, grade=None, network=None,
         host=[], env=[], ro=[], rw=[], yes=False, request_id=None,
@@ -4682,6 +4839,7 @@ def report_installed(
     if isinstance(desired, list):
         changed = bool(kit.refresh(state, desired, names)) or changed
         changed = kit.apply_permits(state, desired, set(names)) or changed
+        changed = bool(kit.auto_fetch(state, desired, set(names))) or changed
         changed = bool(kit.promote_packs()) or changed
     if changed:
         kit.report(state, "installed")  # 지우거나 더한 것을 곧바로 알린다.

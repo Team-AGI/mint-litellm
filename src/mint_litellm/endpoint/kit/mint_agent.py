@@ -78,6 +78,7 @@ HOOK_DEADLINE = 2.5
 # 판정 참조는 호출 뒤 훅이 읽을 때까지만 둔다. 이 시간이 지난 파일은 다음 호출 때 지운다.
 PENDING_MAX_AGE = 86400
 SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+SERVER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 # 승인된 계약이 값을 정하지 않은 한, 시작 직전에 물려받지 않는 환경 변수.
 ENV_DENIED = re.compile(r"^(LD_|DYLD_|NODE_OPTIONS$|NODE_PATH$|PYTHON|BASH_ENV$|ENV$)")
 REFUSED = 126
@@ -613,6 +614,8 @@ def decide(
         flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
         with os.fdopen(os.open(os.path.join(pending, tool_use_id), flags, 0o600), "w") as handle:
             handle.write(str(answer["reference"]))
+            if name.startswith("mcp__") and SERVER_ID.match(payload["server"]):
+                handle.write("\n" + payload["server"])  # 첫 호출 성공 표지용
 
 
 def adapt_event(command: str, event: Mapping[str, Any]) -> dict[str, Any]:
@@ -653,7 +656,7 @@ def report_result(
     path = os.path.join(state_dir, "pending", tool_use_id)
     try:
         with open(path, encoding="utf-8") as handle:
-            reference = handle.read(256).strip()
+            reference, _, called_server = handle.read(512).strip().partition("\n")
     except OSError:
         return False
     payload: dict[str, Any] = {"reference": reference}
@@ -667,6 +670,14 @@ def report_result(
         _call(post, url, RESULT_PATH, key, payload, http_timeout)
     except Refuse:
         return False
+    if not failed and SERVER_ID.match(called_server.strip()):
+        try:
+            called = os.path.join(state_dir, "called")
+            os.makedirs(called, mode=0o700, exist_ok=True)
+            with open(os.path.join(called, called_server.strip()), "w", encoding="utf-8"):
+                pass
+        except OSError:
+            pass
     try:
         os.unlink(path)
     except OSError:

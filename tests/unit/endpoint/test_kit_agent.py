@@ -132,7 +132,7 @@ def test_pack_hook_preserves_the_approved_contract_identity(world, pin_runtime):
 def test_an_allowed_call_leaves_a_reference_for_the_result_hook(world):
     decide(world, Wire())
     path = os.path.join(world.state, "pending", "toolu_1")
-    assert open(path).read() == "ref-1"
+    assert open(path).read().splitlines()[0] == "ref-1"
     if os.name == "posix":
         assert os.stat(path).st_mode & 0o777 == 0o600
 
