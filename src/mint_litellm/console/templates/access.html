@@ -18,7 +18,7 @@
 {% for a in rows %}<tr{% if focus == a.id | string %} class="selected"{% endif %}>
 <td><a href="/servers/{{ a.server_id | urlencode }}">{{ a.server_id }}</a></td>
 <td>{{ L.pick(L.SCOPE, a.scope_type) }} {{ m.ident(a.scope_id) }}{% if a.target_missing %} {{ m.status_badge(L.Status("대상 없음", "error")) }}{% endif %}</td><td>{{ a.tools | join }}</td>
-<td class="nowrap">{{ a.valid_from | when }} ~ {{ a.valid_until | when }}</td><td>{{ a.granted_by | who }}</td>
+<td class="nowrap">{{ a.valid_from | when }} ~ {{ a.valid_until | when if a.valid_until else "기한 없음" }}</td><td>{{ a.granted_by | who }}</td>
 <td class="nowrap">{% if a.recert %}{{ a.recert_due | when }} {{ m.badge(L.RECERT, a.recert) }}{% else %}—{% endif %}</td>
 <td><span class="actions">
 {% if a.recert and actor.role == 'admin' %}{% call m.confirm_dialog('recert-' ~ a.id, '재확인', '승인 재확인', '이 승인이 여전히 필요함을 기록하고 재확인 주기를 새로 시작합니다. 유효 기간은 늘어나지 않습니다.', '/approvals/' ~ a.id ~ '/recertify', actor, '재확인', danger=false, trigger_class='primary' if a.recert in ('due', 'overdue', 'held') else '') %}<input type="hidden" name="state_version" value="{{ a.state_version }}">{% endcall %}{% endif %}
@@ -50,7 +50,7 @@
 <td>{% if actor.role == 'admin' %}<input type="checkbox" name="ids" value="{{ a.id }}:{{ a.state_version }}" aria-label="선택">{% endif %}</td>
 <td><a href="/servers/{{ a.server_id | urlencode }}">{{ a.server_id }}</a></td>
 <td>{{ L.pick(L.SCOPE, a.scope_type) }} {{ m.ident(a.scope_id) }}</td><td>{{ a.tools | join }}</td>
-<td>{{ L.pick(L.APPROVAL_CLASS, a.class) }}</td><td class="nowrap">{{ a.valid_from | when }} ~ {{ a.valid_until | when }}</td>
+<td>{{ L.pick(L.APPROVAL_CLASS, a.class) }}</td><td class="nowrap">{{ a.valid_from | when }} ~ {{ a.valid_until | when if a.valid_until else "기한 없음" }}</td>
 <td>{{ a.granted_by | who }}</td>
 </tr>{% endfor %}
 </tbody></table>

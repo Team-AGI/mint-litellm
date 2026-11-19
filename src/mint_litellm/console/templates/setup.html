@@ -3,12 +3,11 @@
 {% block body %}
 <h1>시작하기</h1>
 <ol>
-<li>LiteLLM에서 서버 등록 {% if litellm_ui_url %}<a class="button" href="{{ litellm_ui_url }}">LiteLLM 관리 화면</a>{% else %}<span class="muted">(.env의 MINT_LITELLM_UI_URL을 정하면 이곳에 링크가 나타납니다)</span>{% endif %}<br><span class="muted">관리 화면의 MCP Servers 메뉴에서 서버를 추가합니다.</span></li>
-<li>허용 목록에 제공자 추가 <a class="button" href="/access?tab=allowlists&amp;new=1">허용 추가</a><br><span class="muted">서버 주소의 제공자가 허용 목록에 없으면 신청이 자동으로 거절됩니다. 종류: {% for k, v in L.ALLOWLIST_KIND.items() %}{{ v }}({{ L.ALLOWLIST_KIND_HELP[k] }}){% if not loop.last %}, {% endif %}{% endfor %}.</span></li>
-<li>MINT 신청 <a class="button" href="/intakes/new">신청 등록</a></li>
-<li>검사·증빙 <a class="button" href="/intakes">신청 확인</a><br><span class="muted">승인 전에 시험 호출 결과, 제공자 자료 처리 조건, 서버 계정 최소 권한, 제공 지시문 검토, 서버 간 전달 승인(해당 없음 가능), 명령·질의 서버의 입력 전달 점검 결과를 붙입니다. 명령줄은 ./mint.sh cli evidence attach &lt;종류&gt; &lt;신청 식별자&gt; --summary &lt;내용&gt;</span></li>
-<li>도입 승인 <a class="button" href="/intakes">도입 검토</a><br><span class="muted">승인 뒤 LiteLLM에서 해당 서버를 사용자 권한(object_permission.mcp_servers)에 추가해야 호출됩니다.</span></li>
-<li>이용 승인 <a class="button" href="/approvals?tab=servers">이용 승인</a></li>
+<li>root / rootrootroot로 로그인 → 비밀번호 바꾸기 {% if litellm_ui_url %}<a class="button" href="{{ litellm_ui_url }}">관리 화면</a>{% endif %}</li>
+<li>허용 목록에 제공자 추가 <a class="button" href="/access?tab=allowlists&amp;new=1">허용 추가</a></li>
+<li>서버 신청 <a class="button" href="/intakes/new">신청 등록</a></li>
+<li>검사 결과 확인 <a class="button" href="/intakes">신청 확인</a></li>
+<li>승인 <a class="button" href="/intakes">신청 결정</a></li>
 </ol>
 <div class="cards">
   {{ m.kpi('남은 필수 항목', pending, none, none, 'wait' if pending else none) }}

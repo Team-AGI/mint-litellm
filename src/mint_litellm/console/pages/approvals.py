@@ -12,7 +12,7 @@ from mint_litellm.console.pages.common import act, lines, page_number, see_other
 from mint_litellm.console.templating import render
 from mint_litellm.control import dormant, key_block
 from mint_litellm.control.approvals import DEFAULT_CALL_WINDOW
-from mint_litellm.control.db.connection import fetchall
+from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import allowlists as allowlist_service
 from mint_litellm.control.services import approval_metrics, dashboard_reads, exception_holds, reads
@@ -79,6 +79,17 @@ def _rule_values(request: Request) -> dict[str, str]:
             for k, old in RULE_FIELDS.items()}
 
 
+def _slow_total(actor: Actor, sla: int) -> int:
+    """처리 기한을 넘긴 대기 호출 전체 수(만료 제외). 목록 쪽수와 무관하다."""
+    row = fetchone(
+        actor.conn,
+        "SELECT count(*) AS n FROM mint.call_approvals WHERE instance_id = %s"
+        " AND status = 'pending' AND expires_at > now() AND requested_at <= now() - %s",
+        (actor.instance, timedelta(minutes=sla)),
+    )
+    return row["n"] if row else 0
+
+
 def approvals_page(request: Request, actor: Actor, error=None, status=200, tab=None):
     """승인 센터: 호출·서버 도입·갱신·규칙 탭. 호출 탭이 기본이다."""
     query = request.query_params
@@ -95,19 +106,20 @@ def approvals_page(request: Request, actor: Actor, error=None, status=200, tab=N
     rules = reads.call_approval_rules(actor.conn, actor.instance)
     blocks = key_block.listing(actor.conn, actor.instance) if tab == "blocks" else []
     holds = exception_holds.pending(actor.conn, actor.instance)
+    wait = dashboard_reads.pending_wait(actor.conn, actor.instance)
     ctx = {
         "holds": holds, "blocks": blocks, "block_view": _block_view,
         "tab": tab, "focus": focus, "error": error, "page": page_number(request),
         "rows": calls, "pending": pending, "queue": queue, "renewal": renewal, "rules": rules,
-        "slow": sum(1 for c in pending if (c["age_seconds"] or 0) >= sla * 60),
+        "pending_total": wait["count"],
+        "slow": _slow_total(actor, sla),
         "sla": sla, "sla_options": SLA_MINUTES,
-        "wait": dashboard_reads.pending_wait(actor.conn, actor.instance),
+        "wait": wait,
         "done_today": dashboard_reads.decided_today(
             actor.conn, actor.instance, actor.config.time_zone
         ),
         "tabs": [
-            ("calls", "호출", len(pending)), ("servers", "서버 도입", len(queue)),
-            ("second", "두 번째 승인", len(holds)),
+            ("calls", "호출", wait["count"]), ("servers", "서버 도입", len(queue)),
             ("renewals", "갱신", len(renewal["unchanged"]) + len(renewal["changed"])),
             ("rules", "규칙", sum(1 for r in rules if r["status"] == "active")),
             ("blocks", "차단 제안", key_block.count_waiting(actor.conn, actor.instance)),
@@ -118,6 +130,8 @@ def approvals_page(request: Request, actor: Actor, error=None, status=200, tab=N
         "selected": None, "history": [], "stats": None,
         "range_options": [("24h", "24시간"), ("7d", "7일"), ("30d", "30일")],
     }
+    if holds or tab == "second":  # 두 번째 승인은 대기가 있을 때만 탭에 나온다
+        ctx["tabs"].insert(2, ("second", "두 번째 승인", len(holds)))
     if tab == "calls":
         chosen = query.get("range", "")
         ctx["stats"] = approval_metrics.collect(
@@ -184,7 +198,14 @@ def approval_form_page(
         raise AdminError(AdminCode.NOT_FOUND, "이용 관계가 없습니다.")
     server_display(actor, [relation])
     high = reads.high_risk_tools(actor.conn, actor.instance, relation["server_id"])
+    server = reads.server(actor.conn, actor.instance, relation["server_id"]) or {}
+    users = sorted({
+        a["scope_id"] for a in server.get("approvals", [])
+        if a["status"] == "active" and a["scope_type"] == "user"
+    })
     form = {
+        "tools": [t["tool"] for t in server.get("tools", [])],
+        "users": users,
         "relation": relation,
         "days": days or api.approval_days("standard", [], high),
         "strict_days": api.STRICT_DAYS,

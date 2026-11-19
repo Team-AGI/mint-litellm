@@ -1,8 +1,8 @@
 """MCP 서버·신청·계약 화면."""
 
-import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Form, Request
 
@@ -12,7 +12,9 @@ from mint_litellm.console.pages.common import act, server_display
 from mint_litellm.console.templating import render
 from mint_litellm.control.db.connection import fetchall
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
+from mint_litellm.control.services import call_review as review_service
 from mint_litellm.control.services import contracts as contract_service
+from mint_litellm.control.services import denials as denial_service
 from mint_litellm.control.services import evidence as evidence_service
 from mint_litellm.control.services import exception_holds, reads
 from mint_litellm.control.services import intake_inspections as inspection_service
@@ -155,6 +157,7 @@ def server_page(
         "critical": sum(1 for v in row["vulns"] if v["severity"] == "critical" or v["exploited"]),
         "active_approvals": sum(1 for a in row["approvals"] if a["status"] == "active"),
         "provisional": row["contract_status"] != "managed",
+        "ctl": tool_controls(actor, server_id),
         "c": contract_context(request, actor, server_id) if tab == "contract" else None,
         "pack": pack_view.view(
             pack_view.read(actor.conn, actor.instance, server_id, approved=True), "decided"
@@ -163,6 +166,77 @@ def server_page(
         else None,
     }
     return render(request, "server_detail.html", ctx, actor=actor, status=status)
+
+
+def tool_controls(actor: Actor, server_id: str) -> dict:
+    """도구별 차단(거부)과 호출별 검토 상태. 관리자에게만 조작 버튼이 보인다."""
+    blocked: dict[str, dict] = {}
+    for d in reads.denials(actor.conn, actor.instance, active_only=True):
+        if d["scope_type"] == "server" and d["scope_id"] == server_id:
+            for tool in d["tools"] or []:
+                blocked.setdefault(tool, d)
+    whole = next(
+        (
+            d for d in reads.denials(actor.conn, actor.instance, active_only=True)
+            if d["scope_type"] == "server" and d["scope_id"] == server_id and not d["tools"]
+        ),
+        None,
+    )
+    return {
+        "blocked": blocked,
+        "whole": whole,
+        "reviewed": review_service.marked(actor.conn, actor.instance, server_id),
+        "can": actor.role == "admin",
+        "server_id": server_id,
+    }
+
+
+def safe_next(value: str, fallback: str) -> str:
+    return value if value.startswith("/") and not value.startswith("//") else fallback
+
+
+@router.post("/servers/{server_id}/tools/{operation}")
+def tool_control(
+    server_id: str,
+    operation: str,
+    request: Request,
+    tool: str = Form(""),
+    user: str = Form(""),
+    reason: str = Form(""),
+    next: str = Form(""),
+    actor: Actor = Depends(page_actor),
+):
+    back = safe_next(next, f"/servers/{server_id}?tab=contract")
+
+    def action():
+        if actor.role != "admin":
+            raise AdminError(AdminCode.FORBIDDEN, "관리자만 바꿀 수 있습니다.")
+        if operation == "block":
+            denial_service.deny(
+                actor.ctx, scope_type="user" if user else "server",
+                scope_id=user or server_id, server_id=server_id,
+                tools=[tool] if tool else None, reason=reason.strip() or "관리자 차단",
+                org_id=None,
+            )
+        elif operation == "unblock":
+            for d in reads.denials(actor.conn, actor.instance, active_only=True):
+                if (
+                    d["scope_type"] == "server" and d["scope_id"] == server_id
+                    and (d["tools"] == [tool] if tool else not d["tools"])
+                ):
+                    denial_service.lift(
+                        actor.ctx, str(d["id"]), expected_version=d["state_version"]
+                    )
+        elif operation in ("review", "unreview"):
+            review_service.set_tool(actor.ctx, server_id, tool, operation == "review")
+        else:
+            raise ValueError(operation)
+
+    ok = {"block": "denied", "unblock": "lifted"}.get(operation, "review_changed")
+    return act(
+        actor, action, ok, back,
+        lambda **kw: server_page(request, actor, server_id, tab="contract", **kw),
+    )
 
 
 @router.get("/servers/{server_id}")
@@ -413,12 +487,10 @@ def intake_page(
     status_now = intake["status"]
     if actor.role == "viewer":
         next_step = None
-    elif stale and status_now in ("passed", "indeterminate"):
-        next_step = "재검사"
     elif status_now == "received" and not intake["requested_by"] and actor.role == "admin":
         next_step = "신청자 지정"
     elif status_now in ("passed", "indeterminate"):
-        next_step = "증빙 첨부" if lacking else "결정"
+        next_step = "결정"
     else:
         next_step = None
     hold = next(iter(exception_holds.pending(actor.conn, actor.instance, intake_id)), None)
@@ -446,6 +518,7 @@ def intake_page(
                 for c in checks) else "검사 컨테이너",
         },
         "server_name": server_name,
+        "ctl": tool_controls(actor, intake["server_id"]),
         "server_url": candidate["url"] if candidate else entry.get("url"),
         "checks": checks,
         "tools": tools,
@@ -486,20 +559,16 @@ def no_address(error) -> bool:
     return any(part in str(error or "") for part in NO_ADDRESS)
 
 
-NEW_STEPS = ("대상", "데이터", "종료 준비")
-NEW_DEFAULTS = {"data_grade": "internal", "audit_access_days": "90"}
+NEW_DEFAULTS = {
+    "data_grade": "internal",
+    "audit_access_days": 90,
+    "credential_notice": "담당자에게 변경 안내",
+    "revocation_record": "관리 기록에 철회 사유 기록",
+    "data_return_terms": "종료 시 제공자가 보관한 자료를 삭제",
+}
 
 
-def intake_new_page(
-    request: Request,
-    actor: Actor,
-    form: dict,
-    error=None,
-    status=200,
-    step: int = 1,
-    resources: list[str] | None = None,
-):
-    rows = list(resources or [])
+def intake_new_page(request: Request, actor: Actor, form: dict, error=None, status=200):
     try:
         servers = actor.litellm().list_servers()
     except ControlError:
@@ -518,12 +587,8 @@ def intake_new_page(
     ctx = {
         "available_servers": servers,
         "available_ids": [r.get("server_id") or r.get("id") for r in servers],
-        "f": {**NEW_DEFAULTS, **{k: v for k, v in form.items() if v not in (None, "")}},
-        "grades": intake_service.DATA_GRADES,
+        "f": {k: v for k, v in form.items() if v not in (None, "")},
         "error": error,
-        "step": step,
-        "steps": NEW_STEPS,
-        "rows": rows or [""],
     }
     return render(request, "intake_new.html", ctx, actor=actor, status=status)
 
@@ -535,58 +600,15 @@ def intake_new(request: Request, actor: Actor = Depends(page_actor)):
     return intake_new_page(request, actor, {key: query.get(key, "")[:256] for key in INTAKE_FIELDS})
 
 
-def address_missing(actor: Actor, server_id: str, server_url: str) -> bool:
-    """등록 정보에도 입력에도 서버 주소가 없어 신청을 끝낼 수 없는가."""
-    if server_url.strip() or not server_id.strip():
-        return False
-    try:
-        entry = actor.litellm().get_server(server_id.strip())
-    except ControlError:
-        return False
-    if not entry or entry.get("url") or entry.get("spec_path"):
-        return False
-    return entry.get("transport") not in ("stdio", "openapi")
-
-
-@router.post("/intakes/new")
-def intake_new_step(
-    request: Request,
-    step: int = Form(1),
-    go: str = Form(""),
-    resource: list[str] = Form([]),
-    server_id: str = Form(""),
-    server_url: str = Form(""),
-    provider: str = Form(""),
-    owner_user_id: str = Form(""),
-    purpose: str = Form(""),
-    data_grade: str = Form(""),
-    audit_access_days: str = Form(""),
-    credential_notice: str = Form(""),
-    revocation_record: str = Form(""),
-    data_return_terms: str = Form(""),
-    actor: Actor = Depends(page_actor),
-):
-    """신청 등록의 단계 이동·자원 행 추가. 값은 숨은 입력으로 이어 받고 아무것도 저장하지 않는다."""
-    form = {
-        "server_id": server_id,
-        "server_url": server_url,
-        "provider": provider,
-        "owner_user_id": owner_user_id,
-        "purpose": purpose,
-        "data_grade": data_grade,
-        "audit_access_days": audit_access_days,
-        "credential_notice": credential_notice,
-        "revocation_record": revocation_record,
-        "data_return_terms": data_return_terms,
-    }
-    if step == 1 and go == "next" and address_missing(actor, server_id, server_url):
-        return intake_new_page(
-            request, actor, form, status=400, step=1, resources=resource,
-            error="이 서버는 등록된 주소가 없습니다. 서버 주소를 입력하십시오.",
-        )
-    step = min(max(step + {"next": 1, "prev": -1}.get(go, 0), 1), len(NEW_STEPS))
-    rows = resource + [""] if go == "add" else resource
-    return intake_new_page(request, actor, form, step=step, resources=rows)
+def provider_of(actor: Actor, server_id: str, server_url: str) -> str:
+    """제공자는 서버 주소의 호스트다. 주소가 없으면 등록 정보의 주소, 그것도 없으면 서버 이름."""
+    url = server_url.strip()
+    if not url:
+        try:
+            url = (actor.litellm().get_server(server_id) or {}).get("url") or ""
+        except ControlError:
+            url = ""
+    return urlsplit(url).hostname or server_id
 
 
 @router.post("/intakes")
@@ -594,57 +616,33 @@ def create_intake(
     request: Request,
     server_id: str = Form(...),
     server_url: str = Form(""),
-    provider: str = Form(...),
-    owner_user_id: str = Form(...),
     purpose: str = Form(...),
-    data_grade: str = Form(...),
-    allowed_resources: str = Form("[]"),
-    resource: list[str] = Form([]),
-    credential_notice: str = Form(...),
-    revocation_record: str = Form(...),
-    audit_access_days: int = Form(...),
-    data_return_terms: str = Form(...),
     actor: Actor = Depends(page_actor),
 ):
-    form = {
-        "server_id": server_id,
-        "server_url": server_url,
-        "provider": provider,
-        "owner_user_id": owner_user_id,
-        "purpose": purpose,
-        "data_grade": data_grade,
-        "credential_notice": credential_notice,
-        "revocation_record": revocation_record,
-        "audit_access_days": audit_access_days,
-        "data_return_terms": data_return_terms,
-    }
+    form = {"server_id": server_id, "server_url": server_url, "purpose": purpose}
 
     def action():
-        resources = (
-            [r.strip() for r in resource if r.strip()]
-            if resource
-            else json.loads(allowed_resources or "[]")
-        )
         if server_url.strip():
             entry = actor.litellm().get_server(server_id.strip()) or {}
             if entry.get("url") and entry["url"] != server_url.strip():
                 raise ControlError("입력한 서버 주소가 등록된 주소와 다릅니다. 주소를 확인하세요.")
+        operator = actor.ctx.operator
         intake_service.create(
             actor.ctx,
             actor.litellm(),
             server_id.strip(),
             url=server_url.strip() or None,
             purpose=purpose,
-            data_grade=data_grade,
-            allowed_resources=resources,
-            provider=provider,
-            owner_user_id=owner_user_id,
+            data_grade=NEW_DEFAULTS["data_grade"],
+            allowed_resources=[],
+            provider=provider_of(actor, server_id.strip(), server_url),
+            owner_user_id=operator.user_id or operator.name,
             readiness={
-                "credential_notice": credential_notice.strip(),
-                "revocation_record": revocation_record.strip(),
-                "audit_access_days": audit_access_days,
+                "credential_notice": NEW_DEFAULTS["credential_notice"],
+                "revocation_record": NEW_DEFAULTS["revocation_record"],
+                "audit_access_days": NEW_DEFAULTS["audit_access_days"],
             },
-            data_return_terms=data_return_terms,
+            data_return_terms=NEW_DEFAULTS["data_return_terms"],
         )
 
     return act(
@@ -656,8 +654,6 @@ def create_intake(
             request,
             actor,
             form,
-            step=1 if no_address(kw.get("error")) else len(NEW_STEPS),
-            resources=resource,
             **{
                 **kw,
                 "error": (
@@ -792,7 +788,7 @@ def decide_intake(
             narrow_file_access=narrow_file_access if narrow_files else None,
             state_version=state_version,
             decision=decision,
-            reason=reason or None,
+            reason=reason or ("관리자 거부" if decision == "reject" else None),
             valid_days=valid_days,
             scope_type=scope_type,
             scope_id=scope_id or None,
