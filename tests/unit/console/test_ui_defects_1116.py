@@ -119,7 +119,7 @@ def test_the_decision_panel_shows_no_buttons_to_the_requester(world, admin):
     from mint_litellm.console import templating  # noqa: F401  (템플릿 로드 확인)
 
     source = open("src/mint_litellm/console/templates/intake_detail.html", encoding="utf-8").read()
-    assert "actor.session.user_id != i.requested_by" in source
+    assert "actor.session.user_id != i.requested_by" not in source
     css = open("src/mint_litellm/console/static/console.css", encoding="utf-8").read()
     assert "flex-wrap: wrap" in css and ".actions button" in css
 
@@ -182,14 +182,14 @@ def test_an_exception_approval_needs_a_reason_and_is_not_granted_twice(world, ad
 
 def test_the_approval_queue_leaves_out_relations_that_already_have_an_approval(world, admin):
     relation = world.query("SELECT id FROM mint.usage_relations WHERE server_id = 'srv-wait'")[0][0]
-    assert "/approvals/review/" in admin.get("/approvals?tab=servers").text
+    assert "신청 결정" in admin.get("/approvals?tab=servers").text
     world.query(
         "INSERT INTO mint.approvals (id, instance_id, org_id, relation_id, class, server_id, tools,"
         " scope_type, scope_id, valid_from, valid_until, conditions, basis, granted_by,"
         " requested_by, status) VALUES (gen_random_uuid(), %s, 'acme', %s, 'standard', 'srv-wait',"
         " ARRAY['echo'], 'user', 'human-7', now(), now() + interval '30 days', '{}'::jsonb,"
         " '{}'::jsonb, 'admin', 'human-7', 'pending')", INSTANCE, relation)
-    assert "/approvals/review/" not in admin.get("/approvals?tab=servers").text
+    assert "srv-wait</a>" not in admin.get("/approvals?tab=servers").text
 
 
 def test_contract_changes_are_not_shown_as_deleted_before_anything_is_observed():

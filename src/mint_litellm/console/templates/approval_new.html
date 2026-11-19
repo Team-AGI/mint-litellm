@@ -4,7 +4,7 @@
 {% block body %}
 <h1>사후 제한</h1>
 <dl class="detail">
-  <dt>서버</dt><dd><a href="/servers/{{ relation.server_id | urlencode }}">{{ relation.server_name }}</a>{% if relation.server_url %} · {{ relation.server_url }}{% endif %}</dd>
+  <dt>서버</dt><dd><a href="/servers/{{ relation.server_id | urlencode }}">{{ relation.server_name }}</a>{% if relation.server_url %} · {{ relation.server_url }}{% endif %}<br>서버 식별자 {{ m.ident(relation.server_id) }} <button type="button" class="copy" data-copy="{{ relation.server_id }}">복사</button></dd>
   <dt>조직·팀</dt><dd>{{ relation.org_name }}{% if relation.team_id %} · {{ relation.team_id }}{% endif %}</dd>
 </dl>
 {% if can(actor, 'approve') %}

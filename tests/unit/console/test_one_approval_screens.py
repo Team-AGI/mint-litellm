@@ -2,7 +2,8 @@
 
 from console_pages_support import add_approval, form_post
 
-from .test_intake_contract_screens import add_intake, version
+from .test_intake_contract_screens import add_intake
+
 
 def add_tool(world, tool="echo"):
     world.query(

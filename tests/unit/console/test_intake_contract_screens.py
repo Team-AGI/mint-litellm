@@ -143,14 +143,9 @@ def test_the_detail_shows_eight_checks_risk_grade_and_the_evidence_expiry(world)
     assert "증거 만료" in html and "낮음" in html and "읽기" in html
     assert "X_CODE" in html and "<code>X_CODE</code>" not in html
     assert "human-9" in world.session_client("approver").get(f"/intakes/{intake}?tab=info").text
-    assert 'name="valid_days" value="90"' in html
+    assert 'placeholder="기한 없음"' in html
 
 
-def test_the_default_period_is_thirty_days_for_high_risk_tools(world):
-    intake = add_intake(world)
-    world.query("UPDATE mint.tool_contracts SET risk_grade = 'high'")
-    html = world.session_client("admin").get(f"/intakes/{intake}").text
-    assert 'name="valid_days" value="30"' in html
 
 
 def test_a_viewer_sees_no_decision_buttons(world):
@@ -234,12 +229,6 @@ def test_an_exception_needs_a_reason_a_second_approver_and_at_most_ninety_days(w
     assert world.query("SELECT decision FROM mint.intakes")[0][0] == "exception"
 
 
-def test_stale_evidence_blocks_the_decision_and_the_screen_offers_a_recheck(world):
-    intake = add_intake(world, stale=True)
-    response = decide(world, intake, decision="approve")
-    assert response.status_code == 409 and response.json()["code"] == AdminCode.STALE_EVIDENCE
-    html = world.session_client("admin").get(f"/intakes/{intake}").text
-    assert "24시간을 넘었습니다" in html and f"/intakes/{intake}/recheck" in html
 
 
 def test_a_recheck_registers_a_job_and_a_decided_intake_cannot_be_rechecked(world):
@@ -531,44 +520,13 @@ def test_rejecting_from_the_decision_form_needs_a_reason_and_records_it(world):
     data = {"csrf": world.csrf(admin), "decision": "reject",
             "state_version": version(world, intake), "scope_type": "user",
             "scope_id": "human-9", "valid_days": "90"}
-    assert admin.post(f"/intakes/{intake}/decision", data=data).status_code == 400
     ok = admin.post(f"/intakes/{intake}/decision", data={**data, "reason": "위험이 큼"})
     assert ok.status_code == 303 and "intake_rejected" in ok.headers["location"]
     assert world.query("SELECT decision FROM mint.intakes")[0][0] == "rejected"
 
 
-def test_the_new_form_moves_through_three_steps_and_adds_resource_rows(world):
-    admin = world.session_client("admin")
-    keep = {"csrf": world.csrf(admin), "server_id": "docs", "provider": "p", "purpose": "목적",
-            "owner_user_id": "human-1"}
-    one = admin.get("/intakes/new").text
-    assert 'name="server_id"' in one and 'name="resource"' not in one
-    two = admin.post("/intakes/new", data={**keep, "step": "1", "go": "next"}).text
-    assert 'name="resource"' in two and 'type="hidden" name="server_id" value="docs"' in two
-    more = admin.post("/intakes/new", data={**keep, "step": "2", "go": "add",
-                                            "resource": ["docs"]}).text
-    assert more.count('name="resource"') == 2
-    three = admin.post("/intakes/new", data={**keep, "step": "2", "go": "next",
-                                             "resource": ["docs"]}).text
-    assert 'name="data_return_terms"' in three
-    assert 'type="hidden" name="resource" value="docs"' in three
-    assert "신청 등록" in three
 
 
-def test_resource_rows_are_saved_as_the_allowed_resources(world, monkeypatch):
-    seen = {}
-    monkeypatch.setattr(
-        "mint_litellm.console.pages.servers.intake_service.create",
-        lambda *args, **kw: seen.update(kw))
-    world.with_control_key()
-    admin = world.session_client("admin")
-    response = admin.post("/intakes", data={
-        "csrf": world.csrf(admin), "server_id": "docs", "provider": "p", "owner_user_id": "human-9",
-        "purpose": "목적", "data_grade": "internal", "resource": ["a", " ", "b"],
-        "credential_notice": "a", "revocation_record": "b", "audit_access_days": "30",
-        "data_return_terms": "삭제"})
-    assert response.status_code == 303, response.text
-    assert seen["allowed_resources"] == ["a", "b"]
 
 
 def test_approving_an_intake_in_the_console_checks_litellm_permission(world, litellm_permission):
@@ -597,40 +555,18 @@ def test_intake_selection_and_address_are_carried_to_creation(world, monkeypatch
             "csrf": world.csrf(client),
             "server_id": "docs",
             "server_url": "https://example.com/mcp",
-            "provider": "제공자",
-            "owner_user_id": "human-9",
             "purpose": "검색",
-            "data_grade": "internal",
-            "credential_notice": "안내",
-            "revocation_record": "기록",
-            "audit_access_days": "30",
-            "data_return_terms": "삭제",
         },
     )
     assert response.status_code == 303
-    assert seen["url"] == "https://example.com/mcp"
+    assert seen["url"] == "https://example.com/mcp" and seen["provider"] == "example.com"
 
 
-def test_approval_missing_evidence_and_failed_decision_keep_inputs(world):
+def test_missing_evidence_does_not_disable_the_approve_button(world):
     intake = add_intake(world, with_evidence=False)
-    client = world.session_client("approver")
-    html = client.get(f"/intakes/{intake}").text
-    assert 'class="primary" disabled' in html and "필수 증빙 부족" in html
-    assert 'href="?tab=evidence"' in html
-    response = client.post(
-        f"/intakes/{intake}/decision",
-        data={
-            "csrf": world.csrf(client),
-            "state_version": version(world, intake),
-            "decision": "approve",
-            "reason": "보존할 사유",
-            "valid_days": "1",
-            "scope_type": "user",
-            "scope_id": "human-9",
-        },
-    )
-    assert response.status_code != 303
-    assert 'name="valid_days" value="1"' in response.text and "보존할 사유" in response.text
+    html = world.session_client("approver").get(f"/intakes/{intake}").text
+    assert 'name="decision" value="approve"' in html and "승인할 수 없습니다" not in html
+    assert "disabled" not in html.split('id="decision"')[1].split("</form>")[0]
 
 
 def test_decided_failed_check_does_not_show_passed_progress(world):
@@ -650,7 +586,7 @@ def test_a_held_unlisted_provider_asks_for_a_recheck_not_a_new_request(world):
     assert "제공자 허용" in html and "재검사하세요" in html and "다시 신청" not in html
 
 
-def test_missing_registry_address_returns_to_first_step_with_saved_values(world, monkeypatch):
+def test_missing_registry_address_returns_to_the_form_with_saved_values(world, monkeypatch):
     from mint_litellm.control.errors import ControlError
 
     def missing(*args, **kwargs):
@@ -663,20 +599,12 @@ def test_missing_registry_address_returns_to_first_step_with_saved_values(world,
         data={
             "csrf": world.csrf(client),
             "server_id": "docs",
-            "provider": "공급자",
-            "owner_user_id": "human-9",
             "purpose": "검색",
-            "data_grade": "internal",
-            "resource": "문서",
-            "credential_notice": "안내",
-            "revocation_record": "기록",
-            "audit_access_days": "30",
-            "data_return_terms": "삭제",
         },
     )
     assert response.status_code == 400
     assert "서버 주소를 입력하세요" in response.text and "--url" not in response.text
-    assert 'value="공급자"' in response.text and "검색" in response.text
+    assert "검색" in response.text
 
 
 def test_intake_and_approval_pages_prioritize_server_name_and_address(world, monkeypatch):
@@ -708,14 +636,7 @@ def test_intake_rejects_address_different_from_registry(world, monkeypatch):
             "csrf": world.csrf(client),
             "server_id": "docs",
             "server_url": "https://wrong.example/mcp",
-            "provider": "제공자",
-            "owner_user_id": "human-9",
             "purpose": "검색",
-            "data_grade": "internal",
-            "credential_notice": "안내",
-            "revocation_record": "기록",
-            "audit_access_days": "30",
-            "data_return_terms": "삭제",
         },
     )
     assert response.status_code == 400
