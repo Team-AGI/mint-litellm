@@ -50,11 +50,11 @@ compose 묶음(LiteLLM, PostgreSQL, 정책 엔진, 작업 실행기, 콘솔)은 
 cd deploy
 cp .env.example .env        # 비밀값은 up이 채운다. 한 기기에 스택을 여럿 두면 아래 참고
 ./mint.sh up                # 이미지 빌드, 마이그레이션, 기동
-./mint.sh bootstrap <이름> <LiteLLM 사용자>   # 첫 관리자·기본 정책·로그인 비밀번호(LiteLLM 관리 화면과 콘솔 공용)
+# 끝나면 관리자 콘솔에 아이디 root / 비밀번호 rootrootroot로 들어갑니다. 로그인 뒤 콘솔에서 바꾸십시오.
 ./mint.sh status            # 상태와 할 일
 ```
 
-이후 운영자 명령은 `./mint.sh cli <명령>`으로, 판본 올리기는 `./mint.sh upgrade`로 실행합니다.
+기본 계정 root(관리자 운영자·기본 정책 포함)는 새 설치에서만 만들며, 바꾼 비밀번호는 재기동·업그레이드 뒤에도 유지됩니다. 다른 이름의 관리자를 따로 두려면 `./mint.sh bootstrap <이름> <LiteLLM 사용자>`를 씁니다. 이후 운영자 명령은 `./mint.sh cli <명령>`으로, 판본 올리기는 `./mint.sh upgrade`로 실행합니다.
 
 한 기기에 스택을 둘 이상 두면 `.env`에서 `COMPOSE_PROJECT_NAME`, `MINT_INSTANCE_ID`, `MINT_LITELLM_PORT`, `MINT_CONSOLE_PORT`, `MINT_SECRETS_DIR`를 스택마다 다르게 정합니다. 메모리가 작은 기기에서는 `MINT_LITELLM_WORKERS=1`로 LiteLLM 작업자 수를 줄입니다. 처음 `up`은 LiteLLM이 자기 DB를 준비하느라 몇 분 걸립니다.
 

@@ -357,6 +357,63 @@ def test_bootstrap_stores_the_first_admin_token_and_later_commands_use_it(tmp_pa
     assert "status-token:mint_op-1_x" in (tmp_path / "docker.log").read_text(encoding="utf-8")
 
 
+ROOT_DOCKER = BOOTSTRAP_DOCKER.replace(
+    'case "$*" in\n',
+    'case "$*" in\n  *default_admin*) echo "default-admin-ran" >> "$FAKE_DOCKER_LOG";;\n',
+    1,
+)
+
+
+NO_OPERATORS = (
+    'case "$*" in *"control --json status"*) echo "운영자가 아직 없습니다";; esac\n'
+)
+
+
+def test_up_creates_the_default_root_admin_on_a_fresh_install(tmp_path):
+    (tmp_path / "deploy").mkdir()
+    (tmp_path / "deploy" / "litellm.config.example.yaml").write_text("{}\n", encoding="utf-8")
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    env = f"POSTGRES_PASSWORD=x\nMINT_SECRETS_DIR={secrets}\n"
+    result, _, _ = run(tmp_path, env, "up", docker_tail=NO_OPERATORS + ROOT_DOCKER)
+    assert result.returncode == 0, result.stderr
+    log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+    assert "default-admin-ran" in log
+    assert "operator bootstrap --name root --user-id root" in log
+    assert "policy activate initial" in log
+    assert (secrets / "operator.token").read_text(encoding="utf-8") == "mint_op-1_x\n"
+    assert "root / 비밀번호 rootrootroot" in result.stdout
+    assert "rootrootroot" not in log and not list(secrets.glob("ui-login-*"))
+
+
+def test_up_recreates_root_after_a_database_reset_even_with_an_old_token_file(tmp_path):
+    (tmp_path / "deploy").mkdir()
+    (tmp_path / "deploy" / "litellm.config.example.yaml").write_text("{}\n", encoding="utf-8")
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    (secrets / "operator.token").write_text("mint_op-9_old\n", encoding="utf-8")
+    env = f"POSTGRES_PASSWORD=x\nMINT_SECRETS_DIR={secrets}\n"
+    result, _, _ = run(tmp_path, env, "up", docker_tail=NO_OPERATORS + ROOT_DOCKER)
+    assert result.returncode == 0, result.stderr
+    log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+    assert "default-admin-ran" in log and "operator bootstrap --name root" in log
+    assert (secrets / "operator.token").read_text(encoding="utf-8") == "mint_op-1_x\n"
+
+
+def test_up_does_not_touch_an_install_that_already_has_an_operator(tmp_path):
+    (tmp_path / "deploy").mkdir()
+    (tmp_path / "deploy" / "litellm.config.example.yaml").write_text("{}\n", encoding="utf-8")
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    (secrets / "operator.token").write_text("mint_op-9_old\n", encoding="utf-8")
+    env = f"POSTGRES_PASSWORD=x\nMINT_SECRETS_DIR={secrets}\n"
+    result, _, _ = run(tmp_path, env, "up", docker_tail=ROOT_DOCKER)
+    assert result.returncode == 0, result.stderr
+    log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+    assert "default-admin-ran" not in log and "operator bootstrap" not in log
+    assert (secrets / "operator.token").read_text(encoding="utf-8") == "mint_op-9_old\n"
+
+
 def test_bootstrap_refuses_a_second_time_and_without_arguments(tmp_path):
     secrets = tmp_path / "secrets"
     secrets.mkdir()

@@ -28,6 +28,23 @@ def test_snippet_has_the_required_guardrail_callback_and_server_entries():
     }
 
 
+def test_only_the_bundled_example_relaxes_the_password_policy_not_the_init_snippet():
+    from pathlib import Path
+
+    import mint_litellm
+
+    root = Path(mint_litellm.__file__).resolve().parents[2]
+    example = root / "deploy" / "litellm.config.example.yaml"
+    general = yaml.safe_load(example.read_text(encoding="utf-8"))["general_settings"]
+    assert general["password_policy_min_length"] == 12
+    for name in ("uppercase", "lowercase", "numbers", "special_characters"):
+        assert general[f"password_policy_require_{name}"] is False
+    assert general["password_policy_check_breached_passwords"] is False
+    # 이미 운영 중인 LiteLLM에 붙이는 init 조각은 전역 비밀번호 정책을 건드리지 않는다.
+    snippet = yaml.safe_load(litellm_config.snippet({}, no_spend_logs=False))["general_settings"]
+    assert not [k for k in snippet if k.startswith("password_policy")]
+
+
 def test_disable_spend_logs_only_with_the_option_and_servers_are_optional():
     on = yaml.safe_load(litellm_config.snippet({}, no_spend_logs=True))
     assert on["general_settings"]["disable_spend_logs"] is True
