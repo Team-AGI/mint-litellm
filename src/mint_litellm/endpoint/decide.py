@@ -18,6 +18,7 @@ from collections.abc import Callable, Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -26,6 +27,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    RootModel,
     StrictBool,
     ValidationError,
     field_validator,
@@ -47,6 +49,7 @@ from mint_litellm.endpoint.routes import (
 )
 from mint_litellm.plugin.pipeline import CallRequest, build_request, evaluate_request
 from mint_litellm.plugin.result import observe_response, observe_unknown_outcome
+from mint_litellm.types.canonical import canonical_text
 from mint_litellm.types.decision import (
     BUILTIN_EXEC_SHA256,
     OperationType,
@@ -262,6 +265,46 @@ class IntakeBody(BaseModel):
         if (self.network == "hosts") != bool(self.allowed_hosts):
             raise ValueError("allowed_hosts does not match network")
         return self
+
+
+class RemoteIntakeBody(BaseModel):
+    """단말의 원격 서버 신청. 주소와 목적만 받고 나머지는 서버가 채운다."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    request_id: UUID
+    server_id: str = Field(pattern=_NAME)
+    url: str = Field(min_length=1, max_length=2048)
+    transport: Literal["http", "sse"] = "http"
+    purpose: str = Field(min_length=1, max_length=256)
+
+    @field_validator("url")
+    @classmethod
+    def _plain_https(cls, value: str) -> str:
+        parts = urlsplit(value)
+        try:
+            port = parts.port
+        except ValueError:
+            port = 0
+        if (parts.scheme != "https" or not parts.hostname or port == 0
+                or parts.username is not None or parts.password is not None
+                or any(c in value for c in "?#\\")
+                or any(c.isspace() or ord(c) < 32 for c in value)):
+            raise ValueError("url must be a plain https address")
+        return value
+
+    def payload(self) -> dict[str, Any]:
+        """DB 함수 입력. 등급은 내부, 자원은 비움(관리자가 정한다)."""
+        contract = {"url": self.url, "transport": self.transport, "auth_type": "none",
+                    "issuer": None, "oauth_scopes": [], "allowed_tools": None,
+                    "image_digest": None, "source_commit": None}
+        return {"server_id": self.server_id, "url": self.url, "transport": self.transport,
+                "purpose": self.purpose, "data_grade": "internal", "resources": [],
+                "provider": urlsplit(self.url).hostname, "contract": canonical_text(contract)}
+
+
+class IntakeRequest(RootModel[IntakeBody | RemoteIntakeBody]):
+    """``INTAKES_PATH``의 본문: 로컬 실행(spec) 또는 원격 주소(url)."""
 
 
 class InspectionDetail(BaseModel):
@@ -628,15 +671,20 @@ def make_router(
     @router.post(INTAKES_PATH, status_code=201)
     async def intakes(request: Request, auth: Any = Depends(auth_dependency)) -> dict[str, Any]:
         runtime = ready()
-        body = await _body(request, IntakeBody)
+        body = (await _body(request, IntakeRequest)).root
         who = principal_factory(auth, instance_id=runtime.config.instance_id)
         if who.key_id is None:
             raise HTTPException(status_code=404, detail="no such kit key")
-        payload = body.model_dump(mode="json", exclude={"request_id"}, exclude_none=True)
         try:
-            made = await runtime.database.endpoint_submit_intake(
-                who.key_id, body.request_id, payload
-            )
+            if isinstance(body, RemoteIntakeBody):
+                made = await runtime.database.endpoint_submit_remote_intake(
+                    who.key_id, body.request_id, body.payload()
+                )
+            else:
+                payload = body.model_dump(mode="json", exclude={"request_id"}, exclude_none=True)
+                made = await runtime.database.endpoint_submit_intake(
+                    who.key_id, body.request_id, payload
+                )
         except Exception as exc:
             status = _intake_status(exc)
             if status is None:

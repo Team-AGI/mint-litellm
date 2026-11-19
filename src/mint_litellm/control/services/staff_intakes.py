@@ -13,11 +13,32 @@ from mint_litellm.control.services import staff
 from mint_litellm.control.services.intakes import _validated_inputs
 from mint_litellm.types.canonical import canonical_text
 
+# 직원은 주소와 목적만 적는다. 나머지는 여기서 채운다(종료 준비 문구는 조직 기본값).
+DEFAULTS = {
+    "data_grade": "internal",
+    "audit_access_days": "90",
+    "credential_notice": "자격 증명이 바뀌면 관리자에게 알립니다",
+    "revocation_record": "철회는 MINT 기록으로 남깁니다",
+    "data_return_terms": "사용을 끝내면 서버에 남은 자료를 삭제합니다",
+}
+
+
+def server_name(url: str) -> str:
+    """주소에서 서버 식별자: 맨 앞 mcp·www·api 칸을 빼고 점을 하이픈으로."""
+    try:
+        labels = (urlsplit(url).hostname or "").split(".")
+    except ValueError:
+        labels = []
+    while len(labels) > 2 and labels[0] in ("mcp", "www", "api"):
+        labels.pop(0)
+    return re.sub(r"[^A-Za-z0-9._-]", "-", "-".join(labels))[:128]
+
 
 def validate(form: dict, allowed_ports: tuple[int, ...] = (443, 8443)) -> tuple[dict, str]:
-    sid = str(form.get("server_id", "")).strip()
+    form = {**DEFAULTS, **{k: v for k, v in form.items() if str(v).strip()}}
     url = str(form.get("url", "")).strip()
-    transport = form.get("transport", "http")
+    sid = str(form.get("server_id", "")).strip() or server_name(url)
+    transport = form.get("transport") or ("sse" if url.rstrip("/").endswith("/sse") else "http")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", sid):
         raise ControlError("서버 식별자는 영문·숫자로 시작하고 "
                            "영문·숫자·점·밑줄·하이픈만 사용합니다.")
@@ -110,3 +131,14 @@ def detail(sctx: staff.StaffContext, identifier: str) -> dict:
     if row is None:
         raise not_found("신청을 찾을 수 없습니다.")
     return row
+
+
+def observed(sctx: staff.StaffContext) -> dict:
+    """내 단말이 보고한 도구 목록의 마지막 시각(서버별). 관측이 없으면 서버가 빠진다."""
+    rows = fetchall(sctx.control,
+                    "SELECT t.server_id, max(t.reported_at) AS at FROM mint.endpoint_tool_lists t"
+                    " JOIN mint.endpoint_installs i ON i.instance_id = t.instance_id"
+                    " AND i.key_token = t.key_token"
+                    " WHERE t.instance_id=%s AND i.user_id=%s AND i.revoked_at IS NULL"
+                    " GROUP BY t.server_id", (sctx.instance_id, sctx.user_id))
+    return {r["server_id"]: r["at"] for r in rows}

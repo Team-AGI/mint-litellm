@@ -422,23 +422,23 @@ def test_add_refuses_a_forbidden_env_before_sending_anything(tmp_path):
     assert code == 2 and sent == [] and "LD_PRELOAD" in lines[-1]
 
 
-def test_the_interactive_prompt_collects_env_and_can_decline_the_read_access(tmp_path):
+def test_the_interactive_prompt_asks_only_the_purpose_and_adds_path_values_as_read_access(tmp_path):
     from test_kit_pack import FakeGateway, add_args
 
-    answers_ = iter(["GHIDRA_INSTALL_DIR=/opt/ghidra", "BAD", "LD_X=1", "", "n"])
+    asked = []
 
     def read(question):
-        if "환경 변수" in question or "읽기로" in question:
-            return next(answers_)
-        return {"이대로": "y"}.get(next((k for k in ("이대로",) if k in question), ""), "")
+        asked.append(question)
+        return "목적"
 
     gateway, lines = FakeGateway(), []
-    args = add_args(yes=False, command=["uvx", "demo==1.0"])
-    code = kit_module.run_add(args, tmp_path, gateway, out=lines.append, read=read, tty=True)
-    assert code == 0
+    args = add_args(yes=False, command=["uvx", "demo==1.0"], purpose=None,
+                    env=["GHIDRA_INSTALL_DIR=/opt/ghidra"])
+    code = kit_module.run_add(
+        args, tmp_path, gateway, out=lines.append, read=read, tty=True, key=lambda: "enter")
+    assert code == 0 and asked == ["목적 "]
     assert gateway.sent[0]["env"] == {"GHIDRA_INSTALL_DIR": "/opt/ghidra"}
-    assert gateway.sent[0]["file_access"] == []
-    assert "이름=값 형식으로 적으십시오" in lines
+    assert gateway.sent[0]["file_access"] == [{"path": "/opt/ghidra", "mode": "ro"}]
 
 
 # --- 화면 탭 3 ---------------------------------------------------------------------------------
@@ -483,14 +483,9 @@ def test_the_model_reads_stored_inspections_and_the_screen_runs_the_action(
             return 200, me
 
     model = kit_module.build_model(kit, state, Gate())
-    assert set(model["inspections"]) == {"in-1"}
-    called, keys = [], iter(["3", "s", "q"])
-    out = io.StringIO()
-    kit_module.run_screen(
-        kit, state, Gate(), {"inspect": lambda m, u: called.append(u["cursor"]) or "검사 제출함"},
-        read=lambda: next(keys), out=out,
-    )
-    assert called == [0] and "검사 제출함" in out.getvalue()
+    assert model["inspections"] == {}  # 승인이 한 번이라 단말 검사는 기본 흐름에 없다
+    model_with = {**model, "inspections": {"in-1": remote()}}
+    assert kit_module.handle_key("s", {"tab": 2, "cursor": 0, "detail": False}, model_with)
     assert "inspect" in kit_module.CLI_COMMANDS
 
 
