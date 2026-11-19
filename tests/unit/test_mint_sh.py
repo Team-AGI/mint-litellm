@@ -379,6 +379,8 @@ def test_up_creates_the_default_root_admin_on_a_fresh_install(tmp_path):
     assert result.returncode == 0, result.stderr
     log = (tmp_path / "docker.log").read_text(encoding="utf-8")
     assert "default-admin-ran" in log
+    assert "ensure_password_policy" in log
+    assert log.index("ensure_password_policy") < log.index("up -d opa litellm")
     assert "operator bootstrap --name root --user-id root" in log
     assert "policy activate initial" in log
     assert (secrets / "operator.token").read_text(encoding="utf-8") == "mint_op-1_x\n"
@@ -411,6 +413,7 @@ def test_up_does_not_touch_an_install_that_already_has_an_operator(tmp_path):
     assert result.returncode == 0, result.stderr
     log = (tmp_path / "docker.log").read_text(encoding="utf-8")
     assert "default-admin-ran" not in log and "operator bootstrap" not in log
+    assert "ensure_password_policy" not in log
     assert (secrets / "operator.token").read_text(encoding="utf-8") == "mint_op-9_old\n"
 
 

@@ -339,6 +339,7 @@ cmd_up() {
     fix_volume_owners
     admin_cli init --out /app/config/litellm.mint.yaml \
         --fix-config /app/config/litellm.config.yaml >/dev/null
+    prepare_default_root
     ensure_bundle
     "${COMPOSE[@]}" up -d opa litellm
     wait_litellm
@@ -424,13 +425,26 @@ cmd_bootstrap() {
     issue_ui_password "$2" || true
 }
 
-# 새 설치와 DB 초기화 뒤(MINT 운영자가 한 명도 없을 때)의 기본 관리자 root(비밀번호 rootrootroot)를
-# LiteLLM 사용자와 MINT 운영자로 만든다. 운영자가 있으면(업그레이드·재기동) 아무것도 하지 않는다.
+# 새 설치와 DB 초기화 뒤(MINT 운영자가 한 명도 없을 때)는 기본 관리자 root(비밀번호 rootrootroot)를 만든다.
+# LiteLLM이 뜨기 전에 확인해, 설정에 비밀번호 규칙이 없으면 완화 값을 넣고(운영자가 적은 값은 그대로 둔다)
+# 뜬 뒤에 root를 LiteLLM 사용자와 MINT 운영자로 만든다. 운영자가 있으면(업그레이드·재기동) 아무것도 하지 않는다.
+NEED_DEFAULT_ROOT=0
+prepare_default_root() {
+    local probe reply
+    probe="$("${COMPOSE[@]}" run --rm --no-deps -T control --json status 2>&1 || true)"
+    case "$probe" in *"운영자가 아직 없습니다"*) NEED_DEFAULT_ROOT=1 ;; *) return 0 ;; esac
+    reply="$("${COMPOSE[@]}" run --rm --no-deps -T --entrypoint python control -c "
+from pathlib import Path
+from mint_litellm.control.litellm_config import ensure_password_policy
+print(len(ensure_password_policy(Path('/app/config/litellm.config.yaml'))))
+" 2>&1)" || { echo "LiteLLM 비밀번호 규칙을 설정하지 못했습니다: $reply" >&2; return 0; }
+    [ "$reply" = "0" ] && echo "config/litellm.config.yaml에 password_policy_*가 있어 그대로 둡니다. root 비밀번호가 규칙에 맞지 않으면 거부됩니다." >&2
+    return 0
+}
+
 # 실패해도 기동은 계속한다.
 ensure_default_root() {
-    local probe
-    probe="$("${COMPOSE[@]}" run --rm --no-deps -T control --json status 2>&1 || true)"
-    case "$probe" in *"운영자가 아직 없습니다"*) ;; *) return 0 ;; esac
+    [ "$NEED_DEFAULT_ROOT" = "1" ] || return 0
     env "LITELLM_MASTER_KEY=$(env_value LITELLM_MASTER_KEY)"         "${COMPOSE[@]}" run --rm --no-deps -T -e LITELLM_MASTER_KEY         --entrypoint python control -c 'from mint_litellm.control.default_admin import main; main()'         && create_first_operator root root         && echo "관리자 콘솔 로그인: 아이디 root / 비밀번호 rootrootroot (로그인 뒤 콘솔에서 바꾸십시오)"         || echo "기본 관리자를 만들지 못했습니다. ./mint.sh bootstrap <이름> <LiteLLM 사용자>로 만드십시오." >&2
 }
 
