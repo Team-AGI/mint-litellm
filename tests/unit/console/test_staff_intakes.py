@@ -11,7 +11,7 @@ sworld = staff_tests.sworld
 
 def form(client, **changes):
     return {"csrf": staff_tests.csrf(client), "request_id": str(uuid.uuid4()),
-            "server_id": "new-docs", "url": "https://docs.example.com/mcp", "transport": "http",
+            "url": "https://new-docs.example.com/mcp", "transport": "http",
             "purpose": "공개 문서 조회", "data_grade": "public", "resources": "docs\nmanuals",
             "credential_notice": "담당자 통지", "revocation_record": "관리 기록",
             "audit_access_days": "90", "data_return_terms": "종료 시 삭제", **changes}
@@ -31,8 +31,8 @@ def test_staff_form_and_submission_reach_the_admin_intake_queue(sworld):
     assert row == (staff_tests.STAFFER, staff_tests.STAFFER, "acme", "staff", "received", True)
     assert sworld.query("SELECT kind,target_ref,status FROM mint.jobs") == [
         ("intake_run", values["request_id"] + "/staff", "pending")]
-    assert sworld.query("SELECT status FROM mint.servers WHERE server_id='new-docs'") == [
-        ("pending",)]
+    assert sworld.query(
+        "SELECT status FROM mint.servers WHERE server_id='new-docs-example-com'") == [("pending",)]
     assert sworld.query("SELECT count(*) FROM mint.approvals") == [(0,)]
     assert client.get(response.headers["location"]).status_code == 200
     assert "new-docs" in client.get("/staff/intakes").text
@@ -76,7 +76,8 @@ def test_invalid_or_credential_urls_never_create_an_intake(sworld, url):
 def test_submission_requires_csrf_and_does_not_change_an_approved_server(sworld):
     client = staff_tests.logged_in(sworld)
     assert client.post("/staff/intakes", data=form(client, csrf="wrong")).status_code == 403
-    assert client.post("/staff/intakes", data=form(client, server_id="srv-ok")).status_code == 409
+    joined = client.post("/staff/intakes", data=form(client, url="https://srv-ok/mcp"))
+    assert joined.status_code == 409
     assert sworld.query("SELECT status FROM mint.servers WHERE server_id='srv-ok'") == [
         ("approved",)]
     assert sworld.query("SELECT count(*) FROM mint.intakes") == [(0,)]
@@ -96,8 +97,8 @@ def test_a_port_outside_the_allowed_list_is_refused_on_the_form_not_recorded(swo
     # 접수 뒤 자동 거절되는 대신 화면에서 허용 포트를 알려 고치게 한다.
     client = staff_tests.logged_in(sworld)
     page = client.get("/staff/intakes/new")
-    # 허용 포트 표시·종료 준비 기본값
-    assert "443, 8443" in page.text and "사용을 끝내면" in page.text
+    # 허용 포트 표시(종료 준비 문구는 입력받지 않고 기본값으로 채운다)
+    assert "443, 8443" in page.text
     response = client.post("/staff/intakes",
                            data=form(client, url="https://docs.example.com:8080/mcp"))
     assert response.status_code == 400
