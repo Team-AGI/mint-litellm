@@ -471,14 +471,16 @@ def intake_run(job: JobContext) -> None:
     started = intakes.begin_checking(ctx, target)
     if started is None:
         return  # 필수 입력이 없으면 검사로 가지 않는다
+    if started["source"] == "staff" and intakes.server_approved(
+            job.conn, job.instance_id, started["server_id"]):
+        intakes.skip_checks(ctx, target)  # 이미 승인된 서버: 이용 범위만 더한다
+        return
     if started["source"] == "endpoint":
         _run_local_checks(job, ctx, started, attempt)
         needs = False
     else:
         needs = _run_checks(job, ctx, started, attempt, mode, persist=True)
-    verdict = intakes.conclude(ctx, target, needs_registry_credentials=needs)
-    if verdict == "failed":
-        _reject_at_litellm(job, intakes.get(ctx, target))
+    intakes.conclude(ctx, target, needs_registry_credentials=needs)
 
 
 # --- evidence_expiry_scan -------------------------------------------------------------------

@@ -35,7 +35,6 @@ def managed(**overrides):
 @pytest.mark.parametrize(
     "change,reason",
     [
-        ({"tool_contracts": ()}, "unapproved_tool"),
         (
             {"tool_contracts": (ToolContractRow("c", "server", "search", "input_schema", 1),)},
             "input_schema",
@@ -71,6 +70,15 @@ def test_contract_blocks_each_drift(tmp_path, change, reason):
     assert f"CONTRACT_DRIFT_{reason}" in [f.reason_code for f in result.snapshot.findings]
 
 
+def test_a_new_tool_on_an_approved_server_is_allowed(tmp_path):
+    h = harness(tmp_path, managed(tool_contracts=()))
+    h.deps.config = replace(h.deps.config, observe_seconds=60)
+    result = asyncio.run(evaluate_request(request(), h.deps))
+    assert "CONTRACT_DRIFT_unapproved_tool" not in [
+        f.reason_code for f in result.snapshot.findings]
+    assert contract_result(managed(tool_contracts=()), "search", 60).reason_code is None
+
+
 def test_observation_deadline_boundary_and_legacy():
     snap = managed(
         server=server_row(contract_status="managed", last_observed_at=NOW - timedelta(seconds=120))
@@ -84,7 +92,10 @@ def test_scope_does_not_fall_back(auth):
     snap = managed(
         server=server_row(contract_status="managed", auth_type=auth, last_observed_at=NOW)
     )
-    assert contract_result(snap, "search", 60).reason_code == "CONTRACT_DRIFT_unapproved_tool"
+    # 다른 자격 범위의 계약은 이 서버의 계약으로 보지 않는다(그 계약의 드리프트도 옮겨 오지 않는다)
+    stray = (ToolContractRow("c", "server", "search", "description", 2),)
+    other = replace(snap, tool_contracts=stray)
+    assert contract_result(other, "search", 60).reason_code is None
     snap = replace(snap, tool_contracts=(ToolContractRow("c", "per_user", "search", "none", 2),))
     assert contract_result(snap, "search", 60).reason_code is None
 
@@ -97,11 +108,12 @@ def test_oauth2_uses_the_server_scope():
 
 
 def test_contract_findings_convert_as_family(tmp_path):
-    h = harness(tmp_path, managed(tool_contracts=(), settings=SettingsRow(mode=Mode.OBSERVE)))
+    drifted = (ToolContractRow("c", "server", "search", "description", 1, input_keys=()),)
+    h = harness(tmp_path, managed(tool_contracts=drifted, settings=SettingsRow(mode=Mode.OBSERVE)))
     h.deps.config = replace(h.deps.config, mode_ceiling=Mode.OBSERVE)
     result = asyncio.run(evaluate_request(request(), h.deps))
     assert result.allowed
-    assert result.snapshot.findings[0].reason_code == "CONTRACT_DRIFT_unapproved_tool"
+    assert result.snapshot.findings[0].reason_code == "CONTRACT_DRIFT_description"
 
 
 def test_output_change_is_alert_only(tmp_path):

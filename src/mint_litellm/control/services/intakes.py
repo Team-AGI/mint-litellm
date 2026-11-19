@@ -21,6 +21,7 @@ from mint_litellm.control.errors import (
     separation_of_duties,
     stale_evidence,
 )
+from mint_litellm.control.operators import separation_enforced
 from mint_litellm.control.services import evidence
 from mint_litellm.control.services.base import (
     Prefetched,
@@ -30,6 +31,7 @@ from mint_litellm.control.services.base import (
 )
 from mint_litellm.types.canonical import canonical_text, pin_sha256, sha256
 from mint_litellm.types.cli_commands import APPROVER_UP
+from mint_litellm.types.contracts import ALL_TOOLS
 from mint_litellm.types.decision import normalize_auth_type, url_sha256
 from mint_litellm.types.events import EventKind
 from mint_litellm.types.exec_contract import ExecContract
@@ -40,8 +42,8 @@ DATA_GRADES = ("public", "internal", "confidential", "restricted")
 READINESS_KEYS = ("credential_notice", "revocation_record", "audit_access_days")
 EVIDENCE_MAX_AGE = timedelta(hours=24)
 EXCEPTION_MAX_DAYS = 90
-DEFAULT_DAYS = 90
-DEFAULT_SHORT_DAYS = 30
+# 기한을 정하지 않은 승인은 만료되지 않는다(관리자가 명시한 기한만 만료).
+NO_EXPIRY = datetime(2999, 12, 31, tzinfo=UTC)
 SYSTEM_ACTOR = "intake_run"
 _REQUIRED = (
     "purpose", "data_grade", "allowed_resources", "provider", "owner_user_id", "readiness",
@@ -477,7 +479,7 @@ def recheck(
             raise conflict(f"신청의 상태 버전이 요청({expected_version})과 다릅니다"
                            f"(현재 {row['state_version']}).")
         approved = row["status"] == "decided" and row["decision"] in ("approved", "exception")
-        if row["status"] not in ("received", "passed", "indeterminate") and not approved:
+        if row["status"] not in ("received", "passed", "indeterminate", "failed") and not approved:
             raise conflict(f"{row['status']} 상태의 신청은 재검사할 수 없습니다.")
         if approved:
             server = fetchone(
@@ -649,13 +651,29 @@ def begin_checking(ctx: Context, intake_id: str) -> dict | None:
         row = get(ctx, intake_id, lock=True)
         if row["status"] == "checking":
             return row
-        if row["status"] not in ("received", "passed", "indeterminate") or not is_complete(row):
+        if row["status"] not in ("received", "passed", "indeterminate", "failed") or (
+                not is_complete(row)):
             return None
         updated = fetchone(ctx.conn,
                            "UPDATE mint.intakes SET status = 'checking' WHERE id = %s RETURNING *",
                            (row["id"],))
         _server_to(ctx, row["server_id"], "validating", _SERVER_REENTRY)
         return updated
+
+
+def server_approved(conn: Any, instance_id: str, server_id: str) -> bool:
+    row = fetchone(conn, "SELECT status FROM mint.servers WHERE instance_id = %s"
+                   " AND server_id = %s", (instance_id, server_id))
+    return bool(row and row["status"] == "approved")
+
+
+def skip_checks(ctx: Context, intake_id: str) -> None:
+    """이미 승인된 서버의 이용 신청: 검사 없이 결정 대기로 올린다(관리자가 한 번 승인한다)."""
+    with transact(ctx):
+        row = get(ctx, intake_id, lock=True)
+        if row["status"] == "checking":
+            ctx.conn.execute(
+                "UPDATE mint.intakes SET status = 'passed' WHERE id = %s", (row["id"],))
 
 
 def contract_binding(conn: Any, instance_id: str, server_id: str) -> str:
@@ -810,14 +828,8 @@ def conclude(ctx: Context, intake_id: str, *, needs_registry_credentials: bool) 
             "UPDATE mint.intakes SET status = %s, needs_registry_credentials = %s WHERE id = %s",
             (verdict, needs_registry_credentials, row["id"]),
         )
-        if verdict == "failed":
-            row = get(ctx, intake_id)
-            reason = f"check_failed:{failed[0]['check']}:{failed[0]['reason_code']}"
-            _decided(ctx, row, "rejected", reason, {"automatic": True})
-            _server_to(ctx, row["server_id"], "rejected", ("validating",))
-            _supersede_candidates(ctx, row["server_id"])
-        else:
-            _server_to(ctx, row["server_id"], "awaiting_approval", ("validating",))
+        # 검사 실패도 자동으로 끝내지 않는다. 결과를 근거로 보이고 관리자가 승인·거부한다.
+        _server_to(ctx, row["server_id"], "awaiting_approval", ("validating",))
         return verdict
 
 
@@ -878,6 +890,8 @@ def _assigner_user_id(ctx: Context, intake_id: Any) -> str | None:
 def _require_separation(
     ctx: Context, row: dict, second: Operator | None, exception: bool
 ) -> dict | None:
+    if not separation_enforced(ctx.operator):  # 직무 분리는 설정을 켰을 때만(최상위 관리자 제외)
+        return None
     user = ctx.operator.user_id
     if user is None or user == row["requested_by"]:
         raise separation_of_duties("신청자와 같은 사용자는 그 신청을 결정할 수 없습니다.")
@@ -937,8 +951,11 @@ def decide(
         if expected_version is not None and row["state_version"] != expected_version:
             raise conflict(f"신청의 상태 버전이 요청({expected_version})과 다릅니다"
                            f"(현재 {row['state_version']}).")
-        required = {"approve": ("passed",), "except": ("indeterminate",),
-                    "reject": ("passed", "indeterminate")}[decision]
+        if row["status"] == "decided" and (row["decision"] in ("approved", "exception")) == (
+                decision != "reject") and row["decision"] != "withdrawn":
+            return row  # 같은 결정의 재전송·동시 클릭은 이미 내려진 결정을 그대로 돌려준다
+        waiting = ("passed", "indeterminate", "failed")  # 검사 결과와 무관하게 관리자가 결정한다
+        required = {"approve": waiting, "except": waiting, "reject": waiting}[decision]
         if row["status"] not in required:
             raise conflict(f"{row['status']} 상태의 신청은 {decision}할 수 없습니다.")
         second_info = _require_separation(ctx, row, second, decision == "except")
@@ -950,13 +967,6 @@ def decide(
                 "승인한 제출 서버의 allow_all_keys를 끄지 못해 진행할 수 없습니다. "
                 "LiteLLM에서 서버를 정리하거나 재검사하십시오."
             )
-        if any(c["result"] == "fail" for c in checks) or (
-            decision == "approve" and any(c["result"] != "pass" for c in checks)
-        ):
-            raise conflict("모든 검사가 통과해야 승인할 수 있습니다.")
-        _require_fresh_evidence(ctx, row)
-        if decision == "approve":  # 사람이 확인하는 증빙이 없으면 일반 승인을 하지 않는다
-            evidence.require(ctx, "approve", "intake", str(row["id"]))
         now = datetime.now(UTC)
         if valid_until is not None:
             if valid_until <= now:
@@ -1004,7 +1014,7 @@ def _approve(
 ) -> dict:
     server_id = row["server_id"]
     scope_type = scope_type or "user"
-    scope_id = scope_id or row["owner_user_id"]
+    scope_id = scope_id or row["owner_user_id"] or row["requested_by"]
     if scope_type not in ("key", "user", "team"):
         raise ControlError("승인 범위는 key, user, team 중 하나여야 합니다.")
     if row["source"] == "endpoint":
@@ -1019,20 +1029,15 @@ def _approve(
         " AND server_id = %s AND status = 'candidate' AND source = 'intake' ORDER BY tool",
         (ctx.instance_id, server_id),
     )
+    # 도구 후보·위험 등급·배포 후보는 있으면 계약으로 승인하고, 없어도 승인한다(검사 결과는 근거).
     if any(c["check"] == "definitions" and c["reason_code"] == "LIMIT_EXCEEDED" for c in checks):
-        # 이전 검사의 후보가 남아 있어도 최신 정의 수집이 상한을 넘었으면 승인하지 않는다
-        raise ControlError("정의 상한 초과: 서버의 도구 수·크기를 줄여 다시 신청하십시오.")
-    if not tools:
-        raise ControlError("승인할 도구 계약 후보가 없습니다. 정의 수집이 끝나야 합니다.")
+        tools = []  # 정의 수집이 상한을 넘었으면 후보를 계약으로 올리지 않는다
     if any(t["risk_grade"] is None or t["action_type"] is None for t in tools):
-        raise ControlError("위험 등급이 산정되지 않은 도구가 있어 승인할 수 없습니다.")
-    if valid_until is None:  # 기본: 일반 90일, high·critical 도구가 있으면 30일, 예외 30일
-        short = decision == "except" or any(t["risk_grade"] in ("high", "critical") for t in tools)
-        valid_until = datetime.now(UTC) + timedelta(days=DEFAULT_SHORT_DAYS if short else
-                                                    DEFAULT_DAYS)
+        tools = []
+    if valid_until is None:
+        valid_until = NO_EXPIRY
     deployment = deployment_candidate(ctx.conn, ctx.instance_id, server_id)
-    if deployment is None:
-        raise ControlError("승인할 배포 계약 후보가 없습니다.")
+    managed = bool(tools) and deployment is not None
     allowlist_ids = sorted(
         {a for c in checks for a in (c["inputs"] or {}).get("allowlist_ids", [])}
     )
@@ -1046,27 +1051,37 @@ def _approve(
          **({"missing_evidence": lacking} if lacking else {})},
     )
     # 후보 계약 승인
-    for tool in tools:
+    if managed:
+        for tool in tools:
+            version = fetchone(ctx.conn,
+                               "UPDATE mint.tool_contracts SET status = 'approved' WHERE id = %s"
+                               " RETURNING version", (tool["id"],))["version"]
+            ctx.emit(EventKind.CONTRACT_APPROVED, tool["id"], version,
+                     {"server_id": server_id, "tool": tool["tool"],
+                      "risk_grade": tool["risk_grade"], "action_type": tool["action_type"],
+                      "intake_id": str(row["id"])})
         version = fetchone(ctx.conn,
-                           "UPDATE mint.tool_contracts SET status = 'approved' WHERE id = %s"
-                           " RETURNING version", (tool["id"],))["version"]
-        ctx.emit(EventKind.CONTRACT_APPROVED, tool["id"], version,
-                 {"server_id": server_id, "tool": tool["tool"], "risk_grade": tool["risk_grade"],
-                  "action_type": tool["action_type"], "intake_id": str(row["id"])})
-    version = fetchone(ctx.conn,
-                       "UPDATE mint.deployment_contracts SET status = 'approved' WHERE id = %s"
-                       " RETURNING version", (deployment["id"],))["version"]
-    ctx.emit(EventKind.DEPLOYMENT_CONTRACT_APPROVED, deployment["id"], version,
-             {"server_id": server_id, "sha256": deployment["sha256"],
-              "intake_id": str(row["id"])})
-    # 서버 행에 계약 값을 복사한다(정본은 servers 열)
-    ctx.conn.execute(
-        "UPDATE mint.servers SET url_sha256 = %s, transport = %s, auth_type = %s, issuer = %s,"
-        " contract_status = 'managed', basis_allowlist_ids = %s::uuid[], data_grade = %s"
-        " WHERE instance_id = %s AND server_id = %s",
-        (deployment["url_sha256"], deployment["transport"], deployment["auth_type"],
-         deployment["issuer"], allowlist_ids, row["data_grade"], ctx.instance_id, server_id),
-    )
+                           "UPDATE mint.deployment_contracts SET status = 'approved'"
+                           " WHERE id = %s RETURNING version", (deployment["id"],))["version"]
+        ctx.emit(EventKind.DEPLOYMENT_CONTRACT_APPROVED, deployment["id"], version,
+                 {"server_id": server_id, "sha256": deployment["sha256"],
+                  "intake_id": str(row["id"])})
+        # 서버 행에 계약 값을 복사한다(정본은 servers 열)
+        ctx.conn.execute(
+            "UPDATE mint.servers SET url_sha256 = %s, transport = %s, auth_type = %s, issuer = %s,"
+            " contract_status = 'managed', basis_allowlist_ids = %s::uuid[], data_grade = %s"
+            " WHERE instance_id = %s AND server_id = %s",
+            (deployment["url_sha256"], deployment["transport"], deployment["auth_type"],
+             deployment["issuer"], allowlist_ids, row["data_grade"], ctx.instance_id, server_id),
+        )
+    elif not server_approved(ctx.conn, ctx.instance_id, server_id):
+        # 계약 없이 승인: 서버는 기본 통과로 두고 계약은 관측으로 채워진다
+        # (이미 승인된 서버에 이용 범위만 더하는 신청은 서버 값을 건드리지 않는다)
+        ctx.conn.execute(
+            "UPDATE mint.servers SET basis_allowlist_ids = %s::uuid[], data_grade = %s"
+            " WHERE instance_id = %s AND server_id = %s",
+            (allowlist_ids, row["data_grade"], ctx.instance_id, server_id),
+        )
     # 이용 관계와 승인(pending)
     relation = fetchone(
         ctx.conn,
@@ -1093,9 +1108,8 @@ def _approve(
             {"server_id": server_id, "team_id": team_id, "org_id": row["org_id"]},
             scope_type, scope_id,
         )
-    high = sorted(t["tool"] for t in tools if t["risk_grade"] in ("high", "critical"))
     conditions = build_conditions(
-        high_risk_tools=high,
+        high_risk_tools=[],  # 호출별 승인은 관리자가 명시한 도구만(위험 등급으로 걸지 않는다)
         business_hours_only=False,
         business_hours=None,
         require_consent=None,
@@ -1118,12 +1132,14 @@ def _approve(
         " %s::jsonb, %s, %s, 'pending')",
         (approval_id, ctx.instance_id, row["org_id"], relation_id,
          "exception" if decision == "except" else "standard", server_id,
-         [t["tool"] for t in tools], scope_type, scope_id, valid_until, json.dumps(conditions),
+         [t["tool"] for t in tools] or [ALL_TOOLS], scope_type, scope_id, valid_until,
+         json.dumps(conditions),
          json.dumps(basis, ensure_ascii=False), ctx.operator.name, row["requested_by"]),
     )
     enqueue_job(ctx, "sync_server", server_id)
     if scope_type in ("key", "team"):
         enqueue_job(ctx, "sync_target", f"{scope_type}:{scope_id}")
+    enqueue_job(ctx, "kit_key_sync", "all")
     return {**updated, "approval_id": str(approval_id), "relation_id": str(relation_id)}
 
 
@@ -1176,20 +1192,15 @@ def _approve_local(
         (ctx.instance_id, server_id),
     )
     if any(t["risk_grade"] is None or t["action_type"] is None for t in tools):
-        raise ControlError("위험 등급이 산정되지 않은 도구가 있어 승인할 수 없습니다.")
-    if tools:
-        names = [t["tool"] for t in tools]
-    else:
+        tools = []  # 등급이 없는 후보는 계약으로 올리지 않는다(판정은 임시 계약이 맡는다)
+    names = [t["tool"] for t in tools]
+    if not names:
         observed = (deployment["pack_spec"] or {}).get("observed_tools") or []
         names = sorted({t["name"] for t in observed
                         if isinstance(t, dict) and isinstance(t.get("name"), str)})
-        if not names:
-            raise ControlError("승인할 도구를 알 수 없습니다. 검사로 도구 목록을 받아야 합니다.")
-    high = sorted(t["tool"] for t in tools if t["risk_grade"] in ("high", "critical"))
+    names = names or [ALL_TOOLS]
     if valid_until is None:
-        short = decision == "except" or bool(high)
-        valid_until = datetime.now(UTC) + timedelta(
-            days=DEFAULT_SHORT_DAYS if short else DEFAULT_DAYS)
+        valid_until = NO_EXPIRY
     allowlist_ids = sorted(
         {a for c in checks for a in (c["inputs"] or {}).get("allowlist_ids", [])})
     lacking = ([e["key"] for e in evidence.missing(ctx, "approve", "intake", str(row["id"]))]
@@ -1243,7 +1254,7 @@ def _approve_local(
             scope_type, scope_id,
         )
     conditions = build_conditions(
-        high_risk_tools=high, business_hours_only=False, business_hours=None,
+        high_risk_tools=[], business_hours_only=False, business_hours=None,
         require_consent=None)
     basis = {"text": reason or "수용검증 통과", "intake_id": str(row["id"]),
              "allowlist_ids": allowlist_ids}

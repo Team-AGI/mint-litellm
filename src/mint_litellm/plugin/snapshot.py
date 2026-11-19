@@ -80,6 +80,10 @@ SELECT jsonb_build_object(
           AND t.credential_scope = CASE WHEN srv.auth_type IN ('oauth_delegate',
               'true_passthrough') THEN 'per_user' ELSE 'server' END
     ),
+    'call_review_tools', (
+        SELECT coalesce(array_agg(c.tool), '{}') FROM mint.call_review_tools c
+        WHERE c.instance_id = %(iid)s AND c.server_id = %(server_id)s
+    ),
     'provisional_contract', (
         SELECT jsonb_build_object('action_type', p.action_type, 'risk_grade', p.risk_grade,
             'input_keys', to_jsonb(p.input_keys))
@@ -372,6 +376,9 @@ class ApprovalRow:
     status: str
     # 재확인 유예가 지나 보류됐다(운영자가 재확인할 때까지 이 승인은 쓰지 않는다).
     recert_held: bool = False
+    # 신청 승인으로 만든 승인은 서버의 모든 도구(앞으로 생기는 도구 포함)에 적용한다.
+    all_tools: bool = False
+    requested_by: str | None = None
 
 
 @dataclass(frozen=True)
@@ -489,6 +496,8 @@ class Snapshot:
     egress_targets: tuple[tuple[str, str | None], ...] = ()
     # 서버의 승인된 배포 계약에서 고른 대상·행위 프로필(근거가 없으면 None).
     auto_profile: str | None = None
+    # 관리자가 「호출별 검토」로 지정한 이 서버의 도구(여기 있는 도구만 호출마다 승인을 받는다)
+    call_review_tools: frozenset[str] = frozenset()
     # 서버의 마지막 승인된 수용 신청이 적은 자료 등급. 수용 신청 없이 등록된 서버는 None.
     data_grade: str | None = None
 
@@ -570,6 +579,8 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
                 conditions=a["conditions"],
                 status=a["status"],
                 recert_held=a.get("recert_held_at") is not None,
+                all_tools=bool((a.get("basis") or {}).get("intake_id")),
+                requested_by=a.get("requested_by"),
             )
             for a in doc["approvals"]
         ),
@@ -650,6 +661,7 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
             }) for c in doc.get("self_confirmations", ())
         ),
         egress_targets=tuple((e["value"], e["org_id"]) for e in doc.get("egress_targets", [])),
+        call_review_tools=frozenset(doc.get("call_review_tools") or ()),
         auto_profile=select_profile(basis.get("url"), basis.get("tools") or ()),
         data_grade=None if server is None else server.get("data_grade"),
     )

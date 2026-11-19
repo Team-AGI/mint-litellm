@@ -138,7 +138,9 @@ def desired_for_target(
     """
     rows = fetchall(
         conn,
-        "SELECT a.id, a.server_id, a.tools, a.status FROM mint.approvals a"
+        "SELECT a.id, a.server_id, a.tools, a.status,"
+        " (a.basis->>'intake_id' IS NOT NULL OR '*' = ANY (a.tools)) AS open_tools"
+        " FROM mint.approvals a"
         " JOIN mint.servers s ON s.instance_id = a.instance_id AND s.server_id = a.server_id"
         " WHERE a.instance_id = %s AND a.scope_type = %s AND a.scope_id = %s"
         " AND s.identity_kind = 'remote' AND ("  # 로컬 서버는 LiteLLM 권한으로 옮기지 않는다
@@ -148,15 +150,20 @@ def desired_for_target(
     )
     servers: set[str] = set()
     tools: dict[str, set[str]] = {}
+    open_servers: set[str] = set()  # 모든 도구를 허용하는 승인이 있는 서버: 도구 제한을 걸지 않는다
     ids: list[str] = []
     for row in rows:
         if row["status"] == "pending" and not pin_satisfied(conn, instance_id, row["server_id"]):
             continue
         servers.add(row["server_id"])
+        if row["open_tools"]:
+            open_servers.add(row["server_id"])
         tools.setdefault(row["server_id"], set()).update(row["tools"])
         ids.append(str(row["id"]))
     return Desired(
-        frozenset(servers), {s: frozenset(t) for s, t in tools.items()}, tuple(sorted(ids))
+        frozenset(servers),
+        {s: frozenset(t) for s, t in tools.items() if s not in open_servers},
+        tuple(sorted(ids)),
     )
 
 

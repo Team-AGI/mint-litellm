@@ -20,6 +20,7 @@ from mint_litellm.types.exec_contract import ExecContract
 from . import test_intakes as base
 
 world = base.world
+strict = base.strict
 HEX = "ab" * 32
 USER, TEAM, KEY, GATEWAY = "emp-1", "team-1", "key-1", "gw-1"
 
@@ -245,10 +246,9 @@ def test_a_local_approval_needs_a_ready_pack_and_known_tools(seeded):
     with pytest.raises(ControlError, match="묶음"):
         world.decide(str(request_id), "approve")
     pass_the_checks_pack_only(world, request_id)
-    with pytest.raises(ControlError, match="도구"):
-        world.decide(str(request_id), "approve")
-    assert world.server("pyg")["status"] == "awaiting_approval"
-    assert rows(world, "approvals") == []
+    world.decide(str(request_id), "approve")  # 도구 목록 없이도 승인한다(모든 도구 기본 허용)
+    assert world.server("pyg")["status"] == "approved"
+    assert rows(world, "approvals")[0]["tools"] == ["*"]
 
 
 def pass_the_checks_pack_only(world, request_id):
@@ -260,7 +260,9 @@ def pass_the_checks_pack_only(world, request_id):
         (HEX, Jsonb(contract.document()), request_id))
 
 
-def test_an_indeterminate_local_request_uses_the_exception_approval_with_a_second_approver(seeded):
+def test_an_indeterminate_local_request_uses_the_exception_approval_with_a_second_approver(
+    seeded, strict
+):
     world = seeded
     request_id = submit(world)
     pass_the_checks(world, request_id, final="indeterminate")

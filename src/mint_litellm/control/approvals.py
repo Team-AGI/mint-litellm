@@ -19,7 +19,11 @@ from mint_litellm.control.errors import (
 from mint_litellm.control.litellm_admin import LiteLLMAdmin
 from mint_litellm.control.services import base
 from mint_litellm.types.canonical import credential_scope
-from mint_litellm.types.contracts import ONE_SHOT_ACTIONS
+from mint_litellm.types.contracts import (
+    ACTION_DENIAL_PREFIX,
+    DENIABLE_ACTIONS,
+    ONE_SHOT_ACTIONS,
+)
 from mint_litellm.types.events import EventKind
 from mint_litellm.types.ids import new_uuid7
 
@@ -294,7 +298,7 @@ def check_scope_and_permission(
     # 승인자 자신이 쓰는 범위(본인 사용자·본인 키)는 요청자가 누구로 적혀 있든 다른 사람이 승인한다.
     beneficiary = scope_id if scope_type == "user" else target.get("user_id")
     mine = ctx.operator.user_id and beneficiary == ctx.operator.user_id
-    if scope_type in ("user", "key") and mine:
+    if scope_type in ("user", "key") and mine and operators.separation_enforced(ctx.operator):
         raise separation_of_duties(
             f"승인자 자신이 쓰는 {label}에는 승인할 수 없습니다. 다른 승인자가 승인해야 합니다."
         )
@@ -529,7 +533,14 @@ def create_denial(
     tools: list[str] | None,
     reason: str,
     org_id: str | None,
+    action_types: list[str] | None = None,
 ) -> str:
+    """거부를 만든다. ``tools``는 도구 이름, ``action_types``는 행위 유형 단위."""
+    if action_types:
+        bad = sorted(set(action_types) - set(DENIABLE_ACTIONS))
+        if bad:
+            raise ControlError(f"알 수 없는 행위 유형입니다: {bad[0][:32]}")
+        tools = [*(tools or []), *(ACTION_DENIAL_PREFIX + a for a in sorted(set(action_types)))]
     if scope_type not in (*SCOPE_TYPES, "server"):
         raise ControlError("scope는 key, user, team, org, server 중 하나여야 합니다.")
     if not reason.strip():
@@ -571,6 +582,9 @@ def lift_denial(ctx: Context, denial_id: str) -> None:
         (ctx.operator.name, ctx.instance_id, denial_id),
     )
     if row is None:
+        if fetchone(ctx.conn, "SELECT 1 AS x FROM mint.denials WHERE instance_id = %s AND id = %s",
+                    (ctx.instance_id, denial_id)):
+            return  # 이미 해제된 거부의 재전송은 그대로 성공이다
         raise not_found(f"해제되지 않은 거부 {denial_id}이(가) 없습니다.")
     ctx.emit(
         EventKind.DENIAL_LIFTED,
@@ -757,7 +771,8 @@ def call_approve(
         raise ControlError(
             f"{current['action_type']} 도구는 기간 승인을 줄 수 없습니다. 1회 승인만 가능합니다."
         )
-    if current["principal_type"] == "user" and current["principal_id"] == ctx.operator.user_id:
+    if (current["principal_type"] == "user" and current["principal_id"] == ctx.operator.user_id
+            and operators.separation_enforced(ctx.operator)):
         raise separation_of_duties(
             "호출 주체와 같은 사용자의 운영자는 호출별 승인을 승인할 수 없습니다."
         )

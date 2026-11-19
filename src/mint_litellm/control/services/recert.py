@@ -51,7 +51,8 @@ def scan(
             "UPDATE mint.approvals SET recert_held_at = now(),"
             " recert_requested_at = COALESCE(recert_requested_at, now())"
             " WHERE instance_id = %s AND status = 'active' AND recert_held_at IS NULL"
-            f" AND valid_until > now() AND {_BASE} + %s + %s <= now()"
+            " AND valid_until > now() AND valid_until < '2999-01-01'"
+            f" AND {_BASE} + %s + %s <= now()"
             " RETURNING id, server_id, scope_type, scope_id, state_version",
             (instance_id, period, grace),
         ).fetchall():
@@ -70,7 +71,9 @@ def scan(
         for approval_id, server_id, version in conn.execute(
             "UPDATE mint.approvals SET recert_requested_at = now()"
             " WHERE instance_id = %s AND status = 'active' AND recert_held_at IS NULL"
-            f" AND recert_requested_at IS NULL AND valid_until > now() AND {_BASE} + %s <= now()"
+            " AND recert_requested_at IS NULL AND valid_until > now()"
+            " AND valid_until < '2999-01-01'"
+            f" AND {_BASE} + %s <= now()"
             " RETURNING id, server_id, state_version",
             (instance_id, period),
         ).fetchall():
