@@ -450,3 +450,61 @@ def test_the_approver_can_only_narrow_the_declared_permissions(seeded):
     stored = ExecContract.model_validate({k: v for k, v in doc.items() if k != "identity_kind"})
     assert world.server("pyg")["exec_contract_sha256"] == stored.sha256()
     assert deployment["exec_contract_sha256"] == stored.sha256()
+
+
+# --- 원격 주소 신청(키로 올리는 직원 원격 신청) ------------------------------------------------
+
+
+def remote_payload(**changes):
+    from mint_litellm.endpoint.decide import RemoteIntakeBody
+
+    body = RemoteIntakeBody(request_id=uuid.uuid4(), server_id="docs",
+                            url="https://mcp.example.com/mcp", purpose="문서 조회")
+    return {**body.payload(), **changes}
+
+
+def submit_remote(world, body=None, token=KEY, request_id=None):
+    request_id = request_id or uuid.uuid4()
+    with as_login(world.url, "mint_plugin") as conn:
+        row = conn.execute("SELECT mint.endpoint_submit_remote_intake(%s, %s, %s)",
+                           (token, request_id, Jsonb(body or remote_payload()))).fetchone()
+    return row[0]
+
+
+def test_a_remote_request_from_a_key_is_the_same_request_a_staff_member_would_make(seeded):
+    world = seeded
+    request_id = uuid.uuid4()
+    assert submit_remote(world, request_id=request_id) == request_id
+    row = world.intake(request_id)
+    assert (row["source"], row["status"], row["requested_by"], row["org_id"],
+            row["staff_registry_required"], row["endpoint_key_token"]) == (
+        "staff", "received", USER, "acme", True, None)
+    server = world.server("docs")
+    assert (server["status"], server["identity_kind"], server["transport"]) == (
+        "pending", "remote", "http")
+    contract = fetchone(world.conn, "SELECT url, transport FROM mint.deployment_contracts"
+                        " WHERE id = %s", (request_id,))
+    assert contract == {"url": "https://mcp.example.com/mcp", "transport": "http"}
+    assert submit_remote(world, request_id=request_id) == request_id  # 재전송은 같은 번호
+
+
+def test_a_second_request_for_the_same_address_joins_the_one_in_progress(seeded):
+    world = seeded
+    first = submit_remote(world)
+    assert submit_remote(world) == first
+    assert len(rows(world, "intakes")) == 1
+
+
+def test_a_remote_request_refuses_a_bad_key_a_bad_address_and_another_users_server(seeded):
+    world = seeded
+    with pytest.raises(Exception, match="MINT-KEY"):
+        submit_remote(world, token="nope")
+    with pytest.raises(Exception, match="MINT-INVALID"):
+        submit_remote(world, remote_payload(url="ftp://x.example.com/", contract="{}"))
+    with pytest.raises(Exception, match="MINT-INVALID"):
+        submit_remote(world, remote_payload(contract='{"url":"https://other.example.com/"}'))
+    first = submit_remote(world)
+    assert first
+    install(world, token="key-2", user="emp-2", gateway="gw-2")
+    with pytest.raises(Exception, match="MINT-CONFLICT"):
+        submit_remote(world, token="key-2")

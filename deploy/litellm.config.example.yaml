@@ -7,6 +7,12 @@ general_settings:
   mcp_allow_all_keys_respects_mcp_scope: true
   store_prompts_in_spend_logs: false
   disable_env_credential_login: true
+  password_policy_min_length: 12
+  password_policy_require_uppercase: false
+  password_policy_require_lowercase: false
+  password_policy_require_numbers: false
+  password_policy_require_special_characters: false
+  password_policy_check_breached_passwords: false
 
 guardrails:
   - guardrail_name: mint

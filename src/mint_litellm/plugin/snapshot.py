@@ -1307,6 +1307,22 @@ class PluginDatabase:
 
         return await self._run(write)  # type: ignore[no-any-return]
 
+    async def endpoint_submit_remote_intake(
+        self, key_token: str, request_id: UUID, payload: Mapping[str, Any]
+    ) -> UUID:
+        """단말 키로 올리는 원격 서버 신청 접수(직원 신청과 같은 신청을 만든다)."""
+        from psycopg.types.json import Jsonb
+
+        async def write(conn: Any) -> Any:
+            async with conn.transaction():
+                cursor = await conn.execute(
+                    "SELECT mint.endpoint_submit_remote_intake(%s, %s, %s)",
+                    (key_token, request_id, Jsonb(dict(payload))),
+                )
+                return (await cursor.fetchone())[0]
+
+        return await self._run(write)  # type: ignore[no-any-return]
+
     async def endpoint_inspections(self, instance_id: str, key_token: str) -> list[dict[str, Any]]:
         """이 설치 키에 유효한(발급·소비) 검사용 승인."""
 
