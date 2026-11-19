@@ -1,5 +1,7 @@
+{% import "_tool_controls.html" as tc %}
+{{ tc.server_bar(ctl, actor, '/servers/' ~ (s.server_id | urlencode) ~ '?tab=contract') }}
 {% if s.tools %}
-<table><thead><tr><th>도구</th><th>위험 등급</th><th>동작 유형</th><th>변경</th></tr></thead><tbody>
-{% for t in s.tools %}<tr><td>{{ t.tool }}</td><td>{{ L.pick(L.RISK, t.risk_grade) }}</td><td>{{ L.pick(L.ACTION, t.action_type) }}</td><td>{% if t.drift != 'none' %}<a href="?tab=contract">변경됨</a>{% else %}—{% endif %}</td></tr>{% endfor %}
+<table><thead><tr><th>도구</th><th>위험 등급</th><th>동작 유형</th><th>변경</th><th>상태</th><th></th></tr></thead><tbody>
+{% for t in s.tools %}<tr><td>{{ t.tool }}</td><td>{{ L.pick(L.RISK, t.risk_grade) }}</td><td>{{ L.pick(L.ACTION, t.action_type) }}</td><td>{% if t.drift != 'none' %}<a href="?tab=contract">변경됨</a>{% else %}—{% endif %}</td><td>{{ tc.state(t, ctl) }}</td><td class="nowrap">{{ tc.actions(t, ctl, actor, '/servers/' ~ (s.server_id | urlencode) ~ '?tab=contract') }}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}<p class="muted">승인된 도구 계약이 없습니다.</p>{% endif %}

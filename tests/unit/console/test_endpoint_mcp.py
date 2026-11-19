@@ -90,9 +90,5 @@ def test_a_viewer_cannot_submit_the_form_and_a_failed_submit_keeps_the_values(wo
     assert 'action="/intakes"' not in viewer
     admin = world.session_client("admin")
     response = admin.post("/intakes", data=fields(world, admin))
-    assert response.status_code == 403 and 'value="docs.example.com"' in response.text
+    assert response.status_code == 403 and "목적" in response.text
     assert "게이트웨이 관리 키" in response.text
-    world.with_control_key()
-    bad = admin.post("/intakes", data={**fields(world, admin), "allowed_resources": "not json"})
-    assert bad.status_code == 400 and "입력 값이 올바르지 않습니다" in bad.text
-    assert 'value="human-1"' in bad.text

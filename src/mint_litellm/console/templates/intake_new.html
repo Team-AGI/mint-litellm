@@ -4,38 +4,13 @@
 {% block body %}
 <h1>신청 등록</h1>
 {% if can(actor, 'intake create') %}
-<ol class="steps" aria-label="단계">{% for name in steps %}<li class="{{ 'ok' if loop.index < step else ('wait' if loop.index == step else 'off') }}"><span class="icon" aria-hidden="true">{{ ICONS.ok if loop.index < step else (ICONS.wait if loop.index == step else ICONS.off) }}</span>{{ name }}</li>{% endfor %}</ol>
 <form method="post" action="/intakes" class="form cols">
-  {{ m.csrf(actor) }}<input type="hidden" name="step" value="{{ step }}">
-  {% if step == 1 %}
+  {{ m.csrf(actor) }}
   <label>서버 선택 (필수)<select name="server_id" required><option value="">서버를 선택하세요</option>{% for s in available_servers %}{% set sid = s.server_id or s.id %}<option value="{{ sid }}"{% if f.server_id == sid %} selected{% endif %}>{{ s.server_name or s.name or s.alias or sid }} · {{ sid }}</option>{% endfor %}{% if f.server_id and f.server_id not in available_ids %}<option value="{{ f.server_id }}" selected>{{ f.server_id }}</option>{% endif %}</select></label>{% if not available_servers %}<p>서버 목록을 확인할 수 없습니다. 관리자에게 문의하세요.</p>{% endif %}
-  <label>서버 주소<input type="url" name="server_url" value="{{ f.server_url }}" placeholder="https://example.com/mcp"></label><p>서버 주소를 조회할 수 없다면 주소를 입력하세요.</p>
-  <label>제공자<input name="provider" value="{{ f.provider }}" required></label>
-  <label>책임자(사용자 식별자)<input name="owner_user_id" value="{{ f.owner_user_id }}" required></label>
+  <label>서버 주소<input type="url" name="server_url" value="{{ f.server_url }}" placeholder="https://example.com/mcp"></label>
   <label class="full">목적<textarea name="purpose" maxlength="256" required>{{ f.purpose }}</textarea></label>
-  {% else %}
-  <input type="hidden" name="server_id" value="{{ f.server_id }}"><input type="hidden" name="server_url" value="{{ f.server_url }}"><input type="hidden" name="provider" value="{{ f.provider }}"><input type="hidden" name="owner_user_id" value="{{ f.owner_user_id }}"><input type="hidden" name="purpose" value="{{ f.purpose }}">
-  {% endif %}
-  {% if step == 2 %}
-  <label>자료 등급<select name="data_grade">{% for g in grades %}<option value="{{ g }}"{% if f.data_grade == g %} selected{% endif %}>{{ L.pick(L.DATA_GRADE, g) }}</option>{% endfor %}</select></label>
-  <fieldset class="form full"><legend>허용 자원 (선택)</legend><p>예: 문서 검색 범위</p>
-  {% for r in rows %}<input name="resource" value="{{ r }}" aria-label="허용 자원 {{ loop.index }}">{% endfor %}
-  <div class="actions"><button type="submit" name="go" value="add" formaction="/intakes/new" formnovalidate>행 추가</button></div>
-  </fieldset>
-  {% else %}
-  <input type="hidden" name="data_grade" value="{{ f.data_grade }}">{% for r in rows if r %}<input type="hidden" name="resource" value="{{ r }}">{% endfor %}
-  {% endif %}
-  {% if step == 3 %}
-  <label>감사 열람 기간(일)<input type="number" name="audit_access_days" min="1" value="{{ f.audit_access_days }}" required></label>
-  <label>자격 증명 변경 안내 (필수)<input placeholder="예: 담당자에게 변경 안내" name="credential_notice" value="{{ f.credential_notice }}" required></label>
-  <label>철회 기록 방법 (필수)<input placeholder="예: 관리 기록에 철회 사유 기록" name="revocation_record" value="{{ f.revocation_record }}" required></label>
-  <label class="full">자료 삭제·반환 조건<textarea name="data_return_terms" required>{{ f.data_return_terms }}</textarea></label>
-  {% else %}
-  <input type="hidden" name="audit_access_days" value="{{ f.audit_access_days }}"><input type="hidden" name="credential_notice" value="{{ f.credential_notice }}"><input type="hidden" name="revocation_record" value="{{ f.revocation_record }}"><input type="hidden" name="data_return_terms" value="{{ f.data_return_terms }}">
-  {% endif %}
   <div class="actions full">
-    {% if step < steps | length %}<button class="primary" type="submit" name="go" value="next" formaction="/intakes/new">다음</button>{% else %}<button class="primary" type="submit">신청 등록</button>{% endif %}
-    {% if step > 1 %}<button type="submit" name="go" value="prev" formaction="/intakes/new" formnovalidate>이전</button>{% endif %}
+    <button class="primary" type="submit">신청 등록</button>
     <a class="button" href="/intakes">취소</a>
   </div>
 </form>

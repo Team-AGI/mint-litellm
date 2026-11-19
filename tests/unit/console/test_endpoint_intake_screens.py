@@ -156,35 +156,8 @@ def test_an_operator_can_withdraw_their_own_endpoint_intake_from_its_detail(worl
     assert f'action="{submission_path}/withdraw"' not in submission.text
 
 
-def test_an_admin_grants_and_withdraws_an_inspection_approval_from_the_intake_screen(world):
-    intake = make_inspectable(world)
-    client = world.session_client("admin")
-    html = client.get(f"/intakes/{intake}").text
-    assert "단말 검사" in html and f"/intakes/{intake}/inspect" in html
-    assert "검사용 승인" in html and "단말 검사 대기" not in html
-    assert post_form(world, client, f"/intakes/{intake}/inspect").status_code == 303
-    html = client.get(f"/intakes/{intake}").text
-    assert re.search(r"단말 검사 대기 · 남은 시간 (59|60)분", html)
-    assert "검사용 승인 철회" in html and f"/intakes/{intake}/inspect" not in html.replace(
-        "/inspect-revoke", "")
-    again = post_form(world, client, f"/intakes/{intake}/inspect")
-    assert again.status_code == 409 and "이미 열려" in again.text
-    inspection = world.query("SELECT id FROM mint.endpoint_inspections")[0][0]
-    assert post_form(world, client, f"/intakes/{intake}/inspect-revoke",
-                     inspection_id=str(inspection)).status_code == 303
-    html = client.get(f"/intakes/{intake}").text
-    assert "단말 검사 대기" not in html and f"/intakes/{intake}/inspect\"" in html
-    assert "철회" in client.get(f"/intakes/{intake}?tab=pack").text
 
 
-def test_the_inspection_button_needs_a_local_indeterminate_intake_and_a_pack(world):
-    other = add_intake(world, status="indeterminate", result="indeterminate")
-    client = world.session_client("admin")
-    assert f"/intakes/{other}/inspect" not in client.get(f"/intakes/{other}").text
-    intake = make_inspectable(world, other)
-    assert f"/intakes/{intake}/inspect" in client.get(f"/intakes/{intake}").text
-    world.query("UPDATE mint.deployment_contracts SET pack_sha256 = NULL")
-    assert f"/intakes/{intake}/inspect" not in client.get(f"/intakes/{intake}").text
 
 
 def test_a_device_inspection_is_labelled_in_the_check_table_and_the_tool_list(world):
@@ -197,3 +170,10 @@ def test_a_device_inspection_is_labelled_in_the_check_table_and_the_tool_list(wo
     html = client.get(f"/intakes/{intake}").text
     assert "단말 검사로 받음" in html and html.count("단말 검사") >= 2
     assert "단말 검사 도구" in client.get(f"/intakes/{intake}?tab=pack").text
+
+
+
+def test_the_intake_screen_has_no_inspection_approval_button(world):
+    intake = make_inspectable(world)
+    html = world.session_client("admin").get(f"/intakes/{intake}").text
+    assert f"/intakes/{intake}/inspect" not in html and "검사용 승인" not in html

@@ -631,6 +631,7 @@ NOTICES = {
     "revoked_denied": "승인을 철회하고 거부를 등록했습니다.",
     "denied": "거부를 등록했습니다.",
     "lifted": "해제했습니다.",
+    "review_changed": "호출별 검토 지정을 바꿨습니다.",
     "key_block_approved": "키 차단을 승인했습니다. LiteLLM 반영 결과는 목록에서 확인하십시오.",
     "key_block_rejected": "키 차단 제안을 거절했습니다.",
     "key_block_unblock": "키 차단 해제를 요청했습니다.",

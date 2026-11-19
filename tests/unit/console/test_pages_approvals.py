@@ -12,17 +12,8 @@ from console_pages_support import (
 
 def test_the_approval_queue_lists_waiting_servers_with_a_review_action(admin):
     html = admin.get("/approvals?tab=servers").text
-    assert "srv-wait" in html and "/approvals/review/" in html
+    assert "srv-wait" in html and "신청 결정" in html
     assert "srv-ok</a></td>" not in html
-
-
-def test_the_review_form_is_prefilled_with_the_default_period(admin, world):
-    relation = world.query("SELECT id FROM mint.usage_relations WHERE server_id = 'srv-wait'")[0][0]
-    path = f"/approvals/review/{relation}"
-    assert "이 콘솔에서는 승인할 수 없습니다" in admin.get(path).text  # 제어 평면 키가 없다
-    world.with_control_key()
-    html = admin.get(path).text
-    assert 'name="valid_days" value="90"' in html and "신청자" in html
 
 
 def test_a_stale_screen_is_refused_with_a_conflict_message(world, admin):
@@ -167,15 +158,12 @@ def test_the_call_approval_screen_shows_what_is_asked_masked_and_the_denial_reas
     assert "범위 밖 요청" in admin.get(f"/approvals?tab=calls&focus={call_id}").text
 
 
-def test_the_review_form_offers_the_path_choices_and_the_result_limits(world, admin):
-    world.with_control_key()
+def test_the_review_page_is_a_restriction_form_without_grant_inputs(world, admin):
     relation = world.query("SELECT id FROM mint.usage_relations WHERE server_id = 'srv-wait'")[0][0]
     html = admin.get(f"/approvals/review/{relation}").text
-    assert html.count('name="paths_mode"') == 1 and 'value="unset" selected' in html
-    assert 'value="unrestricted"' in html and "제한 없음" in html
-    assert 'name="max_result_bytes"' in html and "결과 크기 상한(바이트)" in html
-    assert 'name="max_result_items"' in html and "결과 항목 수 상한" in html
-    assert "경로 이탈" not in html
+    assert "/servers/srv-wait/tools/block" in html and "사후 제한" in html
+    for name in ("second_approver_token", "requested_by", "paths_mode", "valid_days"):
+        assert f'name="{name}"' not in html
 
 
 def _pending_calls(world, count=2):

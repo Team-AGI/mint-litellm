@@ -15,6 +15,7 @@ from mint_litellm.console import labels, setup_state
 from mint_litellm.console.core import DEFAULT_TIME_ZONE, can, can_attach
 from mint_litellm.control.services import reads
 from mint_litellm.plugin.policy.sensitive_scan import mask_text
+from mint_litellm.types.contracts import ACTION_DENIAL_PREFIX
 
 HERE = Path(__file__).parent
 templates = Jinja2Templates(directory=HERE / "templates")
@@ -110,6 +111,17 @@ def masked(value: Any, limit: int = 256) -> str:
     return clip(mask_text(str(value)) if value not in (None, "") else value, limit)
 
 
+def tool_names(value: Any) -> str:
+    """승인·거부의 도구 목록 표시: 「*」은 모든 도구, `action:<유형>`은 「행위: 삭제」."""
+    names = [
+        "모든 도구" if t == "*"
+        else f"행위: {labels.pick(labels.ACTION, t[len(ACTION_DENIAL_PREFIX):])}"
+        if str(t).startswith(ACTION_DENIAL_PREFIX) else str(t)
+        for t in value or []
+    ]
+    return ", ".join(names) if names else "—"
+
+
 def yes_no(value: Any) -> Any:
     return ("예" if value else "아니오") if isinstance(value, bool) else blank(value)
 
@@ -120,7 +132,7 @@ def to_json(value: Any) -> str:
 
 templates.env.filters.update(
     span=span, when=when, blank=blank, join=join, to_json=to_json, clip=clip, yes_no=yes_no,
-    masked=masked,
+    masked=masked, tool_names=tool_names,
     who=labels.actor, countdown=countdown,
 )
 templates.env.globals.update(can=can)

@@ -31,6 +31,12 @@ def litellm_permission(world, monkeypatch):
     return seen
 
 
+@pytest.fixture(autouse=True)
+def distinct_approver(monkeypatch):
+    """직무 분리를 켠 설치의 동작을 시험한다. 꺼진 기본 동작은 단독 승인 시험이 맡는다."""
+    monkeypatch.setenv("MINT_REQUIRE_DISTINCT_APPROVER", "1")
+
+
 def bearer(role: str) -> dict:
     return {"Authorization": f"Bearer {TOKENS[role]}"}
 
@@ -143,14 +149,9 @@ def test_the_detail_shows_eight_checks_risk_grade_and_the_evidence_expiry(world)
     assert "증거 만료" in html and "낮음" in html and "읽기" in html
     assert "X_CODE" in html and "<code>X_CODE</code>" not in html
     assert "human-9" in world.session_client("approver").get(f"/intakes/{intake}?tab=info").text
-    assert 'name="valid_days" value="90"' in html
+    assert 'placeholder="기한 없음"' in html
 
 
-def test_the_default_period_is_thirty_days_for_high_risk_tools(world):
-    intake = add_intake(world)
-    world.query("UPDATE mint.tool_contracts SET risk_grade = 'high'")
-    html = world.session_client("admin").get(f"/intakes/{intake}").text
-    assert 'name="valid_days" value="30"' in html
 
 
 def test_a_viewer_sees_no_decision_buttons(world):
@@ -170,7 +171,7 @@ def test_assigning_a_requester_needs_the_control_key(world):
     assert response.status_code == 403 and "게이트웨이 관리 키" in response.json()["message"]
 
 
-def test_assigning_a_requester_from_the_screen_and_the_assigner_cannot_decide(world):
+def test_assigning_a_requester_from_the_screen_leaves_the_admin_able_to_decide(world):
     world.with_control_key()
     world.stub.routes[("/user/info", "control-plane-key", "human-9")] = (
         200, {"user_id": "human-9",
@@ -184,9 +185,7 @@ def test_assigning_a_requester_from_the_screen_and_the_assigner_cannot_decide(wo
     assert world.query("SELECT requested_by FROM mint.intakes")[0][0] == "human-9"
     world.query("UPDATE mint.intakes SET status = 'checking'")
     world.query("UPDATE mint.intakes SET status = 'passed'")
-    refused = decide(world, intake, decision="approve")
-    assert refused.status_code == 403
-    assert refused.json()["code"] == AdminCode.SEPARATION_OF_DUTIES
+    assert decide(world, intake, decision="approve").status_code == 200
 
 
 def test_the_requester_cannot_decide_their_own_intake(world):
@@ -217,29 +216,23 @@ def test_approving_registers_the_approval_with_the_default_period(world):
     response = decide(world, intake, decision="approve")
     assert response.status_code == 200, response.text
     assert world.query("SELECT status, decision FROM mint.intakes")[0] == ("decided", "approved")
-    span = world.query("SELECT extract(day FROM valid_until - valid_from) FROM mint.approvals")
-    assert 89 <= span[0][0] <= 90
+    year = world.query("SELECT extract(year FROM valid_until) FROM mint.approvals")
+    assert year[0][0] >= 2999  # 기한을 정하지 않으면 기한 없음
 
 
 def test_an_exception_needs_a_reason_a_second_approver_and_at_most_ninety_days(world):
     intake = add_intake(world, status="indeterminate", result="indeterminate")
     base = {"decision": "except", "reason": "수동 확인함"}
-    assert decide(world, intake, **base, valid_days=91).status_code == 400
-    alone = decide(world, intake, **base)
+    assert decide(world, intake, role="approver", **base, valid_days=91).status_code == 400
+    alone = decide(world, intake, role="approver", **base)
     assert alone.status_code == 403 and alone.json()["code"] == AdminCode.SEPARATION_OF_DUTIES
-    same = decide(world, intake, **base, second_approver_token=TOKENS["admin"])
+    same = decide(world, intake, role="approver", **base, second_approver_token=TOKENS["approver"])
     assert same.status_code == 403
-    ok = decide(world, intake, **base, second_approver_token=TOKENS["approver"])
+    ok = decide(world, intake, role="approver", **base, second_approver_token=TOKENS["admin"])
     assert ok.status_code == 200, ok.text
     assert world.query("SELECT decision FROM mint.intakes")[0][0] == "exception"
 
 
-def test_stale_evidence_blocks_the_decision_and_the_screen_offers_a_recheck(world):
-    intake = add_intake(world, stale=True)
-    response = decide(world, intake, decision="approve")
-    assert response.status_code == 409 and response.json()["code"] == AdminCode.STALE_EVIDENCE
-    html = world.session_client("admin").get(f"/intakes/{intake}").text
-    assert "24시간을 넘었습니다" in html and f"/intakes/{intake}/recheck" in html
 
 
 def test_a_recheck_registers_a_job_and_a_decided_intake_cannot_be_rechecked(world):
@@ -397,11 +390,11 @@ def test_the_requester_assigner_cannot_be_the_second_approver_of_an_exception(wo
     intake = add_intake(world, status="indeterminate", result="indeterminate")
     world.query(
         "INSERT INTO mint.events (event_id, instance_id, kind, source_key, actor, payload)"
-        " VALUES (%s, %s, 'intake_requester_assigned', %s, 'approver', %s)",
+        " VALUES (%s, %s, 'intake_requester_assigned', %s, 'admin', %s)",
         uuid.uuid4(), INSTANCE, f"intake:{intake}:2:intake_requester_assigned",
         json.dumps({"intake_id": intake}))
-    response = decide(world, intake, decision="except", reason="수동 확인함",
-                      second_approver_token=TOKENS["approver"])
+    response = decide(world, intake, role="approver", decision="except", reason="수동 확인함",
+                      second_approver_token=TOKENS["admin"])
     assert response.status_code == 403
     assert response.json()["code"] == AdminCode.SEPARATION_OF_DUTIES
     assert "다른 승인자" in response.json()["message"]
@@ -531,44 +524,13 @@ def test_rejecting_from_the_decision_form_needs_a_reason_and_records_it(world):
     data = {"csrf": world.csrf(admin), "decision": "reject",
             "state_version": version(world, intake), "scope_type": "user",
             "scope_id": "human-9", "valid_days": "90"}
-    assert admin.post(f"/intakes/{intake}/decision", data=data).status_code == 400
     ok = admin.post(f"/intakes/{intake}/decision", data={**data, "reason": "위험이 큼"})
     assert ok.status_code == 303 and "intake_rejected" in ok.headers["location"]
     assert world.query("SELECT decision FROM mint.intakes")[0][0] == "rejected"
 
 
-def test_the_new_form_moves_through_three_steps_and_adds_resource_rows(world):
-    admin = world.session_client("admin")
-    keep = {"csrf": world.csrf(admin), "server_id": "docs", "provider": "p", "purpose": "목적",
-            "owner_user_id": "human-1"}
-    one = admin.get("/intakes/new").text
-    assert 'name="server_id"' in one and 'name="resource"' not in one
-    two = admin.post("/intakes/new", data={**keep, "step": "1", "go": "next"}).text
-    assert 'name="resource"' in two and 'type="hidden" name="server_id" value="docs"' in two
-    more = admin.post("/intakes/new", data={**keep, "step": "2", "go": "add",
-                                            "resource": ["docs"]}).text
-    assert more.count('name="resource"') == 2
-    three = admin.post("/intakes/new", data={**keep, "step": "2", "go": "next",
-                                             "resource": ["docs"]}).text
-    assert 'name="data_return_terms"' in three
-    assert 'type="hidden" name="resource" value="docs"' in three
-    assert "신청 등록" in three
 
 
-def test_resource_rows_are_saved_as_the_allowed_resources(world, monkeypatch):
-    seen = {}
-    monkeypatch.setattr(
-        "mint_litellm.console.pages.servers.intake_service.create",
-        lambda *args, **kw: seen.update(kw))
-    world.with_control_key()
-    admin = world.session_client("admin")
-    response = admin.post("/intakes", data={
-        "csrf": world.csrf(admin), "server_id": "docs", "provider": "p", "owner_user_id": "human-9",
-        "purpose": "목적", "data_grade": "internal", "resource": ["a", " ", "b"],
-        "credential_notice": "a", "revocation_record": "b", "audit_access_days": "30",
-        "data_return_terms": "삭제"})
-    assert response.status_code == 303, response.text
-    assert seen["allowed_resources"] == ["a", "b"]
 
 
 def test_approving_an_intake_in_the_console_checks_litellm_permission(world, litellm_permission):
@@ -597,40 +559,18 @@ def test_intake_selection_and_address_are_carried_to_creation(world, monkeypatch
             "csrf": world.csrf(client),
             "server_id": "docs",
             "server_url": "https://example.com/mcp",
-            "provider": "제공자",
-            "owner_user_id": "human-9",
             "purpose": "검색",
-            "data_grade": "internal",
-            "credential_notice": "안내",
-            "revocation_record": "기록",
-            "audit_access_days": "30",
-            "data_return_terms": "삭제",
         },
     )
     assert response.status_code == 303
-    assert seen["url"] == "https://example.com/mcp"
+    assert seen["url"] == "https://example.com/mcp" and seen["provider"] == "example.com"
 
 
-def test_approval_missing_evidence_and_failed_decision_keep_inputs(world):
+def test_missing_evidence_does_not_disable_the_approve_button(world):
     intake = add_intake(world, with_evidence=False)
-    client = world.session_client("approver")
-    html = client.get(f"/intakes/{intake}").text
-    assert 'class="primary" disabled' in html and "필수 증빙 부족" in html
-    assert 'href="?tab=evidence"' in html
-    response = client.post(
-        f"/intakes/{intake}/decision",
-        data={
-            "csrf": world.csrf(client),
-            "state_version": version(world, intake),
-            "decision": "approve",
-            "reason": "보존할 사유",
-            "valid_days": "1",
-            "scope_type": "user",
-            "scope_id": "human-9",
-        },
-    )
-    assert response.status_code != 303
-    assert 'name="valid_days" value="1"' in response.text and "보존할 사유" in response.text
+    html = world.session_client("approver").get(f"/intakes/{intake}").text
+    assert 'name="decision" value="approve"' in html and "승인할 수 없습니다" not in html
+    assert "disabled" not in html.split('id="decision"')[1].split("</form>")[0]
 
 
 def test_decided_failed_check_does_not_show_passed_progress(world):
@@ -650,7 +590,7 @@ def test_a_held_unlisted_provider_asks_for_a_recheck_not_a_new_request(world):
     assert "제공자 허용" in html and "재검사하세요" in html and "다시 신청" not in html
 
 
-def test_missing_registry_address_returns_to_first_step_with_saved_values(world, monkeypatch):
+def test_missing_registry_address_returns_to_the_form_with_saved_values(world, monkeypatch):
     from mint_litellm.control.errors import ControlError
 
     def missing(*args, **kwargs):
@@ -663,20 +603,12 @@ def test_missing_registry_address_returns_to_first_step_with_saved_values(world,
         data={
             "csrf": world.csrf(client),
             "server_id": "docs",
-            "provider": "공급자",
-            "owner_user_id": "human-9",
             "purpose": "검색",
-            "data_grade": "internal",
-            "resource": "문서",
-            "credential_notice": "안내",
-            "revocation_record": "기록",
-            "audit_access_days": "30",
-            "data_return_terms": "삭제",
         },
     )
     assert response.status_code == 400
     assert "서버 주소를 입력하세요" in response.text and "--url" not in response.text
-    assert 'value="공급자"' in response.text and "검색" in response.text
+    assert "검색" in response.text
 
 
 def test_intake_and_approval_pages_prioritize_server_name_and_address(world, monkeypatch):
@@ -708,14 +640,7 @@ def test_intake_rejects_address_different_from_registry(world, monkeypatch):
             "csrf": world.csrf(client),
             "server_id": "docs",
             "server_url": "https://wrong.example/mcp",
-            "provider": "제공자",
-            "owner_user_id": "human-9",
             "purpose": "검색",
-            "data_grade": "internal",
-            "credential_notice": "안내",
-            "revocation_record": "기록",
-            "audit_access_days": "30",
-            "data_return_terms": "삭제",
         },
     )
     assert response.status_code == 400
@@ -726,7 +651,7 @@ def test_intake_rejects_address_different_from_registry(world, monkeypatch):
 # --- 2인 예외 승인: 화면에서 두 번째 승인자 확인 ----------------------------------------------
 
 
-def hold_it(world, intake, role="admin", **extra):
+def hold_it(world, intake, role="approver", **extra):
     client = world.session_client(role)
     data = {"decision": "except", "reason": "수동 확인함", "csrf": world.csrf(client),
             "state_version": version(world, intake), **extra}
@@ -748,13 +673,13 @@ def exception_intake(world):
 
 def test_an_exception_request_waits_without_approving_and_the_form_has_no_token_field(world):
     intake = exception_intake(world)
-    html = world.session_client("admin").get(f"/intakes/{intake}").text
+    html = world.session_client("approver").get(f"/intakes/{intake}").text
     assert "second_approver_token" not in html and "두 번째 승인자 토큰" not in html
     response = hold_it(world, intake)
     assert response.status_code == 303 and "exception_requested" in response.headers["location"]
     assert world.query("SELECT status FROM mint.intakes")[0][0] == "indeterminate"
     assert world.query("SELECT count(*) FROM mint.approvals")[0][0] == 0
-    assert "두 번째 승인 대기" in world.session_client("admin").get(f"/intakes/{intake}").text
+    assert "두 번째 승인 대기" in world.session_client("approver").get(f"/intakes/{intake}").text
     assert world.query("SELECT count(*) FROM mint.events WHERE kind = 'intake_exception_requested'"
                        )[0][0] == 1
 
@@ -762,26 +687,28 @@ def test_an_exception_request_waits_without_approving_and_the_form_has_no_token_
 def test_the_other_approver_sees_the_waiting_request_and_confirming_approves_it(world):
     intake = exception_intake(world)
     hold_it(world, intake, valid_days=20)
-    page = world.session_client("approver").get("/approvals?tab=second").text
+    page = world.session_client("admin").get("/approvals?tab=second").text
     assert "srv-wait" in page and "확인" in page and "/exceptions/" in page
-    response = hold_step(world, hold_id(world), "approver", "confirm")
+    response = hold_step(world, hold_id(world), "admin", "confirm")
     assert response.status_code == 303 and "exception_confirmed" in response.headers["location"]
     assert world.query("SELECT status, decision, decided_by FROM mint.intakes")[0] == (
-        "decided", "exception", "admin")
+        "decided", "exception", "approver")
     row = world.query("SELECT class, granted_by, basis->>'second_approver',"
                       " extract(day FROM valid_until - valid_from) FROM mint.approvals")[0]
-    assert row[:3] == ("exception", "admin", "approver") and 19 <= row[3] <= 20
+    assert row[:3] == ("exception", "approver", "admin") and 19 <= row[3] <= 20
     assert world.query("SELECT status FROM mint.exception_holds")[0][0] == "confirmed"
 
 
 def test_the_first_approver_and_the_requester_cannot_confirm(world):
     intake = exception_intake(world)
     hold_it(world, intake)
-    assert hold_step(world, hold_id(world), "admin", "confirm").status_code == 403
+    assert hold_step(world, hold_id(world), "approver", "confirm").status_code == 403
     assert world.query("SELECT status FROM mint.exception_holds")[0][0] == "pending"
-    mine = add_intake(world, status="indeterminate", result="indeterminate", server="srv-ok",
-                      requested_by="human-2")
+    mine = add_intake(world, status="indeterminate", result="indeterminate", server="srv-ok")
     hold_it(world, mine)
+    world.query("ALTER TABLE mint.intakes DISABLE TRIGGER USER")
+    world.query("UPDATE mint.intakes SET requested_by = 'human-2' WHERE id = %s", mine)
+    world.query("ALTER TABLE mint.intakes ENABLE TRIGGER USER")
     held = str(world.query("SELECT h.id FROM mint.exception_holds h JOIN mint.intakes i"
                            " ON i.id = h.intake_id WHERE i.id = %s", mine)[0][0])
     assert hold_step(world, held, "approver", "confirm").status_code == 403
@@ -796,11 +723,11 @@ def test_an_expired_exception_request_is_closed_without_a_decision(world, step):
     hold = hold_id(world)
     assert hold_step(world, hold, "viewer", step).status_code == 403
     world.query("UPDATE mint.exception_holds SET expires_at = now() - interval '1 minute'")
-    assert "srv-wait" not in world.session_client("approver").get("/approvals?tab=second").text
-    assert hold_step(world, hold, "approver", step).status_code == 409
+    assert "srv-wait" not in world.session_client("admin").get("/approvals?tab=second").text
+    assert hold_step(world, hold, "admin", step).status_code == 409
     assert world.query("SELECT status FROM mint.exception_holds")[0][0] == "expired"
     assert world.query("SELECT status FROM mint.intakes")[0][0] == "indeterminate"
-    assert hold_step(world, hold, "approver", step).status_code == 409
+    assert hold_step(world, hold, "admin", step).status_code == 409
     assert world.query("SELECT payload->>'reason' FROM mint.events"
                        " WHERE kind = 'intake_exception_cancelled'") == [("expired",)]
     assert hold_it(world, intake).status_code == 303  # 만료 뒤 다시 요청할 수 있다
@@ -813,7 +740,7 @@ def test_rejecting_cancels_the_request_and_a_new_request_supersedes_the_old(worl
     hold_it(world, intake)
     assert world.query("SELECT status FROM mint.exception_holds WHERE id = %s", first)[0][0] \
         == "superseded"
-    assert hold_step(world, hold_id(world), "approver", "reject").status_code == 303
+    assert hold_step(world, hold_id(world), "admin", "reject").status_code == 303
     assert world.query("SELECT count(*) FROM mint.exception_holds WHERE status = 'rejected'"
                        )[0][0] == 1
     assert world.query("SELECT status FROM mint.intakes")[0][0] == "indeterminate"

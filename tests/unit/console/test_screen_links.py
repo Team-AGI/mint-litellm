@@ -36,7 +36,7 @@ POSTS = [
     "/call-approval-rules", "/call-approval-rules/x/disable", "/approvals", "/approvals/renew",
     "/approvals/x/revoke", "/approvals/x/recertify", "/approvals/dormant/keep",
     "/approvals/dormant/revoke", "/servers/x/suspend", "/servers/x/resume",
-    "/servers/x/evidence", "/contracts/x/reapprove", "/intakes", "/intakes/new",
+    "/servers/x/evidence", "/contracts/x/reapprove", "/intakes", 
     "/intakes/x/recheck", "/intakes/x/decision", "/intakes/x/evidence", "/denials",
     "/denials/x/lift", "/allowlists", "/allowlists/x/lift", "/alerts/x/acknowledge",
     "/policy/shadow/apply", "/policy/shadow/cancel", "/policy/mode", "/operators/x/role",
