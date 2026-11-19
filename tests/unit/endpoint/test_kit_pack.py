@@ -724,18 +724,21 @@ def test_the_purpose_prompt_names_the_option_only_for_scripts(tmp_path):
     assert lines[-1] == "목적을 적으십시오"
 
 
-def test_data_grades_are_asked_and_shown_in_korean_and_sent_as_internal_values(tmp_path):
+def test_the_grade_is_never_asked_and_an_option_is_sent_as_the_internal_value(tmp_path):
     asked, lines, gateway = [], [], FakeGateway()
 
     def read(question):
         asked.append(question)
-        return {"자료 등급": "기밀", "이대로": "y"}.get(next(
-            (k for k in ("자료 등급", "이대로") if k in question), ""), "")
+        return "목적" if "목적" in question else ""
 
     code = kit_module.run_add(
-        add_args(yes=False, grade=None), tmp_path, gateway, out=lines.append, read=read, tty=True)
-    assert code == 0 and gateway.sent[0]["data_grade"] == "confidential"
-    assert any("공개·내부·기밀·제한" in q and "[내부]" in q for q in asked)
+        add_args(yes=False, grade=None, purpose=None), tmp_path, gateway, out=lines.append,
+        read=read, tty=True, key=lambda: "enter")
+    assert code == 0 and gateway.sent[0]["data_grade"] == "internal"
+    assert asked == ["목적 "] and not any(line.startswith("자료 등급") for line in lines)
+    lines.clear()
+    assert kit_module.run_add(add_args(grade="기밀"), tmp_path, gateway, out=lines.append) == 0
+    assert gateway.sent[1]["data_grade"] == "confidential"
     assert any(line.startswith("자료 등급") and "기밀" in line for line in lines)
     assert not any("confidential" in line or "internal" in line for line in lines)
     assert kit_module.parse_grade("제한") == "restricted"
@@ -751,15 +754,16 @@ def test_a_single_key_confirms_on_the_screen_and_a_line_prompt_says_to_press_ent
     quiet = lambda t: 0  # noqa: E731
     kw = dict(out=quiet, tty=True, read=lambda q: "")
     assert kit_module.run_add(args, tmp_path, gateway, key=lambda: "y", **kw) == 0
+    assert kit_module.run_add(args, tmp_path, gateway, key=lambda: "enter", **kw) == 0
     assert kit_module.run_add(args, tmp_path, gateway, key=lambda: "n", **kw) == 1
-    assert len(gateway.sent) == 1
+    assert len(gateway.sent) == 2
 
     def read(question):
         asked.append(question)
-        return "y" if "이대로" in question else ""
+        return ""
 
     assert kit_module.run_add(args, tmp_path, gateway, out=quiet, read=read, tty=True) == 0
-    assert "이대로 신청할까요? (y/n, Enter) [n] " in asked
+    assert "신청할까요? (Enter 신청, n 취소) [y] " in asked
 
 
 def test_tab_three_shows_the_stage_and_never_an_english_next_step():

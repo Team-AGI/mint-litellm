@@ -1,0 +1,1 @@
+- `./mint.sh up`이 새 설치에서 기본 관리자 root(비밀번호 rootrootroot)를 LiteLLM 사용자와 MINT 운영자로 만든다. 바꾼 비밀번호는 재기동·업그레이드에서 유지되고, 번들 설정 예시만 LiteLLM 비밀번호 규칙을 길이 12로 낮춘다.

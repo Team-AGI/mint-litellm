@@ -3,7 +3,8 @@
 {% block body %}
 <h1>내 서버</h1>
 <div class="cards">
-  {{ m.kpi('사용 가능', rows | selectattr('tools') | list | length) }}
+  {{ m.kpi('승인됨', rows | length) }}
+  {{ m.kpi('도구 발견', rows | selectattr('seen') | list | length) }}
   {{ m.kpi('동의 필요', need, level='wait' if need) }}
   {{ m.kpi('만료 임박(7일)', expiring, level='wait' if expiring) }}
 </div>
@@ -16,11 +17,11 @@
 </tbody></table>
 {% else %}{{ m.empty('기록이 없습니다', '/staff', '내 서버') }}{% endif %}
 {% elif rows %}
-<table class="clickable"><thead><tr><th>서버</th><th>조직</th><th>전송</th><th>인증</th><th>도구</th><th>승인 만료</th><th>동의</th></tr></thead><tbody>
+<table class="clickable"><thead><tr><th>서버</th><th>조직</th><th>전송</th><th>인증</th><th>상태</th><th>도구</th><th>승인 만료</th><th>동의</th></tr></thead><tbody>
 {% for r in rows %}<tr>
 <td><a href="/staff?open={{ r.ref | urlencode }}">{{ r.server_name }}</a></td><td>{{ r.org_name }}</td>
 <td>{{ L.pick(L.TRANSPORT, r.transport) if r.transport else '—' }}</td><td>{{ L.pick(L.AUTH_TYPE, r.auth_type) if r.auth_type else '—' }}</td>
-<td>{{ (r.tools | join) or '—' }}</td><td class="nowrap">{{ r.valid_until | when if r.valid_until else '—' }}</td>
+<td>{{ ('도구 발견 ' ~ (r.seen | when)) if r.seen else '승인됨' }}</td><td>{{ (r.tools | join) or '—' }}</td><td class="nowrap">{{ r.valid_until | when if r.valid_until else '—' }}</td>
 <td>{{ m.badge(L.CONSENT_STATE, r.state) }}{% if r.expiring %} · <span class="nowrap">{{ r.consent_until | when }}</span>{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
@@ -30,6 +31,7 @@
   <dt>조직</dt><dd>{{ selected.org_name }}</dd>
   <dt>전송</dt><dd>{{ L.pick(L.TRANSPORT, selected.transport) if selected.transport else '—' }}</dd>
   <dt>인증</dt><dd>{{ L.pick(L.AUTH_TYPE, selected.auth_type) if selected.auth_type else '—' }}</dd>
+  <dt>상태</dt><dd>{{ ('도구 발견 ' ~ (selected.seen | when)) if selected.seen else '승인됨' }}</dd>
   <dt>도구</dt><dd>{{ (selected.tools | join) or '—' }}</dd>
   <dt>승인 만료</dt><dd>{{ selected.valid_until | when if selected.valid_until else '—' }}</dd>
 </dl>

@@ -21,6 +21,16 @@ REQUIRED_FLAGS = (("general_settings", "disable_env_credential_login"),)
 # 서버마다 없으면 더하는 기본 한도(분당 호출 수, 동시 실행 수). 이미 적힌 값은 존중한다.
 SERVER_LIMITS = {"rpm": DEFAULT_SERVER_RPM, "max_concurrent_requests": DEFAULT_SERVER_CONCURRENCY}
 
+# MINT 자체 스택의 기본 관리자(root)가 들어오도록 LiteLLM 비밀번호 규칙은 길이만 둔다.
+PASSWORD_POLICY: dict[str, Any] = {
+    "password_policy_min_length": 12,
+    "password_policy_require_uppercase": False,
+    "password_policy_require_lowercase": False,
+    "password_policy_require_numbers": False,
+    "password_policy_require_special_characters": False,
+    "password_policy_check_breached_passwords": False,
+}
+
 _HEADER = "# MINT 통제에 필요한 LiteLLM 설정 조각. 기존 config.yaml의 같은 키에 합친다.\n"
 
 
@@ -281,3 +291,48 @@ def ensure_required_flags(path: Path) -> list[str]:
     with path.open("w", encoding="utf-8", newline="") as handle:
         handle.write(edited)
     return added
+
+
+def ensure_password_policy(path: Path) -> list[str]:
+    """``general_settings``에 ``password_policy_*`` 키가 하나도 없을 때만 완화 값을 더한다.
+
+    운영자가 하나라도 적어 두었으면 그대로 두고 빈 목록을 돌려준다(``mint.sh up``이 안내한다).
+    바꾸기 전에 ``<파일>.bak-<UTC 시각>`` 사본을 두고, 다시 읽은 결과가 기대와 다르면 쓰지 않는다.
+    """
+    if not path.is_file():
+        return []
+    raw = path.read_bytes().decode("utf-8")
+    try:
+        document = yaml.safe_load(raw) or {}
+    except yaml.YAMLError as error:
+        raise ControlError(f"설정 파일을 읽을 수 없습니다({path}): {error}") from None
+    general = document.get("general_settings")
+    if any(str(key).startswith("password_policy_") for key in (general or {})):
+        return []
+    lines = raw.split("\n")
+    head = [i for i, ln in enumerate(lines) if re.match(r"^general_settings:\s*(?:#.*)?$", ln)]
+    new = [f"{key}: {str(value).lower()}" for key, value in PASSWORD_POLICY.items()]
+    if head:
+        body = lines[head[0] + 1:]
+        nxt = next((ln for ln in body if ln.strip() and not ln.lstrip().startswith("#")), "")
+        indent = nxt[: len(nxt) - len(nxt.lstrip())] or "  "
+        lines[head[0] + 1:head[0] + 1] = [indent + item for item in new]
+    elif general is not None:
+        raise ControlError(f"{path}의 general_settings를 자동으로 고칠 수 없습니다.")
+    else:
+        tail = [] if not lines or lines[-1] == "" else [""]
+        lines += [*tail, "general_settings:", *("  " + item for item in new), ""]
+    expected = yaml.safe_load(raw) or {}
+    expected["general_settings"] = {**(expected.get("general_settings") or {}), **PASSWORD_POLICY}
+    edited = "\n".join(lines)
+    try:
+        ok = yaml.safe_load(edited) == expected
+    except yaml.YAMLError:
+        ok = False
+    if not ok:
+        raise ControlError(f"{path}에 비밀번호 규칙을 자동으로 더할 수 없습니다.")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    shutil.copy2(path, path.with_name(f"{path.name}.bak-{stamp}"))
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        handle.write(edited)
+    return list(PASSWORD_POLICY)
