@@ -202,16 +202,33 @@ def update_manifest(version: str, digests: dict) -> bytes:
     return NL.join(lines).encode()
 
 
-def verify_update(public_hex: str, update: object) -> tuple[str, dict[str, bytes]] | str:
-    """서명된 갱신 묶음을 고정 공개 키로 검증한다. 통과하면 (판본, 파일들), 아니면 실패 사유."""
+def update_manifest_v2(version: str, serial: int, digests: dict) -> bytes:
+    """판본 번호까지 묶어 서버가 서명한 글(되돌리기 방지)."""
+    lines = [f"mint-kit-update-v2 {version} {serial}"]
+    lines += [f"{n} {digests[n]}" for n in sorted(digests)]
+    return NL.join(lines).encode()
+
+
+def verify_update(
+    keys: str | list[str], update: object, min_serial: int = 0
+) -> tuple[str, dict[str, bytes], int, list[str]] | str:
+    """서명된 갱신 묶음을 고정 공개 키 목록으로 검증한다.
+
+    통과하면 (판본, 파일들, 판본 번호, 갱신된 공개 키 목록), 아니면 실패 사유.
+    묶음의 새 공개 키 공지는 이미 믿는 키가 서명한 것만 목록에 더한다.
+    판본 번호가 ``min_serial`` 아래면 ``rollback``.
+    """
     import base64
     import zlib
 
     try:
         files = update["files"]  # type: ignore[index]
         version = update["version"]  # type: ignore[index]
-        signature = bytes.fromhex(update["sig"])  # type: ignore[index]
+        serial = update["serial"]  # type: ignore[index]
+        signature = bytes.fromhex(update["sig2"])  # type: ignore[index]
         if not isinstance(version, str) or set(files) != {n for n, _ in UPDATE_FILES}:
+            return "bad_bundle"
+        if type(serial) is not int:
             return "bad_bundle"
         data: dict[str, bytes] = {}
         for name, packed in files.items():
@@ -219,18 +236,30 @@ def verify_update(public_hex: str, update: object) -> tuple[str, dict[str, bytes
             data[name] = decoder.decompress(base64.b64decode(packed, validate=True), MAX_REPLY * 4)
             if decoder.unconsumed_tail:
                 return "too_large"
-        public = bytes.fromhex(public_hex)
-    except (TypeError, KeyError, ValueError, zlib.error):
+        known = [keys] if isinstance(keys, str) else list(keys)
+        trusted = [bytes.fromhex(k) for k in known]
+        for item in update.get("keys") or ():  # type: ignore[union-attr]
+            new = bytes.fromhex(item["pub"])
+            notice = b"mint-kit-key-v1 " + new.hex().encode()
+            if new not in trusted and any(
+                ed25519_verify(k, notice, bytes.fromhex(item["sig"])) for k in trusted
+            ):
+                trusted.append(new)
+                known.append(new.hex())
+    except (TypeError, KeyError, ValueError, zlib.error, AttributeError):
         return "bad_bundle"
     digests = {name: sha256_bytes(raw) for name, raw in data.items()}
-    if not ed25519_verify(public, update_manifest(version, digests), signature):
+    message = update_manifest_v2(version, serial, digests)
+    if not any(ed25519_verify(k, message, signature) for k in trusted):
         return "bad_signature"
+    if serial < min_serial:
+        return "rollback"
     for name, raw in data.items():
         try:
             compile(raw, name, "exec")
         except (SyntaxError, ValueError):
             return "bad_code"
-    return version, data
+    return version, data, serial, known
 
 
 def post(url: str, key: str, payload: dict, ca_file: str | None) -> dict | None:
@@ -2710,13 +2739,13 @@ class Kit:
         모든 새 파일을 임시 파일로 먼저 쓴 뒤에 이름을 바꿔 넣고 ``kit.json``의 판본은 맨 끝에
         바꾼다(중간에 멈추면 판본이 옛것이라 다음 보고가 다시 받는다). 새 코드는 다음 주기부터 돈다.
         """
-        public = self.config.get("update_key")
-        if not public:
+        if not self.config.get("update_key"):
             return "no_key"
-        checked = verify_update(public, update)
+        keys = self.config.get("update_keys") or [self.config["update_key"]]
+        checked = verify_update(keys, update, int(self.config.get("kit_serial") or 0))
         if isinstance(checked, str):
             return checked
-        version, files = checked
+        version, files, serial, keys = checked
         if not os.access(folder, os.W_OK):
             return "not_writable"
         try:
@@ -2724,6 +2753,8 @@ class Kit:
         except (OSError, ValueError):
             return "no_config"
         config["kit_version"] = version
+        config["kit_serial"] = serial
+        config["update_keys"] = keys
         staged: list[tuple[str, Path]] = []  # (임시 파일, 최종 경로)
         sums: dict[str, str] = {}
         try:
@@ -2747,6 +2778,8 @@ class Kit:
         state["files"].update(sums)
         state["kit_version"] = version
         self.config["kit_version"] = version
+        self.config["kit_serial"] = serial
+        self.config["update_keys"] = keys
         self.save_state(state)
         return None
 

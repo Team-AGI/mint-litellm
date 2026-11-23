@@ -51,6 +51,14 @@ def kit_version() -> str:
     return digest.hexdigest()
 
 
+def kit_serial() -> int:
+    """단조 증가 판본 번호: 묶음 프로그램 파일의 가장 늦은 수정 시각(초).
+
+    ponytail: 파일 시각 기반이라 배포가 시각을 보존하지 않으면 어긋난다. 필요하면 빌드 번호로.
+    """
+    return max(int(path.stat().st_mtime) for _, path, _ in FILES)
+
+
 def approved_contracts(documents: Mapping[str, Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
     """서버 이름 -> 승인된 실행 계약 필드. 비밀은 계약에 값이 없고 참조만 있다."""
     return {
@@ -76,6 +84,7 @@ def build_kit(
         raise ValueError("unknown platform or harness")
     config = {
         "kit_version": kit_version(),
+        "kit_serial": kit_serial(),
         "harnesses": [h for h in HARNESSES if h in harnesses],
         "decide_url": decide_url,
         "key": key,
@@ -86,6 +95,7 @@ def build_kit(
 
     update_key = kit_sign.public_key_hex()
     if update_key:
+        config["update_keys"] = [update_key]
         config["update_key"] = update_key  # 단말이 갱신 묶음의 서명을 검증하는 고정 공개 키
     if allow_unsandboxed:
         config["allow_unsandboxed"] = True  # 관리형 단말이 격리 없이 서버를 시작해도 된다.

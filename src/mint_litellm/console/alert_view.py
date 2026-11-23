@@ -73,6 +73,7 @@ VALUE = {
         "unapproved_server": "승인 없는 서버 추가", "readback_mismatch": "다시 읽은 값 불일치",
         "reapproval_conflict": "재승인 충돌", "registry_missing": "레지스트리에 없음",
         "target_missing": "대상이 삭제됨", "unpin_failed": "고정 해제 실패",
+        **labels.UPDATE_ERROR,
     },
 }
 # 요약 문장. 없는 값은 줄표로 채운다.
@@ -125,6 +126,7 @@ SUMMARY = {
     "intake_pending": "서버 {server_id}의 도입 신청이 검토를 기다립니다.",
     "endpoint_silent": "단말 {key_alias}의 보고가 끊겼습니다.",
     "endpoint_key_expiring": "단말 {key_alias}의 키가 곧 만료됩니다.",
+    "endpoint_update_failed": "단말 {key_alias}의 자동 갱신이 실패했습니다.",
     "endpoint_stale_server": "단말 {key_alias}에 폐기된 서버 {server_id}가 남아 있습니다.",
     "endpoint_unmanaged": "단말 {key_alias}에 관리되지 않는 설치가 있습니다.",
     "endpoint_stale_process": "단말 {key_alias}에서 폐기된 서버 {server_id}가 실행 중입니다.",

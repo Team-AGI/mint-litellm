@@ -24,7 +24,8 @@
     {"id":"endpoint_egress_refused","description":"허용 호스트 목록이 있는 로컬 서버의 접속이 목록 밖이라 단말에서 거절됨","output":"alert","reference_policies":["POL-O-12","POL-O-13"]},
     {"id":"endpoint_egress_unfiltered","description":"Windows 단말에서 로컬 서버의 허용 호스트 목록이 집행되지 않은 채 실행됨","output":"alert","reference_policies":["POL-O-13"]},
     {"id":"endpoint_silent","description":"설치 보고가 정해진 시간(기본 24시간) 넘게 끊김","output":"alert","reference_policies":["POL-D-04","POL-E-06"]},
-    {"id":"endpoint_key_expiring","description":"단말 설치 묶음 키가 만료 7일 안인데 갱신되지 않음","output":"alert","reference_policies":["POL-E-06"]}
+    {"id":"endpoint_key_expiring","description":"단말 설치 묶음 키가 만료 7일 안인데 갱신되지 않음","output":"alert","reference_policies":["POL-E-06"]},
+    {"id":"endpoint_update_failed","description":"단말의 키트 자동 갱신이 실패해 옛 프로그램이 도는 중","output":"alert","reference_policies":["POL-E-06"]}
   ],
   "policies": [
     {"id":"POL-I-01","class":"unconditional","rule":"제공자·배포 주소가 허용 목록에 있어야 신청이 통과한다","pr":null,"enforced_by":["src/mint_litellm/control/intake_checks.py::_ip_in_entry","src/mint_litellm/plugin/pipeline.py::denial_and_approval"]},

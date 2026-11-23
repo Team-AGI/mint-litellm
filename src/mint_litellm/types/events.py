@@ -499,6 +499,7 @@ class AlertKind(StrEnum):
     ENDPOINT_EGRESS_UNFILTERED = "endpoint_egress_unfiltered"
     ENDPOINT_SILENT = "endpoint_silent"
     ENDPOINT_KEY_EXPIRING = "endpoint_key_expiring"
+    ENDPOINT_UPDATE_FAILED = "endpoint_update_failed"
     CALL_SPIKE = "call_spike"
     BULK_EXTRACTION = "bulk_extraction"
     CONTENT_FINDING_UNMANAGED = "content_finding_unmanaged"

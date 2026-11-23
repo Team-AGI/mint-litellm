@@ -592,6 +592,26 @@ cmd_password() {
     esac
 }
 
+# 단말 키트 서명 키를 돌린다: 새 키를 만들고 옛 키는 회전 기간 동안 공지 서명용으로 남긴다.
+# 모든 단말이 갱신을 한 번 받은 뒤 --finish로 옛 키를 비운다.
+cmd_rotate_kit_key() {
+    require_env
+    local old
+    old="$(env_value MINT_KIT_SIGNING_KEY)"
+    sed -i '/^MINT_KIT_SIGNING_KEY_PREVIOUS=/d' .env
+    case "${1:-}" in
+        --finish) ;;
+        "")
+            sed -i '/^MINT_KIT_SIGNING_KEY=/d' .env
+            append_env MINT_KIT_SIGNING_KEY "$(random_secret)"
+            append_env MINT_KIT_SIGNING_KEY_PREVIOUS "$old" ;;
+        *) fail "사용법: ./mint.sh rotate-kit-key [--finish]" ;;
+    esac
+    "${COMPOSE[@]}" up -d litellm < /dev/null
+    "${COMPOSE[@]}" --profile console up -d console < /dev/null
+    echo "단말 키트 서명 키를 적용했습니다."
+}
+
 # 백업은 데이터베이스 두 개, 정책 번들, LiteLLM 설정을 한 폴더에 모은다. 하나라도 비면 폴더를 지운다.
 cmd_backup() {
     require_env
@@ -753,6 +773,7 @@ case "${1:-}" in
     password) shift; cmd_password "$@" ;;
     upgrade) shift; cmd_upgrade "$@" ;;
     heal) cmd_heal ;;
+    rotate-kit-key) shift; cmd_rotate_kit_key "$@" ;;
     cli) shift; require_env
         case " $* " in
             *" --save-token"*) cli_save_token "$@" ;;
@@ -760,5 +781,5 @@ case "${1:-}" in
             *" password-reset"*) env "MINT_LITELLM_ADMIN_KEY=$(env_value LITELLM_MASTER_KEY)"                 "${COMPOSE[@]}" run --rm -e MINT_LITELLM_ADMIN_KEY ${MINT_LITELLM_KEY:+-e MINT_LITELLM_KEY} control "$@" ;;
             *) cli "$@" ;;
         esac ;;
-    *) fail "사용법: ./mint.sh up | status | bootstrap <이름> <사용자> | password <사용자> | backup | restore <백업 폴더> | upgrade [--dry-run] | heal | cli <명령...>" ;;
+    *) fail "사용법: ./mint.sh up | status | bootstrap <이름> <사용자> | password <사용자> | backup | restore <백업 폴더> | upgrade [--dry-run] | heal | rotate-kit-key [--finish] | cli <명령...>" ;;
 esac

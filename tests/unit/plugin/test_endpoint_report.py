@@ -36,7 +36,8 @@ def test_a_managed_install_report_is_stored_for_the_calling_key(tmp_path, stored
                       "claude_version": "2.1.0 (Claude Code)", "mcp_servers": ["srv-1"],
                       "processes": None, "autostart": None, "outside_processes": None,
                       "removed": None,
-                      "local_mcp": None, "tool_lists": None, "hook_trust": None}
+                      "local_mcp": None, "tool_lists": None, "hook_trust": None,
+                      "update_error": None}
 
 
 def test_the_process_and_autostart_inventory_is_stored_as_plain_rows(tmp_path, stored):

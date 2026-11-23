@@ -66,6 +66,7 @@ KINDS = (
     AlertKind.ENDPOINT_EGRESS_UNFILTERED.value,
     AlertKind.ENDPOINT_SILENT.value,
     AlertKind.ENDPOINT_KEY_EXPIRING.value,
+    AlertKind.ENDPOINT_UPDATE_FAILED.value,
 )
 SILENT_AFTER = timedelta(hours=24)
 KEY_WARN = timedelta(days=7)
@@ -112,6 +113,11 @@ def findings(
                 wanted[f"{kind}:{row['key_alias']}"] = (
                     kind, "medium", {**who, "expires_at": expires.isoformat()}
                 )
+        if row.get("update_error") and row["install_mode"] in ("managed", "user"):
+            kind = AlertKind.ENDPOINT_UPDATE_FAILED.value
+            wanted[f"{kind}:{row['key_alias']}"] = (
+                kind, "medium", {**who, "reason": row["update_error"]}
+            )
         if row["install_mode"] == "user":
             kind = AlertKind.ENDPOINT_UNMANAGED.value
             untrusted = {"hook_trust": "untrusted"} if row.get("hook_trust") == "untrusted" else {}
@@ -188,7 +194,8 @@ def scan(
     installs = fetchall(
         conn,
         "SELECT user_id, key_alias, install_mode, mcp_servers, processes, autostart,"
-        " outside_processes, hook_trust, reported_at, expires_at, clock_timestamp() AS now"
+        " outside_processes, hook_trust, update_error, reported_at, expires_at,"
+        " clock_timestamp() AS now"
         " FROM mint.endpoint_installs WHERE instance_id = %s AND revoked_at IS NULL"
         " AND install_mode IN ('managed', 'user', 'removed')",
         (instance_id,),

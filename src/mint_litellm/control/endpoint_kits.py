@@ -193,6 +193,7 @@ def installs(
         conn,
         "SELECT user_id, team_id, issued_at, revoked_at, install_mode, kit_version,"
         " claude_version, mcp_servers, processes, outside_processes, reported_at, expires_at,"
+        " update_error,"
         " mcp_key_alias IS NOT NULL AS gateway"
         " FROM mint.endpoint_installs"
         " WHERE instance_id = %s AND (%s::text IS NULL OR user_id = %s)"

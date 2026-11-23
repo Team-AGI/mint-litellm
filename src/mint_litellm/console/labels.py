@@ -330,6 +330,13 @@ APPROVAL_CLASS = {"standard": "일반", "exception": "예외"}
 PRINCIPAL = {"user": "사용자", "team_key": "팀 키", "service_account": "서비스 계정"}
 KIT_PLATFORM = {"linux": "Linux", "windows": "Windows"}
 # 단말 설정에서 발견한 MCP 항목의 전송 방식
+# 단말이 보고한 키트 자동 갱신 실패 사유(코드 -> 화면 이름)
+UPDATE_ERROR = {
+    "bad_signature": "서명 확인 실패", "rollback": "낮은 판본 거절", "bad_bundle": "받은 묶음 이상",
+    "too_large": "받은 묶음이 너무 큼", "bad_code": "받은 프로그램 오류", "no_key": "서명 키 없음",
+    "not_writable": "설치 폴더에 쓸 수 없음", "no_config": "설정 파일 없음",
+    "write_failed": "파일 쓰기 실패", "needed": "다시 설치 필요",
+}
 LOCAL_TRANSPORT = {"stdio": "로컬 실행", "http": "원격(HTTP)", "sse": "원격(SSE)"}
 KIT_HARNESS = {
     "claude": "Claude Code", "codex": "Codex", "cursor": "Cursor", "grok": "Grok Build CLI",
@@ -467,6 +474,7 @@ ALERT_KIND = {
     "endpoint_egress_refused": "허용 호스트 밖 접속 거절",
     "endpoint_silent": "단말 보고 끊김",
     "endpoint_key_expiring": "단말 키 만료 임박",
+    "endpoint_update_failed": "단말 자동 갱신 실패",
     "package_unpinned": "버전 미고정 패키지",
     "package_vulnerable": "패키지 취약점",
     "package_vuln_due": "취약점 조치 기한",
