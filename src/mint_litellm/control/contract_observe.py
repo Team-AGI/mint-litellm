@@ -584,6 +584,7 @@ def handle(job) -> None:
         " FROM mint.servers s LEFT JOIN mint.deployment_contracts d"
         " ON d.instance_id=s.instance_id AND d.server_id=s.server_id AND d.status='approved'"
         " WHERE s.instance_id=%s AND s.contract_status='managed' AND s.status='approved'"
+        " AND s.identity_kind='remote'"  # 로컬 서버는 단말 보고로 관측한다
         " AND (%s='contract_observe' OR s.server_id=%s) ORDER BY s.server_id",
         (job.instance_id, job.job["target_ref"], job.job["target_ref"]),
     )
