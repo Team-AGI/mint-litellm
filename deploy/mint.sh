@@ -102,7 +102,7 @@ issue_key() {
     [ -s "$file" ] && return 0
     key="$(env "LITELLM_MASTER_KEY=$(env_value LITELLM_MASTER_KEY)" \
         "${COMPOSE[@]}" run --rm --no-deps -T -e LITELLM_MASTER_KEY -e "KEY_KIND=$kind" \
-        --entrypoint python control -c "$KEY_ISSUER_SCRIPT" | tail -n 1)" || key=""
+        --entrypoint python control -c "$KEY_ISSUER_SCRIPT" < /dev/null | tail -n 1)" || key=""
     [[ "$key" =~ ^sk-[A-Za-z0-9_-]+$ ]] || return 1
     (umask 077; printf '%s\n' "$key" > "$file")
 }
@@ -201,7 +201,7 @@ refresh_control_routes() {
     env "LITELLM_MASTER_KEY=$(env_value LITELLM_MASTER_KEY)" "EXISTING_KEY=$(head -n 1 "$file")" \
         "${COMPOSE[@]}" run --rm --no-deps -T -e LITELLM_MASTER_KEY -e EXISTING_KEY \
         -e KEY_KIND=control-refresh --entrypoint python control -c "$KEY_ISSUER_SCRIPT" \
-        >/dev/null 2>&1 \
+        < /dev/null >/dev/null 2>&1 \
         || echo "제어 평면 키의 허용 경로를 갱신하지 못했습니다. 다음 up·upgrade에서 다시 시도합니다." >&2
 }
 
@@ -338,12 +338,12 @@ if not target.exists():
 # 서비스는 비루트 사용자(65532)로 돈다. 이전 판본이 루트로 만든 볼륨은 소유자를 맞춰야 쓸 수 있다.
 fix_volume_owners() {
     "${COMPOSE[@]}" run --rm --no-deps -T --user 0 --entrypoint chown control \
-        -R 65532:65532 /var/lib/mint/export /bundles
+        -R 65532:65532 /var/lib/mint/export /bundles < /dev/null
     "${COMPOSE[@]}" run --rm --no-deps -T --user 0 --entrypoint chown litellm \
-        -R 65532:65532 /var/lib/mint/buffer
+        -R 65532:65532 /var/lib/mint/buffer < /dev/null
     # 설정 폴더는 운영자 파일이라 소유자는 두고 그룹에만 읽기를 연다.
     "${COMPOSE[@]}" run --rm --no-deps -T --user 0 --entrypoint sh control \
-        -c 'chgrp -R 65532 /app/config && chmod -R g+rX /app/config'
+        -c 'chgrp -R 65532 /app/config && chmod -R g+rX /app/config' < /dev/null
 }
 
 # LiteLLM은 처음 뜰 때 40~60초 걸린다. 준비될 때까지 기다리고, 실패하면 최근 로그와 함께 멈춘다.
@@ -516,9 +516,9 @@ cmd_backup() {
     dir="backups/$(date -u +%Y%m%dT%H%M%SZ)"
     mkdir -p "$dir"
     for database in mint litellm; do
-        "${COMPOSE[@]}" exec -T postgres pg_dump -U postgres -d "$database" > "$dir/$database.sql"
+        "${COMPOSE[@]}" exec -T postgres pg_dump -U postgres -d "$database" < /dev/null > "$dir/$database.sql"
     done
-    "${COMPOSE[@]}" run --rm --no-deps -T --entrypoint cat control "$BUNDLE_FILE" > "$dir/mint.tar.gz"
+    "${COMPOSE[@]}" run --rm --no-deps -T --entrypoint cat control "$BUNDLE_FILE" < /dev/null > "$dir/mint.tar.gz"
     cp config/litellm.config.yaml "$dir/litellm.config.yaml"
     for file in mint.sql litellm.sql mint.tar.gz litellm.config.yaml; do
         [ -s "$dir/$file" ] || { rm -rf "$dir"; fail "백업의 $file이 비어 있어 폴더를 지웠습니다."; }
