@@ -10,6 +10,7 @@
 {% endif %}
 {% if i.status == 'checking' %}<p>검사 진행 중에는 철회할 수 없습니다. 검사가 끝난 뒤 새로고침하십시오.</p>{% endif %}
 {% if stages %}<ol class="steps" aria-label="진행 단계">{% for level, text in stages %}<li class="{{ level }}"><span class="icon" aria-hidden="true">{{ ICONS[level] }}</span>{{ text }}</li>{% endfor %}</ol>{% endif %}
+{% if delivery %}<ol class="steps" aria-label="적용 단계">{% for level, text in delivery %}<li class="{{ level }}"><span class="icon" aria-hidden="true">{{ ICONS[level] }}</span>{{ text }}</li>{% endfor %}</ol>{% endif %}
 <dl class="detail">
 <dt>출처</dt><dd>{{ m.source_badge(source | default('staff')) }}</dd>
 <dt>신청자</dt><dd>{{ actor.user_id }}</dd>

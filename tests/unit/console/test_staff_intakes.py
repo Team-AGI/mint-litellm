@@ -131,3 +131,19 @@ def test_a_port_outside_the_allowed_list_is_refused_on_the_form_not_recorded(swo
     assert response.status_code == 400
     assert "포트 8080" in response.text and "443, 8443" in response.text
     assert sworld.query("SELECT count(*) FROM mint.intakes") == [(0,)]
+
+
+def test_staff_detail_shows_delivery_stages_for_an_approved_intake(sworld, monkeypatch):
+    from mint_litellm.console import staff_pages
+
+    real = staff_pages.staff_intakes.detail
+    monkeypatch.setattr(staff_pages.staff_intakes, "detail",
+                        lambda *a: {**real(*a), "status": "decided", "decision": "approved"})
+    client = staff_tests.logged_in(sworld)
+    values = form(client)
+    location = client.post("/staff/intakes", data=values).headers["location"]
+    sworld.query(
+        "INSERT INTO mint.delivery_receipts (instance_id, intake_id, decision_version, stage)"
+        " SELECT instance_id, id, 1, 'approved' FROM mint.intakes RETURNING 1")
+    page = client.get(location.split("?")[0]).text
+    assert 'aria-label="적용 단계"' in page and "LiteLLM 등록 대기" in page
