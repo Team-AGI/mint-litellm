@@ -194,7 +194,6 @@ def test_the_local_registry_drift_clear_touches_only_registry_missing_on_local_s
 
     import mint_litellm.control.db as db
 
-    sql = (Path(db.__file__).parent / "migrations" / "075_local_registry_drift_clear.sql").read_text(
-        encoding="utf-8"
-    )
+    name = "075_local_registry_drift_clear.sql"
+    sql = (Path(db.__file__).parent / "migrations" / name).read_text(encoding="utf-8")
     assert "identity_kind <> 'remote'" in sql and "ARRAY['registry_missing']" in sql
