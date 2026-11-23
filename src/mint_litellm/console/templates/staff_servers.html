@@ -31,7 +31,7 @@
 <div class="actions"><a class="button" href="/staff?open={{ r.ref | urlencode }}">{{ '동의 확인' if r.state == 'none' else '서버 보기' }}</a></div>
 </article>{% endfor %}</div>
 {% elif search %}{{ m.empty('조건에 맞는 서버가 없습니다', '/staff', '검색 지우기') }}
-{% else %}{% if pending_calls %}<p>처리 대기 중인 호출 요청이 {{ pending_calls }}건 있습니다.</p>{% endif %}{{ m.empty('쓸 수 있는 서버가 없습니다', '/staff/intakes/new', '서버 신청') }}{% endif %}
+{% else %}{% if pending_calls %}<p>처리 대기 중인 호출 요청이 {{ pending_calls }}건 있습니다. <a href="/staff/confirmations?tab=mine">요청 상태 확인</a></p>{% endif %}{{ m.empty('쓸 수 있는 서버가 없습니다', '/staff/intakes/new', '서버 신청') }}{% endif %}
 {% endif %}
 {% if selected %}{% call m.drawer(selected.server_name, '/staff', has_input=selected.can_consent) %}
 <dl class="detail">

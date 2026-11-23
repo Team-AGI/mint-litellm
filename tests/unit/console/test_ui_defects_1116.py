@@ -182,7 +182,7 @@ def test_an_exception_approval_needs_a_reason_and_is_not_granted_twice(world, ad
 
 def test_the_approval_queue_leaves_out_relations_that_already_have_an_approval(world, admin):
     relation = world.query("SELECT id FROM mint.usage_relations WHERE server_id = 'srv-wait'")[0][0]
-    assert "신청 결정" in admin.get("/approvals?tab=servers").text
+    assert "승인·거부" in admin.get("/approvals?tab=servers").text
     world.query(
         "INSERT INTO mint.approvals (id, instance_id, org_id, relation_id, class, server_id, tools,"
         " scope_type, scope_id, valid_from, valid_until, conditions, basis, granted_by,"

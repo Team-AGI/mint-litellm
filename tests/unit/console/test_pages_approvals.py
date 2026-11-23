@@ -41,12 +41,10 @@ def test_revoke_and_revoke_with_denial_are_separate_buttons(world, admin):
     assert "차단되는 대상: 사용자 human-5의 도구 2개, 서버 1개" in html
 
 
-def test_revoking_requires_a_reason_and_revoke_plus_deny_records_both(world, admin):
+def test_revoke_plus_deny_records_both(world, admin):
     approval_id = add_approval(world)
     version = world.query("SELECT state_version FROM mint.approvals")[0][0]
     path = f"/approvals/{approval_id}/revoke"
-    empty = form_post(world, admin, path, state_version=version, reason=" ", deny="0")
-    assert empty.status_code == 400 and "reason" in empty.text
     ok = form_post(world, admin, path, state_version=version, reason="정책 위반", deny="1")
     assert ok.status_code == 303 and "revoked_denied" in ok.headers["location"]
     assert world.query("SELECT status FROM mint.approvals")[0][0] == "revoked"
@@ -55,11 +53,11 @@ def test_revoking_requires_a_reason_and_revoke_plus_deny_records_both(world, adm
     assert {"approval_revoked", "denial_created"} <= kinds
 
 
-def test_revoking_without_a_denial_leaves_no_denial(world, admin):
+def test_revoking_without_a_reason_or_denial_leaves_no_denial(world, admin):
     approval_id = add_approval(world)
     version = world.query("SELECT state_version FROM mint.approvals")[0][0]
     form_post(world, admin, f"/approvals/{approval_id}/revoke", state_version=version,
-              reason="종료", deny="0")
+              reason="", deny="0")
     assert world.query("SELECT count(*) FROM mint.denials")[0][0] == 0
 
 

@@ -69,20 +69,15 @@ def test_an_empty_list_says_so(world):
 def test_the_new_intake_form_is_prefilled_and_escapes_what_it_shows(world):
     client = world.session_client("admin")
     html = client.get(
-        "/intakes/new", params={"server_id": "docs", "provider": '"><script>x</script>',
-                                "purpose": "설정에서 발견"},
+        "/intakes/new", params={"server_url": '"><script>x</script>', "purpose": "설정에서 발견"},
     ).text
-    assert '<option value="docs" selected>' in html and "<script>x" not in html
+    assert "<script>x" not in html and "&lt;script&gt;x" in html
     assert "설정에서 발견" in html and "신청 등록" in html
 
 
 def fields(world, client):
-    return {
-        "csrf": world.csrf(client), "server_id": "docs", "provider": "docs.example.com",
-        "owner_user_id": "human-1", "purpose": "목적", "data_grade": "internal",
-        "allowed_resources": "[]", "credential_notice": "a", "revocation_record": "b",
-        "audit_access_days": "90", "data_return_terms": "삭제",
-    }
+    return {"csrf": world.csrf(client), "server_url": "https://docs.example.com/mcp",
+            "purpose": "목적"}
 
 
 def test_a_viewer_cannot_submit_the_form_and_a_failed_submit_keeps_the_values(world):
