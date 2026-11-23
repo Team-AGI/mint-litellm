@@ -32,9 +32,10 @@ class Issuer:
 class Client:
     """LiteLLM 관리 클라이언트 대역: 키 하나와 팀 하나."""
 
-    def __init__(self, team=None):
+    def __init__(self, team=None, user=None):
         self.key = {"object_permission": {}}
         self.team = team
+        self.user = user
         self.written = []
 
     def get_key(self, token):
@@ -42,6 +43,9 @@ class Client:
 
     def get_team(self, team_id):
         return self.team
+
+    def get_user(self, user_id):
+        return self.user
 
     def update_key_permission(self, token, servers, tools):
         self.written.append((token, servers, tools))
@@ -164,6 +168,58 @@ def test_key_receipt_is_recorded_once_after_permission_is_applied(conn, world):
         "SELECT decision_version, target FROM mint.delivery_receipts"
         " WHERE intake_id = %s AND stage = 'key_applied'", (intake,),
     ).fetchall() == [(7, token)]
+
+
+def test_leaving_the_team_revokes_its_approval_and_an_unreadable_team_does_not(conn, world):
+    relation, _, token = world
+    approve(conn, relation, "team", "t1", ("a",))
+    client = Client(user={"teams": ["t1"]})
+    kit_key_sync.sync_kit_keys(conn, INSTANCE, client)
+    assert client.written[-1][1] == ["ctl-everything"]
+    client.user = {}  # 소속을 읽지 못함: 회수하지 않는다
+    assert kit_key_sync.sync_kit_keys(conn, INSTANCE, client) == 0
+    client.user = {"teams": []}
+    kit_key_sync.sync_kit_keys(conn, INSTANCE, client)
+    assert client.written[-1] == (token, [], {})
+
+
+def test_revoking_one_tool_approval_leaves_the_sibling_tool(conn, world):
+    relation, _, token = world
+    first = approve(conn, relation, "user", "u1", ("a",))
+    approve(conn, relation, "user", "u1", ("b",))
+    approve(conn, relation, "team", "t2", ("c",))
+    revoke(conn, first)
+    assert kit_key_sync.desired_permission(conn, INSTANCE, "u1", "t1", token)[1] == {
+        "ctl-everything": ["b"]
+    }
+
+
+def test_device_reports_record_each_stage_once_on_the_latest_decision_version(conn, world):
+    relation, _, token = world
+    key_token = conn.execute("SELECT key_token FROM mint.endpoint_installs").fetchone()[0]
+    intake = conn.execute("SELECT gen_random_uuid()").fetchone()[0]
+    conn.execute(
+        "INSERT INTO mint.intakes (id, instance_id, org_id, server_id, source)"
+        " VALUES (%s, %s, 'acme', 'ctl-everything', 'operator')", (intake, INSTANCE),
+    )
+    for version in (3, 5):
+        conn.execute(
+            "INSERT INTO mint.delivery_receipts (instance_id, intake_id, decision_version, stage)"
+            " VALUES (%s, %s, %s, 'approved')", (INSTANCE, intake, version),
+        )
+    approve(conn, relation, "user", "u1", basis={"intake_id": str(intake)})
+    approve(conn, relation, "user", "u2", basis={"intake_id": str(intake)})
+    for _ in range(2):
+        for stage in ("device_received", "started", "discovered", "first_response"):
+            conn.execute("SELECT mint.endpoint_record_delivery(%s, %s, %s, %s)",
+                         (INSTANCE, key_token, stage, ["ctl-everything", "other"]))
+    conn.execute("SELECT mint.endpoint_record_delivery(%s, %s, 'started', %s)",
+                 (INSTANCE, key_token, ["other"]))
+    assert conn.execute(
+        "SELECT stage, decision_version, target FROM mint.delivery_receipts"
+        " WHERE stage <> 'approved' ORDER BY stage").fetchall() == [
+        ("device_received", 5, key_token), ("discovered", 5, key_token),
+        ("first_response", 5, key_token), ("started", 5, key_token)]
 
 
 def test_a_revoked_install_is_left_alone(conn, world):
