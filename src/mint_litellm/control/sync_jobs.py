@@ -539,6 +539,26 @@ def sync_server(ctx: JobContext) -> None:
     key = f"sync_divergence:server:{server_id}"
     server = client.get_server(server_id)
     if server is None:
+        intake = fetchone(
+            conn,
+            "SELECT i.* FROM mint.intakes i JOIN mint.approvals a"
+            " ON a.instance_id = i.instance_id AND a.basis->>'intake_id' = i.id::text"
+            " WHERE i.instance_id = %s AND i.server_id = %s AND i.staff_registry_required"
+            " AND i.decision IN ('approved', 'exception') AND a.status IN ('pending', 'active')"
+            " AND a.valid_until > now() ORDER BY i.decided_at DESC LIMIT 1",
+            (inst, server_id),
+        )
+        if intake is not None:
+            from mint_litellm.control.intake_jobs import _staff_registry
+
+            contract = fetchone(
+                conn, "SELECT * FROM mint.deployment_contracts WHERE instance_id = %s"
+                " AND server_id = %s AND id = %s AND status IN ('candidate', 'approved')",
+                (inst, server_id, intake["id"]),
+            )
+            _staff_registry(client, intake, contract)
+            server = client.get_server(server_id)
+    if server is None:
         # 로컬 서버는 LiteLLM 레지스트리에 없는 것이 정상이다
         if not _is_local(conn, inst, server_id):
             raise_alert(conn, inst, kind="sync_divergence", severity="high", dedup_key=key,
@@ -558,6 +578,21 @@ def sync_server(ctx: JobContext) -> None:
     active = status == "active"
     _record_server(ctx, server_id, observed=active, approved_now=approved_now,
                    first_seen_active=active and not approved_now)
+    if active:
+        conn.execute(
+            "INSERT INTO mint.delivery_receipts (instance_id, intake_id, decision_version, stage)"
+            " SELECT r.instance_id, r.intake_id, r.decision_version, 'registry_active'"
+            " FROM mint.delivery_receipts r JOIN mint.intakes i ON i.id = r.intake_id"
+            " JOIN mint.approvals a ON a.instance_id = i.instance_id"
+            " AND a.basis->>'intake_id' = i.id::text"
+            " WHERE r.instance_id = %s AND i.server_id = %s AND r.stage = 'approved'"
+            " AND r.decision_version = (SELECT max(r2.decision_version)"
+            " FROM mint.delivery_receipts r2 WHERE r2.instance_id = r.instance_id"
+            " AND r2.intake_id = r.intake_id AND r2.stage = 'approved')"
+            " AND i.decision IN ('approved', 'exception') AND a.status IN ('pending', 'active')"
+            " AND a.valid_until > now() ON CONFLICT DO NOTHING",
+            (inst, server_id),
+        )
     pinned = False
     if active:
         resolve_alert(conn, inst, key)
@@ -1180,6 +1215,17 @@ def _reconcile_server(ctx: JobContext, client: LiteLLMSync, server_id: str) -> N
         if not _is_local(conn, inst, server_id):
             raise_alert(conn, inst, kind="sync_divergence", severity="high", dedup_key=key,
                         subject={"server_id": server_id, "reason": "registry_missing"})
+            retry = fetchone(
+                conn, "SELECT 1 FROM mint.intakes i JOIN mint.approvals a"
+                " ON a.instance_id = i.instance_id AND a.basis->>'intake_id' = i.id::text"
+                " WHERE i.instance_id = %s AND i.server_id = %s"
+                " AND i.source IN ('staff', 'endpoint')"
+                " AND i.decision IN ('approved', 'exception')"
+                " AND a.status IN ('pending', 'active') AND a.valid_until > now() LIMIT 1",
+                (inst, server_id),
+            )
+            if retry:
+                enqueue_job(_actor_context(ctx), "sync_server", server_id)
         return
     _check_identity(ctx, server_id, server)
     _close_allow_all_keys(ctx, client, server_id, server)

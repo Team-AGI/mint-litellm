@@ -20,7 +20,7 @@ from mint_litellm.endpoint.routes import KIT_KEY_ROUTES
 Permission = tuple[list[str], dict[str, list[str]]]
 
 _APPLICABLE = """
-SELECT a.server_id, a.tools,
+SELECT a.server_id, a.tools, a.basis->>'intake_id' AS intake_id,
   (a.basis->>'intake_id' IS NOT NULL OR '*' = ANY (a.tools)) AS open_tools
 FROM mint.approvals a
 JOIN mint.servers s ON s.instance_id = a.instance_id AND s.server_id = a.server_id
@@ -29,6 +29,7 @@ WHERE a.instance_id = %(iid)s AND a.status = 'active'
   AND s.identity_kind = %(kind)s AND s.status = 'approved'
   AND ((a.scope_type = 'key' AND (a.scope_id = %(key)s OR a.scope_id IN (
         SELECT key_token FROM mint.endpoint_installs WHERE instance_id = %(iid)s
+          AND (%(kind)s = 'stdio' OR mcp_key_token = %(key)s)
           AND user_id = %(user)s AND revoked_at IS NULL)))
     OR (a.scope_type = 'user' AND a.scope_id = %(user)s)
     OR (a.scope_type = 'team' AND a.scope_id = %(team)s)
@@ -110,6 +111,7 @@ def sync_kit_keys(conn: psycopg.Connection, instance_id: str, client: LiteLLMSyn
         if sorted(have_servers) == sorted(servers) and {
             k: sorted(v) for k, v in have_tools.items()
         } == tools:
+            _record_key_receipts(conn, instance_id, row, servers)
             continue
         try:
             client.update_key_permission(row["mcp_key_token"], servers, tools)
@@ -122,7 +124,26 @@ def sync_kit_keys(conn: psycopg.Connection, instance_id: str, client: LiteLLMSyn
                 continue
             raise
         changed += 1
+        _record_key_receipts(conn, instance_id, row, servers)
     return changed
+
+
+def _record_key_receipts(conn, instance_id: str, row: dict, servers: list[str]) -> None:
+    approvals = fetchall(conn, _APPLICABLE, {
+        "iid": instance_id, "key": row["mcp_key_token"], "user": row["user_id"],
+        "team": row["team_id"] or "", "kind": "remote",
+    })
+    for approval in approvals:
+        if approval["intake_id"] and approval["server_id"] in servers:
+            conn.execute(
+                "INSERT INTO mint.delivery_receipts"
+                " (instance_id, intake_id, decision_version, stage, target)"
+                " SELECT instance_id, intake_id, decision_version, 'key_applied', %s"
+                " FROM mint.delivery_receipts WHERE instance_id = %s"
+                " AND intake_id = %s AND stage = 'approved'"
+                " ORDER BY decision_version DESC LIMIT 1 ON CONFLICT DO NOTHING",
+                (row["mcp_key_token"], instance_id, approval["intake_id"]),
+            )
 
 
 def _within_team(
