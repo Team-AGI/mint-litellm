@@ -122,6 +122,7 @@ def staff_actor(
         console_sessions.revoke(
             control, config.instance_id, id_hash, actor=row["user_id"], reason="litellm_logout"
         )
+        control.commit()  # 아래 인증 오류가 이 폐기를 되돌리지 않게 한다
         row = None
     if row is None:
         raise StaffUnauthenticated()

@@ -391,6 +391,7 @@ def actor_dep(*, allow_token: bool):
                 conn, config.instance_id, info.id_hash, actor=info.operator_name,
                 reason="litellm_logout",
             )
+            conn.commit()  # 아래 인증 오류가 이 폐기를 되돌리지 않게 한다
             info = None
         if info is None:
             raise Unauthenticated()
