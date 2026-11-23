@@ -160,6 +160,17 @@ def test_delivery_stages_mark_done_next_and_waiting():
     assert delivery_progress([]) == []
 
 
+def test_a_failed_start_shows_the_reason_on_the_start_step():
+    from mint_litellm.console.pages.servers import delivery_progress
+
+    rows = [{"decision_version": 1, "stage": s, "reason": None} for s in
+            ("approved", "registry_active", "key_applied", "device_received")]
+    rows.append({"decision_version": 1, "stage": "start_failed", "reason": "종료 코드 1"})
+    steps = delivery_progress(rows)
+    assert steps[4] == ("error", "시작 실패 · 종료 코드 1")
+    assert [lv for lv, _ in steps[5:]] == ["off", "off"]
+
+
 def test_service_accounts_do_not_count_as_human_operators(monkeypatch):
     seen = []
     monkeypatch.setattr(setup_state, "_count", lambda a, sql, *args: seen.append(args) or 0)

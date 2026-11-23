@@ -44,7 +44,9 @@ def _pip() -> list[str]:
     return [sys.executable, "-m", "pip"]
 
 
-def _download(requirement: str, destination: Path, python: str) -> None:
+def _download(requirement: str, destination: Path, python: str, before: str | None = None) -> None:
+    # 의존 라이브러리는 고정 판본이 나온 시점까지의 것으로 풀어, 이후에 나온 호환 안 되는 판본을
+    # 피한다(pip 26.1 이상의 옵션).
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith("PIP_")}
     env["PIP_CONFIG_FILE"] = os.devnull
     subprocess.run(
@@ -66,6 +68,7 @@ def _download(requirement: str, destination: Path, python: str) -> None:
             "cp" + python.replace(".", ""),
             "--no-cache-dir",
             "--disable-pip-version-check",
+            *(["--uploaded-prior-to", before] if before else []),
             requirement,
             "-d",
             str(destination),
@@ -114,6 +117,15 @@ def _direct_url(wheels: list[Path]) -> bool:
     return False
 
 
+def _released_at(name: str, version: str, metadata) -> str | None:
+    """고정 판본이 올라온 가장 늦은 시각(ISO 8601). 알 수 없으면 None(제한 없이 푼다)."""
+    try:
+        times = [u["upload_time_iso_8601"] for u in metadata(name, version).get("urls", [])]
+        return max(times) if times else None
+    except Exception:
+        return None
+
+
 def build_pack(
     spec: dict,
     allowlists: list[dict],
@@ -144,10 +156,11 @@ def build_pack(
     root = Path(packs_dir or os.environ.get("MINT_PACKS_DIR", "/var/lib/mint/packs"))
     root.mkdir(parents=True, exist_ok=True)
     requirement = name + ("[" + ",".join(sorted(extras)) + "]" if extras else "") + "==" + version
+    before = _released_at(name, version, metadata)
     with tempfile.TemporaryDirectory(dir=root, prefix=".pack-") as temp:
         stage = Path(temp)
         try:
-            download(requirement, stage, python)
+            download(requirement, stage, python, before)
         except (OSError, subprocess.SubprocessError):
             try:
                 releases = metadata(name, version).get("urls", [])

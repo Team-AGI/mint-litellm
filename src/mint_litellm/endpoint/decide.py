@@ -337,6 +337,15 @@ class InspectionResultBody(BaseModel):
         return out
 
 
+class StartFailureItem(BaseModel):
+    """도구 목록을 내기 전에 죽은 로컬 서버와 짧은 사유(단말의 주장)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    server: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=80)
+
+
 class ReportBody(BaseModel):
     """설치 묶음이 설치·제거를 마치고 보내는 상태 보고. 파일 경로나 키는 받지 않는다."""
 
@@ -358,6 +367,7 @@ class ReportBody(BaseModel):
     local_mcp: list[LocalMcpItem] | None = Field(default=None, max_length=64)
     # 실행기가 서버의 ``tools/list`` 응답에서 본 도구 목록. 이전 묶음은 보내지 않는다.
     tool_lists: list[ToolListItem] | None = Field(default=None, max_length=8)
+    start_failures: list[StartFailureItem] | None = Field(default=None, max_length=8)
     # 사용자 수준 Codex 훅을 Codex가 신뢰했는가(단말 설정에서 읽은 값). 이전 묶음은 보내지 않는다.
     hook_trust: Literal["trusted", "untrusted"] | None = None
     # 서버 이름 -> 단말이 받아 둔 결정 버전. 옛 단말은 보내지 않는다(최신 버전으로 본다).
@@ -598,6 +608,14 @@ def make_router(
                         body.decision_versions)
                 except Exception:
                     log.exception("delivery receipt could not be stored")  # 보고 자체는 받는다
+        if body.action == "installed" and body.start_failures:
+            try:
+                await runtime.database.record_delivery(
+                    runtime.config.instance_id, who.key_id, "start_failed",
+                    [i.server for i in body.start_failures], body.decision_versions,
+                    {i.server: i.reason for i in body.start_failures})
+            except Exception:
+                log.exception("start failure receipt could not be stored")
         try:
             retired = await runtime.database.retired_servers(
                 runtime.config.instance_id,

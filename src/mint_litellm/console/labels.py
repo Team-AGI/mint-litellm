@@ -247,6 +247,8 @@ CHECK_REASON = {
     "ENDPOINT_INCOMPLETE": "단말이 목록을 끝까지 받지 못함",
     "ENDPOINT_INSPECTED": "단말 검사로 받음",
     "REAPPROVAL_PENDING": "재승인 계획이 진행 중",
+    "SERVER_START_FAILED": "서버가 시작되지 않습니다",
+    "SERVER_DEPS_MISMATCH": "서버가 시작되지 않습니다(의존 라이브러리 판본 불일치)",
     "INSPECTION_FAILED": "검사 중 서버가 실패함",
     "INSPECTION_INCOMPLETE": "도구 목록을 끝까지 받지 못함",
     "INSPECTION_UNAVAILABLE": "검사기가 응답하지 않음",

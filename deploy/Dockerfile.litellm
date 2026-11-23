@@ -6,7 +6,7 @@ COPY pyproject.toml README.md LICENSE /src/
 COPY src /src/src
 RUN pip wheel --no-deps --wheel-dir /wheels /src
 # 실행 묶음 만들기용 pip(이미지에 설치하지 않고 wheel 파일로만 둔다).
-RUN pip download --no-deps --only-binary=:all: --dest /pipwheel "pip==25.3"     && mv /pipwheel/pip-*.whl /pipwheel/pip.whl
+RUN pip download --no-deps --only-binary=:all: --dest /pipwheel "pip==26.1.1"     && mv /pipwheel/pip-*.whl /pipwheel/pip.whl
 
 FROM ${LITELLM_IMAGE}
 # 정책 시험과 번들 준비에 쓰는 opa 실행 파일과 정책 소스. 정책 엔진 이미지와 같은 판본이다.

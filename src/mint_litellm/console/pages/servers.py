@@ -460,10 +460,16 @@ def delivery_progress(receipts: list[dict]) -> list[tuple[str, str]]:
         return []
     latest = max(r["decision_version"] for r in receipts)
     done = {r["stage"] for r in receipts if r["decision_version"] == latest}
+    broken = next((r.get("reason") for r in receipts if r["decision_version"] == latest
+                   and r["stage"] == "start_failed"), None)
+    failed = "start_failed" in done and not done & {"started", "discovered", "first_response"}
     waiting = False
     out = []
     for stage, text in DELIVERY_STAGES:
-        if stage in done:
+        if stage == "started" and failed:
+            waiting = True
+            out.append(("error", "시작 실패" + (f" · {broken}" if broken else "")))
+        elif stage in done:
             out.append(("ok", text))
         elif not waiting:
             waiting = True

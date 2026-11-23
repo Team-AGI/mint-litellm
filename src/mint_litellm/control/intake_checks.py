@@ -598,6 +598,16 @@ def _failure_detail(result: dict) -> dict:
 
 
 INSPECTION_STAGES = ("start", "initialize", "tools_list", "sandbox")
+_LIBRARY_ERROR = re.compile(r"ImportError|ModuleNotFoundError|cannot import name")
+
+
+def start_reason(result: dict, default: str) -> str:
+    """서버가 첫 응답 전에 끝났으면 사람이 알아볼 사유로 바꾼다(의존 라이브러리 오류는 따로)."""
+    detail = _failure_detail(result).get("detail")
+    if not detail or detail["stage"] != "start":
+        return default
+    mismatch = _LIBRARY_ERROR.search(detail["stderr_tail"])
+    return "SERVER_DEPS_MISMATCH" if mismatch else "SERVER_START_FAILED"
 
 
 def inspection_outcome(result: dict) -> Outcome:
@@ -607,8 +617,9 @@ def inspection_outcome(result: dict) -> Outcome:
     if result.get("status") != "ok" or result.get("complete") is not True or not isinstance(
             tools, list):
         reason = result.get("reason")
-        return Outcome("indeterminate", reason if isinstance(reason, str) and reason
-                       else "INSPECTION_INCOMPLETE", method, _failure_detail(result))
+        reason = reason if isinstance(reason, str) and reason else "INSPECTION_INCOMPLETE"
+        return Outcome("indeterminate", start_reason(result, reason), method,
+                       _failure_detail(result))
     if depth(tools) > MAX_DEPTH:
         return Outcome("indeterminate", "LIMIT_EXCEEDED", method, {"tools": len(tools)})
     defs = [tool_definition(t) for t in tools if isinstance(t, dict) and t.get("name")]

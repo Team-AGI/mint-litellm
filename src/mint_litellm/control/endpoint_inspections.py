@@ -34,7 +34,8 @@ def _inspection_outcome(row: dict) -> checks.Outcome:
     trace = {"inspection_id": str(row["id"]), "result_sha256": row["result_sha256"]}
     if result.get("complete") is not True:
         failure = checks._failure_detail(result)
-        return checks.Outcome("indeterminate", INCOMPLETE, METHOD, {**failure, **trace})
+        return checks.Outcome("indeterminate", checks.start_reason(result, INCOMPLETE), METHOD,
+                              {**failure, **trace})
     parsed = checks.inspection_outcome(
         {"status": "ok", "complete": True, "tools": result.get("tools")})
     if parsed.result != "pass":
