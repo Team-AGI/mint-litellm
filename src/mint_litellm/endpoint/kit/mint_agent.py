@@ -85,6 +85,7 @@ REFUSED = 126
 STATE_DIR = "~/.cache/mint"
 KIT_DIR = os.path.dirname(os.path.abspath(__file__))  # Windows SYSTEM 보고기는 목록을 여기 둔다
 RETIRED_FILE = "retired.json"
+VERSIONS_FILE = "versions.json"  # 보고기가 받아 둔 서버별 결정 버전(설치 폴더)
 LAUNCHED = "launched"
 # 연결 중계는 요청이 이 시간(초) 없으면 끝난다. 소켓 경로는 운영체제 상한 안이어야 한다.
 BROKER_SOCKET = "conn.sock"
@@ -664,6 +665,13 @@ def report_result(
     except OSError:
         return False
     payload: dict[str, Any] = {"reference": reference}
+    try:
+        with open(os.path.join(KIT_DIR, VERSIONS_FILE), encoding="utf-8") as handle:
+            version = json.load(handle)["versions"].get(called_server.strip())
+        if isinstance(version, int) and version > 0:
+            payload["decision_version"] = version
+    except (OSError, ValueError, KeyError, AttributeError):
+        pass  # 옛 설치: 버전을 모르면 보내지 않는다(최신 버전으로 본다).
     if failed:
         # 사용자가 중단한 호출은 도구가 실행됐는지 알 수 없다.
         payload["outcome"] = "unknown" if event.get("is_interrupt") else "error"

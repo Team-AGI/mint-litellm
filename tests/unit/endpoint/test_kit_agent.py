@@ -540,3 +540,15 @@ def test_tools_outside_the_judged_list_are_ignored(world):
     wire = Wire()
     decide(world, wire, tool_name="Read", tool_input={"file_path": "/a"})
     assert wire.requests == []
+
+
+def test_the_result_hook_returns_the_held_decision_version(world, monkeypatch, tmp_path):
+    (tmp_path / agent.VERSIONS_FILE).write_text('{"versions": {"ctl": 3}}')
+    monkeypatch.setattr(agent, "KIT_DIR", str(tmp_path))
+    decide(world, Wire())
+    pending = os.path.join(world.state, "pending", "toolu_1")
+    reference, _, server = open(pending, encoding="utf-8").read().strip().partition("\n")
+    open(pending, "w", encoding="utf-8").write(f"{reference}\nctl")
+    wire = Wire({"recorded": True})
+    assert report(world, wire) is True
+    assert wire.requests[0][2]["decision_version"] == 3

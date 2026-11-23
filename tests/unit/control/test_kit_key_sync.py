@@ -320,3 +320,31 @@ def test_key_scoped_approval_does_not_reach_other_install_of_same_user(conn, wor
     approve(conn, relation, "key", first_kit)
     assert kit_key_sync.desired_permission(conn, INSTANCE, "u1", "t1", first_gateway)[0]
     assert kit_key_sync.desired_permission(conn, INSTANCE, "u1", "t1", second_token) == ([], {})
+
+
+def test_a_device_reply_with_its_decision_version_lands_on_that_version(conn, world):
+    relation, _, _ = world
+    key_token = conn.execute("SELECT key_token FROM mint.endpoint_installs").fetchone()[0]
+    intake = conn.execute("SELECT gen_random_uuid()").fetchone()[0]
+    conn.execute(
+        "INSERT INTO mint.intakes (id, instance_id, org_id, server_id, source)"
+        " VALUES (%s, %s, 'acme', 'ctl-everything', 'operator')", (intake, INSTANCE),
+    )
+    for version in (3, 5):
+        conn.execute(
+            "INSERT INTO mint.delivery_receipts (instance_id, intake_id, decision_version, stage)"
+            " VALUES (%s, %s, %s, 'approved')", (INSTANCE, intake, version),
+        )
+    approve(conn, relation, "user", "u1", basis={"intake_id": str(intake)})
+    assert conn.execute("SELECT * FROM mint.endpoint_decision_versions(%s, %s, %s)",
+                        (INSTANCE, key_token, ["ctl-everything"])).fetchall() == [
+        ("ctl-everything", 5)]
+    pinned = '{"ctl-everything": 3}'
+    conn.execute("SELECT mint.endpoint_record_delivery(%s, %s, 'started', %s, %s::jsonb)",
+                 (INSTANCE, key_token, ["ctl-everything"], pinned))
+    conn.execute("SELECT mint.endpoint_record_delivery(%s, %s, 'discovered', %s, NULL)",
+                 (INSTANCE, key_token, ["ctl-everything"]))  # 옛 단말: 최신 버전
+    assert conn.execute(
+        "SELECT stage, decision_version FROM mint.delivery_receipts"
+        " WHERE stage <> 'approved' ORDER BY stage").fetchall() == [
+        ("discovered", 5), ("started", 3)]
