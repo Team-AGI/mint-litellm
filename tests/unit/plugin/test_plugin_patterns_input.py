@@ -10,6 +10,7 @@ from plugin_helpers import (
     evaluator,
     harness,
     request,
+    resolved_server,
     server_row,
     snapshot,
 )
@@ -31,7 +32,7 @@ def decide(h, **hook):
     return asyncio.run(evaluate_request(request(**hook), h.deps))
 
 
-def sent_patterns(tmp_path, arguments, *, conditions=None, egress=(), markers=None):
+def sent_patterns(tmp_path, arguments, *, conditions=None, egress=(), markers=None, host=None):
     calls = []
     snap = snapshot(
         server=MANAGED_SERVER,
@@ -46,7 +47,7 @@ def sent_patterns(tmp_path, arguments, *, conditions=None, egress=(), markers=No
             return markers
 
         h.deps = replace(h.deps, secret_markers=fetch)
-    outcome = decide(h, arguments=arguments)
+    outcome = decide(h, arguments=arguments, resolved=resolved_server(host=host))
     assert outcome.allowed, outcome.error
     assert has_only_policy_fields(calls[0])
     return calls[0]["arguments"]["patterns"]
@@ -67,7 +68,7 @@ def test_every_call_carries_the_four_booleans_and_no_argument_text(tmp_path):
 
 def test_allowed_hosts_come_from_the_approval_and_from_egress_targets(tmp_path):
     args = {"u": "https://api.ok.test/x"}
-    assert sent_patterns(tmp_path, args)["url_external"] is True
+    assert sent_patterns(tmp_path, args)["url_external"] is False
     assert (
         sent_patterns(tmp_path, args, conditions={"allowed_hosts": ["API.OK.TEST"]})["url_external"]
         is False
@@ -77,7 +78,14 @@ def test_allowed_hosts_come_from_the_approval_and_from_egress_targets(tmp_path):
         sent_patterns(tmp_path, args, egress=[("https://api.ok.test/", "org1")])["url_external"]
         is False
     )
-    assert sent_patterns(tmp_path, args, egress=[("ok.test", "other-org")])["url_external"] is True
+    assert sent_patterns(tmp_path, args, conditions={"allowed_hosts": []},
+                         egress=[("ok.test", "other-org")])["url_external"] is True
+    assert sent_patterns(tmp_path, args, conditions={"allowed_hosts": []},
+                         host="api.ok.test")["url_external"] is False
+    assert sent_patterns(tmp_path, {"u": "http://other.test"})["url_external"] is True
+    assert sent_patterns(tmp_path, {"u": "https://"})["url_external"] is True
+    private = sent_patterns(tmp_path, {"u": "https://localhost"})
+    assert private["url_external"] is False and private["private_host"] is True
 
 
 def test_registered_internal_address_or_range_is_allowed_and_not_treated_as_private(tmp_path):
@@ -109,7 +117,9 @@ def test_loopback_and_metadata_addresses_stay_private_even_when_registered(tmp_p
 
 def test_allowed_paths_come_from_the_approval(tmp_path):
     args = {"p": "/etc/passwd"}
-    assert sent_patterns(tmp_path, args)["path_traversal"] is True
+    assert sent_patterns(tmp_path, args)["path_traversal"] is False
+    assert sent_patterns(tmp_path, {"p": "../secret"})["path_traversal"] is True
+    assert sent_patterns(tmp_path, args, conditions={"allowed_paths": []})["path_traversal"] is True
     unrestricted = {"allowed_paths_unrestricted": True}
     assert sent_patterns(tmp_path, args, conditions=unrestricted)["path_traversal"] is False
     assert (

@@ -266,7 +266,7 @@ applied contains "R4" if {
 	input.consent.status != "granted"
 }
 
-# 2단계 정책(규칙 ID는 정본 번호). 모두 Block이고 카탈로그에서 observable이다.
+# 패턴은 승인 조건과 서버 호스트를 반영해 플러그인이 계산한다. 참이면 Block이다.
 pattern_rules := {
 	"POL-E-07": "url_external",
 	"POL-E-09": "path_traversal",

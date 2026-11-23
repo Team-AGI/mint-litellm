@@ -84,6 +84,13 @@ test_pol_e07_external_url if {
 	d.observable
 }
 
+test_pol_default_pass_patterns_allow_and_private_still_blocks if {
+	evaluate(with_patterns({})).decision == "Allow"
+	d := evaluate(with_patterns({"private_host": true}))
+	d.decision == "Block"
+	d.policy_ids == ["POL-E-14"]
+}
+
 test_pol_e14_private_host if {
 	d := evaluate(with_patterns({"private_host": true}))
 	d.decision == "Block"
