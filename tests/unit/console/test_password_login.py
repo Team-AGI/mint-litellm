@@ -19,6 +19,7 @@ def claims(user_id: str, email: str | None = "p@acme.test", **extra) -> dict:
         "user_email": email,
         "user_role": "proxy_admin",
         "login_method": "username_password",
+        "key": "sk-ui-session",
         **extra,
     }
 
@@ -218,3 +219,83 @@ def test_set_password_can_set_the_email_and_refuses_what_it_cannot_do(world):
         litellm_password.set_password(world.stub.url, "", "human-1")
     with pytest.raises(ControlError, match="없습니다"):
         litellm_password.set_password(world.stub.url, "admin-key", "ghost")
+
+
+# --- 콘솔에서 비밀번호 바꾸기 ----------------------------------------------------------------
+
+NEW = "Brand-New-Pass-42"
+
+
+def with_email(world, user_id, email):
+    body = user_info(user_id, "proxy_admin")
+    body["user_info"]["user_email"] = email
+    world.stub.routes[("/user/info", CONTROL_KEY, user_id)] = (200, body)
+
+
+def change(world, client, path="/account/password", **fields):
+    data = {"current_password": PASSWORD, "new_password": NEW, "confirm_password": NEW, **fields}
+    token = world.csrf(client) if COOKIE in client.cookies else "x"
+    return client.post(path, data={"csrf": token, **data})
+
+
+def test_a_password_session_changes_the_password(pw):
+    with_email(pw, "human-1", "admin@acme.test")
+    attempt(pw, "admin@acme.test")
+    pw.stub.posts.clear()
+    response = change(pw, pw.client)
+    assert response.status_code == 303 and "ok=password_changed" in response.headers["location"]
+    assert [p for p, _ in pw.stub.posts] == ["/v2/login", "/user/password/change"]
+    assert pw.stub.posts[1][1] == {"current_password": PASSWORD, "new_password": NEW}
+    assert pw.stub.post_auth[-1] == "Bearer sk-ui-session"
+    assert "비밀번호를 바꿨습니다" in pw.client.get("/account/password?ok=password_changed").text
+    assert NEW not in pw.query("SELECT string_agg(e::text, ' ') FROM mint.events e")[0][0]
+
+
+def test_a_wrong_current_password_or_a_weak_new_one_is_explained(pw):
+    with_email(pw, "human-1", "admin@acme.test")
+    attempt(pw, "admin@acme.test")
+    page = change(pw, pw.client, current_password="wrong")
+    assert page.status_code == 400 and "현재 비밀번호가 올바르지 않습니다" in page.text
+    pw.stub.weak.add(NEW)
+    page = change(pw, pw.client)
+    assert page.status_code == 400 and "받아들이지 않았습니다" in page.text
+    assert change(pw, pw.client, confirm_password="x").status_code == 400
+    assert "다른 비밀번호" in change(pw, pw.client, new_password=PASSWORD,
+                                      confirm_password=PASSWORD).text
+
+
+def test_changing_the_password_needs_csrf(pw):
+    attempt(pw, "admin@acme.test")
+    response = pw.client.post(
+        "/account/password",
+        data={"current_password": PASSWORD, "new_password": NEW, "confirm_password": NEW},
+    )
+    assert response.status_code == 403
+    assert all(p != "/user/password/change" for p, _ in pw.stub.posts)
+
+
+def test_a_key_login_session_has_no_password_to_change(pw):
+    client = pw.session_client()
+    assert "비밀번호 바꾸기" not in client.get("/").text
+    page = client.get("/account/password")
+    assert "LiteLLM 계정 비밀번호가 없습니다" in page.text
+    assert 'name="new_password"' not in page.text
+    assert change(pw, client).status_code == 409
+    assert all(p != "/user/password/change" for p, _ in pw.stub.posts)
+
+
+def test_the_menu_link_shows_for_password_sessions_and_staff_can_change_too(pw):
+    attempt(pw, "admin@acme.test")
+    assert 'href="/account/password"' in pw.client.get("/").text
+    with_email(pw, "human-9", "stranger@acme.test")
+    attempt(pw, "stranger@acme.test", path="/staff/login")
+    assert 'href="/staff/account/password"' in pw.client.get("/staff").text
+    from mint_litellm.control.services.console_sessions import csrf_token
+
+    token = csrf_token(pw.client.cookies[STAFF_COOKIE])
+    response = pw.client.post(
+        "/staff/account/password",
+        data={"csrf": token, "current_password": PASSWORD, "new_password": NEW,
+              "confirm_password": NEW},
+    )
+    assert response.status_code == 303

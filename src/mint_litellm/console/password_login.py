@@ -43,8 +43,10 @@ def _claims(token: object) -> dict:
     return claims
 
 
-def verify(litellm_url: str, username: str, password: str, client_host: str = "") -> str:
-    """LiteLLM이 받아들인 아이디·비밀번호이면 사용자 식별자를, 아니면 ``LoginRefused``를 낸다."""
+def login_claims(
+    litellm_url: str, username: str, password: str, client_host: str = "", wrong: str = WRONG
+) -> dict:
+    """받아들인 아이디·비밀번호이면 화면 토큰의 클레임을, 아니면 ``LoginRefused``를 낸다."""
     username = username.strip()
     if not username or not password:
         raise LoginRefused("아이디와 비밀번호를 입력하십시오.")
@@ -64,11 +66,16 @@ def verify(litellm_url: str, username: str, password: str, client_host: str = ""
     if response.status_code == 403:
         raise LoginRefused("LiteLLM이 비밀번호 로그인을 막아 두었습니다. SSO로 로그인하십시오.")
     if response.status_code != 200:
-        raise LoginRefused(WRONG)
+        raise LoginRefused(wrong)
     try:
-        claims = _claims(response.json().get("token"))
+        return _claims(response.json().get("token"))
     except (ValueError, AttributeError):
         raise LoginRefused("LiteLLM 응답을 해석할 수 없습니다.") from None
+
+
+def verify(litellm_url: str, username: str, password: str, client_host: str = "") -> str:
+    """LiteLLM이 받아들인 아이디·비밀번호이면 사용자 식별자를, 아니면 ``LoginRefused``를 낸다."""
+    claims = login_claims(litellm_url, username, password, client_host)
     user_id = claims.get("user_id")
     if not isinstance(user_id, str) or not user_id:
         raise LoginRefused("LiteLLM 응답을 해석할 수 없습니다.")
@@ -117,3 +124,67 @@ def sign_in(
     response = RedirectResponse("/" if target == "admin" else "/staff", status_code=303)
     set_cookie(response, request, cookie, session_id)
     return response
+
+
+REJECTED = (
+    "새 비밀번호를 받아들이지 않았습니다. 더 길고 복잡하게 정하십시오. "
+    "다른 곳에서 유출된 비밀번호도 쓸 수 없습니다."
+)
+
+
+def change_password(
+    litellm_url: str, email: str, current: str, new: str, client_host: str = ""
+) -> None:
+    """현재 비밀번호로 LiteLLM에 로그인해 받은 키로 비밀번호를 바꾼다. 실패하면 ``LoginRefused``."""
+    claims = login_claims(
+        litellm_url, email, current, client_host, "현재 비밀번호가 올바르지 않습니다."
+    )
+    key = claims.get("key")
+    if not isinstance(key, str) or not key:
+        raise LoginRefused("LiteLLM 응답을 해석할 수 없습니다.")
+    try:
+        response = httpx.post(
+            f"{litellm_url.rstrip('/')}/user/password/change",
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=10.0,
+            json={"current_password": current, "new_password": new},
+        )
+    except httpx.HTTPError:
+        raise LoginRefused(UNAVAILABLE) from None
+    if response.status_code in (400, 422):
+        raise LoginRefused(REJECTED)
+    if response.status_code == 401:
+        raise LoginRefused("현재 비밀번호가 올바르지 않습니다.")
+    if response.status_code != 200:
+        raise LoginRefused("LiteLLM이 비밀번호 변경을 처리하지 못했습니다.")
+
+
+def has_password(key_token: str) -> bool:
+    """LiteLLM 아이디·비밀번호로 연 세션인가(키·SSO 세션에는 바꿀 비밀번호가 없다)."""
+    return key_token.startswith(console_sessions.PASSWORD_PREFIX)
+
+
+NO_ACCOUNT = "LiteLLM 계정 비밀번호가 없습니다."
+
+
+def submit(request: Request, user_id: str, key_token: str, current: str, new: str, again: str):
+    """폼 제출 처리. (오류 문구 또는 None, 상태 코드). 평문은 저장·기록하지 않는다."""
+    config = config_of(request)
+    if not has_password(key_token):
+        return NO_ACCOUNT, 409
+    if new != again:
+        return "새 비밀번호와 확인이 다릅니다.", 400
+    if new == current:
+        return "현재 비밀번호와 다른 비밀번호를 입력하십시오.", 400
+    if too_many_attempts(request):
+        return TOO_MANY, 429
+    host = request.client.host if request.client else ""
+    try:
+        user = human_user(config, user_id)
+        email = user.get("user_email")
+        if not email:
+            return NO_ACCOUNT, 409
+        change_password(config.litellm_url, email, current, new, host)
+    except LoginRefused as refused:
+        return str(refused), 400
+    return None, 200

@@ -17,6 +17,7 @@
   <span>
     <span class="who">{{ zone_label }}</span>
     <span class="who">{{ actor.session.operator_name }} · {{ L.pick(L.ROLE, actor.role) }}</span>
+    {% if (actor.session.key_token or "").startswith("pw:") %}<a class="button" href="/account/password">비밀번호 바꾸기</a>{% endif %}
     <form method="post" action="/logout" hx-boost="false"><input type="hidden" name="csrf" value="{{ actor.csrf }}"><button type="submit">로그아웃</button></form>
   </span>
 </header>

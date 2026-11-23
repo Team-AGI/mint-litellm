@@ -74,6 +74,7 @@ class LiteLLMStub:
         self.logins: dict[str, tuple[str, dict]] = {}
         self.posts: list[tuple[str, dict]] = []
         self.login_status = 0
+        self.weak: set[str] = set()  # 정책 위반으로 거부할 새 비밀번호
         self.post_auth: list[str] = []
         stub = self
 
@@ -103,6 +104,8 @@ class LiteLLMStub:
                 known = stub.logins.get(body.get("username"))
                 if urlsplit(self.path).path == "/user/update":
                     status, reply = 200, {}
+                elif urlsplit(self.path).path == "/user/password/change":
+                    status, reply = (400 if body.get("new_password") in stub.weak else 200), {}
                 elif (urlsplit(self.path).path == "/v2/login" and known
                       and known[0] == body["password"]):
                     status, reply = 200, {"redirect_url": "x", "token": fake_ui_token(known[1])}

@@ -5,10 +5,10 @@ import uuid
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
 
-from mint_litellm.console import setup_state
+from mint_litellm.console import password_login, setup_state
 from mint_litellm.console.core import Actor, page_actor, require_csrf
 from mint_litellm.console.templating import render
 from mint_litellm.control import webhook
@@ -72,3 +72,27 @@ def webhook_test(request: Request, actor: Actor = Depends(page_actor)):
         )
     setup_state.mark(actor.conn, actor.instance, "webhook_test", actor.ctx.operator.name)
     return RedirectResponse("/setup?ok=webhook_tested", status_code=303)
+
+
+def password_page(request: Request, actor: Actor, error=None, status=200):
+    ctx = {"error": error, "has_password": password_login.has_password(actor.session.key_token)}
+    return render(request, "password.html", ctx, actor=actor, status=status)
+
+
+@router.get("/account/password")
+def password_form(request: Request, actor: Actor = Depends(page_actor)):
+    return password_page(request, actor)
+
+
+@router.post("/account/password")
+def password_submit(
+    request: Request, current_password: str = Form(""), new_password: str = Form(""),
+    confirm_password: str = Form(""), actor: Actor = Depends(page_actor),
+):
+    error, status = password_login.submit(
+        request, actor.session.user_id, actor.session.key_token,
+        current_password, new_password, confirm_password,
+    )
+    if error:
+        return password_page(request, actor, error, status)
+    return RedirectResponse("/account/password?ok=password_changed", status_code=303)
