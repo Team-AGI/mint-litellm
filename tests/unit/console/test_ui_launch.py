@@ -160,3 +160,25 @@ def test_console_and_adapter_hand_the_session_over_end_to_end(lw):
         assert browser.get(f"{ui_handoff.ENTER_PATH}?code={code}").status_code == 403
     user, role, session, seconds = opened[0]
     assert (user, role) == ("human-1", "proxy_admin") and 0 < seconds <= 8 * 3600
+
+
+def test_litellm_logout_ends_only_the_session_that_opened_the_screen(lw, monkeypatch):
+    monkeypatch.setattr(ui_sessions, "OPEN_GRACE_SECONDS", 0)
+    monkeypatch.setattr(ui_sessions, "CHECK_SECONDS", 0.0)
+    monkeypatch.setattr(ui_sessions, "_revoke_remote", lambda *a: True)
+    plain, opened = lw.session_client("approver"), lw.session_client("admin")
+    redeem(lw, code_of(opened.get("/litellm/open")))
+    calls = []
+
+    def reply(url, **kw):
+        calls.append(url)
+        return httpx.Response(200, json={"open": 0})
+
+    monkeypatch.setattr(ui_sessions.httpx, "post", reply)
+    assert plain.get("/").status_code != 401 and len(calls) == 0
+    assert opened.get("/", follow_redirects=False).status_code in (303, 401)
+    assert calls and lw.query("SELECT count(*) FROM mint.console_sessions"
+                              " WHERE revoked_at IS NOT NULL")[0][0] == 1
+    monkeypatch.setattr(ui_sessions.httpx, "post",
+                        lambda *a, **k: (_ for _ in ()).throw(httpx.ConnectError("x")))
+    assert plain.get("/").status_code != 401

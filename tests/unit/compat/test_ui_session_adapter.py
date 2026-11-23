@@ -31,6 +31,9 @@ class Backend:
         self.deleted.append(session_hash)
         return 2
 
+    async def count_sessions(self, session_hash):
+        return 0
+
 
 def client(backend, grant=None, status=200):
     def console(request):
@@ -130,3 +133,12 @@ def test_the_litellm_symbols_the_backend_uses_exist_in_the_installed_version():
     assert all((LitellmUserRoles, UserAPIKeyAuth, delete_verification_tokens,
                 generate_key_helper_fn, check_is_admin_only_access, has_admin_ui_access,
                 set_session_token_cookie, get_custom_url))
+
+
+def test_alive_reports_open_sessions_only_for_signed_calls():
+    c = client(Backend())
+    body = json.dumps({"session_hash": HASH}).encode()
+    assert c.post(ui_handoff.ALIVE_PATH, content=body).status_code == 403
+    sent = c.post(ui_handoff.ALIVE_PATH, content=body,
+                  headers=ui_handoff.sign(KEY, ui_handoff.ALIVE_PATH, body))
+    assert sent.json() == {"open": 0}

@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 from mint_litellm.console.cookies import read_cookie
 from mint_litellm.console.labels import SERVER
 from mint_litellm.console.oidc import OidcConfig
-from mint_litellm.control import operators
+from mint_litellm.control import operators, ui_sessions
 from mint_litellm.control.config import ControlConfig
 from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import connect
@@ -384,6 +384,16 @@ def actor_dep(*, allow_token: bool):
             if session_id
             else None
         )
+        if info is not None and ui_sessions.litellm_logged_out(
+            conn, config.instance_id, config.litellm_url, config.stage2.export_hmac_key,
+            info.id_hash,
+        ):
+            console_sessions.revoke(
+                conn, config.instance_id, info.id_hash, actor=info.operator_name,
+                reason="litellm_logout",
+            )
+            conn.commit()  # 아래 인증 오류가 이 폐기를 되돌리지 않게 한다
+            info = None
         if info is None:
             raise Unauthenticated()
         operator = Operator(info.operator_name, info.role, info.user_id)

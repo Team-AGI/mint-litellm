@@ -116,6 +116,14 @@ def staff_actor(
     id_hash = console_sessions.hash_id(session_id)
     row = staff.find_session(
         control, config.instance_id, id_hash, config.stage2.session_verify_window_seconds)
+    if row is not None and ui_sessions.litellm_logged_out(
+        control, config.instance_id, config.litellm_url, config.stage2.export_hmac_key, id_hash
+    ):
+        console_sessions.revoke(
+            control, config.instance_id, id_hash, actor=row["user_id"], reason="litellm_logout"
+        )
+        control.commit()  # 아래 인증 오류가 이 폐기를 되돌리지 않게 한다
+        row = None
     if row is None:
         raise StaffUnauthenticated()
     sctx = staff.StaffContext(

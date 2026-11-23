@@ -4,6 +4,7 @@
 """
 
 import json
+import time
 
 import httpx
 import psycopg
@@ -66,3 +67,42 @@ def sweep(conn: psycopg.Connection, instance_id: str, litellm_url: str, key: byt
     return sum(
         end_session(conn, instance_id, litellm_url, key, r["session_hash"]) for r in rows
     )
+
+
+_CHECKED: dict[str, float] = {}
+CHECK_SECONDS = 5.0
+OPEN_GRACE_SECONDS = 15
+
+
+def litellm_logged_out(
+    conn: psycopg.Connection, instance_id: str, litellm_url: str, key: bytes, session_hash: str
+) -> bool:
+    """이 MINT 세션이 연 LiteLLM 화면 세션이 모두 사라졌으면 참(화면에서 로그아웃함).
+
+    화면을 연 적 없는 세션, 방금 연 세션, LiteLLM에 닿지 않을 때는 거짓이다(통과).
+    """
+    now = time.monotonic()
+    if now - _CHECKED.get(session_hash, -CHECK_SECONDS) < CHECK_SECONDS:
+        return False
+    _CHECKED[session_hash] = now
+    if len(_CHECKED) > 4096:
+        _CHECKED.clear()
+    opened = fetchone(
+        conn,
+        "SELECT 1 AS x FROM mint.ui_handoffs WHERE instance_id = %s AND session_hash = %s"
+        " AND consumed_at IS NOT NULL AND revoked_at IS NULL"
+        " AND consumed_at < now() - make_interval(secs => %s) LIMIT 1",
+        (instance_id, session_hash, OPEN_GRACE_SECONDS),
+    )
+    if opened is None:
+        return False
+    body = json.dumps({"session_hash": session_hash}).encode()
+    try:
+        reply = httpx.post(
+            f"{litellm_url.rstrip('/')}{ui_handoff.ALIVE_PATH}", content=body, timeout=3.0,
+            headers={**ui_handoff.sign(key, ui_handoff.ALIVE_PATH, body),
+                     "Content-Type": "application/json"},
+        )
+        return reply.status_code == 200 and reply.json().get("open") == 0
+    except (httpx.HTTPError, ValueError):
+        return False
