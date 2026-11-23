@@ -70,6 +70,10 @@ class StaffActor:
         return self.sctx.user_id
 
     @property
+    def key_token(self) -> str:
+        return self.sctx.key_token
+
+    @property
     def csrf(self) -> str:
         return console_sessions.csrf_token(self.session_id)
 
@@ -292,6 +296,34 @@ def login_submit(
     response = RedirectResponse("/staff", status_code=303)
     set_cookie(response, request, STAFF_COOKIE, session_id)
     return response
+
+
+def password_page(request: Request, actor: StaffActor, error=None, status=200):
+    from mint_litellm.console import password_login  # 순환 참조를 피한다
+
+    ctx = {"error": error, "has_password": password_login.has_password(actor.key_token)}
+    return staff_render(request, "staff_password.html", ctx, actor, status)
+
+
+@router.get("/staff/account/password")
+def password_form(request: Request, actor: StaffActor = Depends(staff_actor)):
+    return password_page(request, actor)
+
+
+@router.post("/staff/account/password")
+def password_submit(
+    request: Request, current_password: str = Form(""), new_password: str = Form(""),
+    confirm_password: str = Form(""), actor: StaffActor = Depends(staff_actor),
+):
+    from mint_litellm.console import password_login  # 순환 참조를 피한다
+
+    error, status = password_login.submit(
+        request, actor.user_id, actor.key_token,
+        current_password, new_password, confirm_password,
+    )
+    if error:
+        return password_page(request, actor, error, status)
+    return RedirectResponse("/staff/account/password?ok=password_changed", status_code=303)
 
 
 @router.post("/staff/logout")

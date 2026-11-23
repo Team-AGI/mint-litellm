@@ -619,6 +619,7 @@ SESSION_END_REASON = {
 }
 
 NOTICES = {
+    "password_changed": "비밀번호를 바꿨습니다.",
     "webhook_tested": "시험 메시지를 보냈습니다.",
     "siem_test_requested": "시험 전송을 요청했습니다. 잠시 뒤 새로 고쳐 결과를 확인하십시오.",
     "suspended": "서버를 중지했습니다.",
