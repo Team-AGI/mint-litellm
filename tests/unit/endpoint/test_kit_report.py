@@ -195,7 +195,7 @@ def test_http_401_prints_korean_guidance(monkeypatch, capsys):
 
     monkeypatch.setattr(urllib.request, "urlopen", refuse)
     assert kit_module.post("http://x", "k", {}, None) is None
-    assert "설치 묶음을 다시 받아" in capsys.readouterr().err
+    assert "한 줄 설치 명령" in capsys.readouterr().err
 
 
 def test_a_reinstall_forgets_the_reported_tool_lists(folder, tmp_path, reports):
@@ -210,7 +210,7 @@ def test_a_reinstall_forgets_the_reported_tool_lists(folder, tmp_path, reports):
 
 
 def test_the_hook_shows_korean_guidance_on_http_401():
-    with pytest.raises(agent.Refuse, match="설치 묶음을 다시 받으세요"):
+    with pytest.raises(agent.Refuse, match="한 줄 설치 명령"):
         agent._call(lambda *a: (401, b""), "http://x", "/p", "k", {}, 1.0)
 
 

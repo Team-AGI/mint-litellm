@@ -15,7 +15,7 @@ from typing import Any
 
 import psycopg
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 
 from mint_litellm.console import labels, login, pack_view
 from mint_litellm.console.cookies import delete_cookie, set_cookie
@@ -34,7 +34,14 @@ from mint_litellm.console.core import (
 from mint_litellm.console.oidc import login_context
 from mint_litellm.console.pages.common import see_other, server_names
 from mint_litellm.console.templating import render
-from mint_litellm.control import directory, endpoint_kits, kit_key_sync, links, ui_sessions
+from mint_litellm.control import (
+    directory,
+    endpoint_kits,
+    kit_codes,
+    kit_key_sync,
+    links,
+    ui_sessions,
+)
 from mint_litellm.control.db.connection import connect, fetchall
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.litellm_admin import LiteLLMError
@@ -76,6 +83,16 @@ class StaffActor:
     @property
     def csrf(self) -> str:
         return console_sessions.csrf_token(self.session_id)
+
+    @property
+    def label(self) -> str:
+        """화면 상단에 보이는 이름: 이메일, 없으면 사용자 ID."""
+        row = fetchall(
+            self.sctx.control,
+            "SELECT email FROM mint.directory_users WHERE instance_id = %s AND user_id = %s",
+            (self.config.instance_id, self.user_id),
+        )
+        return (row[0]["email"] if row else None) or self.user_id
 
 
 def staff_connection(request: Request) -> Iterator[psycopg.Connection]:
@@ -595,13 +612,13 @@ def usage(request: Request, period: str = "", actor: StaffActor = Depends(staff_
 # --- 14 단말 설치 -----------------------------------------------------------------------------
 
 
-def endpoint_page(request: Request, actor: StaffActor, error=None, status=200):
+def endpoint_page(request: Request, actor: StaffActor, error=None, status=200, commands=None):
     rows = endpoint_kits.installs(actor.sctx.control, actor.sctx.instance_id, actor.user_id)
     # 받는 사람의 브라우저가 Windows면 Windows 묶음을 미리 고른다.
     windows = "windows" in request.headers.get("user-agent", "").lower()
     ctx = {
         "rows": rows, "active": any(r["state"] != "revoked" for r in rows), "error": error,
-        "platform": "windows" if windows else "linux",
+        "platform": "windows" if windows else "linux", "commands": commands,
     }
     return staff_render(request, "staff_endpoint.html", ctx, actor, status)
 
@@ -611,6 +628,60 @@ def endpoint(request: Request, actor: StaffActor = Depends(staff_actor)):
     return endpoint_page(request, actor)
 
 
+class KitRefused(Exception):
+    def __init__(self, message: str, status: int) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+def issue_kit(
+    config: ConsoleConfig, control: psycopg.Connection, user_id: str, team_id: str | None,
+    platform: str, harness: str,
+) -> bytes:
+    """본인 키를 새로 발급해 담은 설치 묶음을 만든다(이전 묶음의 키는 지워진다)."""
+    if platform not in labels.KIT_PLATFORM or harness not in labels.KIT_HARNESS:
+        raise KitRefused("설치 묶음의 종류가 올바르지 않습니다.", 400)
+    if config.kit_issuer is None:
+        raise KitRefused(
+            "단말 설치 묶음 발급 키가 설정되지 않아 발급할 수 없습니다. 운영자가 ./mint.sh up(또는 "
+            "upgrade)을 다시 실행하면 키를 만들어 넣습니다(MINT_KIT_ISSUER_KEY).", 503,
+        )
+    if not config.endpoint_url:
+        # 비어 있으면 묶음에 컨테이너 안 주소가 적혀 단말에서 판정을 부를 수 없다.
+        raise KitRefused(
+            "단말이 부를 판정 주소가 정해지지 않아 설치 묶음을 발급할 수 없습니다. 운영자가 "
+            "MINT_ENDPOINT_PUBLIC_URL(단말에서 닿는 LiteLLM 주소)을 정한 뒤 다시 시도하세요.", 503,
+        )
+    if not config.endpoint_routes:
+        raise KitRefused(
+            "단말 경로가 꺼져 있어 설치 묶음을 발급할 수 없습니다. 운영자가 "
+            "MINT_ENDPOINT_ROUTES=true로 켠 뒤 다시 시도하세요.", 503,
+        )
+    # 승인된 로컬 서버가 없어도 게이트웨이 항목과 키만으로 의미가 있어 묶음을 낸다.
+    # 묶음에는 이 직원에게 승인된 로컬 서버만 넣는다(다른 직원의 서버 계약이 새지 않게).
+    mine = kit_key_sync.local_servers_for(control, config.instance_id, user_id, team_id)
+    every = endpoint_kits.approved_contracts(control, config.instance_id)
+    contracts = {name: contract for name, contract in every.items() if name in mine}
+    try:
+        key = endpoint_kits.issue_key(
+            control, config.kit_issuer, config.instance_id, user_id=user_id,
+            team_id=team_id, issued_by=user_id, ttl_days=config.stage2.endpoint_key_days,
+        )
+        gateway_key = endpoint_kits.issue_gateway_key(
+            control, config.kit_issuer, config.instance_id, user_id=user_id,
+            team_id=team_id, kit_key=key,
+        )
+    except LiteLLMError:
+        log.exception("단말 설치 묶음 키 발급 실패")
+        raise KitRefused("설치 묶음을 발급하지 못했습니다.", 503) from None
+    return build_kit(
+        contracts, decide_url=config.endpoint_url or config.litellm_url, key=key,
+        ca_pem=config.endpoint_ca_pem, platform=platform,
+        harnesses=tuple(HARNESSES) if harness == "all" else (harness,),
+        allow_unsandboxed=config.endpoint_allow_unsandboxed, gateway_key=gateway_key,
+    )
+
+
 @router.post("/staff/endpoint/kit")
 def endpoint_kit(
     request: Request,
@@ -618,53 +689,13 @@ def endpoint_kit(
     platform: str = Form("linux"),
     harness: str = Form("claude"),
 ):
-    """본인 키를 새로 발급해 담은 설치 묶음을 내려준다(이전 묶음의 키는 지워진다)."""
-    config, sctx = actor.config, actor.sctx
-    if platform not in labels.KIT_PLATFORM or harness not in labels.KIT_HARNESS:
-        return endpoint_page(request, actor, "설치 묶음의 종류가 올바르지 않습니다.", 400)
-    if config.kit_issuer is None:
-        return endpoint_page(
-            request, actor,
-            "단말 설치 묶음 발급 키가 설정되지 않아 발급할 수 없습니다. 운영자가 ./mint.sh up(또는 "
-            "upgrade)을 다시 실행하면 키를 만들어 넣습니다(MINT_KIT_ISSUER_KEY).", 503,
-        )
-    if not config.endpoint_url:
-        # 비어 있으면 묶음에 컨테이너 안 주소가 적혀 단말에서 판정을 부를 수 없다.
-        return endpoint_page(
-            request, actor,
-            "단말이 부를 판정 주소가 정해지지 않아 설치 묶음을 발급할 수 없습니다. 운영자가 "
-            "MINT_ENDPOINT_PUBLIC_URL(단말에서 닿는 LiteLLM 주소)을 정한 뒤 다시 시도하세요.", 503,
-        )
-    if not config.endpoint_routes:
-        return endpoint_page(
-            request, actor,
-            "단말 경로가 꺼져 있어 설치 묶음을 발급할 수 없습니다. 운영자가 "
-            "MINT_ENDPOINT_ROUTES=true로 켠 뒤 다시 시도하세요.", 503,
-        )
-    # 승인된 로컬 서버가 없어도 게이트웨이 항목과 키만으로 의미가 있어 묶음을 낸다.
+    """설치 묶음 파일을 내려준다."""
+    sctx = actor.sctx
     team_id = sctx.team_ids[0] if sctx.team_ids else None
-    # 묶음에는 이 직원에게 승인된 로컬 서버만 넣는다(다른 직원의 서버 계약이 새지 않게).
-    mine = kit_key_sync.local_servers_for(sctx.control, sctx.instance_id, actor.user_id, team_id)
-    every = endpoint_kits.approved_contracts(sctx.control, sctx.instance_id)
-    contracts = {name: contract for name, contract in every.items() if name in mine}
     try:
-        key = endpoint_kits.issue_key(
-            sctx.control, config.kit_issuer, sctx.instance_id, user_id=actor.user_id,
-            team_id=team_id, issued_by=actor.user_id, ttl_days=config.stage2.endpoint_key_days,
-        )
-        gateway_key = endpoint_kits.issue_gateway_key(
-            sctx.control, config.kit_issuer, sctx.instance_id, user_id=actor.user_id,
-            team_id=team_id, kit_key=key,
-        )
-    except LiteLLMError:
-        log.exception("단말 설치 묶음 키 발급 실패")
-        return endpoint_page(request, actor, "설치 묶음을 발급하지 못했습니다.", 503)
-    kit = build_kit(
-        contracts, decide_url=config.endpoint_url or config.litellm_url, key=key,
-        ca_pem=config.endpoint_ca_pem, platform=platform,
-        harnesses=tuple(HARNESSES) if harness == "all" else (harness,),
-        allow_unsandboxed=config.endpoint_allow_unsandboxed, gateway_key=gateway_key,
-    )
+        kit = issue_kit(actor.config, sctx.control, actor.user_id, team_id, platform, harness)
+    except KitRefused as refused:
+        return endpoint_page(request, actor, str(refused), refused.status)
     media, name = (
         ("application/zip", "mint-kit.zip") if platform == "windows"
         else ("application/gzip", "mint-kit.tar.gz")
@@ -672,6 +703,39 @@ def endpoint_kit(
     return Response(
         kit, media_type=media, headers={"Content-Disposition": f'attachment; filename="{name}"'}
     )
+
+
+@router.post("/staff/endpoint/code")
+def endpoint_code(request: Request, actor: StaffActor = Depends(staff_actor)):
+    """한 줄 설치 명령을 만든다. 코드는 한 번만 쓰이고 곧 만료된다."""
+    sctx = actor.sctx
+    team_id = sctx.team_ids[0] if sctx.team_ids else None
+    code = kit_codes.create(sctx.control, actor.config.instance_id, actor.user_id, team_id)
+    base = f"{str(request.base_url).rstrip('/')}/kit/{code}"
+    return endpoint_page(request, actor, commands={
+        "linux": f"curl -fsSL {base}/install.sh | sh",
+        "windows": f"irm {base}/install.ps1 | iex",
+    })
+
+
+@public.get("/kit/{code}/{name}")
+def kit_redeem(
+    code: str, name: str, request: Request, control: psycopg.Connection = Depends(db)
+) -> Response:
+    """한 줄 설치 명령이 부르는 주소. 코드를 한 번 쓰고 키를 새로 발급해 설치 스크립트를 준다."""
+    config = config_of(request)
+    who = kit_codes.redeem(control, config.instance_id, code) if name in kit_codes.NAMES else None
+    if who is None:
+        return PlainTextResponse("코드가 없거나 이미 쓰였거나 만료되었습니다.\n", status_code=404)
+    try:
+        kit = issue_kit(
+            config, control, who["user_id"], who["team_id"],
+            "windows" if name in ("install.ps1", "kit.zip") else "linux", "all",
+        )
+    except KitRefused as refused:
+        return PlainTextResponse(f"{refused}\n", status_code=refused.status)
+    return PlainTextResponse(
+        kit_codes.script(name, kit), headers={"Cache-Control": "no-store"})
 
 
 @router.post("/staff/endpoint/revoke")

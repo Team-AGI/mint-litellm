@@ -8,14 +8,17 @@
   {{ m.kpi('마지막 보고', (rows[0].reported_at | when) if rows[0].reported_at else '—') }}
 </div>
 {% endif %}
-<form id="kit-form" method="post" action="/staff/endpoint/kit" hx-boost="false" class="form">
+<form method="post" action="/staff/endpoint/code" hx-boost="false" class="form">
   {{ m.csrf(actor) }}
-  <div class="row">
-    <label>운영체제<select name="platform">{% for k, v in L.KIT_PLATFORM.items() %}<option value="{{ k }}"{% if k == platform %} selected{% endif %}>{{ v }}</option>{% endfor %}</select></label>
-    <label>도구<select name="harness">{% for k, v in L.KIT_HARNESS.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></label>
-  </div>
-  <div class="actions">{% if rows %}{{ m.confirm_submit('kit-confirm', '설치 묶음 다시 받기', '설치 묶음을 다시 받습니다', '이전에 받은 키가 지워져 이 키로 연결된 다른 단말의 연결이 끊깁니다. 다른 단말은 새 설치 묶음으로 다시 설치해야 합니다.', 'kit-form', '다시 받기', danger=false, trigger_class='primary') }}{% else %}<button type="submit" class="primary">설치 묶음 받기</button>{% endif %}</div>
+  <div class="actions"><button type="submit" class="primary">설치 명령 만들기</button></div>
 </form>
+{% if commands %}
+<h3>Linux · macOS</h3>
+{{ m.copy_cmd(commands.linux) }}
+<h3>Windows PowerShell</h3>
+{{ m.copy_cmd(commands.windows) }}
+<p class="muted">한 번만 쓰고 15분 뒤 만료됩니다</p>
+{% endif %}
 {% if rows %}
 <table><thead><tr><th>팀</th><th>설치 상태</th><th>도구 판본</th><th>MCP 서버</th><th>발급</th><th>마지막 보고</th></tr></thead><tbody>
 {% for r in rows %}<tr>
@@ -27,6 +30,6 @@
 <td class="nowrap">{{ r.reported_at | when }}</td>
 </tr>{% endfor %}
 </tbody></table>
-{% if active %}{{ m.confirm_dialog('revoke-endpoint', '연결 해제', '단말 연결을 해제합니다', '이 단말의 키가 지워집니다. 새 설치 묶음을 받아야 다시 연결됩니다.', '/staff/endpoint/revoke', actor, '연결 해제') }}{% endif %}
-{% else %}<div class="empty"><h3>발급한 설치 묶음이 없습니다</h3></div>{% endif %}
+{% if active %}{{ m.confirm_dialog('revoke-endpoint', '연결 해제', '단말 연결을 해제합니다', '이 단말의 키가 지워집니다. 새 설치 명령을 붙여 넣어야 다시 연결됩니다.', '/staff/endpoint/revoke', actor, '연결 해제') }}{% endif %}
+{% else %}<div class="empty"><h3>설치한 단말이 없습니다</h3></div>{% endif %}
 {% endblock %}

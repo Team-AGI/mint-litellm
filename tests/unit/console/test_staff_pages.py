@@ -723,20 +723,43 @@ def test_a_second_download_replaces_the_first_key_and_other_users_are_untouched(
     assert rows == [(STAFFER, True), (OTHER, False), (STAFFER, False)]
 
 
-def test_downloading_the_kit_again_asks_for_confirmation(kits):
+def test_a_one_line_command_is_redeemed_once_and_swaps_the_key(kits):
+    import base64
+    import io
+    import json
+    import tarfile
+
     client = logged_in(kits)
-    assert "kit-confirm" not in client.get("/staff/endpoint").text
-    download(client)
+    page = client.post("/staff/endpoint/code", data={"csrf": csrf(client)}).text
+    assert "curl -fsSL" in page and "irm " in page and "kit-confirm" not in page
+    url = page.split("curl -fsSL ")[1].split(" | sh")[0]
+    path = url.replace("https://testserver", "")
+    anonymous = kits.client.__class__(kits.app, base_url="https://testserver")
+    script = anonymous.get(path)
+    assert script.status_code == 200 and "MINT_KIT" in script.text
+    payload = script.text.split("<<'MINT_KIT'")[1].split("\n",1)[1].rsplit("\nMINT_KIT",1)[0]
+    with tarfile.open(fileobj=io.BytesIO(base64.b64decode(payload)), mode="r:gz") as bundle:
+        config = json.loads(bundle.extractfile("mint-kit/kit.json").read())
+    assert config["key"].startswith("sk-kit-") and config["harnesses"] == [
+        "claude", "codex", "cursor", "grok"]
+    assert anonymous.get(path).status_code == 404  # 한 번만 쓴다
+    assert anonymous.get("/kit/nope/install.sh").status_code == 404
+    kits.query("UPDATE mint.kit_codes SET used_at = NULL, expires_at = now() - interval '1s'")
+    assert anonymous.get(path).status_code == 404  # 만료
+
+
+def test_the_staff_header_shows_the_email_not_the_user_id(kits):
+    client = logged_in(kits)
+    kits.query("UPDATE mint.directory_users SET email = 'staff@acme.test'")
     page = client.get("/staff/endpoint").text
-    assert 'data-dialog-open="kit-confirm"' in page and "다른 단말의 연결이 끊깁니다" in page
-    assert 'form="kit-form"' in page
+    assert 'class="who">staff@acme.test<' in page and f'class="who">{STAFFER}<' not in page
 
 
 def test_the_page_shows_the_managed_and_the_unmanaged_state_in_korean(kits):
     client = logged_in(kits)
     download(client)
     page = client.get("/staff/endpoint").text
-    assert "보고 전" in page and "설치 묶음 다시 받기" in page
+    assert "보고 전" in page
     assert "team-a" in client.get("/staff/endpoint").text
     kits.query("UPDATE mint.endpoint_installs SET install_mode = 'user', kit_version = 'k',"
                " claude_version = '2.1.0', mcp_servers = '[\"local-1\"]', reported_at = now()")
@@ -809,9 +832,6 @@ def test_the_download_follows_the_chosen_system_and_tool(kits):
     import zipfile
 
     client = logged_in(kits)
-    agent = {"user-agent": "Mozilla/5.0 (Windows NT 10.0)"}
-    page = client.get("/staff/endpoint", headers=agent).text
-    assert 'value="windows" selected' in page and "모든 도구" in page
     response = client.post(
         "/staff/endpoint/kit", data={"csrf": csrf(client), "platform": "windows", "harness": "all"}
     )

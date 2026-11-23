@@ -82,10 +82,10 @@ def test_the_screen_prompt_takes_one_target_and_the_purpose(tmp_path):
 
     def read(question):
         asked.append(question)
-        return "https://mcp.example.com/mcp" if "대상" in question else "문서 조회"
+        return "https://mcp.example.com/mcp" if "주소" in question else "문서 조회"
 
     kit_module.interactive_add(None, gateway, tmp_path, None, read=read, key=lambda: "enter")
-    assert [q.split("(")[0].strip() for q in asked] == ["대상", "목적"]
+    assert [q.split("(")[0].strip() for q in asked] == ["주소 또는 실행 명령", "목적"]
     assert gateway.sent[0]["url"] == "https://mcp.example.com/mcp"
     assert gateway.sent[0]["purpose"] == "문서 조회"
 

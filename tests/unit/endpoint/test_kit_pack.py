@@ -446,10 +446,9 @@ def test_add_explains_each_refusal_in_words(tmp_path, status, text):
     assert code == 1 and any(text in line for line in lines)
 
 
-def test_add_needs_a_purpose_a_confirmation_and_hosts_for_hosts(tmp_path):
+def test_add_needs_a_purpose_and_hosts_for_hosts(tmp_path):
     gateway, lines = FakeGateway(), []
     assert kit_module.run_add(add_args(purpose=None), tmp_path, gateway, out=lines.append) == 2
-    assert kit_module.run_add(add_args(yes=False), tmp_path, gateway, out=lines.append) == 1
     assert kit_module.run_add(add_args(network="hosts"), tmp_path, gateway, out=lines.append) == 2
     assert (
         kit_module.run_add(add_args(host=["a.example:443"]), tmp_path, gateway, out=lambda t: 0)
@@ -748,22 +747,21 @@ def test_the_grade_is_never_asked_and_an_option_is_sent_as_the_internal_value(tm
     assert lines[-1] == "자료 등급은 공개·내부·기밀·제한 중 하나입니다"
 
 
-def test_a_single_key_confirms_on_the_screen_and_a_line_prompt_says_to_press_enter(tmp_path):
-    gateway, asked = FakeGateway(), []
-    args = add_args(yes=False)
-    quiet = lambda t: 0  # noqa: E731
-    kw = dict(out=quiet, tty=True, read=lambda q: "")
-    assert kit_module.run_add(args, tmp_path, gateway, key=lambda: "y", **kw) == 0
-    assert kit_module.run_add(args, tmp_path, gateway, key=lambda: "enter", **kw) == 0
-    assert kit_module.run_add(args, tmp_path, gateway, key=lambda: "n", **kw) == 1
-    assert len(gateway.sent) == 2
+def test_add_asks_only_the_purpose_and_stops_at_once_when_the_key_is_refused(tmp_path):
+    asked, quiet = [], lambda t: 0  # noqa: E731
+    gateway = FakeGateway()
 
     def read(question):
         asked.append(question)
-        return ""
+        return "문서 조회"
 
+    args = add_args(yes=False, purpose=None)
     assert kit_module.run_add(args, tmp_path, gateway, out=quiet, read=read, tty=True) == 0
-    assert "신청할까요? (Enter 신청, n 취소) [y] " in asked
+    assert asked == ["목적 "] and len(gateway.sent) == 1
+    refused, lines = FakeGateway(), []
+    refused.json = lambda method, path, body=None: (401, None)
+    assert kit_module.run_add(args, tmp_path, refused, out=lines.append, read=read, tty=True) == 1
+    assert lines == [kit_module.KEY_REJECTED_TEXT] and asked == ["목적 "]
 
 
 def test_tab_three_shows_the_stage_and_never_an_english_next_step():

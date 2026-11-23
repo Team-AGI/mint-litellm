@@ -87,9 +87,7 @@ RETIRED_FILE = "retired.json"  # 마지막 보고 응답의 폐기 서버 목록
 LAUNCHED = "launched"  # 실행기가 띄운 서버 프로세스의 기록
 TOOLS_DIR = "tools"  # 실행기가 본 서버별 도구 목록(이름·설명·입력 정의)
 KEY_REJECTED = "key_rejected"  # 서버가 키를 거절(401·403)했다는 표시. check가 문제로 보인다.
-KEY_REJECTED_TEXT = (
-    "MINT 키가 해제되었거나 교체되었습니다. 직원 화면에서 설치 묶음을 다시 받아 설치하세요."
-)
+KEY_REJECTED_TEXT = "한 줄 설치 명령을 다시 붙여 넣으십시오 (mint relink 주소)"
 last_http_error: list[int] = []  # 마지막 보고가 받은 HTTP 오류 코드(없으면 빈 목록)
 TOOLS_SENT = "tools_sent.json"  # 서버 -> 마지막으로 보고한 목록의 해시
 MAX_TOOL_LISTS = 4  # 보고 한 번에 싣는 서버 수(나머지는 다음 보고)
@@ -3744,10 +3742,20 @@ def resolve_target(args, home: Path) -> tuple[str | None, str | None, list[str],
     return name, None, tokens, []
 
 
+def key_refused(gateway: Gateway, out=print) -> bool:
+    """키가 거절되었으면 물어보기 전에 안내하고 참을 돌려준다."""
+    if gateway.json("GET", ME_PATH)[0] in (401, 403, 404):
+        out(KEY_REJECTED_TEXT)
+        return True
+    return False
+
+
 def run_add(
     args, home: Path, gateway: Gateway, out=print, read=input, tty: bool = False, key=None
 ) -> int:
     """``mint add``. 대상(명령 또는 원격 주소)과 목적만 받는다. 서버는 실행하지 않는다."""
+    if key_refused(gateway, out):
+        return 1
     mark_fast(home / STATE_REL, time.time())  # 승인이 곧 올 테니 보고기가 짧은 주기로 돈다
     try:
         server_id, url, tokens, env_names = resolve_target(args, home)
@@ -3815,9 +3823,6 @@ def run_add(
         out(f"{pad(label, 10)}{value}")
     for name in secrets:
         out(f"{name}은(는) 비밀로 보입니다. 관리자가 비밀 참조로 등록합니다")
-    if not args.yes and not (tty and confirm(read, key)):
-        out("신청하지 않았습니다. 확인 없이 하려면 --yes를 쓰십시오" if not tty else "취소했습니다")
-        return 1
     status, doc = gateway.json("POST", INTAKES_PATH, body)
     out(submit_text(status, doc))
     if status == 201:
@@ -4550,7 +4555,7 @@ def run_inspect(
 ) -> int:
     """``mint inspect``: 검사 권한 하나를 받기·검증·격리 실행·제출까지 한 번에."""
     if gateway is None:
-        out("키가 없습니다. 설치 묶음을 다시 받아 설치하십시오")
+        out("키가 없습니다. 한 줄 설치 명령을 붙여 넣으십시오")
         return 1
     item = find_inspection(kit.home, target)
     if item is None:
@@ -4608,7 +4613,7 @@ def run_inspect(
 
 
 # --- 대화형 명령(screen·add·requests·get) ------------------------------------------------------
-CLI_COMMANDS = ("screen", "add", "requests", "get", "inspect")
+CLI_COMMANDS = ("screen", "add", "requests", "get", "inspect", "relink")
 
 
 def open_installed(folder: Path):
@@ -4648,7 +4653,7 @@ def can_write(path: Path) -> bool:
 def run_get(kit, gateway: Gateway | None, server: str, out=print, progress=None) -> int:
     """``mint get``: 승인된 묶음을 받아 검증하고 풀어 준비한다. 반쯤 된 상태는 남기지 않는다."""
     if gateway is None:
-        out("키가 없습니다. 설치 묶음을 다시 받아 설치하십시오")
+        out("키가 없습니다. 한 줄 설치 명령을 붙여 넣으십시오")
         return 1
     status, me = gateway.json("GET", ME_PATH)
     if status != 200 or not isinstance(me, dict):
@@ -4724,7 +4729,9 @@ def interactive_add(kit, gateway, home: Path, source: str | None, read=input, ke
     if source is None:
         import shlex
 
-        typed = ask("대상(명령 또는 https 주소)", "", read)
+        if key_refused(gateway):
+            return KEY_REJECTED_TEXT
+        typed = ask("주소 또는 실행 명령", "", read)
         name, tokens = (typed, []) if is_url(typed) else (None, shlex.split(typed))
     args = argparse.Namespace(
         source=source, name=name, command=tokens, purpose=None, grade=None, network=None,
@@ -4737,12 +4744,55 @@ def interactive_add(kit, gateway, home: Path, source: str | None, read=input, ke
     return lines[-1] if lines else ""
 
 
+def run_relink(url: str, out=print) -> int:
+    """한 줄 설치 명령의 주소로 새 묶음을 받아 설치기를 돌린다(키만 새 것으로 바뀐다)."""
+    import base64
+
+    found = re.match(r"^(https?://\S+/kit/[^/\s]+)(?:/[^/\s]*)?$", url.strip())
+    if not found:
+        out("주소가 올바르지 않습니다. 직원 화면의 설치 명령 주소를 붙여 넣으십시오")
+        return 1
+    windows = sys.platform == "win32"
+    try:
+        with urllib.request.urlopen(
+            f"{found.group(1)}/{'kit.zip' if windows else 'kit.tar.gz'}", timeout=60
+        ) as reply:
+            raw = base64.b64decode(reply.read())
+    except urllib.error.HTTPError:
+        out("코드가 만료되었거나 이미 쓰였습니다. 직원 화면에서 새 명령을 만드십시오")
+        return 1
+    except (OSError, ValueError):
+        out("MINT 화면에 닿지 못했습니다")
+        return 1
+    folder = Path(tempfile.mkdtemp(prefix="mint-relink-"))
+    try:
+        if windows:
+            with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+                archive.extractall(folder)
+            command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                       str(folder / "mint-kit" / "install.ps1")]
+        else:
+            import tarfile
+
+            with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as archive:
+                for member in archive.getmembers():
+                    if not member.isfile() or ".." in Path(member.name).parts:
+                        out("받은 묶음이 올바르지 않습니다")
+                        return 1
+                archive.extractall(folder)
+            command = ["bash", str(folder / "mint-kit" / "install.sh")]
+        return subprocess.call(command)
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
 def cli_main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="mint")
     parser.add_argument("--kit", default=str(KIT))
     sub = parser.add_subparsers(dest="command_name", required=True)
     sub.add_parser("screen")
     sub.add_parser("requests")
+    sub.add_parser("relink").add_argument("url")
     get = sub.add_parser("get")
     get.add_argument("server")
     inspect = sub.add_parser("inspect")
@@ -4761,6 +4811,8 @@ def cli_main(argv: list[str]) -> int:
     add.add_argument("--yes", action="store_true")
     add.add_argument("--request-id")
     args = parser.parse_args(argv)
+    if args.command_name == "relink":
+        return run_relink(args.url)
     kit, state, gateway = open_installed(Path(args.kit))
     if args.command_name == "get":
         return run_get(kit, gateway, args.server, progress=print)
@@ -4772,7 +4824,7 @@ def cli_main(argv: list[str]) -> int:
         return run_inspect(kit, gateway, args.target, progress=print)
     if args.command_name == "add":
         if gateway is None:
-            print("키가 없습니다. 설치 묶음을 다시 받아 설치하십시오")
+            print("키가 없습니다. 한 줄 설치 명령을 붙여 넣으십시오")
             return 1
         tty = sys.stdin.isatty()
         return run_add(args, kit.home, gateway, tty=tty, key=read_key if tty else None)
