@@ -23,7 +23,7 @@ from mint_litellm.console import (
     staff_pages,
     ui_launch,
 )
-from mint_litellm.console.cookies import delete_cookie, set_cookie
+from mint_litellm.console.cookies import delete_cookie, delete_litellm_token, set_cookie
 from mint_litellm.console.core import (
     COOKIE,
     ConsoleConfig,
@@ -87,6 +87,10 @@ def create_app(
             )
         for name, value in HEADERS.items():
             response.headers[name] = value
+        # 로그아웃·세션 만료로 로그인 화면에 돌려보낼 때 LiteLLM 화면 쿠키도 같이 지운다
+        back = response.headers.get("location") or response.headers.get("hx-redirect") or ""
+        if request.url.path.endswith("/logout") or back.startswith(("/login", "/staff/login")):
+            delete_litellm_token(response, request)
         response.headers["X-Request-Id"] = request.state.request_id
         if not request.url.path.startswith("/static/"):
             response.headers["Cache-Control"] = "no-store"
