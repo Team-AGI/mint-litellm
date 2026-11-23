@@ -52,6 +52,13 @@ def cost_cell(value: float | None, listed: bool) -> dict:
     return {"state": "ok", "text": f"${value:,.2f}", "value": value}
 
 
+def total_cost(value: float | None) -> dict:
+    """합계 칸. 0이면 모델 지출이 없는 환경(도구 호출만)이라 사람이 읽을 말로 보인다."""
+    if value == 0:
+        return {"state": "none", "text": "해당 없음(모델 지출 없음)", "value": 0.0}
+    return cost_cell(value, True)
+
+
 # --- LiteLLM 지출 -----------------------------------------------------------------------------
 
 
@@ -63,11 +70,10 @@ def _daily(admin, path: str, start: datetime, end: datetime, **extra) -> list[di
     results: list[dict] = []
     page = 1
     while True:
-        body = admin._ok(
+        body = admin.daily_activity(
             path,
             {"start_date": start.date().isoformat(), "end_date": end.date().isoformat(),
              "page": page, "page_size": 1000, **extra},
-            key="results", shape=list,
         )
         results.extend(r for r in body["results"] if isinstance(r, dict))
         if page >= int((body.get("metadata") or {}).get("total_pages", 1)):
@@ -83,6 +89,8 @@ def _sum(days: list[dict], section: str) -> dict[str, tuple[float, int]]:
     for day in days:
         for name, item in ((day.get("breakdown") or {}).get(section) or {}).items():
             metrics = (item or {}).get("metrics") or {}
+            if section == "mcp_servers":  # 키는 「서버/도구」이다: 서버 단위로 모은다
+                name = name.split("/", 1)[0]
             spend, calls = out.get(name, (0.0, 0))
             out[name] = (spend + float(metrics.get("spend") or 0),
                          calls + int(metrics.get("api_requests") or 0))
@@ -196,7 +204,7 @@ def combine(ledger: list[dict], first: list[dict], spend, names: dict, *, scoped
     return {
         "calls": sum(r["calls"] for r in ledger),
         "blocked": sum(r["blocked"] for r in ledger),
-        "cost": cost_cell(None if known is None else sum(v[0] for v in known.values()), True),
+        "cost": total_cost(None if known is None else sum(v[0] for v in known.values())),
         "teams": [] if scoped else rows(fold("team_id"), teams_s),
         "users": rows(fold("user_id"), people_s, firsts=first_user),
         "servers": servers,

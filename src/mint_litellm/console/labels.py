@@ -207,6 +207,7 @@ CHECK_RESULT = {
     "pass": Status("통과", "ok"),
     "fail": Status("실패", "error"),
     "indeterminate": Status("판별 불가", "wait"),
+    "n/a": Status("해당 없음", "off"),
 }
 CHECK = {
     "url_guard": "주소 검사",
@@ -287,6 +288,7 @@ CHECK_REASON = {
     "SUBMISSION_GONE": "제출 항목 사라짐",
     "TEST_UNAVAILABLE": "시험 불가",
     "UNSUPPORTED": "지원하지 않음",
+    "NOT_APPLICABLE": "해당 없음",
     "URL_INVALID": "주소 형식 오류",
     "URL_QUERY": "주소에 질의 문자열 포함",
     "URL_USERINFO": "주소에 사용자 정보 포함",

@@ -181,6 +181,10 @@ class LiteLLMAdmin:
                     })
         return found
 
+    def daily_activity(self, path: str, params: dict[str, Any]) -> dict:
+        """일별 활동(``/team/daily/activity``·``/user/daily/activity``)의 한 쪽."""
+        return self._ok(path, params, key="results", shape=list)
+
     def list_keys(self) -> list[dict]:
         """메타데이터와 객체 권한을 포함한 전체 객체. ``return_full_object``가 필요하다."""
         keys: list[dict] = []

@@ -193,8 +193,10 @@ def url_guard(
 ) -> Outcome:
     """외부 호출 없이 URL을 본다. 이름은 해석하지 않는다(DNS 재바인딩은 남는 위험)."""
     method = "url_guard:ipaddress"
-    if not url or transport in ("stdio", "openapi"):
-        return _done("url_guard", Outcome("fail", "UNSUPPORTED", method, {"has_url": bool(url)}))
+    if transport in ("stdio", "openapi"):  # 원격 주소가 없는 서버: 검사 대상이 아니다
+        return _done("url_guard", Outcome("pass", "NOT_APPLICABLE", method, {"has_url": bool(url)}))
+    if not url:
+        return _done("url_guard", Outcome("fail", "UNSUPPORTED", method, {"has_url": False}))
     parts = urlsplit(url)
     host = (parts.hostname or "").lower()
     try:

@@ -27,7 +27,7 @@
 {% if retry %}<div class="effect">자동 재시도: 마지막 {{ retry.last | when }} · 다음 {{ (retry.next | when) if retry.next else '없음' }} · {{ retry.n }}/{{ retry.limit }}회</div>{% endif %}
 {% if next_step %}<div class="effect">다음 행동: {% if next_step == '증빙 첨부' %}<a href="?tab=evidence">{{ next_step }}</a>{% else %}{{ next_step }}{% endif %}</div>{% endif %}
 <div class="cards">
-  {{ m.kpi('검사 통과', passed ~ ' / ' ~ (checks | length), level='danger' if failed else ('wait' if passed != (checks | length) else none)) }}
+  {{ m.kpi('검사 통과', passed ~ ' / ' ~ checks_total, level='danger' if failed else ('wait' if passed != checks_total else none)) }}
   {{ m.kpi('높음 이상 도구', high_risk, note='낮음 ' ~ risk.low ~ ' · 보통 ' ~ risk.medium ~ ' · 높음 ' ~ risk.high ~ ' · 심각 ' ~ risk.critical, level='wait' if high_risk) }}
   {% if i.decision == 'withdrawn' %}{{ m.kpi('증빙', '승인 심사 종료') }}{% else %}{{ m.kpi('증빙 충족', proof[0] ~ ' / ' ~ proof[1], '?tab=evidence', level='wait' if lacking) }}{% endif %}
 </div>
@@ -57,7 +57,7 @@
 {% else %}
 {% if checks %}
 <table><thead><tr><th>단계</th><th>결과</th><th>실행 시각</th><th>증거 만료</th><th>사유</th></tr></thead><tbody>
-{% for c in checks %}{% set skip = cause and c.check in ('description_scan', 'risk_grade') and c.reason_code in ('NO_DEFINITIONS', 'INPUT_MISSING') %}<tr{% if skip %} class="skipped"{% endif %}><td>{{ L.pick(L.CHECK, c.check) }}{% if c.method.startswith('endpoint:') %} <span class="badge off">단말 검사</span>{% endif %}</td><td>{{ m.badge(L.CHECK_RESULT, c.result) }}</td><td class="nowrap">{{ c.ran_at | when }}</td><td class="nowrap">{{ c.evidence_valid_until | when }}</td><td>{% if skip %}도구 목록이 없어 건너뜀{% else %}{{ L.check_reason(c) }}{% endif %}{% set d = c.inputs.detail if c.inputs is mapping and c.inputs.detail is mapping else none %}{% if d %}<details><summary>오류 출력 보기</summary><p>{{ L.pick(L.INSPECTION_STAGE, d.stage) }}{% if d.exit_code is not none %} · 종료 코드 {{ d.exit_code }}{% endif %}</p>{% if d.stderr_tail %}<pre class="out">{{ d.stderr_tail }}</pre>{% endif %}</details>{% endif %}</td></tr>{% endfor %}
+{% for c in checks %}{% set skip = cause and c.check in ('description_scan', 'risk_grade') and c.reason_code in ('NO_DEFINITIONS', 'INPUT_MISSING') %}<tr{% if skip %} class="skipped"{% endif %}><td>{{ L.pick(L.CHECK, c.check) }}{% if c.method.startswith('endpoint:') %} <span class="badge off">단말 검사</span>{% endif %}</td><td>{{ m.badge(L.CHECK_RESULT, c.shown) }}</td><td class="nowrap">{{ c.ran_at | when }}</td><td class="nowrap">{{ c.evidence_valid_until | when }}</td><td>{% if skip %}도구 목록이 없어 건너뜀{% else %}{{ L.check_reason(c) }}{% endif %}{% set d = c.inputs.detail if c.inputs is mapping and c.inputs.detail is mapping else none %}{% if d %}<details><summary>오류 출력 보기</summary><p>{{ L.pick(L.INSPECTION_STAGE, d.stage) }}{% if d.exit_code is not none %} · 종료 코드 {{ d.exit_code }}{% endif %}</p>{% if d.stderr_tail %}<pre class="out">{{ d.stderr_tail }}</pre>{% endif %}</details>{% endif %}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}<p class="muted">아직 검사 결과가 없습니다.</p>{% endif %}
 <h2>도구와 위험 등급</h2>
