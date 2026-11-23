@@ -187,3 +187,14 @@ def test_open_approvals_without_a_contract_are_closed_on_managed_servers_only(fr
     finally:
         with psycopg.connect(make_conninfo(**admin), autocommit=True) as conn:
             conn.execute(f'DROP DATABASE "{name}" WITH (FORCE)')
+
+
+def test_the_local_registry_drift_clear_touches_only_registry_missing_on_local_servers():
+    from pathlib import Path
+
+    import mint_litellm.control.db as db
+
+    sql = (Path(db.__file__).parent / "migrations" / "075_local_registry_drift_clear.sql").read_text(
+        encoding="utf-8"
+    )
+    assert "identity_kind <> 'remote'" in sql and "ARRAY['registry_missing']" in sql
