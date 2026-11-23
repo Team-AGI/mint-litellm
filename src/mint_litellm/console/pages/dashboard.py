@@ -9,9 +9,9 @@ from fastapi import APIRouter, Depends, Form, Query, Request
 from mint_litellm.console import alert_view, audit_report, labels
 from mint_litellm.console.core import Actor, page_actor, require_csrf
 from mint_litellm.console.labels import Status
-from mint_litellm.console.pages.common import act
+from mint_litellm.console.pages.common import act, server_names
 from mint_litellm.console.templating import RANGES, local_time, render, span
-from mint_litellm.control import jobs
+from mint_litellm.control import jobs, usage_reader
 from mint_litellm.control import status as control_status
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
@@ -228,9 +228,19 @@ def dashboard(
         "values": [o["alerts"].get(k, 0) for k in order],
         "links": [f"/alerts?status=open&severity={k}" for k in order],
     }
+    month = usage_reader.build(
+        conn, instance, actor.config.litellm_admin, server_names(actor.config.litellm_admin),
+        "month",
+    )
     ctx = {
         "range": name,
         "ranges": choices("/", {}, "range", RANGES, name),
+        "usage_cards": [
+            card("이번 달 비용", month["cost"]["text"], "/reports/usage", None,
+                 "wait" if month["cost"]["state"] == "missing" else None),
+            card("이번 달 호출", month["calls"], "/reports/usage"),
+            card("이번 달 차단", month["blocked"], "/ledger?result=deny"),
+        ],
         "cards": dashboard_cards(
             o,
             series,

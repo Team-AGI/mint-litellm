@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MINT 배포 보조 스크립트: up | status | bootstrap | password | backup | upgrade | cli
+# MINT 배포 보조 스크립트: up | status | bootstrap | password | backup | restore | upgrade | cli
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -102,7 +102,7 @@ issue_key() {
     [ -s "$file" ] && return 0
     key="$(env "LITELLM_MASTER_KEY=$(env_value LITELLM_MASTER_KEY)" \
         "${COMPOSE[@]}" run --rm --no-deps -T -e LITELLM_MASTER_KEY -e "KEY_KIND=$kind" \
-        --entrypoint python control -c "$KEY_ISSUER_SCRIPT" | tail -n 1)" || key=""
+        --entrypoint python control -c "$KEY_ISSUER_SCRIPT" < /dev/null | tail -n 1)" || key=""
     [[ "$key" =~ ^sk-[A-Za-z0-9_-]+$ ]] || return 1
     (umask 077; printf '%s\n' "$key" > "$file")
 }
@@ -201,7 +201,7 @@ refresh_control_routes() {
     env "LITELLM_MASTER_KEY=$(env_value LITELLM_MASTER_KEY)" "EXISTING_KEY=$(head -n 1 "$file")" \
         "${COMPOSE[@]}" run --rm --no-deps -T -e LITELLM_MASTER_KEY -e EXISTING_KEY \
         -e KEY_KIND=control-refresh --entrypoint python control -c "$KEY_ISSUER_SCRIPT" \
-        >/dev/null 2>&1 \
+        < /dev/null >/dev/null 2>&1 \
         || echo "제어 평면 키의 허용 경로를 갱신하지 못했습니다. 다음 up·upgrade에서 다시 시도합니다." >&2
 }
 
@@ -338,12 +338,12 @@ if not target.exists():
 # 서비스는 비루트 사용자(65532)로 돈다. 이전 판본이 루트로 만든 볼륨은 소유자를 맞춰야 쓸 수 있다.
 fix_volume_owners() {
     "${COMPOSE[@]}" run --rm --no-deps -T --user 0 --entrypoint chown control \
-        -R 65532:65532 /var/lib/mint/export /bundles
+        -R 65532:65532 /var/lib/mint/export /bundles < /dev/null
     "${COMPOSE[@]}" run --rm --no-deps -T --user 0 --entrypoint chown litellm \
-        -R 65532:65532 /var/lib/mint/buffer
+        -R 65532:65532 /var/lib/mint/buffer < /dev/null
     # 설정 폴더는 운영자 파일이라 소유자는 두고 그룹에만 읽기를 연다.
     "${COMPOSE[@]}" run --rm --no-deps -T --user 0 --entrypoint sh control \
-        -c 'chgrp -R 65532 /app/config && chmod -R g+rX /app/config'
+        -c 'chgrp -R 65532 /app/config && chmod -R g+rX /app/config' < /dev/null
 }
 
 # LiteLLM은 처음 뜰 때 40~60초 걸린다. 준비될 때까지 기다리고, 실패하면 최근 로그와 함께 멈춘다.
@@ -372,6 +372,7 @@ cmd_up() {
     ensure_control_key
     "${COMPOSE[@]}" --profile worker up -d worker inspector
     "${COMPOSE[@]}" --profile console up -d console
+    "${COMPOSE[@]}" up -d backup
     ensure_default_root
     echo "기동했습니다."
     next_step
@@ -516,9 +517,9 @@ cmd_backup() {
     dir="backups/$(date -u +%Y%m%dT%H%M%SZ)"
     mkdir -p "$dir"
     for database in mint litellm; do
-        "${COMPOSE[@]}" exec -T postgres pg_dump -U postgres -d "$database" > "$dir/$database.sql"
+        "${COMPOSE[@]}" exec -T postgres pg_dump -U postgres -d "$database" < /dev/null > "$dir/$database.sql"
     done
-    "${COMPOSE[@]}" run --rm --no-deps -T --entrypoint cat control "$BUNDLE_FILE" > "$dir/mint.tar.gz"
+    "${COMPOSE[@]}" run --rm --no-deps -T --entrypoint cat control "$BUNDLE_FILE" < /dev/null > "$dir/mint.tar.gz"
     cp config/litellm.config.yaml "$dir/litellm.config.yaml"
     for file in mint.sql litellm.sql mint.tar.gz litellm.config.yaml; do
         [ -s "$dir/$file" ] || { rm -rf "$dir"; fail "백업의 $file이 비어 있어 폴더를 지웠습니다."; }
@@ -526,6 +527,22 @@ cmd_backup() {
     BACKUP_DIR="$dir"
     echo "백업: $dir (mint.sql, litellm.sql, mint.tar.gz, litellm.config.yaml; 기록에 민감한 값이 포함될 수 있으므로 안전하게 보관하십시오)"
     echo "이 백업에는 .env와 비밀 폴더($(env_value MINT_SECRETS_DIR))가 들어 있지 않습니다. 두 곳도 따로 안전하게 보관하십시오."
+}
+
+# 백업 폴더(cmd_backup 또는 매일 백업이 만든 것)의 두 데이터베이스를 되돌리고 다시 기동한다.
+# 운영 데이터베이스를 덮어쓰므로 폴더를 직접 지정해야만 돈다. 비밀 폴더와 .env는 건드리지 않는다.
+cmd_restore() {
+    require_env
+    local dir="${1:-}" database
+    { [ -s "$dir/mint.sql" ] && [ -s "$dir/litellm.sql" ]; }         || fail "사용법: ./mint.sh restore <백업 폴더>(mint.sql과 litellm.sql이 있어야 합니다)"
+    "${COMPOSE[@]}" up -d --wait postgres
+    "${COMPOSE[@]}" --profile worker --profile console stop litellm worker inspector console
+    for database in mint litellm; do
+        "${COMPOSE[@]}" exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d postgres             -c "DROP DATABASE IF EXISTS $database WITH (FORCE)" -c "CREATE DATABASE $database" < /dev/null
+        "${COMPOSE[@]}" exec -T postgres psql -v ON_ERROR_STOP=1 -q -U postgres -d "$database" < "$dir/$database.sql" > /dev/null
+    done
+    echo "복원했습니다: $dir"
+    cmd_up
 }
 
 # 업그레이드 단계. "설명|함수" 순서가 곧 실행 순서이며 --dry-run은 이 표만 보인다.
@@ -578,6 +595,7 @@ upgrade_rest() {
     ensure_control_key
     "${COMPOSE[@]}" --profile worker up -d worker inspector
     "${COMPOSE[@]}" --profile console up -d console
+    "${COMPOSE[@]}" up -d backup
 }
 # 방금 띄운 서비스가 응답하기까지 몇 번 다시 시도한다.
 upgrade_verify() {
@@ -647,6 +665,7 @@ case "${1:-}" in
     up) cmd_up ;;
     status) cmd_status ;;
     backup) cmd_backup ;;
+    restore) shift; cmd_restore "$@" ;;
     bootstrap) shift; cmd_bootstrap "$@" ;;
     password) shift; cmd_password "$@" ;;
     upgrade) shift; cmd_upgrade "$@" ;;
@@ -657,5 +676,5 @@ case "${1:-}" in
             *" password-reset"*) env "MINT_LITELLM_ADMIN_KEY=$(env_value LITELLM_MASTER_KEY)"                 "${COMPOSE[@]}" run --rm -e MINT_LITELLM_ADMIN_KEY ${MINT_LITELLM_KEY:+-e MINT_LITELLM_KEY} control "$@" ;;
             *) cli "$@" ;;
         esac ;;
-    *) fail "사용법: ./mint.sh up | status | bootstrap <이름> <사용자> | password <사용자> | backup | upgrade [--dry-run] | cli <명령...>" ;;
+    *) fail "사용법: ./mint.sh up | status | bootstrap <이름> <사용자> | password <사용자> | backup | restore <백업 폴더> | upgrade [--dry-run] | cli <명령...>" ;;
 esac

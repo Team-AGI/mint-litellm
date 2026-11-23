@@ -708,6 +708,8 @@ def _network_of(value: str) -> ipaddress.IPv4Network | ipaddress.IPv6Network | N
 def _argument_patterns(
     snapshot: Snapshot,
     principal: Principal,
+    resolved: ResolvedServer,
+    approved: bool,
     conditions: Mapping[str, Any],
     arguments: Mapping[str, Any],
     secret_markers: Sequence[str],
@@ -715,7 +717,7 @@ def _argument_patterns(
 ) -> dict[str, bool]:
     entries = [*_condition_list(conditions, "allowed_hosts"),
                *(v for v, org in snapshot.egress_targets if org in (None, principal.org_id))]
-    hosts: set[str] = set()
+    hosts: set[str] = {_host_of(resolved.host)} if approved and resolved.host else set()
     networks = []
     for entry in entries:
         network = _network_of(entry)
@@ -731,8 +733,12 @@ def _argument_patterns(
             arguments,
             allowed_hosts={h for h in hosts if h},
             allowed_networks=networks,
+            https_unrestricted=approved and "allowed_hosts" not in conditions,
             allowed_paths=paths,
-            paths_unrestricted=conditions.get("allowed_paths_unrestricted") is True,
+            paths_unrestricted=(
+                "allowed_paths" not in conditions
+                and (approved or conditions.get("allowed_paths_unrestricted") is True)
+            ),
             secret_markers=secret_markers,
         )
     finally:
@@ -862,6 +868,8 @@ def build_policy_input(
             _argument_patterns(
                 snapshot,
                 principal,
+                resolved,
+                selected is not None and server is not None and server.status == "approved",
                 approval.get("conditions", {}),
                 arguments,
                 secret_markers,

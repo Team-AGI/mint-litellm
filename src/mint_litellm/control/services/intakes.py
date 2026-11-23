@@ -68,6 +68,18 @@ def get(ctx: Context, intake_id: str, *, lock: bool = False) -> dict:
     return row
 
 
+def delivery_receipts(ctx: Context, intake_id: str) -> list[dict]:
+    """Return recorded delivery stages for an intake."""
+    require_role(ctx, "intake show")
+    get(ctx, intake_id)
+    return fetchall(
+        ctx.conn,
+        "SELECT decision_version, stage, target, recorded_at FROM mint.delivery_receipts"
+        " WHERE instance_id = %s AND intake_id = %s ORDER BY decision_version, recorded_at, stage",
+        (ctx.instance_id, intake_id),
+    )
+
+
 def is_complete(row: dict) -> bool:
     return all(row[name] is not None for name in _REQUIRED)
 
@@ -804,6 +816,12 @@ def _decided(ctx: Context, row: dict, decision: str, reason: str, extra: dict) -
         " decision_reason = %s, decided_at = now() WHERE id = %s RETURNING *",
         (decision, ctx.operator.name, reason, row["id"]),
     )
+    if decision in ("approved", "exception"):
+        ctx.conn.execute(
+            "INSERT INTO mint.delivery_receipts (instance_id, intake_id, decision_version, stage)"
+            " VALUES (%s, %s, %s, 'approved') ON CONFLICT DO NOTHING",
+            (ctx.instance_id, row["id"], updated["state_version"]),
+        )
     ctx.emit(EventKind.INTAKE_DECIDED, row["id"], updated["state_version"],
              {"intake_id": str(row["id"]), "server_id": row["server_id"], "decision": decision,
               "reason": reason, "decided_by": ctx.operator.name, **extra})

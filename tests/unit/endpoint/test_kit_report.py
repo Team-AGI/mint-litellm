@@ -33,15 +33,15 @@ def installed(folder, tmp_path, reports):
     return kit, state
 
 
-def test_an_install_registers_a_six_hour_timer_that_runs_the_installed_copy(
+def test_an_install_registers_a_short_tick_timer_that_runs_the_installed_copy(
     folder, tmp_path, reports
 ):
     kit, state = installed(folder, tmp_path, reports)
     units = kit.home / ".config/systemd/user"
     service = (units / "mint-report.service").read_text()
     timer = (units / "mint-report.timer").read_text()
-    assert "mint_kit.py" in service and " report --kit " in service and "Type=oneshot" in service
-    assert "OnUnitActiveSec=6h" in timer and "RandomizedDelaySec=1800" in timer
+    assert "mint_kit.py" in service and " report --tick --kit " in service
+    assert "Type=oneshot" in service and "OnUnitActiveSec=20s" in timer
     # 설치한 설정에는 키와 서버 목록이 없다(키는 사용자 파일에만 있다).
     copy = json.loads((kit.programs / "kit.json").read_text())
     assert "key" not in copy and "servers" not in copy and copy["decide_url"]
@@ -72,7 +72,7 @@ def test_a_user_level_uninstall_stops_the_timer_before_its_unit_files_go(
     assert seen == [(["--user", "disable", "--now"], True)]
 
 
-def test_a_windows_install_asks_for_a_task_with_the_jitter_on_the_command(
+def test_a_windows_install_asks_for_a_one_minute_task(
     folder, tmp_path, reports, monkeypatch
 ):
     calls = []
@@ -83,8 +83,8 @@ def test_a_windows_install_asks_for_a_task_with_the_jitter_on_the_command(
     kit.schedule_task(state, ["py", "-I", "-B", "C:/p/mint_kit.py", "report", "--kit", "C:/p"])
     (command,) = calls
     assert command[:2] == ["schtasks", "/Create"] and "/F" in command
-    assert command[command.index("/MO") + 1] == "6"
-    assert command[command.index("/TR") + 1].endswith("report --kit C:/p --jitter 1800")
+    assert command[command.index("/SC") + 1] == "MINUTE"
+    assert command[command.index("/MO") + 1] == "1"
     assert state["task"] == kit_module.TASK_NAME
 
 
@@ -212,3 +212,73 @@ def test_a_reinstall_forgets_the_reported_tool_lists(folder, tmp_path, reports):
 def test_the_hook_shows_korean_guidance_on_http_401():
     with pytest.raises(agent.Refuse, match="설치 묶음을 다시 받으세요"):
         agent._call(lambda *a: (401, b""), "http://x", "/p", "k", {}, 1.0)
+
+
+@pytest.mark.parametrize(("fast", "tick", "gap"), [
+    (None, True, 6 * 3600),
+    (None, False, 3600),
+    (1100.0, True, 20),   # 짧은 주기 표식이 살아 있다
+    (900.0, True, 6 * 3600),  # 표식이 지났다
+    (1000.0 + 99999, True, 6 * 3600),  # 너무 먼 미래 값은 믿지 않는다
+])
+def test_the_report_gap_is_short_only_while_something_awaits_approval(fast, tick, gap):
+    assert kit_module.report_gap(fast, 1000.0, tick) == gap
+
+
+def test_work_to_apply_keeps_the_short_gap_on():
+    pack = {"contract": {"pack": {"sha256": "a"}}}
+    assert kit_module.needs_fast({}, True, 1000.0)
+    assert kit_module.needs_fast({"inspections": [{"id": "x"}]}, False, 1000.0)
+    assert kit_module.needs_fast({"desired": [pack]}, False, 1000.0)  # 허가 없음
+    done = {**pack, "permit_until": "1970-01-01T01:00:00+00:00"}
+    assert not kit_module.needs_fast({"desired": [done]}, False, 1000.0)
+    assert not kit_module.needs_fast({"desired": [{"contract": {}}]}, False, 1000.0)
+
+
+def test_a_tick_reports_every_twenty_seconds_while_marked_and_every_six_hours_otherwise(
+    tmp_path, monkeypatch, reports
+):
+    programs, home = stage(tmp_path, monkeypatch)
+    now = [5000.0]
+    run = lambda: kit_module.report_installed(  # noqa: E731
+        programs, tick=True, sleep=lambda s: None, now=lambda: now[0])
+    run()
+    assert len(reports) == 1
+    now[0] += 3600
+    run()
+    assert len(reports) == 1  # 6시간 전
+    (home / ".cache/mint/fast_until").write_text(str(now[0] + 100))  # 사용자가 신청했다
+    run()
+    assert len(reports) == 2
+    now[0] += 19
+    run()
+    assert len(reports) == 2
+    now[0] += 2
+    run()
+    assert len(reports) == 3
+    now[0] += 6 * 3600
+    run()
+    assert len(reports) == 4
+
+
+def test_a_missing_start_permit_pulls_one_report_then_starts():
+    calls = []
+
+    def start():
+        calls.append("start")
+        if calls.count("start") < 2:
+            raise agent.NoPermit("missing")
+
+    agent.start_with_permit_retry(start, lambda: calls.append("report"), 0, sleep=lambda s: None)
+    assert calls == ["start", "report", "start"]
+
+
+def test_a_start_permit_that_never_arrives_is_refused_after_a_few_tries():
+    naps = []
+
+    def start():
+        raise agent.NoPermit("missing")
+
+    with pytest.raises(agent.Refuse):
+        agent.start_with_permit_retry(start, lambda: None, 8, sleep=naps.append)
+    assert naps == [8, 8]

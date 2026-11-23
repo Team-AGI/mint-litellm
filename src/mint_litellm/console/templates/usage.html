@@ -1,0 +1,8 @@
+{% extends "base.html" %}{% import "audit_macros.html" as a %}
+{% block title %}사용량 · MINT{% endblock %}
+{% block page_class %}wide{% endblock %}
+{% block body %}
+<h1>사용량</h1>
+<div class="filterbar">{{ a.choices('기간', choices) }}</div>
+{% include "_usage_tables.html" %}
+{% endblock %}

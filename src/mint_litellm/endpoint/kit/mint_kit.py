@@ -8,8 +8,10 @@
 상태를 되돌린다. 설치 상태는 MINT에 보고한다(실패해도 설치는 유지).
 
 설치한 묶음은 설치 상태를 주기적으로 다시 보고한다: Linux는 사용자 systemd 타이머, Windows는
-예약 작업이 ``report`` 하위 명령(설치된 이 파일)을 6시간마다 부르고, 서버 실행기가 시작될 때도
-한 번 부른다(1시간 안에 보냈으면 건너뛴다). 키가 만료되기 전 14일 안의 보고는 MINT가 키의 만료
+예약 작업이 ``report --tick`` 하위 명령(설치된 이 파일)을 자주(Linux 20초, Windows 1분) 부르고,
+명령이 보고 간격을 정한다: 진행 중인 검사 권한이나 방금 있었던 승인 변화, 시작 허가를 못 받은
+묶음 서버가 있으면 20초, 아니면 6시간. 서버 실행기가 시작될 때도 한 번 부른다(1시간 안에 보냈으면
+건너뛴다). 키가 만료되기 전 14일 안의 보고는 MINT가 키의 만료
 시각을 늘려 준다.
 
 보고 응답에는 MINT가 폐기·반려·미승인으로 보는 서버 이름 목록(``retired``)이 실린다. 관리형 설치의
@@ -74,8 +76,10 @@ NL = chr(10)
 REPORT_TIMEOUT = 5
 # 주기 보고: 간격(시), 시작 지연의 상한(초), 서버 실행기가 시작할 때 보고를 건너뛰는 최소 간격(초)
 REPORT_INTERVAL_HOURS = 6
-REPORT_JITTER = 1800
 REPORT_MIN_GAP = 3600
+FAST_GAP = 20  # 승인 반영을 기다리는 동안의 보고 간격(초)
+FAST_WINDOW = 600  # 반영할 일이 있다고 본 뒤 짧은 주기를 유지하는 시간(초)
+FAST_FILE = "fast_until"
 LAST_REPORT = "last_report"
 REPORTER_KEY = "reporter.key"  # Windows 관리형: SYSTEM 보고기가 읽는 키 사본
 RETIRED_FILE = "retired.json"  # 마지막 보고 응답의 폐기 서버 목록(실행기가 읽는다)
@@ -166,6 +170,34 @@ def jitter_delay(limit: int, rand=random.random) -> int:
 def report_due(last: float | None, now: float, min_gap: int = REPORT_MIN_GAP) -> bool:
     """마지막 보고 뒤 ``min_gap``초가 지났거나, 기록이 없거나, 시계가 되돌아갔으면 참."""
     return last is None or now < last or now - last >= min_gap
+
+
+def report_gap(fast_until: float | None, now: float, tick: bool) -> int:
+    """보고 간격(초). 표식이 살아 있으면 20초, 아니면 타이머 호출 6시간, 그 밖은 1시간."""
+    if fast_until is not None and now < fast_until <= now + FAST_WINDOW:
+        return FAST_GAP
+    return REPORT_INTERVAL_HOURS * 3600 if tick else REPORT_MIN_GAP
+
+
+def mark_fast(folder: Path, now: float) -> None:
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / FAST_FILE).write_text(str(now + FAST_WINDOW))
+    except OSError:
+        pass
+
+
+def needs_fast(answer: dict, changed: bool, now: float) -> bool:
+    """반영할 일이 남았나: 검사 권한, 방금 있었던 변화, 허가를 못 받은 묶음 서버."""
+    if changed or answer.get("inspections"):
+        return True
+    for item in answer.get("desired") or []:
+        contract = item.get("contract") if isinstance(item, dict) else None
+        if isinstance(contract, dict) and isinstance(contract.get("pack"), dict) and not (
+            (parse_time(item.get("permit_until")) or 0) > now
+        ):
+            return True
+    return False
 
 
 # --- 읽기 전용 인벤토리: 실행 중인 MCP 서버 프로세스와 자동 시작 항목 -----------------------
@@ -1645,7 +1677,7 @@ class Kit:
                 (self.config["key"] + "\n").encode(), 0o600,
             )  # fmt: skip
             self.lock_programs()
-        command = [python, "-I", "-B", tool, "report", "--kit", self.logical_programs]
+        command = [python, "-I", "-B", tool, "report", "--tick", "--kit", self.logical_programs]
         if self.managed:
             # 관리자 권한으로 돌므로 사용자의 키와 캐시가 있는 홈을 알려 준다.
             command += ["--home", str(self.home).replace("\\", "/"), "--user", self.account.name]
@@ -1704,8 +1736,7 @@ class Kit:
             ),
             f"{UNIT}.timer": (
                 "[Unit]\nDescription=MINT endpoint report\n\n[Timer]\nOnBootSec=5min\n"
-                f"OnUnitActiveSec={REPORT_INTERVAL_HOURS}h\n"
-                f"RandomizedDelaySec={REPORT_JITTER}\n\n[Install]\nWantedBy=timers.target\n"
+                f"OnUnitActiveSec={FAST_GAP}s\n\n[Install]\nWantedBy=timers.target\n"
             ),
         }
         for name, text in units.items():
@@ -1737,8 +1768,7 @@ class Kit:
             ),
             f"{UNIT}.timer": (
                 "[Unit]\nDescription=MINT endpoint report\n\n[Timer]\nOnBootSec=5min\n"
-                f"OnUnitActiveSec={REPORT_INTERVAL_HOURS}h\n"
-                f"RandomizedDelaySec={REPORT_JITTER}\n\n[Install]\nWantedBy=timers.target\n"
+                f"OnUnitActiveSec={FAST_GAP}s\n\n[Install]\nWantedBy=timers.target\n"
             ),
         }
         for name, text in units.items():
@@ -1756,13 +1786,13 @@ class Kit:
             capture(["systemctl", "enable", "--now", f"{UNIT}.timer"])
 
     def schedule_task(self, state: dict, command: list[str]) -> None:
-        """Windows 예약 작업(설치한 계정으로 돈다). 시작 지연은 명령이 스스로 기다린다."""
+        """Windows 예약 작업(설치한 계정으로 돈다). 1분마다 불리고 간격은 명령이 정한다."""
         if self.root is not None or self.dry_run:
             return
-        line = subprocess.list2cmdline([*command, "--jitter", str(REPORT_JITTER)])
+        line = subprocess.list2cmdline(command)
         made = capture([
-            "schtasks", "/Create", "/TN", TASK_NAME, "/SC", "HOURLY",
-            "/MO", str(REPORT_INTERVAL_HOURS), "/TR", line, "/F",
+            "schtasks", "/Create", "/TN", TASK_NAME, "/SC", "MINUTE",
+            "/MO", "1", "/TR", line, "/F",
             *(["/RU", "SYSTEM"] if self.managed else []),
         ])  # fmt: skip
         if made:
@@ -3672,6 +3702,7 @@ def run_add(
     args, home: Path, gateway: Gateway, out=print, read=input, tty: bool = False, key=None
 ) -> int:
     """``mint add``. 대상(명령 또는 원격 주소)과 목적만 받는다. 서버는 실행하지 않는다."""
+    mark_fast(home / STATE_REL, time.time())  # 승인이 곧 올 테니 보고기가 짧은 주기로 돈다
     try:
         server_id, url, tokens, env_names = resolve_target(args, home)
         spec = None if url else parse_command(tokens, home)
@@ -4753,6 +4784,7 @@ def report_installed(
     user: str | None = None,
     if_due: bool = False,
     jitter: int = 0,
+    tick: bool = False,
     now=time.time,
     sleep=time.sleep,
     rand=random.random,
@@ -4788,10 +4820,18 @@ def report_installed(
             key = key_file.read_text(encoding="utf-8").strip()
         except OSError:
             key = ""
-        return {"last": last, "key": key}
+        fast = None
+        for path in (stamp.parent / FAST_FILE, home / STATE_REL / FAST_FILE):
+            try:
+                fast = max(fast or 0.0, float(path.read_text()[:64]))
+            except (OSError, ValueError):
+                pass
+        return {"last": last, "key": key, "fast": fast}
 
     seen = run(read_side) or {}
-    if if_due and not report_due(seen.get("last"), now()):
+    if (if_due or tick) and not report_due(
+        seen.get("last"), now(), report_gap(seen.get("fast"), now(), tick)
+    ):
         return 0
     key = seen.get("key") or ""
     try:
@@ -4841,6 +4881,14 @@ def report_installed(
         changed = kit.apply_permits(state, desired, set(names)) or changed
         changed = bool(kit.auto_fetch(state, desired, set(names))) or changed
         changed = bool(kit.promote_packs()) or changed
+    if needs_fast(kit.answer, changed, now()):
+        fast_file = stamp.parent / FAST_FILE
+
+        def write_fast() -> None:
+            fast_file.parent.mkdir(parents=True, exist_ok=True)
+            fast_file.write_text(str(now() + FAST_WINDOW))
+
+        run(write_fast)
     if changed:
         kit.report(state, "installed")  # 지우거나 더한 것을 곧바로 알린다.
         if system and state.get("sync_task"):
@@ -4911,6 +4959,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--if-due", action="store_true")
+    parser.add_argument("--tick", action="store_true")
     parser.add_argument("--jitter", type=int, default=0)
     parser.add_argument("--user-level", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -4921,7 +4970,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.action == "report":
         return report_installed(
-            Path(args.kit), if_due=args.if_due, jitter=args.jitter,
+            Path(args.kit), if_due=args.if_due, tick=args.tick, jitter=args.jitter,
             home=Path(args.home) if args.home else None, user=args.user,
         )
     windows = sys.platform == "win32"

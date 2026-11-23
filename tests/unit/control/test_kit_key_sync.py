@@ -4,6 +4,7 @@ MINT_TEST_DATABASE_URL이 없으면 건너뛴다.
 """
 
 import hashlib
+import json
 
 import pytest
 from ctl_fixtures import INSTANCE
@@ -47,14 +48,16 @@ class Client:
         self.key = {"object_permission": {"mcp_servers": servers, "mcp_tool_permissions": tools}}
 
 
-def approve(conn, relation, scope_type, scope_id, tools=("echo",), status="active", days=30):
+def approve(conn, relation, scope_type, scope_id, tools=("echo",), status="active", days=30,
+            basis=None):
     return conn.execute(
         "INSERT INTO mint.approvals (id, instance_id, org_id, relation_id, class, server_id,"
         " tools, scope_type, scope_id, valid_from, valid_until, basis, granted_by, requested_by,"
         " status) VALUES (gen_random_uuid(), %s, 'acme', %s, 'standard', 'ctl-everything',"
-        " %s, %s, %s, now() - interval '10 days', now() + make_interval(days => %s), '{}', 'root',"
+        " %s, %s, %s, now() - interval '10 days', now() + make_interval(days => %s), %s, 'root',"
         " 'someone', %s) RETURNING id",
-        (INSTANCE, relation, list(tools), scope_type, scope_id, days, status),
+        (INSTANCE, relation, list(tools), scope_type, scope_id, days,
+         json.dumps(basis or {}), status),
     ).fetchone()[0]
 
 
@@ -133,6 +136,34 @@ def test_a_team_that_lists_servers_limits_the_key_to_them(conn, world):
     client = Client(team={"object_permission": {"mcp_servers": ["other"]}})
     kit_key_sync.sync_kit_keys(conn, INSTANCE, client)
     assert client.written == []  # 팀이 허용하지 않은 서버는 키에 쓰지 않는다
+
+
+def test_team_scope_does_not_apply_to_another_team(conn, world):
+    relation, _, token = world
+    approve(conn, relation, "team", "t1")
+    assert kit_key_sync.desired_permission(conn, INSTANCE, "u1", "t1", token)[0]
+    assert kit_key_sync.desired_permission(conn, INSTANCE, "u1", "t2", token) == ([], {})
+
+
+def test_key_receipt_is_recorded_once_after_permission_is_applied(conn, world):
+    relation, _, token = world
+    intake = conn.execute("SELECT gen_random_uuid()").fetchone()[0]
+    conn.execute(
+        "INSERT INTO mint.intakes (id, instance_id, org_id, server_id, source)"
+        " VALUES (%s, %s, 'acme', 'ctl-everything', 'operator')", (intake, INSTANCE),
+    )
+    conn.execute(
+        "INSERT INTO mint.delivery_receipts (instance_id, intake_id, decision_version, stage)"
+        " VALUES (%s, %s, 7, 'approved')", (INSTANCE, intake),
+    )
+    approve(conn, relation, "user", "u1", basis={"intake_id": str(intake)})
+    client = Client()
+    kit_key_sync.sync_kit_keys(conn, INSTANCE, client)
+    kit_key_sync.sync_kit_keys(conn, INSTANCE, client)
+    assert conn.execute(
+        "SELECT decision_version, target FROM mint.delivery_receipts"
+        " WHERE intake_id = %s AND stage = 'key_applied'", (intake,),
+    ).fetchall() == [(7, token)]
 
 
 def test_a_revoked_install_is_left_alone(conn, world):
@@ -214,3 +245,22 @@ def test_the_routes_write_is_limited_to_the_hook_routes():
             check_write("POST", "/key/update", bad)
     with pytest.raises(WriteRefused):
         check_kit_write("POST", "/key/update", good)
+
+
+def test_key_scoped_approval_does_not_reach_other_install_of_same_user(conn, world):
+    relation, issuer, first_gateway = world
+    first_kit = conn.execute("SELECT key_token FROM mint.endpoint_installs").fetchone()[0]
+    second_kit = endpoint_kits.issue_key(
+        conn, issuer, INSTANCE, user_id="u1", team_id="t1", issued_by="u1"
+    )
+    second_gateway = endpoint_kits.issue_gateway_key(
+        conn, issuer, INSTANCE, user_id="u1", team_id="t1", kit_key=second_kit
+    )
+    second_token = hashlib.sha256(second_gateway.encode()).hexdigest()
+    # issue_key revokes older installs; restore it to model two concurrent devices.
+    conn.execute(
+        "UPDATE mint.endpoint_installs SET revoked_at = NULL WHERE key_token = %s", (first_kit,)
+    )
+    approve(conn, relation, "key", first_kit)
+    assert kit_key_sync.desired_permission(conn, INSTANCE, "u1", "t1", first_gateway)[0]
+    assert kit_key_sync.desired_permission(conn, INSTANCE, "u1", "t1", second_token) == ([], {})

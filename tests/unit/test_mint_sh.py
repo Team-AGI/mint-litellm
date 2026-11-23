@@ -596,3 +596,66 @@ def test_up_waits_for_litellm_and_shows_its_log_tail_when_it_never_gets_ready(tm
     result, _, _ = run(tmp_path, "POSTGRES_PASSWORD=x\n", "up", docker_tail=tail)
     assert result.returncode != 0 and "40~60초" in result.stdout
     assert "logs --tail 20 litellm" in (tmp_path / "docker.log").read_text(encoding="utf-8")
+
+
+def test_restore_replaces_both_databases_from_the_folder_and_starts_again(tmp_path):
+    backup = tmp_path / "bk"
+    backup.mkdir()
+    (backup / "mint.sql").write_text("select 1;\n", encoding="utf-8")
+    (backup / "litellm.sql").write_text("select 2;\n", encoding="utf-8")
+    (tmp_path / "deploy" / "config").mkdir(parents=True)
+    (tmp_path / "deploy" / "config" / "litellm.config.yaml").write_text("{}\n", encoding="utf-8")
+    result, _, _ = run(tmp_path, "POSTGRES_PASSWORD=x\n", "restore", str(backup))
+    assert result.returncode == 0, result.stderr
+    log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+    assert "DROP DATABASE IF EXISTS mint" in log and "DROP DATABASE IF EXISTS litellm" in log
+    assert log.index("stop litellm") < log.index("DROP DATABASE IF EXISTS mint")
+    assert "up -d backup" in log
+
+
+def test_restore_without_a_complete_folder_touches_nothing(tmp_path):
+    (tmp_path / "empty").mkdir()
+    for args in ((), (str(tmp_path / "empty"),)):
+        result, _, _ = run(tmp_path, "POSTGRES_PASSWORD=x\n", "restore", *args)
+        assert result.returncode != 0 and "restore" in result.stderr
+    assert not (tmp_path / "docker.log").exists()
+
+
+def test_the_daily_backup_keeps_the_newest_seven_and_drops_a_failed_dump(tmp_path):
+    root = tmp_path / "backups"
+    root.mkdir()
+    for day in range(1, 9):
+        (root / f"2000010{day}T000000Z").mkdir()
+    # 가장 새 폴더도 하루보다 오래된 것으로 만들어 새 백업이 돌게 한다
+    old = 1_000_000_000
+    for d in root.iterdir():
+        os.utime(d, (old, old))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    dump = bin_dir / "pg_dump"
+    dump.write_text('#!/bin/sh\n[ "$FAIL" = 1 ] && exit 1\necho dump\n', encoding="utf-8")
+    dump.chmod(0o755)
+    (bin_dir / "sleep").write_text("#!/bin/sh\nkill $PPID\n", encoding="utf-8")
+    (bin_dir / "sleep").chmod(0o755)
+    script = SCRIPT.parent / "backup-schedule.sh"
+
+    def once(fail: str):
+        env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+               "BACKUP_DIR": root.as_posix(), "FAIL": fail}
+        subprocess.run([BASH, str(script)], env=env, capture_output=True, timeout=30)
+
+    once("1")
+    assert len(list(root.iterdir())) == 8  # 실패한 덤프 폴더는 남지 않는다
+    once("0")
+    names = sorted(p.name for p in root.iterdir())
+    assert len(names) == 7 and names[0] == "20000103T000000Z"
+    assert (root / names[-1] / "mint.sql").read_text(encoding="utf-8") == "dump\n"
+
+
+def test_the_compose_file_runs_the_daily_backup_with_a_restart_policy():
+    text = (SCRIPT.parent / "compose.yaml").read_text(encoding="utf-8")
+    block = text.split("  backup:\n", 1)[1].split("\n\n", 1)[0]
+    assert "backup-schedule.sh" in block and "restart: unless-stopped" in block
+    # 작업 실행기와 콘솔은 죽어도 다시 뜬다
+    for name in ("worker", "console"):
+        assert "restart: unless-stopped" in text.split(f"\n  {name}:\n", 1)[1].split("\n\n", 1)[0]
