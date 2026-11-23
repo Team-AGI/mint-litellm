@@ -2,15 +2,14 @@
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Form, Request
 
 from mint_litellm.console import api, compare, labels, pack_view
 from mint_litellm.console.core import Actor, page_actor, require_csrf
+from mint_litellm.console.pages import intake_submission
 from mint_litellm.console.pages.common import act, server_display
 from mint_litellm.console.templating import render
-from mint_litellm.control.db.connection import fetchall
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import call_review as review_service
 from mint_litellm.control.services import contracts as contract_service
@@ -61,6 +60,7 @@ def donut_bucket(row: dict) -> str:
 @router.get("/servers")
 def servers(request: Request, actor: Actor = Depends(page_actor)):
     rows = reads.servers(actor.conn, actor.instance)
+    server_display(actor, rows)
     listed = {r["server_id"]: r for r in reads.drifted_servers(actor.conn, actor.instance)}
     vulns = reads.server_vuln_counts(actor.conn, actor.instance)
     for r in rows:
@@ -302,7 +302,7 @@ def attach_server_evidence(
 
 def back_to(server_id: str, next: str) -> str:
     """중지·재개 뒤에 돌아갈 곳: 목록에서 눌렀으면 목록, 아니면 상세."""
-    return "/servers" if next == "/servers" else f"/servers/{server_id}"
+    return next if next in ("/servers", "/approvals?tab=servers") else f"/servers/{server_id}"
 
 
 @router.post("/servers/{server_id}/suspend")
@@ -559,121 +559,49 @@ def intake_page(
     return render(request, "intake_detail.html", ctx, actor=actor, status=status)
 
 
-INTAKE_FIELDS = ("server_id", "provider", "owner_user_id", "purpose")
-NO_ADDRESS = ("서버 URL이 응답되지 않습니다", "서버 주소로")  # 화면용 문구로 바뀐 뒤의 오류 문구
-
-
-def no_address(error) -> bool:
-    return any(part in str(error or "") for part in NO_ADDRESS)
-
-
-NEW_DEFAULTS = {
-    "data_grade": "internal",
-    "audit_access_days": 90,
-    "credential_notice": "담당자에게 변경 안내",
-    "revocation_record": "관리 기록에 철회 사유 기록",
-    "data_return_terms": "종료 시 제공자가 보관한 자료를 삭제",
-}
-
-
 def intake_new_page(request: Request, actor: Actor, form: dict, error=None, status=200):
-    try:
-        servers = actor.litellm().list_servers()
-    except ControlError:
-        servers = []
-    # 이미 승인·중지·종료·검사 중인 서버는 새 수용검증을 시작할 수 없으므로 고르는 목록에서 뺀다
-    closed = {
-        r["server_id"]
-        for r in fetchall(
-            actor.conn,
-            "SELECT server_id FROM mint.servers WHERE instance_id = %s"
-            " AND status NOT IN ('pending', 'awaiting_approval', 'rejected')",
-            (actor.instance,),
-        )
-    }
-    servers = [r for r in servers if (r.get("server_id") or r.get("id")) not in closed]
-    ctx = {
-        "available_servers": servers,
-        "available_ids": [r.get("server_id") or r.get("id") for r in servers],
-        "f": {k: v for k, v in form.items() if v not in (None, "")},
-        "error": error,
-    }
-    return render(request, "intake_new.html", ctx, actor=actor, status=status)
+    return render(request, "intake_new.html", {"f": form, "error": error},
+                  actor=actor, status=status)
 
 
 @router.get("/intakes/new")
 def intake_new(request: Request, actor: Actor = Depends(page_actor)):
-    """단말 MCP 목록의 항목에서 신청을 시작한다. 쿼리 값으로 입력란을 미리 채운다."""
     query = request.query_params
-    return intake_new_page(request, actor, {key: query.get(key, "")[:256] for key in INTAKE_FIELDS})
-
-
-def provider_of(actor: Actor, server_id: str, server_url: str) -> str:
-    """제공자는 서버 주소의 호스트다. 주소가 없으면 등록 정보의 주소, 그것도 없으면 서버 이름."""
-    url = server_url.strip()
-    if not url:
-        try:
-            url = (actor.litellm().get_server(server_id) or {}).get("url") or ""
-        except ControlError:
-            url = ""
-    return urlsplit(url).hostname or server_id
+    form = {"server_url": query.get("server_url", "")[:2048],
+            "purpose": query.get("purpose", "")[:256]}
+    if not form["server_url"] and query.get("server_id"):
+        candidate = intake_service.deployment_candidate(
+            actor.conn, actor.instance, query["server_id"])
+        if candidate:
+            form["server_url"] = candidate["url"]
+        else:
+            try:
+                entry = actor.litellm().get_server(query["server_id"]) or {}
+                form["server_url"] = entry.get("url") or ""
+            except ControlError:
+                pass
+    return intake_new_page(request, actor, form)
 
 
 @router.post("/intakes")
 def create_intake(
     request: Request,
-    server_id: str = Form(...),
     server_url: str = Form(""),
     purpose: str = Form(...),
     actor: Actor = Depends(page_actor),
 ):
-    form = {"server_id": server_id, "server_url": server_url, "purpose": purpose}
+    form = {"server_url": server_url, "purpose": purpose}
+    target = {}
 
     def action():
-        if server_url.strip():
-            entry = actor.litellm().get_server(server_id.strip()) or {}
-            if entry.get("url") and entry["url"] != server_url.strip():
-                raise ControlError("입력한 서버 주소가 등록된 주소와 다릅니다. 주소를 확인하세요.")
-        operator = actor.ctx.operator
-        intake_service.create(
-            actor.ctx,
-            actor.litellm(),
-            server_id.strip(),
-            url=server_url.strip() or None,
-            purpose=purpose,
-            data_grade=NEW_DEFAULTS["data_grade"],
-            allowed_resources=[],
-            provider=provider_of(actor, server_id.strip(), server_url),
-            owner_user_id=operator.user_id or operator.name,
-            readiness={
-                "credential_notice": NEW_DEFAULTS["credential_notice"],
-                "revocation_record": NEW_DEFAULTS["revocation_record"],
-                "audit_access_days": NEW_DEFAULTS["audit_access_days"],
-            },
-            data_return_terms=NEW_DEFAULTS["data_return_terms"],
-        )
+        target["id"], target["existing"] = intake_submission.submit(actor, server_url, purpose)
 
-    return act(
-        actor,
-        action,
-        "intake_created",
-        "/intakes",
-        lambda **kw: intake_new_page(
-            request,
-            actor,
-            form,
-            **{
-                **kw,
-                "error": (
-                    "서버 주소를 입력하세요."
-                    if no_address(kw.get("error"))
-                    else "기본 조직을 설정하도록 담당자에게 요청하세요."
-                    if "--org" in str(kw.get("error", ""))
-                    else kw.get("error")
-                ),
-            },
-        ),
-    )
+    response = act(actor, action, "intake_created", "/intakes",
+                   lambda **kw: intake_new_page(request, actor, form, **kw))
+    if response.status_code == 303:
+        notice = "intake_existing" if target["existing"] else "intake_created"
+        response.headers["location"] = f"/intakes/{target['id']}?ok={notice}"
+    return response
 
 
 @router.post("/intakes/{intake_id}/withdraw")

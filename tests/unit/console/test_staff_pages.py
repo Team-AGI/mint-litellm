@@ -281,7 +281,7 @@ def test_the_server_screen_lists_servers_with_the_tools_approved_for_this_user(s
     assert "내 서버" in page.text and "srv-ok" in page.text
     assert "echo, ping" in page.text and "secret_tool" not in page.text
     assert "srv-wait" not in page.text
-    assert "HTTP" in page.text and "없음" in page.text
+    assert 'class="catalog-card"' in page.text and "서버 보기" in page.text
 
 
 def test_a_staff_member_without_an_organization_sees_an_empty_screen(sworld):
@@ -959,7 +959,7 @@ def test_the_my_servers_screen_shows_consent_state_and_opens_the_consent_form(sw
 
 def test_staff_empty_state_suggests_contact_and_request_history(sworld):
     html = logged_in(sworld).get("/staff").text
-    assert "담당자에게 서버 접근을 요청" in html
+    assert 'href="/staff/intakes/new"' in html and "쓸 수 있는 서버가 없습니다" in html
     assert '<details class="mobile-menu">' in html
     assert 'href="/staff/confirmations"' in html
 
@@ -969,7 +969,7 @@ def test_empty_staff_page_shows_pending_call_requests(sworld, monkeypatch):
         "mint_litellm.console.staff_pages.my_approvals", lambda actor: [{"view": "pending"}]
     )
     html = logged_in(sworld).get("/staff").text
-    assert "처리 대기 중인 호출 승인 요청이 1건" in html
+    assert "처리 대기 중인 호출 요청이 1건" in html
     assert "/staff/confirmations?tab=mine" in html
 
 

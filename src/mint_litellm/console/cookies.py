@@ -41,5 +41,12 @@ def delete_cookie(
     )
 
 
+def delete_litellm_token(response: Response, request: Request) -> None:
+    """LiteLLM 화면이 로그인 상태로 읽는 ``token`` 쿠키를 지운다(LiteLLM이 심을 때와 같은 속성)."""
+    response.delete_cookie(
+        "token", path="/", secure=is_https(request), httponly=False, samesite="lax"
+    )
+
+
 def read_cookie(request: Request, name: str) -> str | None:
     return request.cookies.get(cookie_name(request, name))

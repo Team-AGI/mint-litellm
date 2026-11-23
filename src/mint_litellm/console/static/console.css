@@ -55,6 +55,15 @@
   }
 }
 * { box-sizing: border-box; }
+.permission-switch { display: inline-flex; align-items: center; gap: .5rem; white-space: nowrap; }
+.switch-track { display: inline-block; width: 2.25rem; height: 1.25rem; border-radius: 1rem; background: var(--off); padding: .125rem; }
+.switch-track::after { content: ""; display: block; width: 1rem; height: 1rem; border-radius: 50%; background: var(--bg); }
+.permission-switch[aria-checked="true"] .switch-track { background: var(--ok); }
+.permission-switch[aria-checked="true"] .switch-track::after { transform: translateX(1rem); }
+.catalog { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); gap: var(--gap); margin-block: 1rem; }
+.catalog-card { display: flex; flex-direction: column; gap: .75rem; padding: var(--pad-card); border: 1px solid var(--border); border-radius: .75rem; background: var(--bg); overflow-wrap: anywhere; }
+.catalog-card h2 { margin: 0; font-size: 1.1rem; }
+.catalog-card .actions { margin-top: auto; }
 html, body { margin: 0; }
 body {
   font: 14px/1.5 system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic",

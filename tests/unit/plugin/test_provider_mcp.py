@@ -244,7 +244,9 @@ class TestPreCallChain:
         assert self.send(rig, data, call_type)["model"] == "m"
         assert store.events == {}
 
-    def test_an_unverified_worker_refuses_the_request_too(self, tmp_path, monkeypatch, registry):
+    def test_an_unverified_worker_still_refuses_an_unapproved_external_server(
+        self, tmp_path, monkeypatch, registry
+    ):
         import litellm
 
         runtime, _, _ = build_runtime(tmp_path, verified=False)
@@ -252,7 +254,7 @@ class TestPreCallChain:
         rig = runtime, None, ProxyLogging(user_api_key_cache=DualCache())
         with pytest.raises(HTTPException) as raised:
             self.send(rig, {"tools": [mcp_tool(EXTERNAL)]}, "aresponses")
-        assert MintError.from_detail(raised.value.detail).code == "MINT-ENFORCEMENT-UNVERIFIED"
+        assert MintError.from_detail(raised.value.detail).code == "MINT-EXTERNAL-MCP-FORBIDDEN"
 
     def test_a_judgment_that_fails_blocks_instead_of_passing(self, rig, monkeypatch):
         runtime, _, _ = rig

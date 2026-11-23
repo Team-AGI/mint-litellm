@@ -15,14 +15,14 @@
 <nav class="tabs" aria-label="필터">{% for href, label, n in chips %}<a href="/servers{{ href }}"{% if (kind and href == '?filter=' ~ kind) or (not kind and not href) %} class="active" aria-current="page"{% endif %}>{{ label }} <span class="count">{{ n }}</span></a>{% endfor %}</nav>
 {% endif %}
 {% if rows %}
-<table class="clickable"><thead><tr><th>서버</th><th>상태</th><th>계약</th><th>취약점</th><th class="num">유효 승인</th><th class="num">도구</th><th></th></tr></thead><tbody>
+<table class="clickable"><thead><tr><th>서버</th><th>상태</th><th>계약</th><th>취약점</th><th class="num">유효 승인</th><th class="num">도구</th><th>서버 허용</th></tr></thead><tbody>
 {% for s in rows %}<tr>
-<td><a href="/servers/{{ s.server_id | urlencode }}">{{ s.server_id }}</a></td>
+<td><a href="/servers/{{ s.server_id | urlencode }}">{{ s.server_name or s.server_id }}</a>{% if s.server_url %}<div class="muted">{{ s.server_url }}</div>{% endif %}</td>
 <td>{{ m.badge(L.SERVER, s.status) }}</td>
 <td>{% if s.contract %}<a href="/servers/{{ s.server_id | urlencode }}?tab=contract">{% if s.contract == 'pending' and s.plan_status %}{{ m.badge(L.PLAN, s.plan_status) }}{% else %}{{ m.badge(L.CONTRACT_STATE, s.contract) }}{% endif %}</a>{% else %}—{% endif %}</td>
 <td>{% if s.vulns %}<a href="/servers/{{ s.server_id | urlencode }}?tab=security"><span class="badge error"><span class="icon" aria-hidden="true">▲</span>치명 {{ s.vulns }}</span></a>{% else %}—{% endif %}</td>
 <td class="num">{{ s.approvals }}</td><td class="num">{{ s.tools }}</td>
-<td class="actions">{% if actor.role == 'admin' %}{% if s.status == 'approved' %}{{ a.suspend(s, actor, 'stop-' ~ loop.index, s.approvals, '/servers') }}{% elif s.status == 'suspended' %}{{ a.resume(s, actor, 'resume-' ~ loop.index, '/servers') }}{% endif %}{% endif %}</td>
+<td>{{ a.permission(s, actor, 'permission-' ~ loop.index, '/servers') }}</td>
 </tr>{% endfor %}
 </tbody></table>
 {% elif kind == 'changed' %}{{ m.empty('계약 변경이 있는 서버가 없습니다', '/servers', '서버 목록 보기') }}

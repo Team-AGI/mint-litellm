@@ -100,8 +100,27 @@ def approvals_page(request: Request, actor: Actor, error=None, status=200, tab=N
     asked = query.get("sla", "")
     sla = int(asked) if asked.isdigit() and int(asked) in SLA_MINUTES else SLOW_SECONDS // 60
     queue = reads.queue(actor.conn, actor.instance)
+    permissions = []
     if tab == "servers":
+        intakes = fetchall(
+            actor.conn, "SELECT id, server_id, purpose, requested_by, status FROM mint.intakes"
+            " WHERE instance_id = %s"
+            " AND status <> 'decided' ORDER BY created_at", (actor.instance,),
+        )
+        by_server = {r["server_id"]: r for r in intakes}
+        for row in queue:
+            intake = by_server.get(row["server_id"], {})
+            row["intake_id"] = intake.get("id")
+            row["intake_status"] = intake.get("status")
+            row["purpose"] = intake.get("purpose") or row["purpose"]
+        queued = {r["server_id"] for r in queue}
+        queue += [{**r, "intake_id": r["id"], "intake_status": r["status"],
+                   "registered_by": r["requested_by"]}
+                  for r in intakes if r["server_id"] not in queued]
         server_display(actor, queue)
+        permissions = [s for s in reads.servers(actor.conn, actor.instance)
+                       if s["status"] in ("approved", "suspended")]
+        server_display(actor, permissions)
     renewal = renewal_service.candidates(actor.conn, actor.instance)
     rules = reads.call_approval_rules(actor.conn, actor.instance)
     blocks = key_block.listing(actor.conn, actor.instance) if tab == "blocks" else []
@@ -109,6 +128,7 @@ def approvals_page(request: Request, actor: Actor, error=None, status=200, tab=N
     wait = dashboard_reads.pending_wait(actor.conn, actor.instance)
     ctx = {
         "holds": holds, "blocks": blocks, "block_view": _block_view,
+        "permissions": permissions,
         "tab": tab, "focus": focus, "error": error, "page": page_number(request),
         "rows": calls, "pending": pending, "queue": queue, "renewal": renewal, "rules": rules,
         "pending_total": wait["count"],
@@ -390,7 +410,8 @@ def revoke_approval(
     return act(
         actor,
         lambda: approval_service.revoke(
-            actor.ctx, approval_id, reason, with_denial, expected_version=state_version
+            actor.ctx, approval_id, reason.strip() or "관리자 승인 철회", with_denial,
+            expected_version=state_version
         ),
         "revoked_denied" if with_denial else "revoked", "/access?tab=approvals",
         lambda **kw: access_page(request, actor, tab="approvals", **kw),
@@ -411,7 +432,7 @@ def create_denial(
         actor,
         lambda: denial_service.deny(
             actor.ctx, scope_type=scope_type, scope_id=scope_id, server_id=server_id or None,
-            tools=lines(tools) or None, reason=reason, org_id=None,
+            tools=lines(tools) or None, reason=reason.strip() or "관리자 거부", org_id=None,
         ),
         "denied", "/access?tab=denials",
         lambda **kw: access_page(request, actor, tab="denials", **kw),
@@ -628,7 +649,6 @@ def decide_key_block(
     state_version: int = Form(...),
     scope: str = Form("key"),
     reason: str = Form(""),
-    acknowledge: str = Form(""),
     actor: Actor = Depends(page_actor),
 ):
     def action():
@@ -639,8 +659,9 @@ def decide_key_block(
             key_block.reject(actor.ctx, proposal_id, reason=reason, expected_version=state_version)
         elif decision == "unblock":
             key_block.request_unblock(
-                actor.ctx, actor.litellm(), proposal_id, reason=reason,
-                acknowledge=bool(acknowledge), expected_version=state_version,
+                actor.ctx, actor.litellm(), proposal_id,
+                reason=reason.strip() or "관리자 차단 해제",
+                acknowledge=True, expected_version=state_version,
             )
         else:
             raise AdminError(AdminCode.NOT_FOUND, "알 수 없는 동작입니다.")

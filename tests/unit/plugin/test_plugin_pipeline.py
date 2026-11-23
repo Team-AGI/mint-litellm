@@ -43,7 +43,6 @@ from mint_litellm.types.decision import (
     StageStatus,
     url_sha256,
 )
-from mint_litellm.types.errors import DispatchState
 from mint_litellm.types.events import Event
 from mint_litellm.types.fingerprint import argument_fingerprint
 from mint_litellm.types.identity import OrgStatus, SubjectType
@@ -132,15 +131,15 @@ class TestErrorReference:
 
 
 class TestContextStage:
-    def test_unverified_blocks_without_reading_the_snapshot(self, tmp_path):
+    def test_unverified_still_passes_an_approved_call_and_marks_it(self, tmp_path):
         h = harness(tmp_path, verified=False)
         outcome = decide(h)
-        assert code(outcome) == "MINT-ENFORCEMENT-UNVERIFIED"
-        assert h.snapshots.queries == []
+        assert outcome.allowed and outcome.snapshot.enforcement_unverified is True
         assert len(h.store.of_kind("decision_evaluated")) == 1
-        assert outcome.snapshot.stop.reason_code == "ENFORCEMENT_UNVERIFIED"
-        assert outcome.error.dispatch_state is DispatchState.NOT_DISPATCHED
-        assert outcome.error.retry_safe is False
+
+    def test_unverified_does_not_pass_a_denied_call(self, tmp_path):
+        h = harness(tmp_path, snapshot(denials=(denial(),)), verified=False)
+        assert not decide(h).allowed
 
     def test_master_key_is_forbidden(self, tmp_path):
         h = harness(tmp_path)
@@ -164,10 +163,10 @@ class TestContextStage:
         assert code(outcome) == "MINT-SERVER-IDENTITY-AMBIGUOUS"
         assert outcome.snapshot.candidates_with_same_name == 2
 
-    def test_unverified_wins_over_master_key(self, tmp_path):
+    def test_master_key_is_forbidden_even_while_unverified(self, tmp_path):
         h = harness(tmp_path, verified=False)
         principal = user_principal(is_master_key=True)
-        assert code(decide(h, request(principal))) == "MINT-ENFORCEMENT-UNVERIFIED"
+        assert code(decide(h, request(principal))) == "MINT-MASTER-KEY-FORBIDDEN"
 
 
 class TestSnapshotFailure:
@@ -798,10 +797,9 @@ class TestPolicyStage:
         h = harness(tmp_path, evaluate=evaluator(missing_inputs=("approval",)))
         assert decide(h).snapshot.policy_degraded is True
 
-    def test_an_unknown_decision_is_a_schema_error(self, tmp_path):
-        assert (
-            code(decide(harness(tmp_path, evaluate=evaluator("Restrict")))) == "MINT-SCHEMA-ERROR"
-        )
+    def test_an_unknown_decision_passes_degraded(self, tmp_path):
+        outcome = decide(harness(tmp_path, evaluate=evaluator("Restrict")))
+        assert outcome.allowed and outcome.snapshot.policy_degraded is True
 
     def test_an_unsupported_obligation_stops_at_the_obligation_stage(self, tmp_path):
         evaluate = evaluator("Allow", obligations=({"type": "redact", "fields": ["a"]},))
@@ -1646,10 +1644,10 @@ class TestDiscoveryOperation:
 
         assert run(listing()) == {"first": True, "slow": False, "last": True}
 
-    def test_a_listing_is_hidden_while_unverified(self, tmp_path):
+    def test_a_listing_is_not_hidden_while_unverified(self, tmp_path):
         h = harness(tmp_path, verified=False)
         outcome = decide(h, request(operation=OperationType.RUNTIME_DISCOVERY))
-        assert code(outcome) == "MINT-ENFORCEMENT-UNVERIFIED"
+        assert outcome.allowed
 
 
 class TestDecisionBudget:

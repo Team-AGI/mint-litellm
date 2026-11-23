@@ -162,7 +162,7 @@ def test_a_database_error_keeps_the_previous_verdict(tmp_path):
     assert watch.blocked_cause == "restore_pending"
 
 
-def test_a_blocked_watch_blocks_every_call_with_the_cause_and_reads_no_file(tmp_path, monkeypatch):
+def test_a_blocked_watch_passes_an_approved_call_marked_and_reads_no_file(tmp_path, monkeypatch):
     h = harness(tmp_path)
     state = {"cause": "restore_pending"}
     h.deps.verified = lambda: state["cause"] is None
@@ -174,12 +174,9 @@ def test_a_blocked_watch_blocks_every_call_with_the_cause_and_reads_no_file(tmp_
     monkeypatch.setattr(files, "read_verified", no_files)
     monkeypatch.setattr(files, "newest_negative", no_files)
     outcome = decide(h)
-    assert code(outcome) == "MINT-ENFORCEMENT-UNVERIFIED"
-    assert outcome.snapshot.stop.reason_code == "ENFORCEMENT_UNVERIFIED"
-    assert h.snapshots.queries == []
-    assert "cause=restore_pending" in outcome.snapshot.stop.detail
+    assert outcome.allowed and outcome.snapshot.enforcement_unverified is True
     state["cause"] = None
-    assert decide(h).allowed
+    assert decide(h).snapshot.enforcement_unverified is None
 
 
 def test_the_runtime_gate_follows_the_watch_in_memory(tmp_path):

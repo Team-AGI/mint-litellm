@@ -42,7 +42,7 @@ from mint_litellm.control import (
     links,
     ui_sessions,
 )
-from mint_litellm.control.db.connection import connect, fetchall
+from mint_litellm.control.db.connection import connect, fetchall, fetchone
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.litellm_admin import LiteLLMError
 from mint_litellm.control.services import console_sessions, reads, staff, staff_intakes
@@ -168,11 +168,23 @@ def staff_render(
 
 @router.get("/staff/intakes")
 def intake_list(request: Request, actor: StaffActor = Depends(staff_actor)):
-    rows = staff_intakes.listing(actor.sctx)
-    sources = source_of(actor, [r["id"] for r in rows])
-    for r in rows:
-        r["source"] = sources.get(r["id"], "staff")
+    rows = application_rows(actor)
     return staff_render(request, "staff_intakes.html", {"rows": rows}, actor)
+
+
+def application_rows(actor: StaffActor) -> list[dict]:
+    rows = staff_intakes.listing(actor.sctx)
+    if rows:
+        details = fetchall(
+            actor.sctx.control,
+            "SELECT id, source, state_version FROM mint.intakes WHERE instance_id = %s"
+            " AND requested_by = %s AND id = ANY(%s)",
+            (actor.sctx.instance_id, actor.user_id, [r["id"] for r in rows]),
+        )
+        by_id = {r["id"]: r for r in details}
+        for row in rows:
+            row.update(by_id.get(row["id"], {}))
+    return rows
 
 
 def source_of(actor: StaffActor, ids: list) -> dict:
@@ -204,10 +216,32 @@ def intake_submit(
 ):
     form = dict(request_id=request_id, url=url, purpose=purpose)
     ports = actor.config.stage2.intake_allowed_ports
-    return act(actor, lambda: staff_intakes.submit(
-                   actor.sctx, actor.id_hash, request_id, form, ports),
-               "intake_created", "/staff/intakes/" + request_id,
-               lambda **kw: intake_form(request, actor, form, **kw))
+    target = {}
+
+    def action():
+        payload, _ = staff_intakes.validate(form, ports)
+        prior = fetchone(
+            actor.sctx.control,
+            "SELECT i.id FROM mint.intakes i WHERE i.instance_id = %s AND i.requested_by = %s"
+            " AND i.source IN ('staff', 'endpoint')"
+            " AND (i.status <> 'decided' OR i.decision IN ('approved', 'exception'))"
+            " AND EXISTS (SELECT 1 FROM mint.deployment_contracts d WHERE d.instance_id ="
+            " i.instance_id AND d.server_id = i.server_id AND d.url = %s)"
+            " ORDER BY i.created_at DESC LIMIT 1",
+            (actor.sctx.instance_id, actor.user_id, payload["url"]),
+        )
+        if prior and str(prior["id"]) != request_id:
+            target.update(id=str(prior["id"]), existing=True)
+        else:
+            identifier = staff_intakes.submit(actor.sctx, actor.id_hash, request_id, form, ports)
+            target.update(id=identifier, existing=False)
+
+    response = act(actor, action, "intake_created", "/staff/intakes/" + request_id,
+                   lambda **kw: intake_form(request, actor, form, **kw))
+    if response.status_code == 303:
+        notice = "intake_existing" if target["existing"] else "intake_created"
+        response.headers["location"] = f"/staff/intakes/{target['id']}?ok={notice}"
+    return response
 
 
 @router.get("/staff/intakes/{intake_id}")
@@ -412,7 +446,11 @@ def servers_page(request: Request, actor: StaffActor, error=None, status=200, fo
         row["can_consent"] = key in can_consent
         row["seen"] = seen.get(row["server_id"])
     name_servers(actor, rows)
-    tab = "records" if request.query_params.get("tab") == "records" else "servers"
+    tab = request.query_params.get("tab", "servers")
+    tab = tab if tab in ("servers", "applications", "records") else "servers"
+    search = request.query_params.get("q", "").strip()[:256]
+    catalog = [r for r in rows if search.casefold() in
+               f"{r['server_name']} {r['org_name']}".casefold()]
     records = [
         {"at": e["inserted_at"], "label": event_label(e)}
         for e in staff.list_events(actor.sctx, RECENT_RECORDS)
@@ -421,6 +459,9 @@ def servers_page(request: Request, actor: StaffActor, error=None, status=200, fo
     opened = form.get("target") or request.query_params.get("open")
     ctx = {
         "rows": rows,
+        "catalog": catalog,
+        "search": search,
+        "applications": application_rows(actor) if tab == "applications" else [],
         "tab": tab,
         "records": records,
         "pending_calls": sum(r["view"] == "pending" for r in my_approvals(actor))

@@ -219,9 +219,6 @@ class _Stages:
 def context_result(
     req: CallRequest, verified: bool, cause: str | None = None
 ) -> StageResult | None:
-    if not verified:
-        detail = None if cause is None else f"cause={cause}"
-        return StageResult.stop(Reason.ENFORCEMENT_UNVERIFIED, detail=detail)
     # 모델 요청은 마스터 키로도 보낼 수 있으므로, 공급자 쪽 MCP 차단 사유를 그대로 돌려준다.
     master = req.principal.principal_type is PrincipalType.MASTER_KEY
     if master and req.operation is not OperationType.LLM_REQUEST:
@@ -1003,6 +1000,10 @@ async def policy_stage(
             if normalized.failure.reason_code == Reason.SCHEMA_ERROR
             else Stage.OBLIGATIONS
         )
+        # 정책 출력의 결정·의무 형식이 깨진 경우는 엔진 장애와 같이 내장 검사만으로 판정한다.
+        # 엔진이 의무를 지원하지 못한다고 답한 경우(UNSUPPORTED)만 정책의 뜻으로 막는다.
+        if normalized.failure.reason_code == Reason.SCHEMA_ERROR:
+            return stopped(normalized.failure, Dependency.OPA)
         return PolicyStageResult(
             [(stage, normalized.failure)],
             False,
@@ -1296,6 +1297,7 @@ class _Run:
     scope_exceeded: list[str] = field(default_factory=list)
     scope_unchecked_reason: str | None = None
     policy_degraded: bool = False
+    enforcement_unverified: bool = False
     snapshot_stale: bool = False
 
 
@@ -1381,6 +1383,7 @@ def _decision_snapshot(
         approval_hold=req.hold[0] if req.hold else None,
         approval_hold_ms=req.hold[1] if req.hold else None,
         policy_degraded=True if run.policy_degraded else None,
+        enforcement_unverified=True if run.enforcement_unverified else None,
         snapshot_stale=True if run.snapshot_stale else None,
         cause="control_key_call"
         if conclusion.stop is not None and conclusion.stop.detail == "control_key_call"
@@ -1429,6 +1432,8 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
     req, stages, config = run.req, run.stages, deps.config
     hook, principal = req.hook, req.principal
     run.current = Stage.CONTEXT
+    # 집행 확인이 안 돼도 승인된 대상은 통과시키고 표시만 남긴다(경보는 작업 실행기가 연다).
+    run.enforcement_unverified = not deps.verified()
     early = context_result(req, deps.verified(), deps.unverified_cause())
     if early is not None:
         stages.add(Stage.CONTEXT, early)

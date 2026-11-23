@@ -39,8 +39,7 @@
 {% if actor.role == 'admin' and b.status == 'applied' and b.mint_blocked %}
 <form method="post" action="/key-blocks/{{ b.id }}/unblock" class="form">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ b.state_version }}">
-  <label>해제 사유<input name="reason" required maxlength="500"></label>
-  <label><input type="checkbox" name="acknowledge" value="1"> 차단 뒤 바뀐 내용을 확인했습니다</label>
+  <label>해제 사유(선택)<input name="reason" maxlength="500"></label>
   <div class="actions"><button type="submit">차단 해제</button></div>
 </form>
 {% endif %}
