@@ -50,15 +50,6 @@ def managed(**overrides):
             },
             "deployment",
         ),
-        ({"server": server_row(contract_status="managed")}, "unobserved"),
-        (
-            {
-                "server": server_row(
-                    contract_status="managed", last_observed_at=NOW - timedelta(seconds=121)
-                )
-            },
-            "unobserved",
-        ),
     ],
 )
 def test_contract_blocks_each_drift(tmp_path, change, reason):
@@ -67,6 +58,14 @@ def test_contract_blocks_each_drift(tmp_path, change, reason):
     result = asyncio.run(evaluate_request(request(), h.deps))
     assert not result.allowed
     assert f"CONTRACT_DRIFT_{reason}" in [f.reason_code for f in result.snapshot.findings]
+
+
+def test_an_unobserved_or_stale_server_is_still_allowed(tmp_path):
+    for seen in (None, NOW - timedelta(seconds=121)):
+        h = harness(tmp_path, managed(server=server_row(
+            contract_status="managed", last_observed_at=seen)))
+        h.deps.config = replace(h.deps.config, observe_seconds=60)
+        assert asyncio.run(evaluate_request(request(), h.deps)).allowed
 
 
 def test_a_new_tool_on_an_approved_server_is_allowed(tmp_path):

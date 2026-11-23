@@ -518,13 +518,19 @@ def local_pack_retry(job: JobContext) -> None:
     rows = fetchall(
         job.conn,
         "SELECT i.id FROM mint.intakes i WHERE i.instance_id = %s AND i.source = 'endpoint'"
-        " AND i.status IN ('indeterminate', 'failed', 'passed') AND NOT EXISTS ("
+        " AND i.status IN ('indeterminate', 'failed', 'passed') AND ((NOT EXISTS ("
         " SELECT 1 FROM mint.deployment_contracts d WHERE d.instance_id = i.instance_id"
         " AND d.server_id = i.server_id AND d.status = 'candidate' AND d.pack_sha256 IS NOT NULL)"
         " AND (i.approve_when_ready IS NOT NULL OR EXISTS ("
         " SELECT 1 FROM mint.intake_checks c WHERE c.instance_id = i.instance_id"
         " AND c.intake_id = i.id AND c.\"check\" = 'pack_build'"
-        " AND c.reason_code = ANY(%s)))",
+        " AND c.reason_code = ANY(%s)))) OR EXISTS ("
+        # 묶음은 있는데 검사에서 서버가 시작·응답하지 못한 신청(판별 불가): 묶음부터 다시 만든다
+        " SELECT 1 FROM mint.intake_checks c WHERE c.instance_id = i.instance_id"
+        " AND c.intake_id = i.id AND c.\"check\" = 'inspection'"
+        " AND c.result = 'indeterminate' AND c.attempt = ("
+        " SELECT max(m.attempt) FROM mint.intake_checks m WHERE m.instance_id = i.instance_id"
+        " AND m.intake_id = i.id AND m.\"check\" = 'inspection')))",
         (job.instance_id, list(RETRYABLE_PACK_REASONS)),
     )
     for row in rows:
