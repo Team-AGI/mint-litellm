@@ -100,7 +100,8 @@ def call_event(world, result, principal_type="user"):
     identifier = str(uuid.uuid4())
     world.query(
         "INSERT INTO mint.events(event_id, instance_id, kind, source_key, invocation_id,"
-        " attempt_id, subject, payload) VALUES(%s,%s,'decision_evaluated',%s,%s,1,%s::jsonb,%s::jsonb)",
+        " attempt_id, subject, payload)"
+        " VALUES(%s,%s,'decision_evaluated',%s,%s,1,%s::jsonb,%s::jsonb)",
         identifier, INSTANCE, f"call:{identifier}", identifier,
         json.dumps({"principal_type": principal_type, "principal_id": "caller"}),
         json.dumps({"resolved_server_id": "srv-ok", "tool": "echo", "enforced_action": result}),
