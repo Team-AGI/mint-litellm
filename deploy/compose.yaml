@@ -17,6 +17,22 @@ services:
       retries: 20
     restart: unless-stopped
 
+  # 매일 두 데이터베이스를 backups/<시각>/에 덤프하고 오래된 폴더를 지운다(보존 개수 BACKUP_KEEP, 기본 7).
+  # 복원은 ./mint.sh restore <폴더>. 정책 번들·LiteLLM 설정까지 담은 백업은 ./mint.sh backup이 만든다.
+  backup:
+    image: postgres:16@sha256:5db6dac2ef5dcff512f4f00a009c3c332b9f2f28f24277175bf3e4a3d02ef83a
+    entrypoint: ["sh", "/backup-schedule.sh"]
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD를 .env에 설정하십시오}
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
+    volumes:
+      - ./backup-schedule.sh:/backup-schedule.sh:ro
+      - ./backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   # 번들 모드(--bundle)로 띄우고 번들 파일을 감시한다. --bundle 없이 타르볼을 감시하면 재적재 때
   # 이전 파일과 새 파일이 함께 남아 적재가 실패한다. 번들 디렉터리는 제어 평면 컨테이너와 공유하는
   # 명명 볼륨이어야 하며, 호스트 디렉터리 바인드 마운트는 파일 변경 알림이 전달되지 않는다.
