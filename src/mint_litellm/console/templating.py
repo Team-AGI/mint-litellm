@@ -28,7 +28,7 @@ MENU = (
             ("/access", "접근 통제", None))),
     ("단말", (("/endpoints", "엔드포인트", "endpoints"),)),
     ("감사", (("/ledger", "호출 기록", None), ("/policy", "정책", None),
-            ("/reports/audit", "감사 보고서", None))),
+            ("/reports/audit", "감사 보고서", None), ("/reports/usage", "사용량", None))),
     ("관리", (("/admin", "운영자·조직", None),)),
 )
 STAFF_MENU = (
@@ -36,6 +36,7 @@ STAFF_MENU = (
         ("/staff", "내 서버", None),
         ("/staff/intakes", "MCP 서버 도입 신청", None),
         ("/staff/confirmations", "내 요청", "staff_requests"),
+        ("/staff/usage", "내 사용량", None),
         ("/staff/endpoint", "내 단말", None),
     )),
 )

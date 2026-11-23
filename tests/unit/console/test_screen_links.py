@@ -45,8 +45,8 @@ POSTS = [
     "/staff/confirmations/x/reject", "/staff/confirmations/x/cancel", "/staff/endpoint/kit",
     "/staff/endpoint/revoke",
 ]
-STAFF_GETS = ["/staff", "/staff/confirmations", "/staff/endpoint", "/staff/requests",
-              "/staff/consents", "/staff/login"]
+STAFF_GETS = ["/staff", "/staff/usage", "/staff/confirmations", "/staff/endpoint",
+              "/staff/requests", "/staff/consents", "/staff/login"]
 LINK = re.compile(r'(?:href|formaction|action)="(/[^"#]*)"')
 
 

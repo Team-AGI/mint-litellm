@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MINT 배포 보조 스크립트: up | status | bootstrap | password | backup | upgrade | cli
+# MINT 배포 보조 스크립트: up | status | bootstrap | password | backup | restore | upgrade | cli
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -372,6 +372,7 @@ cmd_up() {
     ensure_control_key
     "${COMPOSE[@]}" --profile worker up -d worker inspector
     "${COMPOSE[@]}" --profile console up -d console
+    "${COMPOSE[@]}" up -d backup
     ensure_default_root
     echo "기동했습니다."
     next_step
@@ -528,6 +529,22 @@ cmd_backup() {
     echo "이 백업에는 .env와 비밀 폴더($(env_value MINT_SECRETS_DIR))가 들어 있지 않습니다. 두 곳도 따로 안전하게 보관하십시오."
 }
 
+# 백업 폴더(cmd_backup 또는 매일 백업이 만든 것)의 두 데이터베이스를 되돌리고 다시 기동한다.
+# 운영 데이터베이스를 덮어쓰므로 폴더를 직접 지정해야만 돈다. 비밀 폴더와 .env는 건드리지 않는다.
+cmd_restore() {
+    require_env
+    local dir="${1:-}" database
+    { [ -s "$dir/mint.sql" ] && [ -s "$dir/litellm.sql" ]; }         || fail "사용법: ./mint.sh restore <백업 폴더>(mint.sql과 litellm.sql이 있어야 합니다)"
+    "${COMPOSE[@]}" up -d --wait postgres
+    "${COMPOSE[@]}" --profile worker --profile console stop litellm worker inspector console
+    for database in mint litellm; do
+        "${COMPOSE[@]}" exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d postgres             -c "DROP DATABASE IF EXISTS $database WITH (FORCE)" -c "CREATE DATABASE $database" < /dev/null
+        "${COMPOSE[@]}" exec -T postgres psql -v ON_ERROR_STOP=1 -q -U postgres -d "$database" < "$dir/$database.sql" > /dev/null
+    done
+    echo "복원했습니다: $dir"
+    cmd_up
+}
+
 # 업그레이드 단계. "설명|함수" 순서가 곧 실행 순서이며 --dry-run은 이 표만 보인다.
 # 이미지 빌드·데이터베이스 확인·백업까지는 이전 판본이 그대로 돈다. 서비스를 멈춘 뒤에는 마이그레이션
 # (제어 평면)이 플러그인보다 먼저 끝나야 새 열을 판정이 읽는다.
@@ -578,6 +595,7 @@ upgrade_rest() {
     ensure_control_key
     "${COMPOSE[@]}" --profile worker up -d worker inspector
     "${COMPOSE[@]}" --profile console up -d console
+    "${COMPOSE[@]}" up -d backup
 }
 # 방금 띄운 서비스가 응답하기까지 몇 번 다시 시도한다.
 upgrade_verify() {
@@ -647,6 +665,7 @@ case "${1:-}" in
     up) cmd_up ;;
     status) cmd_status ;;
     backup) cmd_backup ;;
+    restore) shift; cmd_restore "$@" ;;
     bootstrap) shift; cmd_bootstrap "$@" ;;
     password) shift; cmd_password "$@" ;;
     upgrade) shift; cmd_upgrade "$@" ;;
@@ -657,5 +676,5 @@ case "${1:-}" in
             *" password-reset"*) env "MINT_LITELLM_ADMIN_KEY=$(env_value LITELLM_MASTER_KEY)"                 "${COMPOSE[@]}" run --rm -e MINT_LITELLM_ADMIN_KEY ${MINT_LITELLM_KEY:+-e MINT_LITELLM_KEY} control "$@" ;;
             *) cli "$@" ;;
         esac ;;
-    *) fail "사용법: ./mint.sh up | status | bootstrap <이름> <사용자> | password <사용자> | backup | upgrade [--dry-run] | cli <명령...>" ;;
+    *) fail "사용법: ./mint.sh up | status | bootstrap <이름> <사용자> | password <사용자> | backup | restore <백업 폴더> | upgrade [--dry-run] | cli <명령...>" ;;
 esac

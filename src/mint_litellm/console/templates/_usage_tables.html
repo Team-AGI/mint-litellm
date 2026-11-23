@@ -1,0 +1,19 @@
+{% import "macros.html" as m %}{% import "audit_macros.html" as a %}
+<div class="cards">
+  {{ m.kpi('비용', report.cost.text, level='wait' if report.cost.state == 'missing') }}
+  {{ m.kpi('호출', report.calls) }}
+  {{ m.kpi('차단', report.blocked, level='danger' if report.blocked) }}
+</div>
+{{ a.panel('서버별 호출', bars, report.bars['values'] | length) }}
+{% macro table(title, rows, first=false) %}
+<section><h2>{{ title }}</h2>
+{% if rows %}
+<table><thead><tr><th>이름</th><th>비용</th><th>호출</th><th>차단</th>{% if first %}<th>첫 성공</th>{% endif %}</tr></thead><tbody>
+{% for r in rows %}<tr><td>{{ r.name }}</td><td class="num">{{ r.cost.text }}</td><td class="num">{{ r.calls }}</td><td class="num">{{ r.blocked }}</td>{% if first %}<td class="nowrap">{{ (r.first | when) if r.first else '없음' }}</td>{% endif %}</tr>{% endfor %}
+</tbody></table>
+{% else %}<div class="empty slim">이 기간에 기록이 없습니다</div>{% endif %}
+</section>
+{% endmacro %}
+{% if report.teams or not scoped %}{{ table('팀별', report.teams) }}{% endif %}
+{{ table('사람별' if not scoped else '내 사용', report.users, true) }}
+{{ table('서버별', report.servers, true) }}
