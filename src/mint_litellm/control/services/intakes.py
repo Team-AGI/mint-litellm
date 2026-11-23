@@ -41,6 +41,10 @@ from mint_litellm.types.jobs import intake_reject_job_key, intake_run_job_key
 DATA_GRADES = ("public", "internal", "confidential", "restricted")
 READINESS_KEYS = ("credential_notice", "revocation_record", "audit_access_days")
 EVIDENCE_MAX_AGE = timedelta(hours=24)
+RETRY_LIMIT = 12  # 자동 재시도 상한
+RETRY_EVERY = timedelta(minutes=5)
+# 묶음은 있으나 서버가 시작되지 않은 검사 사유(판본 맞춤 묶음으로 다시 만들면 풀릴 수 있다)
+START_FAILED_REASONS = ("SERVER_DEPS_MISMATCH", "SERVER_START_FAILED")
 EXCEPTION_MAX_DAYS = 90
 # 기한을 정하지 않은 승인은 만료되지 않는다(관리자가 명시한 기한만 만료).
 NO_EXPIRY = datetime(2999, 12, 31, tzinfo=UTC)
@@ -104,6 +108,29 @@ def latest_checks(conn: Any, instance_id: str, intake_id: Any) -> list[dict]:
     )
     order = {name: i for i, name in enumerate((*intake_checks.LOCAL_CHECKS, *intake_checks.CHECKS))}
     return sorted(rows, key=lambda r: order[r["check"]])
+
+
+def retry_state(conn: Any, instance_id: str, intake: dict) -> dict | None:
+    """단말 신청의 자동 재시도 상황(마지막·다음 시각, 횟수). 재시도 대상이 아니면 None."""
+    if intake["source"] != "endpoint":
+        return None
+    approved = intake["status"] == "decided"
+    if approved and intake["decision"] not in ("approved", "exception"):
+        return None
+    stuck = any(
+        c["result"] == "indeterminate" and (
+            c["reason_code"] in START_FAILED_REASONS if approved and c["check"] == "inspection"
+            else not approved and (c["check"] == "pack_build" or (
+                c["check"] == "inspection" and c["reason_code"] != "ENDPOINT_INSPECTED")))
+        for c in latest_checks(conn, instance_id, intake["id"])
+    )
+    last = fetchone(conn, "SELECT max(ran_at) AS at FROM mint.intake_checks"
+                    " WHERE instance_id = %s AND intake_id = %s", (instance_id, intake["id"]))["at"]
+    if not stuck or last is None:
+        return None
+    tries = next_attempt(conn, instance_id, intake["id"]) - 1
+    return {"last": last, "next": last + RETRY_EVERY if tries < RETRY_LIMIT else None,
+            "n": tries, "limit": RETRY_LIMIT}
 
 
 def list_intakes(ctx: Context, status: str | None = None) -> list[dict]:

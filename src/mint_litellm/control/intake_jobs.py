@@ -10,9 +10,12 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from psycopg.types.json import Jsonb
+
 from mint_litellm.control import alerts, inspection, packs
 from mint_litellm.control import allowlists as allowlist_domain
 from mint_litellm.control import intake_checks as checks
+from mint_litellm.control import servers as server_domain
 from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import ControlError
@@ -21,13 +24,16 @@ from mint_litellm.control.litellm_admin import LiteLLMError
 from mint_litellm.control.services import evidence, intakes
 from mint_litellm.control.services import intake_inspections as inspections
 from mint_litellm.control.services.base import enqueue_job, transact
+from mint_litellm.types.exec_contract import ExecContract
+from mint_litellm.types.ids import new_uuid7
 from mint_litellm.types.jobs import intake_run_job_key
 
 POLL_LIMIT = 500
 PACK_PYTHON = "3.12"
 # 시간이 지나면 풀릴 수 있는 묶음 실패(기본 저장소 미등록, 네트워크·의존 판본 해석 실패)
 RETRYABLE_PACK_REASONS = ("PACK_INDEX_NOT_ALLOWED", "PACK_RESOLVE_FAILED")
-PACK_RETRIES = 12  # 5분 간격으로 약 1시간
+PACK_RETRIES = intakes.RETRY_LIMIT  # 5분 간격으로 약 1시간
+START_FAILED_REASONS = intakes.START_FAILED_REASONS
 DEFAULT_LOCAL_PYTHON = "/usr/bin/python3"
 EXPIRY_WARNING = timedelta(days=7)
 
@@ -459,6 +465,67 @@ def _evidence_run(job: JobContext, ctx: Context, row: dict, attempt: int) -> Non
     _run_checks(job, ctx, row, attempt, "evidence", persist=persist)
 
 
+def _repack_run(job: JobContext, ctx: Context, row: dict, attempt: int) -> None:
+    """승인된 뒤 서버가 시작되지 않는 단말 신청: 승인된 묶음 명세로 판본 맞춤 묶음을 다시 만든다.
+
+    승인된 계약은 묶음 열이 고정이라, 새 묶음이 다르면 같은 명세·같은 권한으로 계약을 갈아 끼운다
+    (이전 계약은 대체됨). 권한은 넓어지지 않고 승인·이용 범위·신청 상태는 그대로이다.
+    """
+    approved = intakes.approved_deployment(job.conn, job.instance_id, row["server_id"])
+    spec = approved and approved.get("pack_spec")
+    if not spec or not isinstance(approved.get("exec_contract"), dict):
+        return
+    try:
+        digest, manifest = packs.build_pack(spec, _allowlists(job, row["org_id"]),
+                                            python=PACK_PYTHON)
+    except packs.PackError as error:
+        intakes.record_check(ctx, row, attempt, "pack_build", checks.pack_build_failed(error.code))
+        return
+    if digest != approved["pack_sha256"]:
+        _swap_pack(job, ctx, approved, digest, manifest)
+    out = checks.inspection_outcome(
+        inspection.inspect_pack(digest, manifest["entry"], spec.get("argv", [])))
+    intakes.record_check(ctx, row, attempt, "inspection", out)
+    defs = out.extra.get("definitions")
+    if defs is not None:
+        data = job.policy_data.get(job.conn, job.instance_id) if job.policy_data else None
+        intakes.record_check(ctx, row, attempt, "description_scan",
+                             checks.description_scan(defs, data))
+        intakes.record_check(ctx, row, attempt, "risk_grade",
+                             checks.risk_grade(defs, row["data_grade"], data))
+
+
+def _swap_pack(job: JobContext, ctx: Context, approved: dict, digest: str,
+               manifest: dict) -> None:
+    """승인된 배포 계약을 묶음만 다른 새 계약으로 대체하고 서버의 계약 값을 맞춘다."""
+    document = {k: v for k, v in approved["exec_contract"].items() if k != "identity_kind"}
+    document["pack"] = {**document["pack"], "sha256": digest,
+                        "python": manifest["platform"]["python"], "entry": manifest["entry"]}
+    contract = ExecContract.model_validate(document)
+    keep = {k: v for k, v in approved.items() if k not in (
+        "id", "status", "version", "pack_sha256", "pack_manifest", "exec_contract",
+        "exec_contract_sha256", "exec_contract_version")}
+    if keep.get("pack_spec") is not None:
+        keep["pack_spec"] = Jsonb(keep["pack_spec"])
+    columns = ", ".join(["id", *keep])
+    new_id = new_uuid7()
+    with transact(ctx):
+        ctx.conn.execute("UPDATE mint.deployment_contracts SET status = 'superseded'"
+                         " WHERE id = %s", (approved["id"],))
+        ctx.conn.execute(
+            f"INSERT INTO mint.deployment_contracts ({columns}) VALUES"
+            f" ({', '.join(['%s'] * (len(keep) + 1))})", (new_id, *keep.values()))
+        ctx.conn.execute(
+            "UPDATE mint.deployment_contracts SET pack_sha256 = %s, pack_manifest = %s::jsonb,"
+            " exec_contract_sha256 = %s, exec_contract_version = %s, exec_contract = %s::jsonb,"
+            " status = 'approved' WHERE id = %s",
+            (digest, json.dumps(manifest), contract.sha256(), contract.schema_version,
+             json.dumps(contract.document()), new_id))
+        server_domain.register_local(ctx, approved["server_id"], contract)
+        inspections.invalidate_changed(ctx.conn, job.instance_id, new_id)
+        enqueue_job(ctx, "kit_key_sync", "all")  # 단말이 새 묶음을 받도록
+
+
 def intake_run(job: JobContext) -> None:
     target, _, mode = job.job["target_ref"].partition("/")
     ctx = _context(job)
@@ -469,6 +536,9 @@ def intake_run(job: JobContext) -> None:
     attempt = int(job.job["idempotency_key"].rsplit(":", 1)[1])
     if mode == "evidence":
         _evidence_run(job, ctx, row, attempt)
+        return
+    if mode == "repack":
+        _repack_run(job, ctx, row, attempt)
         return
     if row["status"] == "decided":
         if row["decision"] == "rejected":  # 거절 전달은 신청마다 하나의 작업으로 수렴한다
@@ -510,35 +580,53 @@ def _finish_deferred(job: JobContext, ctx: Context, intake_id: str) -> None:
             subject={"target_ref": row["server_id"], "reason": reason[:200]})
 
 
+# 묶음은 있는데 가장 최근 시도의 검사에서 서버가 시작되지 못한 신청(인자: 사유 목록)
+_START_FAILED = (
+    "EXISTS (SELECT 1 FROM mint.intake_checks c WHERE c.instance_id = i.instance_id"
+    " AND c.intake_id = i.id AND c.\"check\" = 'inspection' AND c.result = 'indeterminate'"
+    " AND {reason} AND c.attempt = ("
+    " SELECT max(m.attempt) FROM mint.intake_checks m WHERE m.instance_id = i.instance_id"
+    " AND m.intake_id = i.id AND m.\"check\" = 'inspection'))"
+)
+_UNAPPROVED_FAILED = _START_FAILED.format(reason="c.reason_code <> 'ENDPOINT_INSPECTED'")
+_APPROVED_FAILED = _START_FAILED.format(reason="c.reason_code = ANY(%s)")
+
+
 def local_pack_retry(job: JobContext) -> None:
-    """기본 저장소를 넣고, 묶음이 없어 막힌 단말 신청을 다시 검사한다(횟수 상한까지)."""
+    """기본 저장소를 넣고, 묶음이 없어 막히거나 서버가 시작되지 못한 단말 신청을 다시 만든다.
+
+    승인 전 신청은 다시 검사하고, 승인된 신청은 승인된 명세로 묶음을 다시 만든다(횟수 상한까지).
+    """
     ctx = _context(job)
     with transact(ctx):
         allowlist_domain.ensure_defaults(ctx)
     rows = fetchall(
         job.conn,
-        "SELECT i.id FROM mint.intakes i WHERE i.instance_id = %s AND i.source = 'endpoint'"
-        " AND i.status IN ('indeterminate', 'failed', 'passed') AND ((NOT EXISTS ("
+        "SELECT i.id, (i.status = 'decided') AS approved FROM mint.intakes i"
+        " WHERE i.instance_id = %s AND i.source = 'endpoint'"
+        " AND ((i.status IN ('indeterminate', 'failed', 'passed') AND ((NOT EXISTS ("
         " SELECT 1 FROM mint.deployment_contracts d WHERE d.instance_id = i.instance_id"
         " AND d.server_id = i.server_id AND d.status = 'candidate' AND d.pack_sha256 IS NOT NULL)"
         " AND (i.approve_when_ready IS NOT NULL OR EXISTS ("
         " SELECT 1 FROM mint.intake_checks c WHERE c.instance_id = i.instance_id"
         " AND c.intake_id = i.id AND c.\"check\" = 'pack_build'"
-        " AND c.reason_code = ANY(%s)))) OR EXISTS ("
-        # 묶음은 있는데 검사에서 서버가 시작·응답하지 못한 신청(판별 불가): 묶음부터 다시 만든다
-        " SELECT 1 FROM mint.intake_checks c WHERE c.instance_id = i.instance_id"
-        " AND c.intake_id = i.id AND c.\"check\" = 'inspection'"
-        " AND c.result = 'indeterminate' AND c.attempt = ("
-        " SELECT max(m.attempt) FROM mint.intake_checks m WHERE m.instance_id = i.instance_id"
-        " AND m.intake_id = i.id AND m.\"check\" = 'inspection')))",
-        (job.instance_id, list(RETRYABLE_PACK_REASONS)),
+        " AND c.reason_code = ANY(%s)))) OR " + _UNAPPROVED_FAILED + "))"
+        " OR (i.status = 'decided' AND i.decision IN ('approved', 'exception')"
+        " AND EXISTS (SELECT 1 FROM mint.servers s WHERE s.instance_id = i.instance_id"
+        " AND s.server_id = i.server_id AND s.status = 'approved') AND " + _APPROVED_FAILED + "))",
+        (job.instance_id, list(RETRYABLE_PACK_REASONS), list(START_FAILED_REASONS)),
     )
     for row in rows:
         job.checkpoint()
-        if intakes.next_attempt(job.conn, job.instance_id, row["id"]) <= PACK_RETRIES:
-            intakes.enqueue_run(ctx, intakes.get(ctx, str(row["id"])))
+        attempt = intakes.next_attempt(job.conn, job.instance_id, row["id"])
+        if attempt > PACK_RETRIES:
+            if not row["approved"]:
+                _finish_deferred(job, ctx, str(row["id"]))
+        elif row["approved"]:
+            enqueue_job(ctx, "intake_run", f"{row['id']}/repack",
+                        intake_run_job_key(row["id"], attempt))
         else:
-            _finish_deferred(job, ctx, str(row["id"]))
+            intakes.enqueue_run(ctx, intakes.get(ctx, str(row["id"])))
 
 
 # --- evidence_expiry_scan -------------------------------------------------------------------
