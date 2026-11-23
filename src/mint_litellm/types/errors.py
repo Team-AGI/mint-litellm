@@ -142,8 +142,11 @@ class MintError(BaseModel):
             raise ValueError("retry_safe requires dispatch_state=not_dispatched")
         return self
 
-    def detail(self) -> str:
-        """``HTTPException.detail``에 넣을 JSON 문자열. 키 순서가 고정되어 있다."""
+    def detail(self, human_first: bool = False) -> str:
+        """``HTTPException.detail``에 넣을 JSON 문자열. 키 순서가 고정되어 있다.
+
+        ``human_first``는 MCP 도구 오류 본문용: 하네스가 앞부분만 보여 주므로 안내 문장을 첫 줄에
+        두고 JSON을 다음 줄에 둔다."""
         body = {
             "code": self.code,
             "dispatch_state": self.dispatch_state.value,
@@ -162,14 +165,15 @@ class MintError(BaseModel):
             body["retry_after"] = self.retry_after
         if self.confirm_link is not None:
             body["confirm_link"] = self.confirm_link
-        return json.dumps(
-            body,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
+        text = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+        if human_first and self.guidance:
+            return f"{self.guidance}\n{text}"
+        return text
 
     @classmethod
     def from_detail(cls, detail: str) -> Self:
+        if not detail.startswith("{"):  # 안내 첫 줄 + JSON
+            detail = detail.split("\n", 1)[-1]
         return cls.model_validate_json(detail)
 
     def as_block(self) -> "BlockResponse":

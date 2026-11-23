@@ -1192,3 +1192,12 @@ def test_the_output_guardrail_is_required_where_the_result_stage_exists():
     assert modes_failed(native, callbacks=[LOGGER, native, GUARDRAIL]) is True
     # 결과 단계가 없는 LiteLLM(등급 C)에는 이 가드레일이 없어도 된다.
     assert modes_failed(None, result_guardrail=False) is False
+
+
+def test_a_managed_local_server_absent_from_the_registry_is_not_a_mismatch(tmp_path):
+    runtime, store, _, _ = make_runtime(
+        tmp_path, v=view(registry=[]), controlled=[local(contract_status="managed")]
+    )
+    asyncio.run(runtime.run_checks())
+    assert runtime.last_mismatches == []
+    assert store.of_kind("server_identity_mismatch_observed") == []

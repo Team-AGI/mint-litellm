@@ -271,7 +271,9 @@ class TestGuardrailJudgment:
             pre(runtime.guardrail, synthesized(logging_obj()))
         detail = raised.value.detail
         assert isinstance(detail, str)
-        assert set(json.loads(detail)) == {
+        guidance, body = detail.split(chr(10), 1)  # 첫 줄은 사람 문장, 다음 줄이 JSON
+        assert guidance and not guidance.startswith("{")
+        assert set(json.loads(body)) == {
             "code", "dispatch_state", "retry_safe", "reference", "guidance"
         }
 
