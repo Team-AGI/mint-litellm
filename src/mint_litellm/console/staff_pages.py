@@ -46,7 +46,7 @@ from mint_litellm.control.db.connection import connect, fetchall, fetchone
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.litellm_admin import LiteLLMError
 from mint_litellm.control.services import console_sessions, reads, staff, staff_intakes
-from mint_litellm.endpoint.kit_build import HARNESSES, build_kit
+from mint_litellm.endpoint.kit_build import HARNESSES, build_kit, kit_version
 from mint_litellm.plugin.snapshot import WINDOW_MAX_USES
 from mint_litellm.types.ids import new_uuid7
 
@@ -693,6 +693,9 @@ def endpoint_page(request: Request, actor: StaffActor, error=None, status=200, c
     ctx = {
         "rows": rows, "active": any(r["state"] != "revoked" for r in rows), "error": error,
         "platform": "windows" if windows else "linux", "commands": commands,
+        # 서버 판본보다 뒤처진 단말: 고정 공개 키가 없는 옛 설치는 한 번 다시 설치해야 한다.
+        "behind": bool(rows) and rows[0]["state"] in ("managed", "user")
+        and rows[0]["kit_version"] != kit_version(),
     }
     return staff_render(request, "staff_endpoint.html", ctx, actor, status)
 

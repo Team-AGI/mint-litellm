@@ -35,7 +35,7 @@ from pydantic import (
 )
 
 from mint_litellm.compat.litellm_1_106 import HookData
-from mint_litellm.endpoint import intake_text
+from mint_litellm.endpoint import intake_text, kit_sign
 from mint_litellm.endpoint.routes import (
     DECIDE_PATH,
     INSPECTION_RESULT_PATH,
@@ -378,6 +378,9 @@ class ReportBody(BaseModel):
     capabilities: list[Annotated[str, Field(min_length=1, max_length=32)]] | None = Field(
         default=None, max_length=8
     )
+    # 단말이 서명된 키트 갱신을 받을 수 있는가(고정 공개 키가 있다). 직전 갱신 실패 사유(있을 때만).
+    kit_update: bool | None = None
+    update_error: str | None = Field(default=None, max_length=80)
 
     @model_validator(mode="after")
     def _mode_matches_action(self) -> ReportBody:
@@ -631,6 +634,13 @@ def make_router(
         except Exception:
             desired = None  # 마찬가지로 못 만들면 싣지 않는다(단말은 설정을 바꾸지 않는다)
         answer: dict[str, Any] = {"recorded": True, "renewed": outcome == "renewed"}
+        if body.update_error:
+            log.warning("kit self-update failed on a device: %s", body.update_error)
+        bundle = kit_sign.update_bundle()
+        if bundle:
+            answer["kit_version"] = bundle["version"]
+            if body.kit_update and body.kit_version != bundle["version"]:
+                answer["kit_update"] = bundle  # 판본이 다른 단말만 서명된 묶음을 받는다
         if "inspect" in (body.capabilities or ()):
             try:
                 answer["inspections"] = [

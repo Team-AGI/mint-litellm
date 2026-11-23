@@ -19,6 +19,7 @@
 {{ m.copy_cmd(commands.windows) }}
 <p class="muted">한 번만 쓰고 15분 뒤 만료됩니다</p>
 {% endif %}
+{% if behind %}<p class="muted">한 번만 다시 설치하면 이후 자동 갱신됩니다</p>{% endif %}
 {% if rows %}
 <table><thead><tr><th>팀</th><th>설치 상태</th><th>도구 판본</th><th>MCP 서버</th><th>발급</th><th>마지막 보고</th></tr></thead><tbody>
 {% for r in rows %}<tr>
