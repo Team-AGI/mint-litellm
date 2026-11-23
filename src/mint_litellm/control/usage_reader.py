@@ -11,7 +11,7 @@ from typing import Any
 
 import psycopg
 
-from mint_litellm.control.db.connection import fetchall
+from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import ControlError
 
 USAGE_ROUTES = ("/team/daily/activity", "/user/daily/activity")
@@ -224,6 +224,21 @@ def build(conn, instance, admin, names: dict, period: str, user: str | None = No
     for r in report["users"]:  # 사용자 번호 대신 이메일(없으면 번호)
         r["name"] = emails.get(r["name"], r["name"])
     return {"period": period, **report}
+
+
+def has_response(conn: psycopg.Connection, instance: str, server_id: str) -> bool:
+    """이 서버에서 성공 응답이 돌아온 호출이 있는지(허용만 되고 응답이 없던 호출은 세지 않는다)."""
+    return fetchone(
+        conn,
+        "SELECT 1 FROM mint.events r JOIN mint.events d ON d.instance_id = r.instance_id"
+        " AND d.invocation_id = r.invocation_id AND d.attempt_id = r.attempt_id"
+        " AND d.kind = 'decision_evaluated'"
+        " WHERE r.instance_id = %s AND r.kind = 'call_response_received'"
+        " AND COALESCE(r.payload->>'outcome', 'success') = 'success'"
+        " AND COALESCE(r.payload->>'is_error', 'false') <> 'true'"
+        " AND COALESCE(d.payload->>'resolved_server_id', d.payload->>'server_id') = %s LIMIT 1",
+        (instance, server_id),
+    ) is not None
 
 
 def read_tools(conn: psycopg.Connection, instance: str, server_id: str) -> list[dict]:

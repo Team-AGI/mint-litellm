@@ -566,7 +566,8 @@ def intake_page(
     why = labels.pick(labels.CHECK_REASON, bad["reason_code"]) if bad else ""
     lost = bad and not tools and not seen
     cause = f"검사로 도구 목록을 받지 못했습니다 · {why}" if lost else None
-    answered = any(t["calls"] > t["blocked"] for t in seen)  # 응답이 돌아온 호출만
+    answered = approved and usage_reader.has_response(  # 성공 응답이 돌아온 호출만
+        actor.conn, actor.instance, intake["server_id"])
     refused = next((t for t in seen if t["blocked"]), None)
     failure = ("discovered", why) if lost else None
     if refused and not answered and not lost:
