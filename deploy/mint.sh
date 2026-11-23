@@ -415,6 +415,8 @@ register_heal() {
         if [ "$HEAL_CHANGED" -eq 1 ]; then
             systemctl --user daemon-reload < /dev/null || true
             systemctl --user enable --now "$HEAL_ID.timer" < /dev/null || true
+            # 로그아웃 뒤에도 타이머가 돌게 한다(자기 사용자는 sudo 없이 된다).
+            loginctl enable-linger "$(id -un)" < /dev/null >/dev/null 2>&1 || true
         fi
         return 0
     fi
