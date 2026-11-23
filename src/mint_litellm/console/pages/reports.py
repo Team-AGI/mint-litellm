@@ -8,7 +8,9 @@ from fastapi.responses import Response
 
 from mint_litellm.console import audit_report, setup_state
 from mint_litellm.console.core import Actor, api_actor, page_actor, public, require_csrf
+from mint_litellm.console.pages.common import server_names
 from mint_litellm.console.templating import render
+from mint_litellm.control import usage_reader
 
 router = APIRouter(dependencies=[Depends(require_csrf)])
 api_router = APIRouter(dependencies=[Depends(require_csrf)])
@@ -66,3 +68,25 @@ def audit_api(
             headers={"Content-Disposition": f'attachment; filename="{name}"'},
         )
     return public(report)
+
+
+def usage_view(admin, conn, instance, period: str, base: str, user: str | None = None) -> dict:
+    """사용량 화면 공통 자료. 기간 이름이 틀리면 기본 기간으로 본다."""
+    period = period if period in usage_reader.PERIODS else usage_reader.DEFAULT_PERIOD
+    report = usage_reader.build(conn, instance, admin, server_names(admin), period, user)
+    return {
+        "report": report,
+        "bars": {"kind": "bars", "horizontal": True, **report["bars"]},
+        "scoped": user is not None,
+        "choices": [
+            (text, f"{base}?period={key}", key == period)
+            for key, (text, _) in usage_reader.PERIODS.items() if key != "month"
+        ],
+    }
+
+
+@router.get("/reports/usage")
+def usage_page(request: Request, period: str = "", actor: Actor = Depends(page_actor)):
+    ctx = usage_view(actor.config.litellm_admin, actor.conn, actor.instance, period,
+                     "/reports/usage")
+    return render(request, "usage.html", ctx, actor=actor)

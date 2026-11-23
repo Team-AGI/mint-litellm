@@ -575,6 +575,15 @@ def my_approvals_api(actor: StaffActor = Depends(staff_actor)):
     return {"items": reads.jsonable([{k: r[k] for k in keep} for r in my_approvals(actor)])}
 
 
+@router.get("/staff/usage")
+def usage(request: Request, period: str = "", actor: StaffActor = Depends(staff_actor)):
+    from mint_litellm.console.pages.reports import usage_view
+
+    ctx = usage_view(actor.config.litellm_admin, actor.sctx.control, actor.sctx.instance_id,
+                     period, "/staff/usage", actor.user_id)
+    return staff_render(request, "staff_usage.html", ctx, actor)
+
+
 # --- 14 단말 설치 -----------------------------------------------------------------------------
 
 

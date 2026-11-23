@@ -7,6 +7,9 @@
 <div class="cards">
 {% for c in cards %}{{ m.kpi(c.label, c.value, c.href, c.note, c.level, c.trend) }}{% endfor %}
 </div>
+<div class="cards">
+{% for c in usage_cards %}{{ m.kpi(c.label, c.value, c.href, c.note, c.level, c.trend) }}{% endfor %}
+</div>
 <div class="grid">
 {{ a.panel('결정 추이', trend, trend.labels | length and trend_has_data) }}
 {{ a.panel('차단 사유', reasons, reasons['items'] | length) }}
