@@ -77,7 +77,7 @@ def _forms(text: str) -> list[str]:
     return forms
 
 
-def _urls(text: str) -> Iterable[str]:
+def _urls(text: str) -> Iterable[tuple[str, str]]:
     """``scheme:`` 뒤에 슬래시나 역슬래시가 하나 이상 오는 곳마다 호스트를 낸다.
 
     파싱 실패는 빈 문자열(알 수 없음)이다. 역슬래시는 슬래시로 읽는다. 한 글자 스킴은 드라이브
@@ -104,9 +104,10 @@ def _urls(text: str) -> Iterable[str]:
                 continue
             seen = authority
             try:
-                yield (urlsplit("//" + authority).hostname or "").lower().rstrip(".")
+                host = (urlsplit("//" + authority).hostname or "").lower().rstrip(".")
+                yield text[i:at].lower(), host
             except ValueError:
-                yield ""
+                yield text[i:at].lower(), ""
 
 
 def _loose_ipv4(host: str) -> ipaddress.IPv4Address | None:
@@ -178,7 +179,7 @@ def _traversal(text: str, allowed_paths: Collection[str], unrestricted: bool) ->
         flat = variant.replace("\\", "/")
         if ".." in flat.split("/"):
             return True
-        # 허용 경로가 없으면 절대 경로는 모두 범위 밖이다. 제한 없음은 승인에 명시한 경우뿐이다.
+        # 제한된 경우 절대 경로는 지정된 폴더 안이어야 한다.
         if not unrestricted and _is_absolute(variant) and "://" not in variant:
             path = posixpath.normpath(flat)
             if not any(path == a or path.startswith(a.rstrip("/") + "/") for a in allowed_paths):
@@ -217,6 +218,7 @@ def compute_patterns(
     *,
     allowed_hosts: Collection[str] = (),
     allowed_networks: Collection[Network] = (),
+    https_unrestricted: bool = False,
     allowed_paths: Collection[str] = (),
     paths_unrestricted: bool = False,
     secret_markers: Collection[str] = (),
@@ -228,9 +230,10 @@ def compute_patterns(
         # 상한 검사를 모두 끝낸 뒤에 훑는다. 상한을 넘는 인자는 훑어 봐야 결과가 같다(모두 참).
         for raw in list(_strings(arguments)):
             for text in _forms(raw):
-                for host in _urls(text):
+                for scheme, host in _urls(text):
                     registered = registered_address(host, allowed_networks)
-                    if not (registered or host_allowed(host, allowed_hosts)):
+                    if not (registered or host_allowed(host, allowed_hosts)
+                            or (https_unrestricted and scheme == "https" and host)):
                         result["url_external"] = True
                     if not registered and _private_host(host, loose=True):
                         result["private_host"] = True

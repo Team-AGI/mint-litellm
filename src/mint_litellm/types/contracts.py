@@ -45,7 +45,7 @@ ACTION_SCORE: dict[ActionType, int] = {
 }
 
 # 기간 승인을 허용하지 않고 호출마다 정확한 1회 승인만 받는 행위. 삭제·외부 전송은 본인 확인
-# 기본값(plugin/policy/defaults.CONFIRM_ACTIONS)과 같고, 자격 접근은 행위 점수가 가장 높다.
+# 자격 접근은 행위 점수가 가장 높다.
 # 승인 도구 목록에 이 값이 있으면 서버의 모든 도구(앞으로 생기는 도구 포함)를 기본 허용한다.
 ALL_TOOLS = "*"
 

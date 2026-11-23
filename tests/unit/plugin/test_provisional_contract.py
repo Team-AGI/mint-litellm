@@ -61,9 +61,9 @@ def test_an_unmanaged_server_sends_the_provisional_contract(tmp_path):
     assert "patterns" in doc["arguments"]
 
 
-def test_a_provisional_delete_tool_needs_the_user_to_confirm(tmp_path):
+def test_a_provisional_delete_tool_needs_no_confirmation_by_default(tmp_path):
     doc, _ = sent(tmp_path, "delete_file", {"path": "a"})
-    assert doc["approval"]["conditions"]["require_user_confirmation"]["tools"] == ["delete_file"]
+    assert "require_user_confirmation" not in doc["approval"]["conditions"]
 
 
 def test_a_provisional_read_tool_needs_no_confirmation(tmp_path):

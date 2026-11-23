@@ -6,7 +6,6 @@ from plugin_helpers import NOW, approval, evaluator, harness, request, server_ro
 
 from mint_litellm.plugin.pipeline import evaluate_request
 from mint_litellm.plugin.policy.defaults import (
-    CONFIRM_PURPOSE,
     CONSENT_FALLBACK,
     effective_conditions,
 )
@@ -57,12 +56,10 @@ def test_allowed_keys_written_in_the_approval_are_kept(tmp_path):
     assert doc["approval"]["conditions"]["allowed_arg_keys"] == ["q"]
 
 
-def test_a_delete_tool_always_needs_the_user_to_confirm(tmp_path):
-    doc = sent(tmp_path, contract=contract(action_type="delete"))
-    assert doc["tool"]["action_type"] == "delete"
-    assert doc["approval"]["conditions"]["require_user_confirmation"] == {
-        "tools": ["search"], "purpose": CONFIRM_PURPOSE, "display_fields": [],
-    }
+def test_delete_and_external_send_do_not_add_confirmation(tmp_path):
+    for action in ("delete", "external_send"):
+        doc = sent(tmp_path, contract=contract(action_type=action))
+        assert "require_user_confirmation" not in doc["approval"]["conditions"]
 
 
 def test_a_read_tool_needs_no_confirmation(tmp_path):
@@ -92,7 +89,7 @@ def test_the_pure_function_never_changes_what_the_approval_wrote():
     )
     assert result["require_consent"] == "내 목적"
     assert result["require_user_confirmation"] == {
-        "tools": ["other", "send"], "purpose": "직접", "display_fields": ["to"]}
+        "tools": ["other"], "purpose": "직접", "display_fields": ["to"]}
     assert base["require_user_confirmation"]["tools"] == ["other"]
 
 
