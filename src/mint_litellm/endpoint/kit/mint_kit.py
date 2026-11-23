@@ -89,6 +89,10 @@ FAILED_DIR = "start-failed"  # 실행기가 남긴 서버별 시작 실패 사�
 TOOLS_DIR = "tools"  # 실행기가 본 서버별 도구 목록(이름·설명·입력 정의)
 KEY_REJECTED = "key_rejected"  # 서버가 키를 거절(401·403)했다는 표시. check가 문제로 보인다.
 KEY_REJECTED_TEXT = "한 줄 설치 명령을 다시 붙여 넣으십시오 (mint relink 주소)"
+UPDATE_NOTE = "update_note"  # 자체 갱신 표시: 「needed」(고정 공개 키 없음) 또는 실패 사유
+UPDATE_NEEDED_TEXT = "한 번만 다시 설치하면 이후 자동 갱신됩니다"
+UPDATE_FILES = (("mint_agent.py", 0o755), ("mint_kit.py", 0o644))  # 이름 -> 설치 권한
+MAX_REPLY = 2 * 1024 * 1024  # 보고 응답에 서명된 갱신 묶음이 실릴 수 있다
 last_http_error: list[int] = []  # 마지막 보고가 받은 HTTP 오류 코드(없으면 빈 목록)
 TOOLS_SENT = "tools_sent.json"  # 서버 -> 마지막으로 보고한 목록의 해시
 MAX_TOOL_LISTS = 4  # 보고 한 번에 싣는 서버 수(나머지는 다음 보고)
@@ -132,6 +136,103 @@ def write_atomic(path: Path, data: bytes, mode: int, owner: tuple[int, int] | No
             os.unlink(name)
 
 
+_P = 2**255 - 19
+_Q = 2**252 + 27742317777372353535851937790883648493
+_D = -121665 * pow(121666, _P - 2, _P) % _P
+_I = pow(2, (_P - 1) // 4, _P)
+
+
+def _ed_add(a: tuple, b: tuple) -> tuple:
+    x1, y1, z1, t1 = a
+    x2, y2, z2, t2 = b
+    p, q = (y1 - x1) * (y2 - x2) % _P, (y1 + x1) * (y2 + x2) % _P
+    c, d = 2 * t1 * t2 * _D % _P, 2 * z1 * z2 % _P
+    e, f, g, h = q - p, d - c, d + c, q + p
+    return (e * f % _P, g * h % _P, f * g % _P, e * h % _P)
+
+
+def _ed_mul(s: int, point: tuple) -> tuple:
+    out = (0, 1, 1, 0)
+    while s:
+        if s & 1:
+            out = _ed_add(out, point)
+        point = _ed_add(point, point)
+        s >>= 1
+    return out
+
+
+def _ed_x(y: int, sign: int) -> int | None:
+    xx = (y * y - 1) * pow(_D * y * y + 1, _P - 2, _P) % _P
+    x = pow(xx, (_P + 3) // 8, _P)
+    if (x * x - xx) % _P:
+        x = x * _I % _P
+    if (x * x - xx) % _P or (x == 0 and sign):
+        return None
+    return _P - x if x & 1 != sign else x
+
+
+def _ed_decode(raw: bytes) -> tuple | None:
+    y = int.from_bytes(raw, "little")
+    sign, y = y >> 255, y & ((1 << 255) - 1)
+    x = _ed_x(y, sign) if y < _P else None
+    return None if x is None else (x, y, 1, x * y % _P)
+
+
+_ED_BASE = (lambda gy: (_ed_x(gy, 0), gy, 1, _ed_x(gy, 0) * gy % _P))(4 * pow(5, _P - 2, _P) % _P)
+
+
+def ed25519_verify(public: bytes, message: bytes, signature: bytes) -> bool:
+    """Ed25519 서명 검증(RFC 8032, 표준 라이브러리만). 형식이 틀리면 거짓."""
+    if len(public) != 32 or len(signature) != 64:
+        return False
+    a, r = _ed_decode(public), _ed_decode(signature[:32])
+    s = int.from_bytes(signature[32:], "little")
+    if a is None or r is None or s >= _Q:
+        return False
+    k = int.from_bytes(hashlib.sha512(signature[:32] + public + message).digest(), "little") % _Q
+    left, right = _ed_mul(s, _ED_BASE), _ed_add(r, _ed_mul(k, a))
+    return (left[0] * right[2] - right[0] * left[2]) % _P == 0 and (
+        left[1] * right[2] - right[1] * left[2]
+    ) % _P == 0
+
+
+def update_manifest(version: str, digests: dict) -> bytes:
+    """서버가 서명한 글을 다시 만든다(판본과 파일 이름·해시, 이름순)."""
+    lines = [f"mint-kit-update-v1 {version}"] + [f"{n} {digests[n]}" for n in sorted(digests)]
+    return NL.join(lines).encode()
+
+
+def verify_update(public_hex: str, update: object) -> tuple[str, dict[str, bytes]] | str:
+    """서명된 갱신 묶음을 고정 공개 키로 검증한다. 통과하면 (판본, 파일들), 아니면 실패 사유."""
+    import base64
+    import zlib
+
+    try:
+        files = update["files"]  # type: ignore[index]
+        version = update["version"]  # type: ignore[index]
+        signature = bytes.fromhex(update["sig"])  # type: ignore[index]
+        if not isinstance(version, str) or set(files) != {n for n, _ in UPDATE_FILES}:
+            return "bad_bundle"
+        data: dict[str, bytes] = {}
+        for name, packed in files.items():
+            decoder = zlib.decompressobj()
+            data[name] = decoder.decompress(base64.b64decode(packed, validate=True), MAX_REPLY * 4)
+            if decoder.unconsumed_tail:
+                return "too_large"
+        public = bytes.fromhex(public_hex)
+    except (TypeError, KeyError, ValueError, zlib.error):
+        return "bad_bundle"
+    digests = {name: sha256_bytes(raw) for name, raw in data.items()}
+    if not ed25519_verify(public, update_manifest(version, digests), signature):
+        return "bad_signature"
+    for name, raw in data.items():
+        try:
+            compile(raw, name, "exec")
+        except (SyntaxError, ValueError):
+            return "bad_code"
+    return version, data
+
+
 def post(url: str, key: str, payload: dict, ca_file: str | None) -> dict | None:
     """보고를 보내고 응답 본문(JSON 객체)을 돌려준다. 닿지 못했거나 거절되면 None."""
     import ssl
@@ -149,7 +250,7 @@ def post(url: str, key: str, payload: dict, ca_file: str | None) -> dict | None:
             if reply.status != 200:
                 return None
             try:
-                answer = json.loads(reply.read(65536))
+                answer = json.loads(reply.read(MAX_REPLY))
             except ValueError:
                 answer = None
             return answer if isinstance(answer, dict) else {"recorded": True}
@@ -2564,6 +2665,10 @@ class Kit:
         }
         if installed:
             payload["capabilities"] = ["inspect"]
+            if self.config.get("update_key"):
+                payload["kit_update"] = True  # 서명된 프로그램 갱신을 받을 수 있다
+            if self.update_error:
+                payload["update_error"] = self.update_error[:80]
             versions = self.stored_versions()
             if versions:
                 payload["decision_versions"] = versions
@@ -2596,6 +2701,67 @@ class Kit:
             state.pop("pending_removed", None)
             self.save_state(state)
         return bool(answer)
+
+    update_error: str | None = None  # 직전 자체 갱신이 실패한 사유(다음 보고에 싣는다)
+
+    def apply_update(self, folder: Path, state: dict, update: object) -> str | None:
+        """서명 검증을 통과한 묶음으로 설치된 프로그램 파일을 바꾼다. 실패하면 사유(옛 코드 유지).
+
+        모든 새 파일을 임시 파일로 먼저 쓴 뒤에 이름을 바꿔 넣고 ``kit.json``의 판본은 맨 끝에
+        바꾼다(중간에 멈추면 판본이 옛것이라 다음 보고가 다시 받는다). 새 코드는 다음 주기부터 돈다.
+        """
+        public = self.config.get("update_key")
+        if not public:
+            return "no_key"
+        checked = verify_update(public, update)
+        if isinstance(checked, str):
+            return checked
+        version, files = checked
+        if not os.access(folder, os.W_OK):
+            return "not_writable"
+        try:
+            config = json.loads((folder / "kit.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return "no_config"
+        config["kit_version"] = version
+        staged: list[tuple[str, Path]] = []  # (임시 파일, 최종 경로)
+        sums: dict[str, str] = {}
+        try:
+            for name, mode in UPDATE_FILES:
+                staged.append((self.stage(folder, files[name], mode), folder / name))
+                sums[f"{self.logical_programs}/{name}"] = sha256_bytes(files[name])
+            body = json.dumps(config, indent=1).encode()
+            staged.append((self.stage(folder, body, 0o644), folder / "kit.json"))
+            sums[f"{self.logical_programs}/kit.json"] = sha256_bytes(body)
+            while staged:
+                os.replace(staged[0][0], staged[0][1])
+                staged.pop(0)
+        except OSError:
+            return "write_failed"
+        finally:
+            for temp, _ in staged:
+                try:
+                    os.unlink(temp)
+                except OSError:
+                    pass
+        state["files"].update(sums)
+        state["kit_version"] = version
+        self.config["kit_version"] = version
+        self.save_state(state)
+        return None
+
+    @staticmethod
+    def stage(folder: Path, data: bytes, mode: int) -> str:
+        """같은 폴더의 임시 파일에 내용을 써 둔다(이름 바꾸기 전까지 설치된 파일은 그대로)."""
+        fd, name = tempfile.mkstemp(dir=folder, prefix=".mint-upd-")
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(data)
+            os.chmod(name, mode)
+        except OSError:
+            os.unlink(name)
+            raise
+        return name
 
     def hook_trust(self, state: dict) -> str | None:
         """사용자 수준 Codex 설치의 훅을 Codex가 신뢰하는지(설정 파일 추정). 모르면 None."""
@@ -2638,6 +2804,13 @@ class Kit:
             )
         if any((d / KEY_REJECTED).exists() for d in (self.home / STATE_REL, self.programs)):
             problems.append(KEY_REJECTED_TEXT)
+        for folder in (self.home / STATE_REL, self.programs):
+            try:
+                note = (folder / UPDATE_NOTE).read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+            problems.append(UPDATE_NEEDED_TEXT if note == "needed" else f"자동 갱신 실패: {note}")
+            break
         if state.get("mode") == "user":
             problems.append("사용자 수준 설치라 관리되지 않습니다. 관리자 권한으로 재설치하세요.")
         return {**state, "problems": problems, "hook_trust": trust}, problems
@@ -5084,7 +5257,11 @@ def report_installed(
                 fast = max(fast or 0.0, float(path.read_text()[:64]))
             except (OSError, ValueError):
                 pass
-        return {"last": last, "key": key, "fast": fast}
+        try:
+            note = (stamp.parent / UPDATE_NOTE).read_text(encoding="utf-8").strip()
+        except OSError:
+            note = ""
+        return {"last": last, "key": key, "fast": fast, "note": note}
 
     seen = run(read_side) or {}
     if (if_due or tick) and not report_due(
@@ -5112,6 +5289,8 @@ def report_installed(
     kit.config["key"] = key
     kit.run_as_user = run
     kit.system_mode = system
+    if seen.get("note") and seen["note"] != "needed":
+        kit.update_error = seen["note"]
     marker = stamp.parent / KEY_REJECTED
     if not kit.report(state, "installed"):
         run(lambda: stamp.unlink(missing_ok=True))  # 닿지 못했으면 다음 기회에 다시 보낸다.
@@ -5122,6 +5301,7 @@ def report_installed(
     retired = kit.answer.get("retired")
     names: list[str] = []
     changed = False
+    updated = self_update(kit, folder, state, stamp.parent / UPDATE_NOTE, run) == "updated"
     kit.drop_to = target
     if isinstance(retired, list):
         names = [n for n in retired if isinstance(n, str)][:MAX_PENDING]
@@ -5149,11 +5329,33 @@ def report_installed(
             fast_file.write_text(str(now() + FAST_WINDOW))
 
         run(write_fast)
-    if changed:
+    if changed or updated:
         kit.report(state, "installed")  # 지우거나 더한 것을 곧바로 알린다.
         if system and state.get("sync_task"):
             capture(["schtasks", "/Run", "/TN", state["sync_task"]])  # 사용자 Codex 설정을 맞춘다
     return 0
+
+
+def self_update(kit: Kit, folder: Path, state: dict, note: Path, run) -> str:
+    """보고 응답의 서버 판본이 다르면 서명된 묶음을 검증해 교체한다. 결과: updated·current·failed.
+
+    고정 공개 키가 없는 옛 설치는 바꾸지 않고 「다시 설치」 안내만 남긴다. 실패하면 옛 코드를
+    그대로 두고 사유만 기록한다(다음 보고에 실린다).
+    """
+    version = kit.answer.get("kit_version")
+    if not isinstance(version, str) or version == kit.config.get("kit_version"):
+        run(lambda: note.unlink(missing_ok=True))
+        return "current"
+    reason = (
+        kit.apply_update(folder, state, kit.answer.get("kit_update"))
+        if kit.config.get("update_key")
+        else "needed"
+    )
+    if reason is None:
+        run(lambda: note.unlink(missing_ok=True))
+        return "updated"
+    run(lambda: note.write_text(reason, encoding="utf-8"))
+    return "failed"
 
 
 def ours(item: object) -> bool:

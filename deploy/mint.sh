@@ -233,6 +233,11 @@ ensure_generated() {
             append_env "$name" "$(random_secret)"
         fi
     done
+    # 단말 키트 자동 갱신의 서명 키(Ed25519 씨앗). 설치 때 한 번 만들고 바꾸지 않는다(바꾸면 설치된 단말이 갱신을 거절한다).
+    if [ -z "$(env_value MINT_KIT_SIGNING_KEY)" ]; then
+        sed -i '/^MINT_KIT_SIGNING_KEY=/d' .env
+        append_env MINT_KIT_SIGNING_KEY "$(random_secret)"
+    fi
     # 설치 묶음이 단말에서 부르는 판정 주소. 비어 있으면 묶음이 컨테이너 안 주소를 적어 단말에서 쓸 수 없다.
     if [ -z "$(env_value MINT_ENDPOINT_PUBLIC_URL)" ]; then
         local lite_origin

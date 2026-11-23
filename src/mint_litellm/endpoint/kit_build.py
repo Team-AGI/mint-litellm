@@ -9,6 +9,7 @@ import json
 import tarfile
 import zipfile
 from collections.abc import Mapping, Sequence
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,12 @@ def _text(path: Path) -> bytes:
     return path.read_bytes().replace(b"\r\n", b"\n")
 
 
+def program_bytes(name: str) -> bytes:
+    """묶음의 프로그램 파일 내용(단말에 설치되는 것)."""
+    return next(_text(path) for n, path, _ in PROGRAMS if n == name)
+
+
+@lru_cache(maxsize=1)
 def kit_version() -> str:
     """묶음 프로그램 파일 내용의 해시. 사용자 키·서버 목록과 무관하다."""
     digest = hashlib.sha256()
@@ -75,6 +82,11 @@ def build_kit(
         "ca_pem": ca_pem,
         "servers": approved_contracts(documents),
     }
+    from mint_litellm.endpoint import kit_sign
+
+    update_key = kit_sign.public_key_hex()
+    if update_key:
+        config["update_key"] = update_key  # 단말이 갱신 묶음의 서명을 검증하는 고정 공개 키
     if allow_unsandboxed:
         config["allow_unsandboxed"] = True  # 관리형 단말이 격리 없이 서버를 시작해도 된다.
     if gateway_key:

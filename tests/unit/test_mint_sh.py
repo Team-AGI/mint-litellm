@@ -116,11 +116,13 @@ def test_first_run_generates_export_key_and_worker_passwords_once_with_private_e
     assert len(values["MINT_WORKER_DB_PASSWORD"]) >= 32
     assert len(values["MINT_REDIS_PASSWORD"]) >= 32
     assert values["MINT_STAFF_DB_PASSWORD"] == "keep-me"
+    signing = values["MINT_KIT_SIGNING_KEY"]
+    assert len(base64.urlsafe_b64decode(signing + "=" * (-len(signing) % 4))) == 32
     if os.name != "nt":
         assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
     run(tmp_path, env_file.read_text(encoding="utf-8"), "cli", "status")
     again = dict(ln.split("=", 1) for ln in env_file.read_text(encoding="utf-8").splitlines())
-    assert again["MINT_EXPORT_HMAC_KEY"] == key
+    assert again["MINT_EXPORT_HMAC_KEY"] == key and again["MINT_KIT_SIGNING_KEY"] == signing
 
 
 def test_up_hands_worker_and_staff_passwords_to_init_and_starts_the_worker(tmp_path):
