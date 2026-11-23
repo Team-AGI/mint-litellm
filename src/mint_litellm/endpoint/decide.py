@@ -608,6 +608,7 @@ def make_router(
                 local_mcp=_dump(body.local_mcp),
                 tool_lists=_dump(body.tool_lists),
                 hook_trust=body.hook_trust,
+                update_error=body.update_error,
             )
         except Exception as exc:
             log.exception("install report could not be stored")
@@ -652,8 +653,6 @@ def make_router(
         except Exception:
             desired = None  # 마찬가지로 못 만들면 싣지 않는다(단말은 설정을 바꾸지 않는다)
         answer: dict[str, Any] = {"recorded": True, "renewed": outcome == "renewed"}
-        if body.update_error:
-            log.warning("kit self-update failed on a device: %s", body.update_error)
         bundle = kit_sign.update_bundle()
         if bundle:
             answer["kit_version"] = bundle["version"]

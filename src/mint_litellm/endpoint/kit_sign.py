@@ -2,7 +2,10 @@
 
 서명 키 씨앗은 설치 때 한 번 만들어 ``.env``의 ``MINT_KIT_SIGNING_KEY``(base64url 32바이트)에
 둔다. 공개 키는 설치 묶음의 ``kit.json``에 들어가 단말에 고정된다. 단말의 검증 코드는
-``kit/mint_kit.py``에 따로 있다(단말은 이 패키지를 쓸 수 없다). 키 회전·되돌리기는 없다.
+``kit/mint_kit.py``에 따로 있다(단말은 이 패키지를 쓸 수 없다). 서명 대상에는 단조 증가 판본 번호
+(``serial``)가 들어가 단말은 현재보다 낮은 묶음을 거절한다. 키를 돌릴 때는 새 키를
+``MINT_KIT_SIGNING_KEY``에, 옛 키를 ``MINT_KIT_SIGNING_KEY_PREVIOUS``에 두면 묶음에 옛 키로 서명한
+새 공개 키 공지가 실려 단말이 새 키를 목록에 더한다.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ from functools import lru_cache
 from mint_litellm.endpoint import kit_build
 
 ENV = "MINT_KIT_SIGNING_KEY"
+ENV_PREVIOUS = "MINT_KIT_SIGNING_KEY_PREVIOUS"
 UPDATE_FILES = ("mint_agent.py", "mint_kit.py")  # 단말에 설치되는 프로그램 파일
 
 _P = 2**255 - 19
@@ -88,9 +92,21 @@ def manifest(version: str, digests: Mapping[str, str]) -> bytes:
     return "\n".join(lines).encode()
 
 
-def seed(env: Mapping[str, str] | None = None) -> bytes | None:
+def manifest_v2(version: str, serial: int, digests: Mapping[str, str]) -> bytes:
+    """판본 번호까지 묶은 서명 대상 글(되돌리기 방지)."""
+    lines = [f"mint-kit-update-v2 {version} {serial}"]
+    lines += [f"{n} {digests[n]}" for n in sorted(digests)]
+    return "\n".join(lines).encode()
+
+
+def key_notice(public: bytes) -> bytes:
+    """옛 키가 서명하는 「새 공개 키」 공지 글."""
+    return b"mint-kit-key-v1 " + public.hex().encode()
+
+
+def seed(env: Mapping[str, str] | None = None, name: str = ENV) -> bytes | None:
     """환경의 서명 키 씨앗(32바이트). 없거나 잘못되면 None(갱신 기능이 꺼진다)."""
-    text = ((os.environ if env is None else env).get(ENV) or "").strip()
+    text = ((os.environ if env is None else env).get(name) or "").strip()
     try:
         raw = base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
     except ValueError:
@@ -104,17 +120,27 @@ def public_key_hex(env: Mapping[str, str] | None = None) -> str | None:
 
 
 @lru_cache(maxsize=4)
-def _bundle(key: bytes, version: str) -> dict:
+def _bundle(key: bytes, previous: bytes | None, version: str, serial: int) -> dict:
     files = {name: kit_build.program_bytes(name) for name in UPDATE_FILES}
     digests = {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}
-    return {
+    # sig: 새 규칙을 모르는 옛 단말용(회전 중이면 옛 키로). sig2: 판본 번호를 묶은 현재 서명.
+    bundle = {
         "version": version,
+        "serial": serial,
         "files": {n: base64.b64encode(zlib.compress(d, 9)).decode() for n, d in files.items()},
-        "sig": sign(key, manifest(version, digests)).hex(),
+        "sig": sign(previous or key, manifest(version, digests)).hex(),
+        "sig2": sign(key, manifest_v2(version, serial, digests)).hex(),
     }
+    if previous:
+        new_public = public_from_seed(key)
+        notice = sign(previous, key_notice(new_public)).hex()
+        bundle["keys"] = [{"pub": new_public.hex(), "sig": notice}]
+    return bundle
 
 
 def update_bundle(env: Mapping[str, str] | None = None) -> dict | None:
     """서명한 키트 프로그램 묶음(판본이 같으면 같은 결과를 재사용). 서명 키가 없으면 None."""
     key = seed(env)
-    return _bundle(key, kit_build.kit_version()) if key else None
+    if not key:
+        return None
+    return _bundle(key, seed(env, ENV_PREVIOUS), kit_build.kit_version(), kit_build.kit_serial())

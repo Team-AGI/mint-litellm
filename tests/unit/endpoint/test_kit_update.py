@@ -14,18 +14,26 @@ from mint_litellm.endpoint.kit_build import kit_version
 SEED = bytes(range(32))
 ENV = {kit_sign.ENV: base64.urlsafe_b64encode(SEED).decode().rstrip("=")}
 NEW_VERSION = "v-new"
+SERIAL = 4_000_000_000  # 설치된 묶음의 파일 시각 번호보다 크다
 NEW_AGENT = b"# new agent\nVALUE = 1\n"
 
 
-def make_bundle(seed=SEED, version=NEW_VERSION, **replace):
+def make_bundle(seed=SEED, version=NEW_VERSION, serial=SERIAL, announce=None, **replace):
     files = {"mint_agent.py": NEW_AGENT, "mint_kit.py": b"# new kit\nVALUE = 2\n"}
     files.update(replace)
     digests = {n: kit_module.sha256_bytes(d) for n, d in files.items()}
-    return {
+    bundle = {
         "version": version,
+        "serial": serial,
         "files": {n: base64.b64encode(zlib.compress(d)).decode() for n, d in files.items()},
         "sig": kit_sign.sign(seed, kit_sign.manifest(version, digests)).hex(),
+        "sig2": kit_sign.sign(seed, kit_sign.manifest_v2(version, serial, digests)).hex(),
     }
+    if announce:  # (옛 키 씨앗) 새 키가 서명한 묶음에 옛 키의 공지를 싣는다
+        new = kit_sign.public_from_seed(seed)
+        notice = kit_sign.sign(announce, kit_sign.key_notice(new)).hex()
+        bundle["keys"] = [{"pub": new.hex(), "sig": notice}]
+    return bundle
 
 
 def run_now(fn):
@@ -78,7 +86,8 @@ def test_the_server_signs_the_real_programs_once_per_version():
     assert bundle["version"] == kit_version() and kit_sign.update_bundle(ENV) is bundle
     assert kit_sign.update_bundle({}) is None
     public = kit_sign.public_from_seed(SEED).hex()
-    version, files = kit_module.verify_update(public, bundle)
+    version, files, serial, _ = kit_module.verify_update(public, bundle)
+    assert serial == bundle["serial"] > 0
     assert version == kit_version() and set(files) == {"mint_agent.py", "mint_kit.py"}
 
 
@@ -96,8 +105,44 @@ def test_verification_rejects_a_wrong_key_a_tampered_file_and_broken_code():
     broken = make_bundle(**{"mint_kit.py": b"def ("})
     assert kit_module.verify_update(public, broken) == "bad_code"
     assert kit_module.verify_update(public, None) == "bad_bundle"
-    empty = {"version": "v", "files": {}, "sig": ""}
+    empty = {"version": "v", "files": {}, "sig2": ""}
     assert kit_module.verify_update(public, empty) == "bad_bundle"
+
+
+def test_a_lower_serial_is_refused_and_an_equal_or_higher_one_is_taken():
+    public = kit_sign.public_from_seed(SEED).hex()
+    assert kit_module.verify_update(public, make_bundle(serial=999), 1000) == "rollback"
+    assert kit_module.verify_update(public, make_bundle(serial=1000), 1000)[2] == 1000
+    forged = {**make_bundle(serial=999), "serial": 5000}  # 번호만 올리면 서명이 깨진다
+    assert kit_module.verify_update(public, forged, 1000) == "bad_signature"
+
+
+def test_a_rotated_key_is_accepted_only_when_the_old_key_announced_it():
+    old_public = kit_sign.public_from_seed(SEED).hex()
+    new_seed = bytes(range(1, 33))
+    new_public = kit_sign.public_from_seed(new_seed).hex()
+    assert kit_module.verify_update(old_public, make_bundle(seed=new_seed)) == "bad_signature"
+    stranger = make_bundle(seed=new_seed, announce=bytes(32))
+    assert kit_module.verify_update([old_public], stranger) == "bad_signature"
+    good = make_bundle(seed=new_seed, announce=SEED)
+    *_, keys = kit_module.verify_update([old_public], good)
+    assert keys == [old_public, new_public]
+    assert kit_module.verify_update(keys, make_bundle(seed=new_seed))[0] == NEW_VERSION
+
+
+def test_the_server_bundle_during_rotation_works_for_old_and_new_devices():
+    new_seed = bytes(range(1, 33))
+    env = {kit_sign.ENV: base64.urlsafe_b64encode(new_seed).decode(),
+           kit_sign.ENV_PREVIOUS: ENV[kit_sign.ENV]}
+    bundle = kit_sign.update_bundle(env)
+    old = kit_sign.public_from_seed(SEED).hex()
+    *_, keys = kit_module.verify_update([old], bundle)
+    assert keys[-1] == kit_sign.public_from_seed(new_seed).hex()
+    raw = {n: zlib.decompress(base64.b64decode(f)) for n, f in bundle["files"].items()}
+    digests = {n: kit_module.sha256_bytes(d) for n, d in raw.items()}
+    assert kit_module.ed25519_verify(  # 새 규칙을 모르는 옛 단말은 옛 키의 sig로 받는다
+        bytes.fromhex(old), kit_module.update_manifest(bundle["version"], digests),
+        bytes.fromhex(bundle["sig"]))
 
 
 def test_a_good_update_replaces_the_programs_and_the_version_and_leaves_no_temp_files(installed):
@@ -107,12 +152,21 @@ def test_a_good_update_replaces_the_programs_and_the_version_and_leaves_no_temp_
     assert (programs / "mint_kit.py").read_bytes() == b"# new kit\nVALUE = 2\n"
     config = json.loads((programs / "kit.json").read_text())
     assert config["kit_version"] == NEW_VERSION and config["update_key"]
+    assert config["kit_serial"] == SERIAL and config["update_keys"] == [config["update_key"]]
     assert all(not p.name.startswith(".mint-upd-") for p in programs.iterdir())
     saved = kit.load_state()
     assert saved["kit_version"] == NEW_VERSION
     assert saved["files"][f"{kit.logical_programs}/mint_agent.py"] == kit_module.sha256_bytes(
         NEW_AGENT
     )
+
+
+def test_an_installed_kit_refuses_an_older_bundle(installed):
+    kit, programs, state = installed
+    kit.config["kit_serial"] = 3000
+    before = snapshot(programs)
+    assert kit.apply_update(programs, state, make_bundle(serial=2999)) == "rollback"
+    assert snapshot(programs) == before
 
 
 def test_a_failed_check_keeps_every_old_file_byte_for_byte(installed):

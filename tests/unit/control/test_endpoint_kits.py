@@ -134,7 +134,8 @@ def test_only_the_report_columns_can_change_and_a_report_needs_its_time(conn):
     conn.execute("SET LOCAL ROLE mint_plugin")
     updated = conn.execute(
         "UPDATE mint.endpoint_installs SET install_mode = 'user', kit_version = 'k',"
-        " mcp_servers = '[]'::jsonb, reported_at = now() WHERE key_token = %s", (token(key),)
+        " mcp_servers = '[]'::jsonb, update_error = 'rollback', reported_at = now()"
+        " WHERE key_token = %s", (token(key),)
     )
     assert updated.rowcount == 1
     with pytest.raises(errors.InsufficientPrivilege), conn.transaction():
@@ -144,6 +145,7 @@ def test_only_the_report_columns_can_change_and_a_report_needs_its_time(conn):
                      " key_alias, issued_by) VALUES ('inst1', 't', 'u', 'mint-kit-y', 'u')")
     conn.execute("RESET ROLE")
     assert [r["state"] for r in endpoint_kits.installs(conn, INSTANCE)] == ["user"]
+    assert endpoint_kits.installs(conn, INSTANCE)[0]["update_error"] == "rollback"
 
 
 @pytest.fixture
@@ -285,6 +287,36 @@ def test_the_unmanaged_mcp_list_keeps_first_seen_and_is_replaced_by_the_next_rep
     assert {i["name"] for i in stored()} == {"a", "c"}
     asyncio.run(report(local_mcp=[]))
     assert stored() == []
+
+
+def test_a_reported_update_failure_is_stored_and_the_next_clean_report_clears_it(
+    fresh_db, plugin_dsn
+):
+    pytest.importorskip("psycopg_pool")
+    with psycopg.connect(fresh_db) as admin:
+        admin.execute(
+            "INSERT INTO mint.endpoint_installs (instance_id, key_token, user_id, key_alias,"
+            " issued_by) VALUES (%s, 'tok-a', 'u1', 'mint-kit-a', 'u1')", (INSTANCE,))
+
+    async def report(**extra):
+        database = PluginDatabase(plugin_dsn)
+        try:
+            return await database.report_install(
+                INSTANCE, "tok-a", mode="managed", kit_version="k", claude_version=None,
+                mcp_servers=[], **extra)
+        finally:
+            await database.close()
+
+    def stored():
+        with psycopg.connect(fresh_db) as admin:
+            return admin.execute(
+                "SELECT update_error FROM mint.endpoint_installs WHERE key_token = 'tok-a'"
+            ).fetchone()[0]
+
+    asyncio.run(report(update_error="rollback"))
+    assert stored() == "rollback"
+    asyncio.run(report())
+    assert stored() is None
 
 
 def test_the_inventory_counts_the_endpoints_that_share_an_entry_and_skips_dead_installs(conn):

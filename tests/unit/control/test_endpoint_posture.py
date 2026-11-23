@@ -147,6 +147,16 @@ def test_the_catalog_names_the_policies_these_alerts_report():
     assert by_id["endpoint_egress_refused"]["reference_policies"] == ["POL-O-12", "POL-O-13"]
     assert "POL-D-04" in by_id["endpoint_silent"]["reference_policies"]
     assert by_id["endpoint_key_expiring"]["reference_policies"] == ["POL-E-06"]
+    assert by_id["endpoint_update_failed"]["reference_policies"] == ["POL-E-06"]
+
+
+def test_a_failed_self_update_opens_an_alert_and_a_clean_report_closes_it():
+    failed = endpoint_posture.findings([{**row("managed"), "update_error": "rollback"}], {})
+    assert failed["endpoint_update_failed:mint-kit-a"] == (
+        "endpoint_update_failed", "medium",
+        {"user_id": "u1", "key_alias": "mint-kit-a", "reason": "rollback"},
+    )
+    assert not endpoint_posture.findings([{**row("managed"), "update_error": None}], {})
 
 
 NOW = datetime(2030, 1, 10, 12, tzinfo=UTC)
