@@ -454,17 +454,32 @@ DELIVERY_STAGES = (
 )
 
 
-def delivery_progress(receipts: list[dict]) -> list[tuple[str, str]]:
-    """적용 7단계. 최신 결정 판본의 기록이 있는 단계는 완료, 첫 빈 단계는 대기, 나머지는 꺼짐."""
-    if not receipts:
+def delivery_progress(
+    receipts: list[dict], *, local: bool = False, called: bool = False,
+    failure: tuple[str, str] | None = None,
+) -> list[tuple[str, str]]:
+    """적용 7단계. 단조: 뒤 단계 증거(영수증·호출 기록)가 있으면 앞 단계는 완료.
+    로컬 서버는 LiteLLM 등록을 건너뛰고, 실패 단계는 사유와 함께 오류로 보인다."""
+    if not receipts and not called:
         return []
-    latest = max(r["decision_version"] for r in receipts)
+    latest = max((r["decision_version"] for r in receipts), default=0)
     done = {r["stage"] for r in receipts if r["decision_version"] == latest}
+    order = [stage for stage, _ in DELIVERY_STAGES]
+    reached = max((order.index(x) for x in done if x in order), default=-1)
+    if called:
+        reached = len(order) - 1  # 첫 성공 호출이 있으면 단말 보고가 없어도 거기까지 왔다
+    if failure and failure[0] in order and failure[0] not in done and not called:
+        reached = max(reached, order.index(failure[0]) - 1)  # 실패한 단계 앞은 지났다
     waiting = False
     out = []
-    for stage, text in DELIVERY_STAGES:
-        if stage in done:
+    for i, (stage, text) in enumerate(DELIVERY_STAGES):
+        if i <= reached and not (local and stage == "registry_active"):
             out.append(("ok", text))
+        elif local and stage == "registry_active":
+            out.append(("off", f"{text} 해당 없음"))
+        elif failure and failure[0] == stage and not called and not waiting:
+            waiting = True
+            out.append(("error", f"{text} 실패 · {failure[1]}"))
         elif not waiting:
             waiting = True
             out.append(("wait", f"{text} 대기"))
@@ -535,7 +550,6 @@ def intake_page(
         next_step = "다른 승인자의 확인"
     approved = intake["status"] == "decided" and intake["decision"] in ("approved", "exception")
     receipts = intake_service.delivery_receipts(actor.ctx, intake_id) if approved else []
-    delivery = delivery_progress(receipts)
     seen = (
         usage_reader.read_tools(actor.conn, actor.instance, intake["server_id"]) if approved else []
     )
@@ -544,6 +558,10 @@ def intake_page(
     why = labels.pick(labels.CHECK_REASON, bad["reason_code"]) if bad else ""
     lost = bad and not tools and not seen
     cause = f"검사로 도구 목록을 받지 못했습니다 · {why}" if lost else None
+    delivery = delivery_progress(
+        receipts, local=intake["source"] == "endpoint", called=any(t["calls"] for t in seen),
+        failure=("discovered", why) if lost else None,
+    )
     inspections = (
         inspection_service.for_intake(actor.conn, actor.instance, intake["id"]) if local else []
     )

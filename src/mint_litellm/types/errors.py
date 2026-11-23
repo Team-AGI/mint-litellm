@@ -31,6 +31,12 @@ BLOCKED_GUIDANCE = (
     "정책상 차단되었으니 같은 호출을 재시도하지 마십시오. 다른 방법을 쓰거나 관리자에게 "
     "요청하십시오. Blocked by policy: do not retry the same call."
 )
+# 관리자의 사후 차단: 해제되면 같은 호출을 다시 할 수 있다(정책 차단과 다르다).
+ADMIN_BLOCK_RETRY_AFTER = 300
+ADMIN_BLOCK_GUIDANCE = (
+    "관리자가 이 도구를 잠시 막았습니다. 해제되면 같은 호출을 다시 할 수 있습니다"
+    "(Blocked by an administrator; retry after it is unblocked)."
+)
 # 사용자 본인 확인이 필요한 호출. 확인 링크를 연 사람이 본인일 때만 확인된다.
 CONFIRMATION_GUIDANCE = (
     "본인 확인이 필요합니다. 링크에서 확인한 뒤 같은 작업을 다시 요청하십시오."
@@ -213,6 +219,15 @@ def error_for_reason(
             reference=reference,
             guidance=APPROVAL_GUIDANCE,
             retry_after=APPROVAL_RETRY_AFTER,
+        )
+    if family is Reason.DENIED:
+        return MintError(
+            code=error_code(reason_code),
+            dispatch_state=DispatchState.NOT_DISPATCHED,
+            retry_safe=True,
+            reference=reference,
+            guidance=ADMIN_BLOCK_GUIDANCE,
+            retry_after=ADMIN_BLOCK_RETRY_AFTER,
         )
     name = policy_detect_name(reason_code)
     guidance = {
