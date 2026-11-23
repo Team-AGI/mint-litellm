@@ -58,6 +58,7 @@ class Fake:
         )
         monkeypatch.setattr(intake_jobs, "intakes", fake_intakes)
         monkeypatch.setattr(intake_jobs, "_allowlists", lambda *_: [])
+        monkeypatch.setattr(intake_jobs.allowlist_domain, "ensure_defaults", lambda ctx: None)
         stored = [checks.tool_definition(TOOL)]
         monkeypatch.setattr(intake_jobs, "_stored_definitions", lambda *_: stored)
         monkeypatch.setattr(intake_jobs, "transact", lambda ctx: contextlib.nullcontext())
@@ -157,13 +158,16 @@ def test_endpoint_intake_uses_local_checks_and_concludes(monkeypatch):
     calls = []
     row = {"id": "n1", "server_id": "s1", "source": "endpoint", "status": "received"}
     fake_intakes = SimpleNamespace(
-        get=lambda ctx, target: row, begin_checking=lambda ctx, target: row,
+        get=lambda ctx, target: {**row, "approve_when_ready": None},
+        apply_deferred_approval=lambda ctx, target, litellm: None,
+        begin_checking=lambda ctx, target: row,
         conclude=lambda ctx, target, needs_registry_credentials: calls.append(
             ("conclude", needs_registry_credentials)) or "indeterminate")
     monkeypatch.setattr(intake_jobs, "intakes", fake_intakes)
     monkeypatch.setattr(intake_jobs, "_context", lambda job: "ctx")
     monkeypatch.setattr(intake_jobs, "_run_local_checks", lambda *a: calls.append("local"))
     monkeypatch.setattr(intake_jobs, "_run_checks", lambda *a, **k: pytest.fail("remote"))
-    job = SimpleNamespace(job={"target_ref": "n1", "idempotency_key": "intake_run:n1:1"})
+    job = SimpleNamespace(job={"target_ref": "n1", "idempotency_key": "intake_run:n1:1"},
+                          litellm=None)
     intake_jobs.intake_run(job)
     assert calls == ["local", ("conclude", False)]

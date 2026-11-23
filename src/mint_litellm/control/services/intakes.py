@@ -200,6 +200,10 @@ def deployment_candidate(conn: Any, instance_id: str, server_id: str) -> dict | 
     )
 
 
+def enqueue_run(ctx: Context, row: dict) -> str:
+    return _enqueue_run(ctx, row)
+
+
 def _enqueue_run(ctx: Context, row: dict, mode: str = "") -> str:
     """수용검증 작업을 등록한다. 시도 번호가 같으면 한 작업이다."""
     if not mode and row.get("source") in ("staff", "endpoint"):
@@ -1036,6 +1040,9 @@ def _approve(
     if scope_type not in ("key", "user", "team"):
         raise ControlError("승인 범위는 key, user, team 중 하나여야 합니다.")
     if row["source"] == "endpoint":
+        if not _pack_ready(ctx, server_id):
+            return _defer_approval(ctx, row, decision, reason, valid_until, scope_type, scope_id,
+                                   team_id, narrow_network, narrow_file_access)
         return _approve_local(ctx, row, decision, reason, valid_until, scope_type, scope_id,
                               team_id, second_info, checks, litellm, narrow_network,
                               narrow_file_access)
@@ -1161,6 +1168,61 @@ def _approve(
     return {**updated, "approval_id": str(approval_id), "relation_id": str(relation_id)}
 
 
+def _pack_ready(ctx: Context, server_id: str) -> bool:
+    deployment = deployment_candidate(ctx.conn, ctx.instance_id, server_id)
+    return bool(deployment and deployment["pack_sha256"]
+                and isinstance(deployment["exec_contract"], dict))
+
+
+def _defer_approval(
+    ctx: Context, row: dict, decision: str, reason: str | None, valid_until: datetime | None,
+    scope_type: str, scope_id: str, team_id: str | None, narrow_network: str | None,
+    narrow_file_access: list[str] | None,
+) -> dict:
+    """묶음이 아직 없어도 승인은 받는다. 기록해 두고 묶음 만들기를 이어 가면 끝에서 적용한다."""
+    plan = {"decision": decision, "reason": reason, "scope_type": scope_type,
+            "scope_id": scope_id, "team_id": team_id, "narrow_network": narrow_network,
+            "narrow_file_access": narrow_file_access,
+            "valid_until": valid_until.isoformat() if valid_until else None}
+    updated = fetchone(
+        ctx.conn, "UPDATE mint.intakes SET approve_when_ready = %s::jsonb WHERE id = %s"
+        " RETURNING *", (json.dumps(plan), row["id"]))
+    _enqueue_run(ctx, updated)
+    return {**updated, "approval_pending": True}
+
+
+def apply_deferred_approval(
+    ctx: Context, intake_id: str, litellm: Callable[[], Any] | None = None
+) -> str | None:
+    """보류된 승인을 묶음이 준비됐을 때 적용한다. 적용했으면 ``applied``, 아직이면 None.
+
+    적용이 끝내 실패하면 사유를 돌려주며(``failed:...``) 보류는 풀린다.
+    """
+    row = get(ctx, intake_id)
+    plan = row.get("approve_when_ready")
+    if plan is None or row["status"] not in ("passed", "indeterminate", "failed"):
+        return None
+    if not _pack_ready(ctx, row["server_id"]):
+        return None
+    until = plan["valid_until"]
+    try:
+        with transact(ctx):
+            ctx.conn.execute(
+                "UPDATE mint.intakes SET approve_when_ready = NULL WHERE id = %s", (row["id"],))
+            decide(ctx, intake_id, plan["decision"], reason=plan["reason"],
+                   valid_until=datetime.fromisoformat(until) if until else None,
+                   scope_type=plan["scope_type"], scope_id=plan["scope_id"],
+                   team_id=plan["team_id"], litellm=litellm,
+                   narrow_network=plan["narrow_network"],
+                   narrow_file_access=plan["narrow_file_access"])
+    except ControlError as error:
+        with transact(ctx):
+            ctx.conn.execute(
+                "UPDATE mint.intakes SET approve_when_ready = NULL WHERE id = %s", (row["id"],))
+        return f"failed:{error}"
+    return "applied"
+
+
 def _narrowed(
     contract: ExecContract, network: str | None, file_access: list[str] | None
 ) -> ExecContract:
@@ -1194,15 +1256,15 @@ def _approve_local(
     deployment = deployment_candidate(ctx.conn, ctx.instance_id, server_id)
     if (deployment is None or not deployment["pack_sha256"]
             or not isinstance(deployment["exec_contract"], dict)):
-        raise ControlError("실행 묶음이 준비되지 않았습니다. 재검사한 뒤 결정하십시오.")
+        raise ControlError("실행 묶음을 준비하는 중입니다.")
     try:
         contract = _narrowed(ExecContract.model_validate(
             {k: v for k, v in deployment["exec_contract"].items() if k != "identity_kind"}),
             narrow_network, narrow_file_access)
     except ValueError:
-        raise ControlError("실행 계약이 올바르지 않습니다. 재검사한 뒤 결정하십시오.") from None
+        raise ControlError("실행 계약이 올바르지 않아 묶음을 다시 만듭니다.") from None
     if contract.pack is None or contract.pack.sha256 != deployment["pack_sha256"]:
-        raise ControlError("실행 계약이 묶음과 맞지 않습니다. 재검사한 뒤 결정하십시오.")
+        raise ControlError("실행 계약이 묶음과 맞지 않아 묶음을 다시 만듭니다.")
     tools = fetchall(
         ctx.conn,
         "SELECT id, tool, risk_grade, action_type FROM mint.tool_contracts WHERE instance_id = %s"

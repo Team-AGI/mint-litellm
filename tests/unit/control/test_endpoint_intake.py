@@ -243,10 +243,13 @@ def test_a_local_approval_needs_a_ready_pack_and_known_tools(seeded):
     world = seeded
     request_id = submit(world, payload(observed_tools=[]))
     pass_the_checks(world, request_id, pack=False)
-    with pytest.raises(ControlError, match="묶음"):
-        world.decide(str(request_id), "approve")
+    held = world.decide(str(request_id), "approve")  # 묶음이 없어도 승인은 받는다
+    assert held["approval_pending"] and world.intake(request_id)["decision"] is None
+    assert world.call(lambda ctx: svc.apply_deferred_approval(ctx, str(request_id))) is None
     pass_the_checks_pack_only(world, request_id)
-    world.decide(str(request_id), "approve")  # 도구 목록 없이도 승인한다(모든 도구 기본 허용)
+    assert world.call(
+        lambda ctx: svc.apply_deferred_approval(ctx, str(request_id))) == "applied"
+    assert world.intake(request_id)["approve_when_ready"] is None
     assert world.server("pyg")["status"] == "approved"
     assert rows(world, "approvals")[0]["tools"] == ["*"]
 
@@ -510,3 +513,20 @@ def test_a_remote_request_refuses_a_bad_key_a_bad_address_and_another_users_serv
     install(world, token="key-2", user="emp-2", gateway="gw-2")
     with pytest.raises(Exception, match="MINT-CONFLICT"):
         submit_remote(world, token="key-2")
+
+
+def test_official_package_hosts_are_seeded_once_and_a_lift_is_respected(seeded):
+    from mint_litellm.control import allowlists
+
+    world = seeded
+    world.call(allowlists.ensure_defaults)
+    world.call(allowlists.ensure_defaults)
+    hosts = sorted(r["value"] for r in rows(world, "allowlists")
+                   if r["status"] == "active" and r["created_by"] == "mint-default")
+    assert hosts == ["files.pythonhosted.org", "pypi.org", "registry.npmjs.org"]
+    world.conn.execute("ALTER TABLE mint.allowlists DISABLE TRIGGER allowlists_1_status")
+    world.conn.execute("UPDATE mint.allowlists SET status = 'lifted' WHERE value = 'pypi.org'")
+    world.conn.execute("ALTER TABLE mint.allowlists ENABLE TRIGGER allowlists_1_status")
+    world.call(allowlists.ensure_defaults)
+    assert "pypi.org" not in [r["value"] for r in rows(world, "allowlists")
+                              if r["status"] == "active"]
