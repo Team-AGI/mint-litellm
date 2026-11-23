@@ -624,7 +624,7 @@ class PluginRuntime:
         self.last_degraded = list(view.degraded)
         self.last_mismatches = contract_mismatches(view, controlled or [])
         by_id = {entry.server_id: entry for entry in view.registry}
-        for server in controlled or ():
+        for server in registry_backed(controlled or []):  # 로컬 서버는 레지스트리에 없는 게 정상
             entry = by_id.get(server.server_id)
             if (
                 server.contract_status == "managed"

@@ -252,7 +252,7 @@ class MintGuardrail(CustomGuardrail):
             guardrail_log.record_decision(self, data, outcome, began, event="pre_mcp_call")
             if not outcome.allowed:
                 assert outcome.error is not None
-                raise HTTPException(status_code=403, detail=outcome.error.detail())
+                raise HTTPException(status_code=403, detail=outcome.error.detail(human_first=True))
         finally:
             if timed:
                 log.debug(

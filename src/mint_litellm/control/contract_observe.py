@@ -281,6 +281,11 @@ def consume_deployment_events(ctx: Context) -> None:
                 )
             ):
                 continue
+            if server["identity_kind"] != "remote":
+                # 로컬 서버는 LiteLLM 레지스트리에 없다: 레지스트리 부재는 변경이 아니다
+                hashes = {k: v for k, v in hashes.items() if k != "registry_missing"}
+                if not hashes:
+                    continue
             contract = fetchone(
                 ctx.conn,
                 "SELECT * FROM mint.deployment_contracts"

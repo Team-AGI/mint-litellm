@@ -608,8 +608,8 @@ def decide(
             message += " approval_requested=true"
             if on_pending is not None:
                 on_pending()
-        if isinstance(error.get("guidance"), str):
-            message += " " + " ".join(error["guidance"].split())[:300]
+        if isinstance(error.get("guidance"), str):  # 하네스가 앞부분만 보여 주므로 안내를 첫 줄에
+            message = " ".join(error["guidance"].split())[:300] + "\n" + message
         raise Refuse(message)
     # 호출 뒤 훅이 결과를 보고할 수 있게 판정 참조를 호출 식별자로 남긴다.
     if isinstance(tool_use_id, str) and SAFE_ID.match(tool_use_id) and answer.get("reference"):
