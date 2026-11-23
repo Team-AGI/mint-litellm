@@ -5,7 +5,7 @@
 """
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import httpx
@@ -24,6 +24,8 @@ class Identity:
     key_token: str
     # 본인 키 정보의 team_id에서 읽은 팀. 화면 입력이 아니다.
     team_ids: tuple[str, ...] = ()
+    # 본인 사용자 정보(역할·이메일). 명부에 사람을 맞출 때 쓴다.
+    user: dict = field(default_factory=dict, compare=False, repr=False)
 
 
 def _get(client: httpx.Client, base: str, path: str, key: str) -> httpx.Response:
@@ -94,4 +96,4 @@ def verify(litellm_url: str, key: str, *, timeout: float = 10.0) -> Identity:
             or user.get("user_role") not in HUMAN_ROLES
         ):
             raise LoginRefused("사람 사용자의 키가 아닙니다.")
-    return Identity(user_id=user_id, key_token=token, team_ids=teams_of(info))
+    return Identity(user_id=user_id, key_token=token, team_ids=teams_of(info), user=user)

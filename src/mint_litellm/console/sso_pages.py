@@ -15,7 +15,7 @@ from mint_litellm.console.login import LoginRefused
 from mint_litellm.console.oidc import login_context
 from mint_litellm.console.staff_pages import start_staff_session
 from mint_litellm.console.templating import render
-from mint_litellm.control import ledger
+from mint_litellm.control import directory, ledger
 from mint_litellm.control.db.connection import connect
 from mint_litellm.control.errors import AdminCode, AdminError
 from mint_litellm.control.litellm_admin import LiteLLMError
@@ -74,6 +74,7 @@ def open_session(
     via: dict,
 ) -> tuple[str, str]:
     """로그인 수단과 무관하게 관리자·직원 세션을 연다. (쿠키 이름, 세션 식별자)를 돌려준다."""
+    directory.record_login(conn, config.instance_id, user_id, key_token, user)
     if target == "admin":
         session_id, _ = console_sessions.create(
             conn, config.instance_id, config.stage2, user_id=user_id, key_token=key_token,

@@ -8,9 +8,9 @@
 
 from datetime import UTC, datetime
 
-from mint_litellm.control import jobs
+from mint_litellm.control import directory, jobs, ui_sessions
 from mint_litellm.control.errors import ControlError
-from mint_litellm.control.litellm_admin import LiteLLMError
+from mint_litellm.control.litellm_admin import LiteLLMAdmin, LiteLLMError
 from mint_litellm.control.operators import HUMAN_ROLES
 from mint_litellm.control.services import console_sessions
 
@@ -47,6 +47,20 @@ def verdict(
     if session["subject"] == "admin" and (operator is None or operator["role"] != session["role"]):
         return "operator_changed"
     return None
+
+
+def _housekeeping(job: jobs.JobContext) -> None:
+    """명부를 LiteLLM에 맞추고, 끝난 MINT 세션에 남은 LiteLLM 화면 세션을 지운다. 실패해도 세션
+    확인 결과에는 영향이 없다(다음 주기에 다시 한다)."""
+    if not isinstance(job.litellm, LiteLLMAdmin):
+        return
+    try:
+        directory.sync_if_due(job.conn, job.instance_id, job.litellm)
+    except (LiteLLMError, ControlError):
+        pass
+    key = getattr(job.settings, "export_hmac_key", None)
+    if key:
+        ui_sessions.sweep(job.conn, job.instance_id, job.litellm.base_url, key)
 
 
 def run(job: jobs.JobContext) -> None:
@@ -87,5 +101,6 @@ def run(job: jobs.JobContext) -> None:
             console_sessions.revoke(
                 conn, instance, session["id_hash"], actor="session_verify", reason=reason
             )
+    _housekeeping(job)
     if unreachable is not None:
         raise unreachable

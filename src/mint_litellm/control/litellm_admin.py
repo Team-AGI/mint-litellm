@@ -55,6 +55,10 @@ class LiteLLMAdmin:
         self._timeout = timeout
 
     @property
+    def base_url(self) -> str:
+        return self._base
+
+    @property
     def key_token(self) -> str:
         """이 접속이 쓰는 키의 토큰(LiteLLM 키 객체의 토큰, 키의 SHA-256 16진수)."""
         return hashlib.sha256(self._key.encode("utf-8")).hexdigest()

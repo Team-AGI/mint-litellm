@@ -34,7 +34,7 @@ from mint_litellm.console.core import (
 from mint_litellm.console.oidc import login_context
 from mint_litellm.console.pages.common import see_other, server_names
 from mint_litellm.console.templating import render
-from mint_litellm.control import endpoint_kits, kit_key_sync, links
+from mint_litellm.control import directory, endpoint_kits, kit_key_sync, links, ui_sessions
 from mint_litellm.control.db.connection import connect, fetchall
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.litellm_admin import LiteLLMError
@@ -291,6 +291,10 @@ def login_submit(
         return render(request, "staff_login.html", login_context(request, str(refused)), status=401)
     finally:
         key = ""  # 평문 키는 여기서 버린다
+    directory.record_login(
+        control, config.instance_id, identity.user_id, identity.key_token, identity.user,
+        identity.team_ids,
+    )
     session_id = start_staff_session(
         config, control, staff_conn, identity.user_id, identity.key_token, identity.team_ids)
     response = RedirectResponse("/staff", status_code=303)
@@ -329,6 +333,10 @@ def password_submit(
 @router.post("/staff/logout")
 def logout(request: Request, actor: StaffActor = Depends(staff_actor)) -> Response:
     staff.end_session(actor.sctx, actor.id_hash)
+    ui_sessions.end_session(
+        actor.sctx.control, actor.config.instance_id, actor.config.litellm_url,
+        actor.config.stage2.export_hmac_key, actor.id_hash,
+    )
     target = "/staff/login"
     oidc_client = request.app.state.oidc
     if oidc_client is not None and console_sessions.is_oidc_session(actor.sctx.key_token):
