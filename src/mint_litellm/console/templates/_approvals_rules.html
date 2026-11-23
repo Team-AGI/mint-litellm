@@ -7,7 +7,7 @@
 <td>{{ r.server_id or '전체' }}</td><td class="nowrap">{{ L.pick(L.ACTION, r.action_class) }} · {{ r.window_minutes }}분</td><td>{{ r.tool_pattern or '전체' }}</td>
 <td class="nowrap">{{ r.valid_until | when if r.valid_until else '—' }}</td>
 <td class="num">{{ r.opened }}</td><td>{{ m.badge(L.CALL_APPROVAL_RULE, r.status) }}</td>
-<td>{% if r.status == 'active' and can(actor, 'call-approval-rule disable') %}{% call m.confirm_dialog('disable-rule-' ~ r.id, '해제', '규칙 해제', '이 규칙의 자동 승인이 끝나고 이후 요청은 사람이 승인해야 합니다.', '/call-approval-rules/' ~ r.id ~ '/disable', actor, '규칙 해제', danger=false, trigger_class='') %}<input type="hidden" name="state_version" value="{{ r.state_version }}">{% endcall %}{% endif %}</td>
+<td>{% if r.status == 'active' and can(actor, 'call-approval-rule disable') %}<form method="post" action="/call-approval-rules/{{ r.id }}/disable" class="inline">{{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ r.state_version }}"><button type="submit">해제</button></form>{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
 {% else %}{{ m.empty('상시 승인 규칙이 없습니다', '/approvals?tab=calls', '호출 보기') }}{% endif %}

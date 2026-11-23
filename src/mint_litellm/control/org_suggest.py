@@ -73,7 +73,9 @@ def _recent_calls(conn, instance_id: str) -> dict[tuple[str, str], int]:
     calls: dict[tuple[str, str], int] = {}
     for r in fetchall(
         conn,
-        "SELECT payload->>'team_id' AS team_id, payload->>'user_id' AS user_id, count(*) AS n"
+        "SELECT payload#>>'{principal,team_id}' AS team_id,"
+        " CASE WHEN payload#>>'{principal,principal_type}' = 'user'"
+        " THEN payload#>>'{principal,principal_id}' END AS user_id, count(*) AS n"
         " FROM mint.events WHERE instance_id = %s AND kind = 'decision_evaluated'"
         " AND inserted_at >= now() - make_interval(days => %s) GROUP BY 1, 2",
         (instance_id, CALL_DAYS),

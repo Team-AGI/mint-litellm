@@ -256,9 +256,18 @@ def intake_detail(intake_id: str, request: Request, actor: StaffActor = Depends(
     if source == "endpoint":
         pack = pack_view.read(actor.sctx.control, actor.sctx.instance_id, row["server_id"])
         stages = pack_view.stages(row["status"], bool(pack and pack.get("pack_sha256")))
+    delivery = []
+    if row["status"] == "decided" and row["decision"] in ("approved", "exception"):
+        from mint_litellm.console.pages.servers import delivery_progress
+
+        delivery = delivery_progress(fetchall(
+            actor.sctx.control,
+            "SELECT decision_version, stage FROM mint.delivery_receipts"
+            " WHERE instance_id = %s AND intake_id = %s",
+            (actor.sctx.instance_id, row["id"])))
     return staff_render(request, "staff_intake_detail.html",
                         {"i": row, "decision_reason": reason, "source": source,
-                         "stages": stages}, actor)
+                         "stages": stages, "delivery": delivery}, actor)
 
 
 # --- 로그인·로그아웃 --------------------------------------------------------------------------

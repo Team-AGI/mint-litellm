@@ -109,3 +109,20 @@ def test_domain_table_rejects_closed_orgs_and_bad_names(world):
         org_service.unset_domain(ctx, "missing.example")
     org_service.unset_domain(ctx, "acme.example")
     assert org_service.list_domains(ctx) == []
+
+
+def test_recent_calls_read_the_principal_not_flat_fields(world):
+    import json
+
+    from mint_litellm.types.ids import new_uuid7
+
+    conn = world.conn
+    for principal in ({"principal_type": "user", "principal_id": "u9"},
+                      {"principal_type": "team_key", "principal_id": "k", "team_id": "t9"}):
+        conn.execute(
+            "INSERT INTO mint.events (event_id, instance_id, kind, source_key, invocation_id,"
+            " attempt_id, payload) VALUES (%s, %s, 'decision_evaluated', %s, %s, 1, %s)",
+            (new_uuid7(), INSTANCE, f"t:{new_uuid7()}", new_uuid7(),
+             json.dumps({"principal": principal})),
+        )
+    assert org_suggest._recent_calls(conn, INSTANCE) == {("user", "u9"): 1, ("team", "t9"): 1}
