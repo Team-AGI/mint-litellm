@@ -762,41 +762,41 @@ class TestPolicyStage:
         entry = next(e for e in outcome.snapshot.stages if e.stage is Stage.CONTRACT)
         assert entry.status is StageStatus.SKIPPED and entry.missing_reason == "unsupported_stage"
 
-    def test_no_active_policy_version_stops(self, tmp_path):
+    def test_no_active_policy_version_passes_degraded(self, tmp_path):
         h = harness(tmp_path, snapshot(policy_version=None))
-        assert code(decide(h)) == "MINT-POLICY-VERSION-MISMATCH"
+        assert decide(h).snapshot.policy_degraded is True
 
-    def test_an_evaluator_answering_for_another_version_stops(self, tmp_path):
+    def test_an_evaluator_answering_for_another_version_passes_degraded(self, tmp_path):
         h = harness(tmp_path, evaluate=evaluator(version="pv2"))
-        assert code(decide(h)) == "MINT-POLICY-VERSION-MISMATCH"
+        assert decide(h).snapshot.policy_degraded is True
         h = harness(tmp_path, evaluate=evaluator(bundle="c" * 64))
-        assert code(decide(h)) == "MINT-POLICY-VERSION-MISMATCH"
+        assert decide(h).snapshot.policy_degraded is True
 
-    def test_an_evaluation_failure_is_passed_through(self, tmp_path):
+    def test_an_evaluation_failure_passes_degraded(self, tmp_path):
         failure = StageResult.stop(Reason.DEPENDENCY_FAILURE)
         outcome = decide(harness(tmp_path, evaluate=evaluator(failure=failure)))
-        assert code(outcome) == "MINT-DEPENDENCY-OPA" and outcome.error.retry_safe is True
+        assert outcome.allowed and outcome.snapshot.policy_degraded is True
 
     def test_an_evaluator_exception_is_an_opa_dependency_failure(self, tmp_path):
         async def broken(policy_input, **kwargs):
             raise ConnectionError("opa down")
 
         outcome = decide(harness(tmp_path, evaluate=broken))
-        assert code(outcome) == "MINT-DEPENDENCY-OPA"
+        assert outcome.allowed and outcome.snapshot.policy_degraded is True
 
     def test_an_evaluator_over_budget_is_an_opa_dependency_failure(self, tmp_path):
         async def slow(policy_input, **kwargs):
             await asyncio.sleep(1)
 
         h = harness(tmp_path, evaluate=slow, cfg=config(tmp_path, decision_budget_seconds=0.05))
-        assert code(decide(h)) == "MINT-DEPENDENCY-OPA"
+        assert decide(h).snapshot.policy_degraded is True
 
-    def test_a_missing_evaluator_is_an_opa_dependency_failure(self, tmp_path):
-        assert code(decide(harness(tmp_path, evaluate=None))) == "MINT-DEPENDENCY-OPA"
+    def test_a_missing_evaluator_passes_degraded(self, tmp_path):
+        assert decide(harness(tmp_path, evaluate=None)).snapshot.policy_degraded is True
 
-    def test_missing_policy_inputs_are_a_schema_error(self, tmp_path):
+    def test_missing_policy_inputs_pass_degraded(self, tmp_path):
         h = harness(tmp_path, evaluate=evaluator(missing_inputs=("approval",)))
-        assert code(decide(h)) == "MINT-SCHEMA-ERROR"
+        assert decide(h).snapshot.policy_degraded is True
 
     def test_an_unknown_decision_is_a_schema_error(self, tmp_path):
         assert (
@@ -1285,57 +1285,6 @@ class TestCancellation:
         (event,) = h.store.of_kind("decision_evaluated")
         self.one_cancelled_event(event)
 
-    def test_a_cancel_during_the_audit_failure_write_is_the_attempt_after_it(self, tmp_path):
-        h = harness(tmp_path)
-        recorder = h.deps.recorder
-        commit = h.store.insert_event
-        state = {"inserts": 0, "writes": 0, "down": False}
-        entered = asyncio.Event()
-
-        async def commits_then_loses_the_response(event, consume=None):
-            state["inserts"] += 1
-            if state["down"]:
-                raise RuntimeError("database down")
-            inserted = await commit(event, consume)
-            if state["inserts"] == 1:
-                state["down"] = True
-                raise RuntimeError("connection lost after the commit")
-            return inserted
-
-        h.store.insert_event = commits_then_loses_the_response
-        write = recorder._write_local
-
-        async def written_but_never_returns(event):
-            state["writes"] += 1
-            evidence = await write(event)
-            if state["writes"] == 1:
-                # 쓰기 스레드는 끝났지만 기다리는 쪽은 아직 돌아오지 못한 때
-                entered.set()
-                await asyncio.sleep(3600)
-            return evidence
-
-        recorder._write_local = written_but_never_returns
-
-        async def main():
-            task = asyncio.ensure_future(evaluate_request(request(), h.deps))
-            await asyncio.wait_for(entered.wait(), 2)
-            task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await task
-            state["down"] = False
-            await recorder.replay()
-
-        run(main())
-        events = sorted(h.store.of_kind("decision_evaluated"), key=lambda e: e.attempt_id)
-        assert [e.attempt_id for e in events] == [1, 2, 3]
-        assert events[0].payload["enforced_action"] == "allow"
-        assert events[1].payload["stop"]["reason_code"] == "AUDIT_FAILURE"
-        assert events[2].payload["stop"]["reason_code"] == "CANCELLED"
-        first_ref = events[0].payload["decision_ref"]
-        assert events[1].payload["original_decision_ref"] == first_ref
-        assert events[2].payload["original_decision_ref"] == first_ref
-        assert len({e.source_key for e in events}) == 3 and buffered(h) == []
-
     def test_a_cancel_after_the_decision_event_was_written_adds_nothing(self, tmp_path):
         h = harness(tmp_path)
         h.store.fail = RuntimeError("database down")
@@ -1356,7 +1305,7 @@ class TestCancellation:
 
         run(main())
         (event,) = buffered(h)
-        assert event.payload["stop"]["reason_code"] == "AUDIT_FAILURE" and event.attempt_id == 2
+        assert event.payload["enforced_action"] == "allow" and event.attempt_id == 1
 
     def test_a_cancelled_discovery_is_not_recorded(self, tmp_path):
         h = harness(tmp_path)
@@ -1440,7 +1389,7 @@ class TestRecording:
         outcome = decide(h)
         assert code(outcome) == "MINT-DENIED" and outcome.evidence.value == "buffer"
 
-    def test_a_block_after_a_commit_with_a_lost_response_is_the_next_attempt_and_survives_replay(
+    def test_an_allow_after_a_commit_with_a_lost_response_stays_allowed_and_replay_dedups(
         self, tmp_path
     ):
         h = harness(tmp_path)
@@ -1456,57 +1405,22 @@ class TestRecording:
 
         h.store.insert_event = lose_the_response
         outcome = decide(h)
-        assert code(outcome) == "MINT-AUDIT-FAILURE" and outcome.evidence.value == "buffer"
+        assert outcome.allowed and outcome.evidence.value == "buffer"
         (first,) = h.store.of_kind("decision_evaluated")
-        assert first.payload["enforced_action"] == "allow" and first.attempt_id == 1
         (second,) = buffered(h)
-        assert second.attempt_id == 2 and second.source_key != first.source_key
-        assert second.source_key == f"call:{first.invocation_id}:2:decision_evaluated"
+        assert second.source_key == first.source_key and second.attempt_id == 1
 
         asyncio.run(h.deps.recorder.replay())
-        both = sorted(h.store.of_kind("decision_evaluated"), key=lambda e: e.attempt_id)
-        assert [e.payload["enforced_action"] for e in both] == ["allow", "block"]
-        assert both[1].payload["stop"]["reason_code"] == "AUDIT_FAILURE"
-        assert both[1].payload["original_decision_ref"] == first.payload["decision_ref"]
-        assert both[0].payload.get("original_decision_ref") is None
-        # 호출자가 받은 참조는 최종(차단) 사건을 가리킨다.
-        assert outcome.error.reference == both[1].payload["decision_ref"]
-        assert outcome.snapshot.attempt_id == 2 and outcome.context["attempt_id"] == 2
+        assert len(h.store.of_kind("decision_evaluated")) == 1
         assert buffered(h) == []
 
-    def test_a_listing_decision_with_the_database_down_still_records_the_hide(self, tmp_path):
+    def test_a_listing_decision_with_the_database_down_is_buffered_and_passes(self, tmp_path):
         h = harness(tmp_path)
         h.store.fail = RuntimeError("write failed")
         outcome = decide(h, request(operation=OperationType.RUNTIME_DISCOVERY))
-        assert code(outcome) == "MINT-AUDIT-FAILURE" and outcome.evidence.value == "buffer"
+        assert outcome.allowed and outcome.evidence.value == "buffer"
         (event,) = buffered(h)
-        assert event.kind.value == "discovery_evaluated" and event.attempt_id == 2
-        assert event.payload["stop"]["reason_code"] == "AUDIT_FAILURE"
-        assert event.payload["original_decision_ref"] == f"{event.invocation_id}:1"
-
-    def test_a_listing_block_after_a_lost_commit_response_survives_replay(self, tmp_path):
-        h = harness(tmp_path)
-        commit = h.store.insert_event
-        seen = {"calls": 0}
-
-        async def lose_the_response(event, consume=None):
-            seen["calls"] += 1
-            inserted = await commit(event, consume)
-            if seen["calls"] == 1:
-                raise RuntimeError("connection lost after the commit")
-            return inserted
-
-        h.store.insert_event = lose_the_response
-        outcome = decide(h, request(operation=OperationType.RUNTIME_DISCOVERY))
-        assert code(outcome) == "MINT-AUDIT-FAILURE"
-        (first,) = h.store.of_kind("discovery_evaluated")
-        assert first.payload["enforced_action"] == "allow" and first.attempt_id == 1
-        asyncio.run(h.deps.recorder.replay())
-        both = sorted(h.store.of_kind("discovery_evaluated"), key=lambda e: e.attempt_id)
-        assert [e.payload["enforced_action"] for e in both] == ["allow", "block"]
-        assert both[1].payload["original_decision_ref"] == first.payload["decision_ref"]
-        assert outcome.error.reference == both[1].payload["decision_ref"]
-        assert buffered(h) == []
+        assert event.kind.value == "discovery_evaluated" and event.attempt_id == 1
 
     def test_a_block_path_failure_keeps_the_first_attempt(self, tmp_path):
         h = harness(tmp_path, snapshot(denials=(denial(),)))
@@ -1525,7 +1439,7 @@ class TestRecording:
 
         h.store.insert_event = slow
         outcome = decide(h)
-        assert code(outcome) == "MINT-AUDIT-FAILURE" and outcome.evidence.value == "buffer"
+        assert outcome.allowed and outcome.evidence.value == "buffer"
 
     def test_every_path_records_one_decision_event_with_a_unique_source_key(self, tmp_path):
         h = harness(tmp_path)
@@ -1771,10 +1685,10 @@ class TestDecisionBudget:
 
         h.snapshots.read_snapshot = slow_snapshot
         outcome = decide(h)
-        assert code(outcome) == "MINT-DEPENDENCY-OPA"
+        assert outcome.allowed and outcome.snapshot.policy_degraded is True
         assert seen["waited"] < 0.2
 
-    def test_an_insert_that_outlives_the_remaining_budget_is_unknown_and_blocks_the_call(
+    def test_an_insert_that_outlives_the_remaining_budget_is_buffered_and_passes(
         self, tmp_path
     ):
         cfg = config(tmp_path, decision_budget_seconds=0.2)
@@ -1786,10 +1700,10 @@ class TestDecisionBudget:
 
         h.store.insert_event = slow_insert
         outcome = decide(h)
-        assert code(outcome) == "MINT-AUDIT-FAILURE" and outcome.evidence.value == "buffer"
+        assert outcome.allowed and outcome.evidence.value == "buffer"
         (event,) = buffered(h)
         assert event.source_key.endswith(":decision_evaluated")
-        assert event.payload["stop"]["reason_code"] == "AUDIT_FAILURE"
+        assert event.payload["enforced_action"] == "allow"
 
     def test_an_unsupported_answer_from_the_policy_engine_is_an_obligation_stage_stop(
         self, tmp_path

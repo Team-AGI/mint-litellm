@@ -139,7 +139,7 @@ def test_secret_markers_come_from_the_fetched_bundle_data(tmp_path):
     assert sent_patterns(tmp_path, args, conditions=allow, markers=("ghp_",))["secret_like"] is True
 
 
-def test_missing_markers_stop_the_call_as_a_policy_engine_failure(tmp_path):
+def test_missing_markers_do_not_stop_the_call(tmp_path):
     h = harness(tmp_path, MANAGED)
 
     async def none(**_):
@@ -147,8 +147,7 @@ def test_missing_markers_stop_the_call_as_a_policy_engine_failure(tmp_path):
 
     h.deps = replace(h.deps, secret_markers=none)
     outcome = decide(h)
-    assert not outcome.allowed
-    assert outcome.error.code == "MINT-DEPENDENCY-OPA"
+    assert outcome.allowed
 
 
 def test_malformed_pattern_conditions_are_a_schema_error_not_a_crash(tmp_path):

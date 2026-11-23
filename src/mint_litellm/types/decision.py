@@ -572,8 +572,10 @@ class DecisionSnapshot(BaseModel):
     # 시간은 밀리초이다.
     approval_hold: str | None = None
     approval_hold_ms: int | None = Field(default=None, ge=0)
-    # 정책 엔진이 응답하지 않아 직전에 허용된 같은 호출의 정책 판정을 다시 쓴 호출이면 참.
-    policy_reused: bool | None = None
+    # 정책 엔진이 응답하지 않아 로컬 검사만으로 통과시킨 호출이면 참.
+    policy_degraded: bool | None = None
+    # DB가 응답하지 않아 워커 메모리의 마지막 정상 스냅숏으로 판정한 호출이면 참.
+    snapshot_stale: bool | None = None
     cause: str | None = Field(default=None, exclude=True)
 
     @field_validator("missing_reasons", mode="after")

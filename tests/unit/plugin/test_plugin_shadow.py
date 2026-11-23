@@ -265,4 +265,4 @@ def test_a_stopped_policy_stage_is_not_compared(tmp_path):
     h = harness(tmp_path, evaluate=evaluator(failure=failure))
     h.deps.shadow = lambda *a, **k: seen.append(k)
     outcome = run(evaluate_request(request(), h.deps))
-    assert not outcome.allowed and seen == []
+    assert outcome.allowed and outcome.snapshot.policy_degraded is True and seen == []
