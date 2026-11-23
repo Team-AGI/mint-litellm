@@ -7,7 +7,6 @@ from plugin_helpers import (
     KEY,
     NOW,
     approval,
-    denial,
     evaluator,
     harness,
     request,
@@ -158,12 +157,11 @@ def test_control_negative_server_still_hides(tmp_path, status):
 @pytest.mark.parametrize(
     "change",
     [
-        {"denials": (denial(),)},
         {"relations": {"r1": RelationRow("r1", "terminating")}},
         {"negative_relation": True},
     ],
 )
-def test_control_negative_relationship_and_denial(tmp_path, change):
+def test_control_negative_relationship(tmp_path, change):
     h = harness(tmp_path, managed(settings=SettingsRow(control_key_token=KEY), **change))
     assert not asyncio.run(
         evaluate_request(request(operation=OperationType.RUNTIME_DISCOVERY), h.deps)

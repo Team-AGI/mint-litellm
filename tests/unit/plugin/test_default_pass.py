@@ -81,10 +81,23 @@ def test_an_action_denial_blocks_the_tools_of_that_action_type():
     sibling = denial_and_approval(
         snap, principal(snap), RESOLVED, "search", tool_traits(snap, "search", {})[0])
     assert sibling.results == [] and sibling.selected is not None
-    # 목록 조회에서도 막힌 도구는 숨긴다
-    assert control_listing_negative(snap, principal(snap), RESOLVED, "drop", "delete")
+    # 목록 조회에서는 막힌 도구도 남긴다(호출 때 막는다)
+    assert control_listing_negative(snap, principal(snap), RESOLVED, "drop", "delete") is None
     assert control_listing_negative(snap, principal(snap), RESOLVED, "search", "read") is None
 
 
 def test_the_request_helper_is_importable():
     assert request() is not None
+
+
+def test_a_post_block_stays_listed_blocks_the_call_and_lifts_at_once():
+    deny = denial(scope_type="user", scope_id="u1", server_id="srv-1", tools=("drop",))
+    snap = snapshot(approvals=(approval(tools=(ALL_TOOLS,)),), denials=(deny,))
+    me = principal(snap)
+    assert denial_and_approval(snap, me, RESOLVED, "drop", listing=True).results == []
+    assert denial_and_approval(snap, me, RESOLVED, "drop").results
+    lifted = replace(snap, denials=())
+    assert denial_and_approval(lifted, principal(lifted), RESOLVED, "drop").results == []
+    # 미승인 서버는 목록에서도 여전히 빠진다
+    bare = snapshot(approvals=(), denials=())
+    assert denial_and_approval(bare, principal(bare), RESOLVED, "drop", listing=True).results

@@ -283,10 +283,11 @@ def _approval_expired(approval: ApprovalRow, now: datetime) -> bool:
 
 def denial_and_approval(
     snapshot: Snapshot, principal: Principal, resolved: ResolvedServer, tool: str,
-    action_type: str | None = None,
+    action_type: str | None = None, listing: bool = False,
 ) -> ApprovalSelection:
     now = snapshot.now
-    for denial in snapshot.denials:
+    # 목록 조회에서는 사후 차단을 숨기지 않는다. 호출 때 막고 해제하면 같은 목록으로 바로 쓴다.
+    for denial in () if listing else snapshot.denials:
         applies = (
             scope_matches(denial.scope_type, denial.scope_id, principal, resolved.server_id)
             and (denial.server_id is None or denial.server_id == resolved.server_id)
@@ -467,14 +468,6 @@ def control_listing_negative(
         "terminated",
     }:
         return server_state_result(server.status)
-    for denial in snapshot.denials:
-        if (
-            scope_matches(denial.scope_type, denial.scope_id, principal, resolved.server_id)
-            and (denial.server_id is None or denial.server_id == resolved.server_id)
-            and denial_hits_tool(denial.tools, tool, action_type)
-            and (denial.org_id is None or denial.org_id == principal.org_id)
-        ):
-            return StageResult.stop(Reason.DENIED)
     if snapshot.negative_relation or any(
         r.status in {"terminating", "terminated"} for r in snapshot.relations.values()
     ):
@@ -1534,7 +1527,8 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
     selection = denial_and_approval(
         snapshot, run.principal, resolved, tool,
         tool_traits(snapshot, tool, hook.arguments or {},
-                    builtin=is_builtin_server(resolved.server_id))[0])
+                    builtin=is_builtin_server(resolved.server_id))[0],
+        listing=req.operation is OperationType.RUNTIME_DISCOVERY)
     for result in selection.results:
         stages.add(Stage.DENIAL_APPROVAL, result)
     if not selection.results:

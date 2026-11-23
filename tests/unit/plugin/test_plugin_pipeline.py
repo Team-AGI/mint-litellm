@@ -1579,7 +1579,7 @@ class TestDiscoveryOperation:
         settings = SettingsRow(mode=Mode.OBSERVE)
         shown = harness(tmp_path, snapshot(approvals=(), settings=settings), cfg=cfg)
         assert decide(shown, request(operation=OperationType.RUNTIME_DISCOVERY)).allowed
-        hidden = harness(tmp_path, snapshot(denials=(denial(),), settings=settings), cfg=cfg)
+        hidden = harness(tmp_path, snapshot(server=server_row(status="rejected"), settings=settings), cfg=cfg)
         assert not decide(hidden, request(operation=OperationType.RUNTIME_DISCOVERY)).allowed
 
     @pytest.mark.parametrize("mode", [Mode.ENFORCE, Mode.OBSERVE])

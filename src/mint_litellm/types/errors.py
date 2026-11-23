@@ -59,7 +59,7 @@ REASON_EXPLANATIONS = {
     Reason.SERVER_SUSPENDED: "중지된 서버의 호출이 막혔습니다",
     Reason.SERVER_TERMINATED: "폐기된 서버의 호출이 막혔습니다",
     Reason.RELATION_TERMINATED: "종료된 이용 관계의 호출이 막혔습니다",
-    Reason.DENIED: "명시적 거부에 따라 호출이 막혔습니다",
+    Reason.DENIED: "관리자가 이 도구를 막았습니다",
     Reason.APPROVAL_REVOKED: "철회된 승인에 따른 호출이 막혔습니다",
     Reason.APPROVAL_EXPIRED: "승인이 만료되어 호출이 막혔습니다",
     Reason.APPROVAL_RECERT_REQUIRED: "승인 재확인이 필요해 호출이 막혔습니다",
