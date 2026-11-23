@@ -259,12 +259,15 @@ def intake_detail(intake_id: str, request: Request, actor: StaffActor = Depends(
     delivery = []
     if row["status"] == "decided" and row["decision"] in ("approved", "exception"):
         from mint_litellm.console.pages.servers import delivery_progress
+        from mint_litellm.control import usage_reader
 
+        seen = usage_reader.read_tools(actor.sctx.control, actor.sctx.instance_id, row["server_id"])
         delivery = delivery_progress(fetchall(
             actor.sctx.control,
             "SELECT decision_version, stage FROM mint.delivery_receipts"
             " WHERE instance_id = %s AND intake_id = %s",
-            (actor.sctx.instance_id, row["id"])))
+            (actor.sctx.instance_id, row["id"])),
+            local=source == "endpoint", called=any(t["calls"] for t in seen))
     return staff_render(request, "staff_intake_detail.html",
                         {"i": row, "decision_reason": reason, "source": source,
                          "stages": stages, "delivery": delivery}, actor)

@@ -35,9 +35,12 @@ def test_the_three_refusal_kinds_tell_the_agent_what_to_do():
     pending = body("CALL_APPROVAL_REQUIRED")
     assert pending["retry_safe"] is True and pending["retry_after"] > 0
     assert "승인 대기 중" in pending["guidance"] and "Approval pending" in pending["guidance"]
-    blocked = body("DENIED")
+    blocked = body("SERVER_NOT_APPROVED")
     assert blocked["retry_safe"] is False and "retry_after" not in blocked
     assert "재시도하지 마십시오" in blocked["guidance"] and "do not retry" in blocked["guidance"]
+    admin = body("DENIED")
+    assert admin["retry_safe"] is True and admin["retry_after"] >= 300
+    assert "잠시 막았습니다" in admin["guidance"] and "retry after" in admin["guidance"]
     transient = body("DEPENDENCY_FAILURE", dependency=Dependency.OPA)
     assert transient["retry_safe"] is True and transient["retry_after"] > 0
     assert "일시 오류" in transient["guidance"] and "Temporary error" in transient["guidance"]

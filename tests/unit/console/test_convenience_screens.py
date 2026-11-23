@@ -160,6 +160,20 @@ def test_delivery_stages_mark_done_next_and_waiting():
     assert delivery_progress([]) == []
 
 
+def test_delivery_stages_are_monotonic_and_skip_registry_for_local():
+    from mint_litellm.console.pages.servers import delivery_progress
+
+    rows = [{"decision_version": 1, "stage": "approved"}]
+    assert [lv for lv, _ in delivery_progress(rows, called=True)] == ["ok"] * 7
+    local = delivery_progress(
+        [{"decision_version": 1, "stage": s} for s in ("approved", "device_received", "started")],
+        local=True)
+    assert [lv for lv, _ in local] == ["ok", "off", "ok", "ok", "ok", "wait", "off"]
+    assert "해당 없음" in local[1][1]
+    failed = delivery_progress(rows, local=True, failure=("discovered", "시험 사유"))
+    assert failed[5][0] == "error" and "실패 · 시험 사유" in failed[5][1]
+
+
 def test_service_accounts_do_not_count_as_human_operators(monkeypatch):
     seen = []
     monkeypatch.setattr(setup_state, "_count", lambda a, sql, *args: seen.append(args) or 0)

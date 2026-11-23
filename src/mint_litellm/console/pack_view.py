@@ -64,7 +64,7 @@ def view(row: dict | None, intake_status: str) -> dict:
         if isinstance(f, dict)
     ]
     access = contract.get("file_access", spec.get("file_access")) or []
-    network = contract.get("network", spec.get("network")) or "none"
+    network = contract.get("network", spec.get("network")) or "auto"  # 모르면 단정 안 함
     return {
         "stages": stages(intake_status, has_pack),
         "ready": has_pack,
