@@ -46,7 +46,7 @@ def cell(**inputs) -> str:
 def test_the_admin_sees_a_readable_reason_and_a_folded_detail():
     html = cell(detail={"stage": "start", "exit_code": 1,
                         "stderr_tail": "ValueError: GHIDRA_INSTALL_DIR is not set"})
-    assert "검사 중 서버가 실패함" in html and "<details>" in html
+    assert "서버가 시작되지 않습니다" in html and "<details>" in html
     assert "서버 시작" in html and "종료 코드 1" in html
     assert "GHIDRA_INSTALL_DIR is not set" in html
 

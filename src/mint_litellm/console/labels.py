@@ -726,7 +726,8 @@ def check_reason(check: dict) -> str:
     """검사 결과의 사유 이름. 서버가 시작 단계에서 끝난 옛 기록은 오류 출력으로 사유를 가른다."""
     inputs = check.get("inputs")
     detail = inputs.get("detail") if isinstance(inputs, dict) else None
-    if isinstance(detail, dict) and detail.get("stage") == "start" and check.get("result") != "pass":
+    started = isinstance(detail, dict) and detail.get("stage") == "start"
+    if started and check.get("result") != "pass":
         tail = detail.get("stderr_tail") or ""
         code = "SERVER_DEPS_MISMATCH" if _LIBRARY_ERROR.search(tail) else "SERVER_START_FAILED"
         return CHECK_REASON[code]
