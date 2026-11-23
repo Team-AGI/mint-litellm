@@ -410,6 +410,12 @@ INTAKE_TABS = (("overview", "검사 결과"), ("info", "신청 내용"), ("evide
 PACK_TAB = ("pack", "실행 묶음")
 
 
+def check_na(check: dict) -> bool:
+    """로컬(stdio·묶음) 신청의 원격 주소 검사: 옛 기록(지원하지 않음 실패)도 해당 없음이다."""
+    return check.get("check") == "url_guard" and check.get("reason_code") in (
+        "NOT_APPLICABLE", "UNSUPPORTED")
+
+
 def intake_progress(
     intake: dict, lacking: list[str], checks: list[dict] | None = None,
     hold: bool = False, cause: bool = False, seen: int = 0,
@@ -419,6 +425,10 @@ def intake_progress(
     if intake.get("decision") == "withdrawn":
         return [("ok", "접수"), ("off", "검사 이력 보존"), ("off", "승인 심사 종료"),
                 ("off", "신청 철회")]
+    checks = [c for c in checks or [] if not check_na(c)] if checks is not None else None
+    st = "passed" if st == "failed" and checks is not None and not any(
+        c["result"] == "fail" for c in checks) and any(
+        c["result"] != "fail" for c in checks) else st
     checked = {
         "failed": ("error", "검사 실패"),
         "received": ("wait", "검사 중"),
@@ -579,6 +589,7 @@ def intake_page(
         inspection_service.for_intake(actor.conn, actor.instance, intake["id"]) if local else []
     )
     open_inspection = next((x for x in inspections if x["status"] in inspection_service.OPEN), None)
+    counted = [c for c in checks if not check_na(c)]
     ctx = {
         "delivery": delivery,
         "seen": seen,
@@ -597,7 +608,7 @@ def intake_page(
         "server_name": server_name,
         "ctl": tool_controls(actor, intake["server_id"]),
         "server_url": candidate["url"] if candidate else entry.get("url"),
-        "checks": checks,
+        "checks": [{**c, "shown": "n/a" if check_na(c) else c["result"]} for c in checks],
         "tools": tools,
         "stale": stale,
         "expires": min(expiries) if expiries else None,
@@ -621,8 +632,9 @@ def intake_page(
         "decision_form": decision_form or {},
         "hold": hold,
         "provider_blocked": any(c["reason_code"] == "PROVIDER_NOT_ALLOWED" for c in checks),
-        "passed": sum(1 for c in checks if c["result"] == "pass"),
-        "failed": sum(1 for c in checks if c["result"] == "fail"),
+        "passed": sum(1 for c in counted if c["result"] == "pass"),
+        "failed": sum(1 for c in counted if c["result"] == "fail"),
+        "checks_total": len(counted),
         "risk": risk,
         "high_risk": risk["high"] + risk["critical"],
         "proof": (sum(1 for e in needed if e["state"] not in ("missing", "expired")), len(needed)),

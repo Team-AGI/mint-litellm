@@ -23,7 +23,7 @@ class FakeAdmin:
     def __init__(self, by_path, fail=()):
         self.by_path, self.fail, self.calls = by_path, set(fail), []
 
-    def _ok(self, path, params=None, **_):
+    def daily_activity(self, path, params=None):
         self.calls.append((path, dict(params or {})))
         if path in self.fail:
             raise ControlError("x")
@@ -142,3 +142,21 @@ def test_ledger_reads_the_user_from_the_principal_and_cost_is_never_half_known(c
     out = usage_reader.combine(everyone, [], (None, None, {}), {}, scoped=False)
     assert out["cost"]["text"] == "미수집"
     assert usage_reader.read_tools(conn, INSTANCE, "s") == []
+
+
+def test_total_without_model_spend_is_not_applicable():
+    assert usage_reader.total_cost(0.0)["text"] == "해당 없음(모델 지출 없음)"
+    assert usage_reader.total_cost(1.5)["text"] == "$1.50"
+    assert usage_reader.total_cost(None)["text"] == "미수집"
+
+
+def test_mcp_server_keys_are_grouped_by_server():
+    days = [day(0.0, 2, None, {"srv/a": (0.5, 1), "srv/b": (0.25, 1)})]
+    assert usage_reader._sum(days, "mcp_servers") == {"srv": (0.75, 2)}
+
+
+def test_read_only_client_exposes_daily_activity():
+    from mint_litellm.console.core import ReadOnlyLiteLLM
+    from mint_litellm.control.litellm_admin import LiteLLMAdmin
+
+    assert ReadOnlyLiteLLM(LiteLLMAdmin("http://x", "k")).daily_activity

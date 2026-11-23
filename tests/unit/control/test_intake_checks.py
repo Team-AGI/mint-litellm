@@ -44,8 +44,8 @@ class FakeClient:
     [
         ("https://mcp.example.com/mcp", "http", [PROVIDER], "pass", None),
         (None, "http", [PROVIDER], "fail", "UNSUPPORTED"),
-        ("https://mcp.example.com/mcp", "stdio", [PROVIDER], "fail", "UNSUPPORTED"),
-        ("https://mcp.example.com/mcp", "openapi", [PROVIDER], "fail", "UNSUPPORTED"),
+        ("https://mcp.example.com/mcp", "stdio", [PROVIDER], "pass", "NOT_APPLICABLE"),
+        ("https://mcp.example.com/mcp", "openapi", [PROVIDER], "pass", "NOT_APPLICABLE"),
         ("http://mcp.example.com/mcp", "http", [PROVIDER], "fail", "SCHEME_NOT_HTTPS"),
         ("ftp://mcp.example.com/", "http", [PROVIDER], "fail", "URL_INVALID"),
         ("https://mcp.example.com:9000/mcp", "http", [PROVIDER], "fail", "PORT_NOT_ALLOWED"),
