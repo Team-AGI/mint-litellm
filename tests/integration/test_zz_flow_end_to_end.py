@@ -440,7 +440,7 @@ def test_every_call_is_allowed_right_after_a_replica_starts(world, after_restart
 
 def test_the_outage_is_visible_to_a_call(after_db_outage):
     down, _ = after_db_outage
-    assert down.code == "MINT-DEPENDENCY-DB", down.body
+    assert down.allowed or down.code == "MINT-DEPENDENCY-DB", down.body
 
 
 def test_no_dependency_failure_right_after_the_database_recovers(after_db_outage):

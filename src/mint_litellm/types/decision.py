@@ -576,6 +576,8 @@ class DecisionSnapshot(BaseModel):
     policy_degraded: bool | None = None
     # DB가 응답하지 않아 워커 메모리의 마지막 정상 스냅숏으로 판정한 호출이면 참.
     snapshot_stale: bool | None = None
+    # 집행 상태를 확인하지 못한 채 승인된 호출을 통과시켰으면 참.
+    enforcement_unverified: bool | None = None
     cause: str | None = Field(default=None, exclude=True)
 
     @field_validator("missing_reasons", mode="after")
