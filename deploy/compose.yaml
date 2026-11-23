@@ -88,6 +88,8 @@ services:
       STORE_MODEL_IN_DB: "True"
       PROXY_BASE_URL: ${PROXY_BASE_URL:-}
       MCP_TRUSTED_REDIRECT_ORIGINS: ${MCP_TRUSTED_REDIRECT_ORIGINS:-}
+      # LiteLLM 로그인 화면의 기본 계정 안내를 숨긴다(MINT 콘솔 로그인을 쓴다)
+      LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT: "true"
       MINT_INSTANCE_ID: ${MINT_INSTANCE_ID:-default}
       MINT_CONSOLE_URL: ${MINT_CONSOLE_URL:-}
       # 콘솔에서 넘어온 사람에게 LiteLLM 화면 세션을 열어 주는 어댑터가 인계 코드를 확인하는 콘솔 주소

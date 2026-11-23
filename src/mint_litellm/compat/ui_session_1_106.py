@@ -47,6 +47,8 @@ class Backend(Protocol):
 
     async def delete_sessions(self, session_hash: str) -> int: ...
 
+    async def count_sessions(self, session_hash: str) -> int: ...
+
 
 class LiteLLMBackend:
     """LiteLLM 1.106.6의 화면 로그인 함수를 그대로 쓴다(``/v2/login``·SSO 콜백과 같은 경로)."""
@@ -116,6 +118,15 @@ class LiteLLMBackend:
         set_session_token_cookie(response, request, jwt)
         return response
 
+    async def count_sessions(self, session_hash: str) -> int:
+        client = self._server().prisma_client
+        if client is None:
+            raise HTTPException(status_code=503, detail="database not connected")
+        return await client.db.litellm_verificationtoken.count(
+            where={"team_id": DASHBOARD_TEAM,
+                   "key_alias": {"startswith": ALIAS_PREFIX + session_hash}}
+        )
+
     async def delete_sessions(self, session_hash: str) -> int:
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
         from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -178,10 +189,9 @@ def make_router(
             request, user, grant["session_hash"], max(int(grant["seconds_left"]), 1)
         )
 
-    @router.post(ui_handoff.REVOKE_PATH, include_in_schema=False)
-    async def revoke(request: Request) -> Response:
+    async def signed_session_hash(request: Request, path: str) -> str | Response:
         body = await request.body()
-        if not ui_handoff.verify(key, ui_handoff.REVOKE_PATH, body, dict(request.headers)):
+        if not ui_handoff.verify(key, path, body, dict(request.headers)):
             return JSONResponse({"error": "invalid signature"}, status_code=403)
         try:
             session_hash = json.loads(body)["session_hash"]
@@ -189,7 +199,22 @@ def make_router(
                 raise ValueError
         except (ValueError, KeyError, TypeError):
             return JSONResponse({"error": "invalid request"}, status_code=400)
-        return JSONResponse({"deleted": await backend.delete_sessions(session_hash)})
+        return session_hash
+
+    @router.post(ui_handoff.REVOKE_PATH, include_in_schema=False)
+    async def revoke(request: Request) -> Response:
+        got = await signed_session_hash(request, ui_handoff.REVOKE_PATH)
+        if isinstance(got, Response):
+            return got
+        return JSONResponse({"deleted": await backend.delete_sessions(got)})
+
+    @router.post(ui_handoff.ALIVE_PATH, include_in_schema=False)
+    async def alive(request: Request) -> Response:
+        """LiteLLM 화면에서 로그아웃하면 화면 세션 키가 지워진다. 남은 개수를 콘솔에 알린다."""
+        got = await signed_session_hash(request, ui_handoff.ALIVE_PATH)
+        if isinstance(got, Response):
+            return got
+        return JSONResponse({"open": await backend.count_sessions(got)})
 
     return router
 

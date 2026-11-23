@@ -13,6 +13,7 @@ SIGNATURE_HEADER = "X-Mint-Signature"
 TIMESTAMP_HEADER = "X-Mint-Timestamp"
 REDEEM_PATH = "/internal/ui-grants/redeem"
 REVOKE_PATH = "/mint-ui/revoke"
+ALIVE_PATH = "/mint-ui/alive"
 ENTER_PATH = "/mint-ui/enter"
 # 인계 코드의 유효 시간(초). 한 번 쓰면 끝난다.
 CODE_SECONDS = 60
