@@ -27,6 +27,12 @@ _BLOCKED = (
     " THEN 'allowed' ELSE 'blocked' END) NOT IN ('allowed', 'observed', 'pending_approval')"
 )
 _CALL = "COALESCE(invocation_id::text, event_id::text)"
+# 판정 본문은 주체를 principal 안에 남긴다(사람 키는 principal_id가 LiteLLM 사용자 식별자).
+_USER = (
+    "COALESCE(payload->>'user_id', CASE WHEN payload#>>'{principal,principal_type}' = 'user'"
+    " THEN payload#>>'{principal,principal_id}' END, '')"
+)
+_TEAM = "COALESCE(payload->>'team_id', payload#>>'{principal,team_id}', '')"
 
 
 def window(period: str, now: datetime | None = None) -> tuple[datetime, datetime]:
@@ -118,11 +124,10 @@ def read_ledger(conn: psycopg.Connection, instance: str, start: datetime, end: d
     """(팀, 사람, 서버)별 호출·차단 수. 같은 호출의 재시도는 한 건이다."""
     who, args = "", [instance, start, end]
     if user:
-        who, args = " AND payload->>'user_id' = %s", [*args, user]
+        who, args = f" AND {_USER} = %s", [*args, user]
     return fetchall(
         conn,
-        "SELECT COALESCE(payload->>'team_id', '') AS team_id,"
-        " COALESCE(payload->>'user_id', '') AS user_id,"
+        f"SELECT {_TEAM} AS team_id, {_USER} AS user_id,"
         " COALESCE(payload->>'resolved_server_id', payload->>'server_id', '') AS server_id,"
         f" count(DISTINCT {_CALL}) AS calls,"
         f" count(DISTINCT {_CALL}) FILTER (WHERE {_BLOCKED}) AS blocked"
@@ -136,10 +141,10 @@ def read_first_success(conn: psycopg.Connection, instance: str, user: str | None
     """(사람, 서버)별 처음 성공한 시각. ponytail: 전체 기간을 훑는다. 느려지면 롤업 표로 옮긴다."""
     who, args = "", [instance]
     if user:
-        who, args = " AND d.payload->>'user_id' = %s", [instance, user]
+        who, args = f" AND {_USER.replace('payload', 'd.payload')} = %s", [instance, user]
     return fetchall(
         conn,
-        "SELECT COALESCE(d.payload->>'user_id', '') AS user_id,"
+        f"SELECT {_USER.replace('payload', 'd.payload')} AS user_id,"
         " COALESCE(d.payload->>'resolved_server_id', d.payload->>'server_id', '') AS server_id,"
         " min(r.inserted_at) AS first_at FROM mint.events r JOIN mint.events d"
         " ON d.instance_id = r.instance_id AND d.invocation_id = r.invocation_id"
@@ -186,7 +191,8 @@ def combine(ledger: list[dict], first: list[dict], spend, names: dict, *, scoped
     server_source = None if servers_s is None else {
         **servers_s, **{k: servers_s[v] for k, v in names.items() if v in servers_s}}
     servers = rows(fold("server_id"), server_source, lambda n: names.get(n) or n, first_server)
-    known = teams_s if teams_s is not None else people_s
+    # 전체 합계는 팀별 지출에서만 낸다(사람별은 상위 몇 명뿐). 못 읽었으면 어디서나 미수집이다.
+    known = people_s if scoped else teams_s
     return {
         "calls": sum(r["calls"] for r in ledger),
         "blocked": sum(r["blocked"] for r in ledger),
@@ -211,3 +217,18 @@ def build(conn, instance, admin, names: dict, period: str, user: str | None = No
     spend = read_spend(admin, start, end, users, user) if admin else (None, None, None)
     first = read_first_success(conn, instance, user)
     return {"period": period, **combine(ledger, first, spend, names, scoped=user is not None)}
+
+
+def read_tools(conn: psycopg.Connection, instance: str, server_id: str) -> list[dict]:
+    """서버에서 실제로 발견·호출된 도구별 호출·차단 수(도구 목록 판정 포함)."""
+    return fetchall(
+        conn,
+        "SELECT payload->>'tool' AS tool,"
+        f" count(DISTINCT {_CALL}) FILTER (WHERE kind = 'decision_evaluated') AS calls,"
+        f" count(DISTINCT {_CALL}) FILTER (WHERE {_BLOCKED}) AS blocked"
+        " FROM mint.events WHERE instance_id = %s"
+        " AND kind IN ('decision_evaluated', 'discovery_evaluated')"
+        " AND COALESCE(payload->>'resolved_server_id', payload->>'server_id') = %s"
+        " AND payload->>'tool' IS NOT NULL GROUP BY 1 ORDER BY 2 DESC, 1",
+        (instance, server_id),
+    )

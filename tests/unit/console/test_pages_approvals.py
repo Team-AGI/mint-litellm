@@ -340,3 +340,10 @@ def test_signed_links_open_the_new_screens(world):
         response = client.get(f"/link/{links.make(key, kind, ref)}")
         assert response.status_code == 303 and response.headers["location"] == target
     assert client.get("/link/forged").status_code == 404
+
+
+def test_a_denial_is_lifted_with_one_click_and_no_dialog(world, admin):
+    form_post(world, admin, "/denials", scope_type="user", scope_id="human-8", reason="사고")
+    page = admin.get("/access?tab=denials").text
+    assert "lift-deny-" not in page and "다시 승인을 받을 수 있습니다" not in page
+    assert 'action="/denials/' in page

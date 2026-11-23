@@ -18,8 +18,12 @@ INSTALL_COMMANDS = (
 )
 
 
-def _count(actor: Actor, sql: str) -> int:
-    return fetchone(actor.conn, sql, (actor.instance,))["n"]
+# 배포가 만드는 서비스 계정. 사람 운영자 수에 세지 않는다.
+SERVICE_ACCOUNTS = ["mint-control", "mint-kit-issuer"]
+
+
+def _count(actor: Actor, sql: str, *args) -> int:
+    return fetchone(actor.conn, sql, (actor.instance, *args))["n"]
 
 
 def mark_time(actor: Actor, mark: str) -> Any:
@@ -118,7 +122,9 @@ def _approval_flow(actor: Actor) -> dict:
         actor,
         "SELECT count(*) AS n FROM mint.operators WHERE instance_id = %s"
         " AND role IN ('admin', 'approver') AND name <> 'root'"
+        " AND name <> ALL(%s) AND coalesce(user_id, '') <> ALL(%s)"
         " AND (expires_at IS NULL OR expires_at > now())",
+        SERVICE_ACCOUNTS, SERVICE_ACCOUNTS,
     ) == 0
     approvers = _count(
         actor,

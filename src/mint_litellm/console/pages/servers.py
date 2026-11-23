@@ -10,6 +10,7 @@ from mint_litellm.console.core import Actor, page_actor, require_csrf
 from mint_litellm.console.pages import intake_submission
 from mint_litellm.console.pages.common import act, server_display
 from mint_litellm.console.templating import render
+from mint_litellm.control import usage_reader
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import call_review as review_service
 from mint_litellm.control.services import contracts as contract_service
@@ -411,7 +412,7 @@ PACK_TAB = ("pack", "실행 묶음")
 
 def intake_progress(
     intake: dict, lacking: list[str], checks: list[dict] | None = None,
-    hold: bool = False, cause: bool = False,
+    hold: bool = False, cause: bool = False, seen: int = 0,
 ) -> list[tuple[str, str]]:
     """진행 표시 4단계(접수·검사·증빙·결정)를 (심각도, 이름)으로."""
     st = intake["status"]
@@ -429,6 +430,8 @@ def intake_progress(
             checked = ("error", "검사 실패")
         elif not checks or any(c["result"] == "indeterminate" for c in checks):
             checked = ("wait", "검사 판별 불가")
+    if seen and checked[0] == "wait":
+        checked = ("ok", f"도구 {seen}개 확인")  # 검사는 못 읽었지만 실제 호출로 발견됐다
     if st in ("received", "checking", "failed") or checked[0] == "error" or cause:
         proof = ("off", "증빙")
     else:
@@ -442,6 +445,32 @@ def intake_progress(
             ("off", "결정") if st in ("received", "checking") else ("wait", "결정 대기")
         )
     return [("ok", "접수"), checked, proof, decision]
+
+
+DELIVERY_STAGES = (
+    ("approved", "승인"), ("registry_active", "LiteLLM 등록"), ("key_applied", "키 반영"),
+    ("device_received", "PC 수신"), ("started", "시작"), ("discovered", "도구 발견"),
+    ("first_response", "첫 응답"),
+)
+
+
+def delivery_progress(receipts: list[dict]) -> list[tuple[str, str]]:
+    """적용 7단계. 최신 결정 판본의 기록이 있는 단계는 완료, 첫 빈 단계는 대기, 나머지는 꺼짐."""
+    if not receipts:
+        return []
+    latest = max(r["decision_version"] for r in receipts)
+    done = {r["stage"] for r in receipts if r["decision_version"] == latest}
+    waiting = False
+    out = []
+    for stage, text in DELIVERY_STAGES:
+        if stage in done:
+            out.append(("ok", text))
+        elif not waiting:
+            waiting = True
+            out.append(("wait", f"{text} 대기"))
+        else:
+            out.append(("off", text))
+    return out
 
 
 def minutes_left(inspection: dict, now: datetime) -> str:
@@ -504,15 +533,24 @@ def intake_page(
     hold = next(iter(exception_holds.pending(actor.conn, actor.instance, intake_id)), None)
     if hold and next_step == "결정":
         next_step = "다른 승인자의 확인"
+    approved = intake["status"] == "decided" and intake["decision"] in ("approved", "exception")
+    receipts = intake_service.delivery_receipts(actor.ctx, intake_id) if approved else []
+    delivery = delivery_progress(receipts)
+    seen = (
+        usage_reader.read_tools(actor.conn, actor.instance, intake["server_id"]) if approved else []
+    )
     # 검사로 도구 목록을 못 받았으면 설명 검사·위험 등급은 파생 결과다.
     bad = next((c for c in checks if c["check"] == "inspection" and c["result"] != "pass"), None)
     why = labels.pick(labels.CHECK_REASON, bad["reason_code"]) if bad else ""
-    cause = f"검사로 도구 목록을 받지 못했습니다 · {why}" if bad and not tools else None
+    lost = bad and not tools and not seen
+    cause = f"검사로 도구 목록을 받지 못했습니다 · {why}" if lost else None
     inspections = (
         inspection_service.for_intake(actor.conn, actor.instance, intake["id"]) if local else []
     )
     open_inspection = next((x for x in inspections if x["status"] in inspection_service.OPEN), None)
     ctx = {
+        "delivery": delivery,
+        "seen": seen,
         "i": intake,
         "inspect": {
             "open": open_inspection,
@@ -545,7 +583,8 @@ def intake_page(
             (key, label, len(lacking) if key == "evidence" else 0) for key, label in intake_tabs
         ],
         "pack": pack,
-        "progress": intake_progress(intake, lacking, checks, hold is not None, cause is not None),
+        "progress": intake_progress(intake, lacking, checks, hold is not None, cause is not None,
+                                 len(seen)),
         "cause": cause,
         "decision_form": decision_form or {},
         "hold": hold,

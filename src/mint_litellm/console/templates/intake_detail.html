@@ -19,6 +19,7 @@
 {% if server_url %}<p>{{ server_url }}</p>{% endif %}<p>서버 식별자 {{ m.ident(i.server_id) }} <button type="button" class="copy" data-copy="{{ i.server_id }}">복사</button></p>
 {% if cause %}<div class="banner error" role="alert">원인: {{ cause }}</div>{% endif %}
 <ol class="steps" aria-label="진행 단계">{% for level, text in progress %}<li class="{{ level }}"><span class="icon" aria-hidden="true">{{ ICONS[level] }}</span>{{ text }}</li>{% endfor %}</ol>
+{% if delivery %}<ol class="steps" aria-label="적용 단계">{% for level, text in delivery %}<li class="{{ level }}"><span class="icon" aria-hidden="true">{{ ICONS[level] }}</span>{{ text }}</li>{% endfor %}</ol>{% endif %}
 {% if hold %}<div class="effect">두 번째 승인 대기 · 요청자 {{ hold.first_name }} · 만료 {{ hold.expires_at | when }}</div>{% endif %}
 {% if provider_blocked %}<div class="banner error">제공자가 허용되지 않았습니다. <a href="/access?tab=allowlists">제공자 허용</a> 후 {% if i.status == "indeterminate" %}재검사하세요.{% else %}<a href="/intakes/new?server_id={{ i.server_id | urlencode }}">다시 신청</a>하세요.{% endif %}</div>{% endif %}
 {% if inspect.open %}<div class="effect">단말 검사 대기 · 남은 시간 {{ inspect.left }}</div>
@@ -62,6 +63,10 @@
 {% if tools %}
 <table><thead><tr><th>도구</th><th>위험 등급</th><th>동작 유형</th><th>상태</th><th>제어</th><th></th></tr></thead><tbody>
 {% for t in tools %}<tr><td>{{ t.tool }}</td><td>{{ L.pick(L.RISK, t.risk_grade) }}</td><td>{{ L.pick(L.ACTION, t.action_type) }}</td><td>{{ '승인됨' if t.status == 'approved' else '후보' }}</td><td>{{ tc.state(t, ctl) }}</td><td class="nowrap">{{ tc.actions(t, ctl, actor, '/intakes/' ~ i.id) }}</td></tr>{% endfor %}
+</tbody></table>
+{% elif seen %}
+<table><thead><tr><th>발견된 도구</th><th>호출</th><th>차단</th></tr></thead><tbody>
+{% for t in seen %}<tr><td>{{ t.tool }}</td><td>{{ t.calls }}</td><td>{{ t.blocked }}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}<p class="muted">산정된 도구가 없습니다.</p>{% endif %}
 {% endif %}
