@@ -93,6 +93,7 @@
 <h2>결정</h2>
 <form method="post" action="/intakes/{{ i.id }}/decision" class="form" id="decision">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ i.state_version }}">
+  <details{% if error %} open{% endif %}><summary>추가 설정</summary>
   <div class="row">
     <label>대상 구분<select name="scope_type"><option value="user"{% if decision_form.scope_type == "user" %} selected{% endif %}>사용자</option><option value="key"{% if decision_form.scope_type == "key" %} selected{% endif %}>키</option><option value="team"{% if decision_form.scope_type == "team" %} selected{% endif %}>팀</option></select></label>
     <label>대상 식별자<input name="scope_id" value="{{ decision_form.scope_id if decision_form.scope_id is defined else (i.requested_by or i.owner_user_id or '') }}"></label>
@@ -104,7 +105,8 @@
     {% if pack.access %}<input type="hidden" name="narrow_files" value="1">{% for a in pack.access %}<label><input type="checkbox" name="narrow_file_access" value="{{ a.path }}" checked>{{ a.path }} · {{ '읽기·쓰기' if a.mode == 'rw' else '읽기' }}</label>{% endfor %}{% endif %}
   </fieldset>
   {% endif %}
-  <label>사유<textarea name="reason" maxlength="500">{{ decision_form.reason or "" }}</textarea></label>
+  <label>사유(선택)<textarea name="reason" maxlength="500">{{ decision_form.reason or "" }}</textarea></label>
+  </details>
   <div class="actions">
     <button type="submit" name="decision" value="approve" class="primary">승인</button>
     <button type="submit" name="decision" value="reject">거부</button>

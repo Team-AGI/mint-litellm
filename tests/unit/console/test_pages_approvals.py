@@ -12,8 +12,8 @@ from console_pages_support import (
 
 def test_the_approval_queue_lists_waiting_servers_with_a_review_action(admin):
     html = admin.get("/approvals?tab=servers").text
-    assert "srv-wait" in html and "신청 결정" in html
-    assert "srv-ok</a></td>" not in html
+    assert "srv-wait" in html and "승인·거부" in html
+    assert "서버별 허용" in html and 'role="switch"' in html
 
 
 def test_a_stale_screen_is_refused_with_a_conflict_message(world, admin):

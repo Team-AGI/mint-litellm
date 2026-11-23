@@ -62,10 +62,12 @@ def test_the_list_has_a_status_donut_whose_slices_filter_the_rows(world, admin):
     assert "srv-wait" in only and "srv-ok" not in only
 
 
-def test_stopping_from_the_list_needs_the_name_and_returns_to_the_list(world, admin):
+def test_stopping_from_the_list_uses_one_confirmation_and_returns_to_the_list(world, admin):
     version = world.query("SELECT state_version FROM mint.servers WHERE server_id = 'srv-ok'")[0][0]
     html = admin.get("/servers").text
-    assert 'name="confirm_name" data-confirm="srv-ok"' in html
+    assert 'role="switch" aria-checked="true"' in html
+    assert 'type="hidden" name="confirm_name" value="srv-ok"' in html
+    assert 'name="confirm_name" data-confirm=' not in html
     ok = form_post(world, admin, "/servers/srv-ok/suspend", state_version=version,
                    confirm_name="srv-ok", next="/servers")
     assert ok.status_code == 303 and ok.headers["location"] == "/servers?ok=suspended"

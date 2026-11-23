@@ -114,6 +114,12 @@ def _servers(actor: Actor) -> dict:
 
 
 def _approval_flow(actor: Actor) -> dict:
+    solo = _count(
+        actor,
+        "SELECT count(*) AS n FROM mint.operators WHERE instance_id = %s"
+        " AND role IN ('admin', 'approver') AND name <> 'root'"
+        " AND (expires_at IS NULL OR expires_at > now())",
+    ) == 0
     approvers = _count(
         actor,
         "SELECT count(*) AS n FROM mint.operators WHERE instance_id = %s AND role = 'approver'"
@@ -141,7 +147,9 @@ def _approval_flow(actor: Actor) -> dict:
         extra = {"post": "/setup/webhook-test", "action": "시험 전송"}
     else:
         extra = {}
-    return _item("approval", "승인 알림", status, line, **extra)
+    if solo and not approvers and not urls:
+        line = "기본 관리자가 직접 결정할 수 있습니다."
+    return _item("approval", "승인 알림", status, line, optional=solo, **extra)
 
 
 def _endpoints(actor: Actor) -> dict:

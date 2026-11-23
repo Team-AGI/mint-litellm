@@ -52,6 +52,33 @@ def test_replayed_form_is_idempotent_and_changed_payload_does_not_replace_it(swo
     assert sworld.query("SELECT purpose FROM mint.intakes") == [("공개 문서 조회",)]
 
 
+def test_a_new_form_for_the_same_address_opens_the_existing_application(sworld):
+    client = staff_tests.logged_in(sworld)
+    original = form(client)
+    assert client.post("/staff/intakes", data=original).status_code == 303
+    response = client.post("/staff/intakes", data=form(client, purpose="다른 목적"))
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        f"/staff/intakes/{original['request_id']}?ok=intake_existing")
+    assert "이미 신청한 서버입니다" in client.get(response.headers["location"]).text
+    assert sworld.query("SELECT purpose FROM mint.intakes") == [("공개 문서 조회",)]
+
+
+def test_my_application_history_can_cancel_a_waiting_request(sworld):
+    client = staff_tests.logged_in(sworld)
+    values = form(client)
+    assert client.post("/staff/intakes", data=values).status_code == 303
+    history = client.get("/staff?tab=applications").text
+    assert "내 신청 이력" in history and "대기 취소" in history
+    version = sworld.query("SELECT state_version FROM mint.intakes")[0][0]
+    response = client.post(f"/staff/intakes/{values['request_id']}/withdraw", data={
+        "csrf": staff_tests.csrf(client), "state_version": version,
+        "reason": "신청자 취소", "confirm": "yes",
+    })
+    assert response.status_code == 303
+    assert "대기 취소" not in client.get("/staff?tab=applications").text
+
+
 def test_other_staff_cannot_read_or_overwrite_an_introduction(sworld):
     client = staff_tests.logged_in(sworld)
     values = form(client)

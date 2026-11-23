@@ -281,7 +281,7 @@ def test_the_server_screen_lists_servers_with_the_tools_approved_for_this_user(s
     assert "내 서버" in page.text and "srv-ok" in page.text
     assert "echo, ping" in page.text and "secret_tool" not in page.text
     assert "srv-wait" not in page.text
-    assert "HTTP" in page.text and "없음" in page.text
+    assert 'class="catalog-card"' in page.text and "서버 보기" in page.text
 
 
 def test_a_staff_member_without_an_organization_sees_an_empty_screen(sworld):

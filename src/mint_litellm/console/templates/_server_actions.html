@@ -6,6 +6,24 @@
 {% endcall %}
 {% endmacro %}
 
+{% macro permission(s, actor, id, back) %}
+{% if s.status in ('approved', 'suspended') %}
+{% set allowed = s.status == 'approved' %}
+{% if actor.role == 'admin' %}
+<button type="button" role="switch" aria-checked="{{ 'true' if allowed else 'false' }}" aria-label="{{ s.server_name or s.server_id }} 허용" class="permission-switch" data-dialog-open="{{ id }}"><span class="switch-track" aria-hidden="true"></span>{{ '허용' if allowed else '차단' }}</button>
+<dialog id="{{ id }}" class="confirm" aria-labelledby="{{ id }}-title">
+<form method="post" action="/servers/{{ s.server_id | urlencode }}/{{ 'suspend' if allowed else 'resume' }}" hx-boost="false">
+{{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ s.state_version }}"><input type="hidden" name="next" value="{{ back }}">
+{% if allowed %}<input type="hidden" name="confirm_name" value="{{ s.server_id }}">{% endif %}
+<h3 id="{{ id }}-title">{{ '서버 차단' if allowed else '서버 허용' }}</h3>
+<p>{{ s.server_name or s.server_id }}</p>
+<p>{{ '이 서버의 모든 호출을 차단합니다.' if allowed else '기존 승인 범위의 호출을 다시 허용합니다.' }}</p>
+<div class="actions"><button type="button" data-dialog-close>취소</button><button type="submit" class="{{ 'danger' if allowed else 'primary' }}">{{ '차단' if allowed else '허용' }}</button></div>
+</form></dialog>
+{% else %}{{ m.status_badge(L.Status('허용', 'ok') if allowed else L.Status('차단', 'block')) }}{% endif %}
+{% else %}{{ m.badge(L.SERVER, s.status) }}{% endif %}
+{% endmacro %}
+
 {% macro resume(s, actor, id, back='') %}
 {% call m.confirm_dialog(id, '재개', '서버 재개', '이 서버로 가는 호출이 승인 범위 안에서 다시 허용됩니다.', '/servers/' ~ (s.server_id | urlencode) ~ '/resume', actor, '서버 재개', danger=false) %}
 <input type="hidden" name="state_version" value="{{ s.state_version }}">{% if back %}<input type="hidden" name="next" value="{{ back }}">{% endif %}

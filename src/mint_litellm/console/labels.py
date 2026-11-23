@@ -654,6 +654,7 @@ NOTICES = {
     "operator_role": "운영자의 역할을 변경했습니다.",
     "requester_assigned": "신청자를 지정했습니다.",
     "intake_created": "신청을 등록했습니다.",
+    "intake_existing": "이미 신청한 서버입니다",
     "intake_withdrawn": "신청을 철회했습니다. 기존 검사 이력은 보존됩니다.",
     "evidence_attached": "증빙을 첨부했습니다.",
     "rechecked": "재검사를 등록했습니다.",
