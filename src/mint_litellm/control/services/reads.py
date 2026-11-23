@@ -103,6 +103,14 @@ def server(conn: psycopg.Connection, instance: str, server_id: str) -> dict | No
     )
     row["file_access"] = (declared or {}).get("access") or []
     row["network"] = (declared or {}).get("network") or "any"
+    if row["network"] == "none" and fetchone(
+        conn,
+        "SELECT 1 FROM (SELECT network_legacy FROM mint.intakes WHERE instance_id = %s"
+        " AND server_id = %s AND source = 'endpoint' ORDER BY created_at DESC LIMIT 1) t"
+        " WHERE network_legacy",
+        (instance, server_id),
+    ):
+        row["network"] = "any"  # 이전 신청의 none은 직원이 정한 값이 아니다
     row["allowed_hosts"] = (declared or {}).get("hosts") or []
     row["packages"] = fetchall(
         conn,

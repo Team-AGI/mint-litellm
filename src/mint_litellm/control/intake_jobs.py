@@ -345,12 +345,15 @@ def _record_pack(job: JobContext, ctx: Context, contract: dict, spec: dict,
                  digest: str, manifest: dict) -> None:
     """같은 배포 계약 행에 묶음 해시·manifest·실행 계약(판 2)을 적는다. 다시 써도 같다."""
     python = getattr(job.settings, "local_python", None) or DEFAULT_LOCAL_PYTHON
+    legacy = fetchone(job.conn, "SELECT network_legacy FROM mint.intakes WHERE id = %s",
+                      (contract["id"],))
     with transact(ctx):
         ctx.conn.execute(
             "UPDATE mint.deployment_contracts SET pack_sha256 = %s, pack_manifest = %s::jsonb,"
             " exec_contract = %s::jsonb WHERE instance_id = %s AND id = %s",
             (digest, json.dumps(manifest), json.dumps(
-                checks.local_exec_contract(spec, digest, manifest, python)),
+                checks.local_exec_contract(
+                    spec, digest, manifest, python, bool(legacy and legacy["network_legacy"]))),
              job.instance_id, contract["id"]),
         )
         # 묶음·계약이 바뀌면 열린 검사용 승인은 쓸 수 없다
@@ -589,7 +592,9 @@ _START_FAILED = (
     " AND m.intake_id = i.id AND m.\"check\" = 'inspection'))"
 )
 _UNAPPROVED_FAILED = _START_FAILED.format(reason="c.reason_code <> 'ENDPOINT_INSPECTED'")
-_APPROVED_FAILED = _START_FAILED.format(reason="c.reason_code = ANY(%s)")
+_APPROVED_FAILED = _START_FAILED.format(
+    reason="(c.reason_code = ANY(%s) OR (c.reason_code = 'INSPECTION_FAILED'"
+    " AND coalesce(c.inputs #>> '{detail,stage}', c.inputs ->> 'stage') = 'start'))")
 
 
 def local_pack_retry(job: JobContext) -> None:

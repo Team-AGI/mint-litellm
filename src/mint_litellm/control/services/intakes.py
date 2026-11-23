@@ -45,6 +45,15 @@ RETRY_LIMIT = 12  # 자동 재시도 상한
 RETRY_EVERY = timedelta(minutes=5)
 # 묶음은 있으나 서버가 시작되지 않은 검사 사유(판본 맞춤 묶음으로 다시 만들면 풀릴 수 있다)
 START_FAILED_REASONS = ("SERVER_DEPS_MISMATCH", "SERVER_START_FAILED")
+
+
+def start_failed(check: dict) -> bool:
+    """검사에서 서버가 시작되지 못했나. 옛 기록(사유 INSPECTION_FAILED, 시작 단계 상세)도 같다."""
+    if check["reason_code"] in START_FAILED_REASONS:
+        return True
+    inputs = check.get("inputs") or {}
+    stage = ((inputs.get("detail") or {}).get("stage")) or inputs.get("stage")
+    return check["reason_code"] == "INSPECTION_FAILED" and stage == "start"
 EXCEPTION_MAX_DAYS = 90
 # 기한을 정하지 않은 승인은 만료되지 않는다(관리자가 명시한 기한만 만료).
 NO_EXPIRY = datetime(2999, 12, 31, tzinfo=UTC)
@@ -119,7 +128,7 @@ def retry_state(conn: Any, instance_id: str, intake: dict) -> dict | None:
         return None
     stuck = any(
         c["result"] == "indeterminate" and (
-            c["reason_code"] in START_FAILED_REASONS if approved and c["check"] == "inspection"
+            start_failed(c) if approved and c["check"] == "inspection"
             else not approved and (c["check"] == "pack_build" or (
                 c["check"] == "inspection" and c["reason_code"] != "ENDPOINT_INSPECTED")))
         for c in latest_checks(conn, instance_id, intake["id"])
@@ -840,12 +849,14 @@ def _supersede_candidates(ctx: Context, server_id: str) -> None:
         " AND server_id = %s AND status = 'candidate'", (ctx.instance_id, server_id))
 
 
-def _decided(ctx: Context, row: dict, decision: str, reason: str, extra: dict) -> dict:
+def _decided(ctx: Context, row: dict, decision: str, reason: str, extra: dict,
+             explicit_network: bool = False) -> dict:
     updated = fetchone(
         ctx.conn,
         "UPDATE mint.intakes SET status = 'decided', decision = %s, decided_by = %s,"
-        " decision_reason = %s, decided_at = now() WHERE id = %s RETURNING *",
-        (decision, ctx.operator.name, reason, row["id"]),
+        " decision_reason = %s, decided_at = now(),"
+        " network_legacy = network_legacy AND NOT %s WHERE id = %s RETURNING *",
+        (decision, ctx.operator.name, reason, explicit_network, row["id"]),
     )
     if decision in ("approved", "exception"):
         ctx.conn.execute(
@@ -1292,6 +1303,7 @@ def _approve_local(
         raise ControlError("실행 계약이 올바르지 않아 묶음을 다시 만듭니다.") from None
     if contract.pack is None or contract.pack.sha256 != deployment["pack_sha256"]:
         raise ControlError("실행 계약이 묶음과 맞지 않아 묶음을 다시 만듭니다.")
+
     tools = fetchall(
         ctx.conn,
         "SELECT id, tool, risk_grade, action_type FROM mint.tool_contracts WHERE instance_id = %s"
@@ -1316,6 +1328,7 @@ def _approve_local(
         ctx, row, "exception" if decision == "except" else "approved", reason or "수용검증 통과",
         {"second_approver": None if second_info is None else second_info["name"],
          **({"missing_evidence": lacking} if lacking else {})},
+        explicit_network=narrow_network is not None,  # 관리자가 정한 차단은 값으로 남는다
     )
     # 계약 등록이 서버 행의 계약 값을 정한다(등록 사건이 단말 배포 근거가 된다)
     server_domain.register_local(ctx, server_id, contract)

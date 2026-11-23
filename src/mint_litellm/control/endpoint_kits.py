@@ -40,7 +40,17 @@ def approved_contracts(conn: psycopg.Connection, instance_id: str) -> dict[str, 
         " ORDER BY s.server_id, e.inserted_at DESC",
         (instance_id,),
     )
-    return {r["server_id"]: r["contract"] for r in rows if isinstance(r["contract"], dict)}
+    legacy = {r["server_id"] for r in fetchall(
+        conn,
+        "SELECT DISTINCT ON (server_id) server_id, network_legacy FROM mint.intakes"
+        " WHERE instance_id = %s AND source = 'endpoint' ORDER BY server_id, created_at DESC",
+        (instance_id,),
+    ) if r["network_legacy"]}
+    out = {r["server_id"]: r["contract"] for r in rows if isinstance(r["contract"], dict)}
+    for name in legacy & out.keys():  # 이전 신청의 network none은 직원이 정한 값이 아니다
+        if out[name].get("network") == "none":
+            out[name] = {k: v for k, v in out[name].items() if k != "network"}
+    return out
 
 
 def _active_aliases(conn: psycopg.Connection, instance_id: str, user_id: str) -> list[str]:
