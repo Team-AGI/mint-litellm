@@ -451,11 +451,11 @@ class TestGuardrailJudgment:
         assert pre(runtime.guardrail, data) is None
         assert calls[0]["arguments"]["keys"] == ["z"]
 
-    def test_an_unverified_runtime_blocks_every_call(self, tmp_path, contract_snapshot):
-        runtime, store, snapshots = build_runtime(tmp_path, contract_snapshot, verified=False)
-        error = blocked(lambda: pre(runtime.guardrail, synthesized(logging_obj())))
-        assert error.code == "MINT-ENFORCEMENT-UNVERIFIED" and snapshots.queries == []
-        assert len(store.of_kind("decision_evaluated")) == 1
+    def test_an_unverified_runtime_still_passes_an_approved_call(self, tmp_path, contract_snapshot):
+        runtime, store, _ = build_runtime(tmp_path, contract_snapshot, verified=False)
+        assert pre(runtime.guardrail, synthesized(logging_obj())) is None
+        (event,) = store.of_kind("decision_evaluated")
+        assert event.payload["enforcement_unverified"] is True
 
     def test_the_master_key_is_forbidden(self, tmp_path, contract_snapshot):
         runtime, _, snapshots = build_runtime(tmp_path, contract_snapshot)
@@ -811,10 +811,9 @@ class TestGuardrail:
         runtime, _, _ = build_runtime(tmp_path, contract_snapshot)
         assert pre(self.make(runtime), synthesized(None), "list_mcp_tools") is None
 
-    def test_a_listing_is_hidden_while_unverified(self, tmp_path, contract_snapshot):
+    def test_a_listing_is_not_hidden_while_unverified(self, tmp_path, contract_snapshot):
         runtime, _, _ = build_runtime(tmp_path, contract_snapshot, verified=False)
-        error = blocked(lambda: pre(self.make(runtime), synthesized(None), "list_mcp_tools"))
-        assert error.code == "MINT-ENFORCEMENT-UNVERIFIED"
+        pre(self.make(runtime), synthesized(None), "list_mcp_tools")
 
     def test_two_registry_entries_with_the_same_name_hide_the_tool(
         self, tmp_path, contract_snapshot

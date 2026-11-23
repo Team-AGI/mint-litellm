@@ -245,10 +245,9 @@ def test_a_request_before_the_worker_finished_starting_gets_a_coded_refusal(tmp_
                                           "outcome": "success"})
     assert res.status_code == 503
     assert json.loads(res.json()["detail"])["error"]["code"] == "MINT-ENDPOINT-NOT-READY"
-    # 판정은 파이프라인이 막고 사건을 남긴다(통과하지 않는다).
+    # 승인된 대상의 판정은 통과하고 집행 미확인 표시가 사건에 남는다.
     res = post(client, "/mint/v1/decide", body())
-    assert res.status_code == 200 and res.json()["decision"] == "deny"
-    assert res.json()["error"]["code"] == "MINT-ENFORCEMENT-UNVERIFIED"
+    assert res.status_code == 200 and res.json()["decision"] == "allow"
 
 
 def test_a_second_guardrail_in_the_same_worker_does_not_attach_the_routes_again(monkeypatch):

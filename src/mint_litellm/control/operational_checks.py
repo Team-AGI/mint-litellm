@@ -8,6 +8,7 @@ LiteLLM 연결, 제어 키 유효, 가드레일 중복 등록 없음, 내보내�
 import shutil
 
 from mint_litellm.control import alerts
+from mint_litellm.control.db.connection import fetchone
 from mint_litellm.control.litellm_admin import LiteLLMError
 
 KIND = "operational_check"
@@ -46,7 +47,28 @@ def findings(litellm, export_dir) -> dict[str, str | None]:
     return out
 
 
+def unverified_workers(conn, instance_id) -> int:
+    """가장 최근 자가 점검이 실패한 워커 수."""
+    row = fetchone(
+        conn,
+        "SELECT count(*) FROM (SELECT DISTINCT ON (payload->>'worker_id') kind FROM mint.events"
+        " WHERE instance_id = %s AND kind IN ('enforcement_verified', 'enforcement_unverified')"
+        " ORDER BY payload->>'worker_id', inserted_at DESC, event_id DESC) t"
+        " WHERE kind = 'enforcement_unverified'", (instance_id,),
+    )
+    return int(row["count"]) if row else 0
+
+
 def run(job) -> None:
+    key_ = "enforcement_unverified:selfcheck"
+    count = unverified_workers(job.conn, job.instance_id)
+    if count:
+        alerts.raise_alert(
+            job.conn, job.instance_id, kind="enforcement_unverified", severity="critical",
+            dedup_key=key_, subject={"workers": count},
+        )
+    else:
+        alerts.resolve(job.conn, job.instance_id, key_)
     for check, problem in findings(job.litellm, job.settings.export_dir).items():
         if problem is None:
             alerts.resolve(job.conn, job.instance_id, key(check))

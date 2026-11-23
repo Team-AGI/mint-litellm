@@ -1,0 +1,1 @@
+- 집행 미확인·정책 출력 형식 오류 때도 승인된 호출은 통과시켜 `enforcement_unverified`·`policy_degraded`를 남기고, 집행 미확인은 대시보드 경보를 연다.
