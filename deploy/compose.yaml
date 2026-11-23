@@ -17,6 +17,23 @@ services:
       retries: 20
     restart: unless-stopped
 
+  # LiteLLM 워커·컨테이너가 로그인 횟수·예산·속도 제한 계수와 캐시 무효화를 함께 쓰는 공유 저장소.
+  # 외부 포트는 열지 않는다. 죽어도 LiteLLM은 멈추지 않고 워커별 메모리 계수로 계속 동작한다.
+  redis:
+    image: redis:7.4-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\" --appendonly yes"]
+    environment:
+      REDIS_PASSWORD: ${MINT_REDIS_PASSWORD:?MINT_REDIS_PASSWORD를 .env에 설정하십시오}
+      REDISCLI_AUTH: ${MINT_REDIS_PASSWORD}
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
   # 매일 두 데이터베이스를 backups/<시각>/에 덤프하고 오래된 폴더를 지운다(보존 개수 BACKUP_KEEP, 기본 7).
   # 복원은 ./mint.sh restore <폴더>. 정책 번들·LiteLLM 설정까지 담은 백업은 ./mint.sh backup이 만든다.
   backup:
@@ -80,6 +97,10 @@ services:
       MINT_MODE: ${MINT_MODE:-enforce}
       MINT_DATABASE_URL: postgresql://mint_plugin_app:${MINT_PLUGIN_DB_PASSWORD}@postgres:5432/mint
       MINT_OPA_URL: http://opa:8181
+      # LiteLLM이 환경 변수만으로 공유 저장소를 잡는다. 닿지 않으면 경고만 남기고 메모리 계수로 기동한다.
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${MINT_REDIS_PASSWORD:?MINT_REDIS_PASSWORD를 .env에 설정하십시오}
       MINT_SHADOW_OPA_URL: ${MINT_SHADOW_OPA_URL:-}
       MINT_SHADOW_SAMPLE_PERCENT: ${MINT_SHADOW_SAMPLE_PERCENT:-100}
       MINT_SHADOW_MAX_PER_SECOND: ${MINT_SHADOW_MAX_PER_SECOND:-50}
@@ -110,6 +131,9 @@ services:
         condition: service_healthy
       opa:
         condition: service_started
+      redis:
+        condition: service_started
+        required: false
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:4000/health/liveliness', timeout=3)"]
       interval: 15s
@@ -259,6 +283,7 @@ services:
 
 volumes:
   pgdata:
+  redisdata:
   bundles:
   buffer:
   export:

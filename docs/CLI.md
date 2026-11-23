@@ -261,6 +261,7 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 | `MINT_REPLICAS`, `MINT_LITELLM_WORKERS` | `check`가 공유 캐시 설정을 판단할 때 쓰는 복제본 수와 컨테이너당 LiteLLM 워커 수. 곱이 둘 이상이면 공유 Redis를 요구한다. | `1`, `1` |
 | `MINT_SECRETS_FILE` | `init`이 인자 지문 키를 쓰는 비밀 파일. `--secrets-file`로 대신할 수 있다. | `~/.config/mint/secrets.env` |
 | `MINT_PLUGIN_DB_PASSWORD`, `MINT_CONTROL_DB_PASSWORD` | `init`이 판정 프로세스용·제어 평면용 로그인 역할(`mint_plugin_app`, `mint_control_app`)을 만들 때 쓰는 비밀번호 | 없음(역할을 만들지 않음) |
+| `MINT_REDIS_PASSWORD` | LiteLLM 워커가 로그인 횟수·예산·속도 제한 계수를 함께 쓰는 Redis 비밀번호. 비워 두면 `mint.sh`가 만든다 | 자동 생성 |
 | `MINT_WORKER_DB_PASSWORD`, `MINT_STAFF_DB_PASSWORD` | `init`이 작업 실행기용(`mint_worker_app`: 제어·작업·봉인 그룹)·콘솔 직원 화면 연결 풀용(`mint_staff_app`: 직원 그룹) 로그인 역할을 만들 때 쓰는 비밀번호 | 없음(역할을 만들지 않음) |
 | `MINT_EXPORT_DIR`, `MINT_EXPORT_HMAC_KEY`, `MINT_WORKER_LEASE_SECONDS` 등 | `worker`가 읽는 2단계 설정(`MINT_EXPORT_HMAC_KEY`는 디코딩하면 32바이트 이상인 base64url). | `MINT_EXPORT_DIR`·`MINT_EXPORT_HMAC_KEY`는 필수, 임대 길이 60초 |
 | `MINT_SHADOW_OPA_URL`, `MINT_OPA_SHADOW_BUNDLE_PATH` | `policy shadow`의 시험용 정책 엔진 주소와 그 엔진이 감시하는 번들 파일. 각 옵션(`--opa-url`, `--bundle-path`)으로 대신할 수 있다. LiteLLM 컨테이너에도 `MINT_SHADOW_OPA_URL`을 주어야 시험 판본을 평가한다. | 없음, `/bundles/shadow.tar.gz` |

@@ -173,7 +173,7 @@ write_service_env() {
     [ -n "$kit" ] || kit="$(head -n 1 "$dir/kit_issuer.key" 2>/dev/null || true)"
     local settings
     settings="$(grep -E '^MINT_[A-Z0-9_]+=' .env 2>/dev/null \
-        | grep -vE '^MINT_(OPERATOR_TOKEN|LITELLM_KEY|KIT_ISSUER_KEY|[A-Z0-9_]*DB_PASSWORD)=' || true)"
+        | grep -vE '^MINT_(OPERATOR_TOKEN|LITELLM_KEY|KIT_ISSUER_KEY|REDIS_PASSWORD|[A-Z0-9_]*DB_PASSWORD)=' || true)"
     (umask 077 && {
         printf 'MINT_LITELLM_KEY=%s\nMINT_KIT_ISSUER_KEY=%s\n' "$control" "$kit"
         [ -z "$settings" ] || printf '%s\n' "$settings"
@@ -227,7 +227,7 @@ random_secret() {
 
 ensure_generated() {
     local name
-    for name in MINT_EXPORT_HMAC_KEY MINT_WEBHOOK_HMAC_KEY MINT_WORKER_DB_PASSWORD MINT_STAFF_DB_PASSWORD; do
+    for name in MINT_EXPORT_HMAC_KEY MINT_WEBHOOK_HMAC_KEY MINT_WORKER_DB_PASSWORD MINT_STAFF_DB_PASSWORD MINT_REDIS_PASSWORD; do
         if [ -z "$(env_value "$name")" ]; then
             sed -i "/^${name}=/d" .env
             append_env "$name" "$(random_secret)"

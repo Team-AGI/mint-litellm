@@ -114,6 +114,7 @@ def test_first_run_generates_export_key_and_worker_passwords_once_with_private_e
     key = values["MINT_EXPORT_HMAC_KEY"]
     assert len(base64.urlsafe_b64decode(key + "=" * (-len(key) % 4))) >= 32
     assert len(values["MINT_WORKER_DB_PASSWORD"]) >= 32
+    assert len(values["MINT_REDIS_PASSWORD"]) >= 32
     assert values["MINT_STAFF_DB_PASSWORD"] == "keep-me"
     if os.name != "nt":
         assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
@@ -314,7 +315,7 @@ def test_a_key_in_the_env_file_wins_over_the_stored_control_key(tmp_path):
     (tmp_path / "deploy").mkdir()
     (tmp_path / "deploy" / "litellm.config.example.yaml").write_text("{}\n", encoding="utf-8")
     env = (f"POSTGRES_PASSWORD=x\nMINT_SECRETS_DIR={secrets}\nMINT_LITELLM_KEY=sk-from-env\n"
-           "MINT_APPROVAL_HOLD_SECONDS=200\nMINT_SLACK_SIGNING_SECRET=s3\nMINT_STAFF_DB_PASSWORD=w\n")
+           "MINT_APPROVAL_HOLD_SECONDS=200\nMINT_SLACK_SIGNING_SECRET=s3\nMINT_STAFF_DB_PASSWORD=w\nMINT_REDIS_PASSWORD=rp\n")
     result, _, _ = run(tmp_path, env, "up", docker_tail=CONTROL_DOCKER)
     assert result.returncode == 0, result.stderr
     log = (tmp_path / "docker.log").read_text(encoding="utf-8")
@@ -324,7 +325,7 @@ def test_a_key_in_the_env_file_wins_over_the_stored_control_key(tmp_path):
     assert "MINT_LITELLM_KEY=sk-from-env" in lines and "MINT_KIT_ISSUER_KEY=sk-kit" in lines
     # .env 운영 설정도 컨테이너로 간다(DB 비밀번호 제외, 플러그인용 파일에는 비밀 없음).
     assert "MINT_APPROVAL_HOLD_SECONDS=200" in lines and "MINT_SLACK_SIGNING_SECRET=s3" in lines
-    assert not any(ln.startswith("MINT_STAFF_DB_PASSWORD") for ln in lines)
+    assert not any(ln.startswith(("MINT_STAFF_DB_PASSWORD", "MINT_REDIS_PASSWORD")) for ln in lines)
     settings = (secrets / "settings.env").read_text(encoding="utf-8").splitlines()
     assert "MINT_APPROVAL_HOLD_SECONDS=200" in settings
     names = {ln.split("=", 1)[0] for ln in settings}
@@ -742,3 +743,16 @@ def test_auto_heal_off_registers_nothing_and_removes_what_exists(tmp_path):
     assert "disable --now" in (tmp_path / "host.log").read_text(encoding="utf-8")
     _, _, home = run(tmp_path, off, "upgrade", extra_env={"FAKE_NO_SYSTEMD": "1"})
     assert (home / "cron.txt").read_text(encoding="utf-8").strip() == ""
+
+
+def test_compose_redis_is_private_and_litellm_uses_it_without_depending_on_health():
+    import yaml
+    text = (SCRIPT.parent / "compose.yaml").read_text(encoding="utf-8")
+    services = yaml.safe_load(text)["services"]
+    redis = services["redis"]
+    assert "@sha256:" in redis["image"] and "ports" not in redis
+    assert redis["restart"] == "unless-stopped" and "healthcheck" in redis
+    env = services["litellm"]["environment"]
+    assert env["REDIS_HOST"] == "redis" and "MINT_REDIS_PASSWORD" in env["REDIS_PASSWORD"]
+    dep = services["litellm"]["depends_on"]["redis"]
+    assert dep == {"condition": "service_started", "required": False}
