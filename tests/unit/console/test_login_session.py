@@ -262,3 +262,21 @@ def test_a_browser_that_sends_origin_null_is_accepted_when_fetch_metadata_says_s
         "/login", data={"key": Keys.admin},
         headers={"Origin": "null", "Sec-Fetch-Site": "same-origin"})
     assert response.status_code == 303
+
+
+def test_logout_and_expiry_clear_the_litellm_screen_cookie(world):
+    client = world.session_client()
+    response = client.post("/logout", data={"csrf": world.csrf(client)})
+    assert any(h.lower().startswith("token=") and "max-age=0" in h.lower()
+               and "samesite=lax" in h.lower()
+               and "path=/" in h.lower() for h in response.headers.get_list("set-cookie"))
+    client.cookies.set(COOKIE, "forged", domain="testserver.local")
+    expired = client.get("/")
+    assert expired.status_code == 303
+    assert any(h.lower().startswith("token=") for h in expired.headers.get_list("set-cookie"))
+
+
+def test_opening_the_console_without_a_mint_session_leaves_the_litellm_cookie(world):
+    response = world.client.get("/")
+    assert response.status_code == 303
+    assert not any(h.lower().startswith("token=") for h in response.headers.get_list("set-cookie"))
