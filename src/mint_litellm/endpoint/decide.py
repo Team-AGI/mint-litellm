@@ -445,6 +445,23 @@ def local_request(
     )
 
 
+async def _legacy_network(body: DecideBody, runtime: Any) -> DecideBody:
+    """옛 신청의 승인 계약은 network none으로 저장돼 있고 단말은 그 값을 뺀 계약을 보낸다.
+    저장된 해시가 network none을 더한 계약의 해시와 같으면 저장된 쪽으로 맞춘다."""
+    contract = body.contract
+    if contract is None or contract.network is not None:
+        return body
+    try:
+        rows = await runtime.database.registered_servers(runtime.config.instance_id)
+    except Exception:  # 가용성 우선: 조회 실패는 원래 계약 그대로 판정한다
+        return body
+    stored = {r.server_id: r.exec_contract_sha256 for r in rows}.get(body.server)
+    if stored is None or stored == contract.sha256():
+        return body
+    legacy = contract.model_copy(update={"network": "none"})
+    return body.model_copy(update={"contract": legacy}) if legacy.sha256() == stored else body
+
+
 def result_context(payload: Mapping[str, Any]) -> dict[str, Any]:
     """판정 사건 본문에서 응답 관측이 읽는 호출 컨텍스트를 다시 만든다(단말 값은 쓰지 않는다)."""
     principal = payload.get("principal") or {}
@@ -514,6 +531,7 @@ def make_router(
     async def decide(request: Request, auth: Any = Depends(auth_dependency)) -> dict[str, Any]:
         runtime = ready(verified=False)
         body = await _body(request, DecideBody)
+        body = await _legacy_network(body, runtime)
         call = local_request(
             body, auth, instance_id=runtime.config.instance_id, principal_factory=principal_factory
         )
