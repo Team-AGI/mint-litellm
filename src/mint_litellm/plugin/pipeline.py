@@ -579,11 +579,7 @@ def contract_result(
     ):
         # 지금 서버 정의의 범위가 승인된 범위보다 넓다: 닫힌 쪽으로 막는다(좁아지거나 같으면 통과)
         return StageResult.finding(Reason.CONTRACT_DRIFT, "oauth_scope")
-    if (
-        server.last_observed_at is None
-        or (snapshot.now - server.last_observed_at).total_seconds() > 2 * observe_seconds
-    ):
-        return StageResult.finding(Reason.CONTRACT_DRIFT, "unobserved")
+    # 관측이 없거나 오래됐다는 이유만으로는 막지 않는다(가용성 우선, 로컬 서버는 PC가 보고).
     return StageResult.passed()
 
 

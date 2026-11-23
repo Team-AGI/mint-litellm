@@ -257,7 +257,7 @@ def test_pin_mismatch_keeps_approval_and_retry_releases_block(contract_db):
     assert contract_result(snap, "read", 60).reason_code is None
     assert contract_result(
         replace(snap, now=snap.now + timedelta(seconds=121)), "read", 60
-    ).reason_code == ("CONTRACT_DRIFT_unobserved")
+    ).reason_code is None
 
 
 @pytest.mark.parametrize("mode", ["stale", "requester", "viewer", "unbound", "version"])

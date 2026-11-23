@@ -424,7 +424,7 @@ def test_add_submits_the_spec_without_running_anything(tmp_path):
     assert body["spec"]["argv"] == ["/data/in"] and body["file_access"] == [
         {"path": "/data/in", "mode": "ro"}
     ]
-    assert body["network"] == "none" and body["env_names"] == ["API_TOKEN"]
+    assert body["network"] is None and body["env_names"] == ["API_TOKEN"]
     assert body["data_grade"] == "internal" and body["allowed_hosts"] == []
     assert any("비밀" in line for line in lines) and "신청했습니다" in lines
 

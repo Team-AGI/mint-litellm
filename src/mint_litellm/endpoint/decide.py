@@ -242,7 +242,7 @@ class IntakeBody(BaseModel):
     server_id: str = Field(pattern=_NAME)
     spec: IntakeSpec
     file_access: list[FileAccessItem] = Field(default_factory=list, max_length=64)
-    network: Literal["none", "hosts"] = "none"
+    network: Literal["none", "hosts"] | None = None  # 지정하지 않으면 자동(막지 않음)
     allowed_hosts: list[Annotated[str, Field(min_length=1, max_length=253)]] = Field(
         default_factory=list, max_length=64
     )

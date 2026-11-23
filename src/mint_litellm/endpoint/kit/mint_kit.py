@@ -3949,7 +3949,7 @@ def run_add(
                 out(f"파일 접근에 읽기로 더했습니다: {path[:50]}")
         hosts = list(args.host or []) or (
             [] if args.network == "none" else inferred_hosts(spec["argv"], env_values))
-        network = args.network or ("hosts" if hosts else "none")
+        network = args.network or ("hosts" if hosts else None)
         if network == "hosts" and not hosts:
             out("hosts에는 허용 호스트(--host)가 필요합니다")
             return 2
@@ -3963,7 +3963,7 @@ def run_add(
             ("명령", " ".join([spec["command"], *spec["argv"]])[:70]),
             ("파일 접근", ", ".join(
                 f"{p} ({'쓰기' if m == 'rw' else '읽기'})" for p, m in access.items()) or "없음"),
-            ("네트워크", "자동" if args.network is None and not hosts
+            ("네트워크", "자동" if network is None
              else "없음" if network == "none" else ", ".join(hosts)),
             ("환경 변수", ", ".join([*env_names, *(f"{k}={v}" for k, v in env_values.items())])[:70]
              or "없음"), ("목적", purpose[:70]),

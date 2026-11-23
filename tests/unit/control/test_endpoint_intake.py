@@ -549,3 +549,23 @@ def test_the_pack_retry_picks_up_a_pending_request_whose_pack_could_not_be_built
     before = len(world.jobs("intake_run"))
     intake_jobs.local_pack_retry(job)
     assert len(world.jobs("intake_run")) == before + 1  # 승인 보류가 없어도 다시 검사한다
+
+
+def test_the_pack_retry_also_picks_up_a_request_whose_server_failed_during_inspection(seeded):
+    from types import SimpleNamespace
+
+    from mint_litellm.control import intake_checks as checks
+    from mint_litellm.control import intake_jobs
+    from mint_litellm.control.context import Context
+
+    world = seeded
+    request_id = submit(world)
+    pass_the_checks(world, request_id, final="indeterminate")  # 묶음은 있다
+    row = world.intake(request_id)
+    ctx = Context(world.conn, INSTANCE, Operator(svc.SYSTEM_ACTOR, "admin", None))
+    svc.record_check(ctx, row, 1, "inspection",
+                     checks.Outcome("indeterminate", "INSPECTION_FAILED", "inspector:tools_list"))
+    job = SimpleNamespace(conn=world.conn, instance_id=INSTANCE, checkpoint=lambda: None)
+    before = len(world.jobs("intake_run"))
+    intake_jobs.local_pack_retry(job)
+    assert len(world.jobs("intake_run")) == before + 1
