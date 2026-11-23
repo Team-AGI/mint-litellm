@@ -17,7 +17,8 @@ BASH = shutil.which("bash")
 pytestmark = pytest.mark.skipif(BASH is None, reason="bash가 필요하다")
 
 
-def run(tmp_path: Path, env_text: str, *args: str, docker_tail: str = ""):
+def run(tmp_path: Path, env_text: str, *args: str, docker_tail: str = "", extra_env=None):
+    extra_env = extra_env or {}
     deploy = tmp_path / "deploy"
     deploy.mkdir(exist_ok=True)
     shutil.copy(SCRIPT, deploy / "mint.sh")
@@ -34,6 +35,14 @@ def run(tmp_path: Path, env_text: str, *args: str, docker_tail: str = ""):
         (deploy / "config").mkdir(exist_ok=True)
         (deploy / "config" / "litellm.config.yaml").write_text("{}\n", encoding="utf-8")
     fake.chmod(0o755)
+    fakes = {  # 호스트 주기 실행 등록이 시험 기기를 건드리지 않게 대역으로 바꾼다
+        "systemctl": 'echo "$@" >> "$FAKE_HOST_LOG"\n[ -z "$FAKE_NO_SYSTEMD" ]\n',
+        "crontab": 'f="$HOME/cron.txt"\n'
+        'if [ "$1" = -l ]; then cat "$f" 2>/dev/null; else cat > "$f"; fi\n',
+    }
+    for name, body in fakes.items():
+        (bin_dir / name).write_text("#!/bin/sh\n" + body, encoding="utf-8")
+        (bin_dir / name).chmod(0o755)
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
     env = {
@@ -42,6 +51,8 @@ def run(tmp_path: Path, env_text: str, *args: str, docker_tail: str = ""):
         "HOME": str(home),
         "FAKE_DOCKER_LOG": str(tmp_path / "docker.log"),
         "MINT_UPGRADE_WAIT": "0",
+        "FAKE_HOST_LOG": str(tmp_path / "host.log"),
+        **extra_env,
     }
     result = subprocess.run(
         [BASH, "mint.sh", *args],
@@ -659,3 +670,75 @@ def test_the_compose_file_runs_the_daily_backup_with_a_restart_policy():
     # 작업 실행기와 콘솔은 죽어도 다시 뜬다
     for name in ("worker", "console"):
         assert "restart: unless-stopped" in text.split(f"\n  {name}:\n", 1)[1].split("\n\n", 1)[0]
+
+
+HEAL_ENV = "POSTGRES_PASSWORD=x\nLITELLM_MASTER_KEY=sk-master\nMINT_SECRETS_DIR={s}\n"
+STALE = 'case "$*" in *"CHECK_KEY"*) echo missing;; esac\n'
+
+
+def heal(tmp_path, docker_tail):
+    secrets = tmp_path / "secrets"
+    secrets.mkdir(exist_ok=True)
+    (secrets / "kit_issuer.key").write_text("sk-old-kit\n", encoding="utf-8")
+    (secrets / "control.key").write_text("sk-old-control\n", encoding="utf-8")
+    result, _, _ = run(tmp_path, HEAL_ENV.format(s=secrets), "heal", docker_tail=docker_tail)
+    log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+    return result, log, secrets
+
+
+def test_heal_does_nothing_when_no_key_is_rejected(tmp_path):
+    result, log, secrets = heal(tmp_path, 'case "$*" in *CHECK_KEY*) echo present;; esac\n')
+    assert result.returncode == 0, result.stderr
+    assert "거부된 키 없음" in result.stdout
+    assert "key/generate" not in log and " up -d" not in log
+    assert (secrets / "control.key").read_text(encoding="utf-8") == "sk-old-control\n"
+
+
+def test_heal_leaves_keys_alone_when_litellm_is_unreachable(tmp_path):
+    result, log, _ = heal(tmp_path, 'case "$*" in *CHECK_KEY*) echo unknown;; esac\n')
+    assert result.returncode == 0 and "key/generate" not in log and " up -d" not in log
+
+
+def test_heal_reissues_rejected_keys_and_restarts_their_containers(tmp_path):
+    result, log, secrets = heal(tmp_path, STALE + CONTROL_DOCKER)
+    assert result.returncode == 0, result.stderr
+    assert (secrets / "control.key").read_text(encoding="utf-8") == "sk-issued-control\n"
+    assert (secrets / "kit_issuer.key").read_text(encoding="utf-8") == "sk-issued-kit\n"
+    assert "up -d --force-recreate worker inspector" in log
+    assert "up -d --force-recreate console" in log
+
+
+def test_upgrade_registers_one_systemd_user_timer_and_a_rerun_adds_no_second(tmp_path):
+    env = HEAL_ENV.format(s=tmp_path / "secrets")
+    result, _, home = run(tmp_path, env, "upgrade")
+    assert result.returncode == 0, result.stderr
+    units = sorted((home / ".config/systemd/user").iterdir())
+    assert [u.suffix for u in units] == [".service", ".timer"]
+    assert "OnUnitActiveSec=10min" in units[1].read_text(encoding="utf-8")
+    assert "mint.sh heal" in units[0].read_text(encoding="utf-8")
+    run(tmp_path, env, "upgrade")
+    host = (tmp_path / "host.log").read_text(encoding="utf-8")
+    assert host.count("enable --now") == 1
+    assert len(list((home / ".config/systemd/user").iterdir())) == 2
+
+
+def test_without_systemd_a_single_crontab_line_is_kept_and_replaced(tmp_path):
+    env = HEAL_ENV.format(s=tmp_path / "secrets")
+    for _ in range(2):
+        result, _, home = run(tmp_path, env, "upgrade", extra_env={"FAKE_NO_SYSTEMD": "1"})
+        assert result.returncode == 0, result.stderr
+    lines = (home / "cron.txt").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1 and lines[0].startswith("*/10 * * * * ")
+    assert "mint.sh heal" in lines[0]
+
+
+def test_auto_heal_off_registers_nothing_and_removes_what_exists(tmp_path):
+    env = HEAL_ENV.format(s=tmp_path / "secrets")
+    run(tmp_path, env, "upgrade")
+    run(tmp_path, env, "upgrade", extra_env={"FAKE_NO_SYSTEMD": "1"})
+    off = env + "MINT_AUTO_HEAL=0\n"
+    _, _, home = run(tmp_path, off, "upgrade")
+    assert list((home / ".config/systemd/user").iterdir()) == []
+    assert "disable --now" in (tmp_path / "host.log").read_text(encoding="utf-8")
+    _, _, home = run(tmp_path, off, "upgrade", extra_env={"FAKE_NO_SYSTEMD": "1"})
+    assert (home / "cron.txt").read_text(encoding="utf-8").strip() == ""

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MINT 배포 보조 스크립트: up | status | bootstrap | password | backup | restore | upgrade | cli
+# MINT 배포 보조 스크립트: up | status | bootstrap | password | backup | restore | upgrade | heal | cli
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -109,10 +109,10 @@ issue_key() {
 
 # DB를 비운 뒤 비밀 폴더에 남은 옛 키는 새 LiteLLM에 없다. 없다고 확인될 때만 치우고 새로 발급한다
 # (LiteLLM에 닿지 않으면 그대로 둔다).
-drop_stale_key() {
-    local file="$1" state
-    [ -s "$file" ] || return 0
-    state="$(env "LITELLM_MASTER_KEY=$(env_value LITELLM_MASTER_KEY)" "CHECK_KEY=$(head -n 1 "$file")"         "${COMPOSE[@]}" run --rm --no-deps -T -e LITELLM_MASTER_KEY -e CHECK_KEY         --entrypoint python control -c '
+key_state() {
+    env "LITELLM_MASTER_KEY=$(env_value LITELLM_MASTER_KEY)" "CHECK_KEY=$(head -n 1 "$1")" \
+        "${COMPOSE[@]}" run --rm --no-deps -T -e LITELLM_MASTER_KEY -e CHECK_KEY \
+        --entrypoint python control -c '
 import os, urllib.error, urllib.parse, urllib.request
 query = urllib.parse.urlencode({"key": os.environ["CHECK_KEY"]})
 request = urllib.request.Request("http://litellm:4000/key/info?" + query,
@@ -124,8 +124,13 @@ except urllib.error.HTTPError as error:
     print("missing" if error.code in (400, 404) else "unknown")
 except Exception:
     print("unknown")
-' 2>/dev/null | tail -n 1)"
-    [ "$state" = "missing" ] || return 0
+' < /dev/null 2>/dev/null | tail -n 1
+}
+
+drop_stale_key() {
+    local file="$1"
+    [ -s "$file" ] || return 0
+    [ "$(key_state "$file")" = "missing" ] || return 0
     mv "$file" "$file.stale-$(date -u +%Y%m%dT%H%M%SZ)"
     echo "$(basename "$file")가 LiteLLM에 없어 새로 발급합니다." >&2
 }
@@ -355,6 +360,75 @@ wait_litellm() {
     fail "원인을 고친 뒤 ./mint.sh up을 다시 실행하십시오(전체 로그: docker compose logs litellm)."
 }
 
+# 호스트 주기 실행이 부른다. 제어 키·단말 설치 묶음 키가 LiteLLM에서 사라졌을 때만 다시 발급해 재기동한다.
+cmd_heal() {
+    require_env
+    if command -v flock >/dev/null 2>&1; then
+        exec 9> .heal.lock
+        flock -n 9 || exit 0
+    fi
+    local dir file bad=0
+    dir="$(env_value MINT_SECRETS_DIR)"
+    for file in "$dir/kit_issuer.key" "$dir/control.key"; do
+        [ -s "$file" ] || continue
+        if [ "$file" = "$dir/control.key" ] && [ -n "$(env_value MINT_LITELLM_KEY)" ]; then continue; fi
+        if [ "$(key_state "$file")" = "missing" ]; then bad=1; fi
+    done
+    if [ "$bad" -eq 0 ]; then
+        echo "키 점검: 거부된 키 없음"
+        return 0
+    fi
+    echo "거부된 키를 다시 발급합니다." >&2
+    ensure_kit_issuer_key
+    ensure_control_key
+    "${COMPOSE[@]}" --profile worker up -d --force-recreate worker inspector < /dev/null
+    "${COMPOSE[@]}" --profile console up -d --force-recreate console < /dev/null
+}
+
+# 10분마다 heal을 돌리는 사용자 단위 등록(sudo 없음). systemd 사용자 타이머가 되면 그것, 아니면 crontab.
+# MINT_AUTO_HEAL=0이면 등록하지 않고 있으면 지운다. 실패해도 기동은 계속한다.
+HEAL_ID="mint-heal-$(printf %s "$PWD" | cksum | cut -d' ' -f1)"
+HEAL_UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+heal_cron_strip() { { crontab -l 2>/dev/null < /dev/null || true; } | grep -vF "# $HEAL_ID" || true; }
+write_unit() { # 내용이 다르면 쓰고 1을 낸다
+    local file="$1" text="$2"
+    printf '%b' "$text" | cmp -s - "$file" 2>/dev/null && return 0
+    printf '%b' "$text" > "$file"
+    HEAL_CHANGED=1
+}
+register_heal() {
+    local want=1
+    HEAL_CHANGED=0
+    [ "$(env_value MINT_AUTO_HEAL)" = "0" ] && want=0
+    if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1 < /dev/null; then
+        if [ "$want" -eq 0 ]; then
+            if [ -e "$HEAL_UNIT_DIR/$HEAL_ID.timer" ]; then
+                systemctl --user disable --now "$HEAL_ID.timer" < /dev/null || true
+                rm -f "$HEAL_UNIT_DIR/$HEAL_ID.timer" "$HEAL_UNIT_DIR/$HEAL_ID.service"
+                systemctl --user daemon-reload < /dev/null || true
+            fi
+            return 0
+        fi
+        mkdir -p "$HEAL_UNIT_DIR"
+        write_unit "$HEAL_UNIT_DIR/$HEAL_ID.service" "[Unit]\nDescription=MINT 키 거부 자동 복구\n\n[Service]\nType=oneshot\nWorkingDirectory=$PWD\nExecStart=/usr/bin/env bash $PWD/mint.sh heal\n"
+        write_unit "$HEAL_UNIT_DIR/$HEAL_ID.timer" "[Unit]\nDescription=MINT 키 거부 자동 복구(10분마다)\n\n[Timer]\nOnBootSec=5min\nOnUnitActiveSec=10min\n\n[Install]\nWantedBy=timers.target\n"
+        if [ "$HEAL_CHANGED" -eq 1 ]; then
+            systemctl --user daemon-reload < /dev/null || true
+            systemctl --user enable --now "$HEAL_ID.timer" < /dev/null || true
+        fi
+        return 0
+    fi
+    command -v crontab >/dev/null 2>&1 || return 0
+    if [ "$want" -eq 0 ]; then
+        if { crontab -l 2>/dev/null < /dev/null || true; } | grep -qF "# $HEAL_ID"; then
+            heal_cron_strip | crontab - || true
+        fi
+        return 0
+    fi
+    { heal_cron_strip; echo "*/10 * * * * cd '$PWD' && ./mint.sh heal >/dev/null 2>>.heal.log < /dev/null # $HEAL_ID"; } \
+        | crontab - || true
+}
+
 cmd_up() {
     require_env
     mkdir -p config
@@ -374,6 +448,7 @@ cmd_up() {
     "${COMPOSE[@]}" --profile console up -d console
     "${COMPOSE[@]}" up -d backup
     ensure_default_root
+    register_heal
     echo "기동했습니다."
     next_step
 }
@@ -658,6 +733,7 @@ cmd_upgrade() {
         "${entry##*|}"
     done
     UPGRADE_STEP=""
+    register_heal
     echo "업그레이드했습니다.${BACKUP_DIR:+ 백업: $BACKUP_DIR}"
 }
 
@@ -669,6 +745,7 @@ case "${1:-}" in
     bootstrap) shift; cmd_bootstrap "$@" ;;
     password) shift; cmd_password "$@" ;;
     upgrade) shift; cmd_upgrade "$@" ;;
+    heal) cmd_heal ;;
     cli) shift; require_env
         case " $* " in
             *" --save-token"*) cli_save_token "$@" ;;
@@ -676,5 +753,5 @@ case "${1:-}" in
             *" password-reset"*) env "MINT_LITELLM_ADMIN_KEY=$(env_value LITELLM_MASTER_KEY)"                 "${COMPOSE[@]}" run --rm -e MINT_LITELLM_ADMIN_KEY ${MINT_LITELLM_KEY:+-e MINT_LITELLM_KEY} control "$@" ;;
             *) cli "$@" ;;
         esac ;;
-    *) fail "사용법: ./mint.sh up | status | bootstrap <이름> <사용자> | password <사용자> | backup | restore <백업 폴더> | upgrade [--dry-run] | cli <명령...>" ;;
+    *) fail "사용법: ./mint.sh up | status | bootstrap <이름> <사용자> | password <사용자> | backup | restore <백업 폴더> | upgrade [--dry-run] | heal | cli <명령...>" ;;
 esac

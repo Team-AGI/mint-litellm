@@ -32,7 +32,7 @@ def findings(litellm, export_dir) -> dict[str, str | None]:
         guardrails = litellm.list_guardrails()
     except LiteLLMError as error:
         if "HTTP 401" in str(error) or "HTTP 403" in str(error):
-            out["key"] = "제어 키가 거부됩니다. ./mint.sh up으로 다시 발급하십시오."
+            out["key"] = "제어 키가 거부됩니다. 자동 복구 대기(10분 이내)"
         else:
             out["litellm"] = "LiteLLM에 연결할 수 없습니다."
         return out
