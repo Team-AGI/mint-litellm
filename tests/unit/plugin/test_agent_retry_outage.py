@@ -1,0 +1,85 @@
+"""에이전트가 읽는 거부 응답 세 갈래와, 정책 엔진 장애 중 직전에 허용된 호출의 통과."""
+
+import asyncio
+import json
+
+from plugin_helpers import (
+    NOW,
+    approval,
+    evaluator,
+    harness,
+    resolved_server,
+    server_row,
+    snapshot,
+    user_principal,
+)
+
+from mint_litellm.compat import litellm_1_106 as compat
+from mint_litellm.plugin.pipeline import build_request, evaluate_request
+from mint_litellm.plugin.snapshot import ToolContractRow
+from mint_litellm.types.decision import OperationType, Reason, StageResult
+from mint_litellm.types.errors import Dependency, error_for_reason
+
+SERVER = server_row(contract_status="managed", last_observed_at=NOW)
+CONTRACTS = (ToolContractRow("c1", "server", "search", "none", 1, input_keys=("q",)),)
+REF = "00000000-0000-0000-0000-000000000001:1"
+
+
+def body(code, **kw):
+    return json.loads(error_for_reason(code, REF, **kw).detail())
+
+
+def test_the_three_refusal_kinds_tell_the_agent_what_to_do():
+    pending = body("CALL_APPROVAL_REQUIRED")
+    assert pending["retry_safe"] is True and pending["retry_after"] > 0
+    assert "승인 대기 중" in pending["guidance"] and "Approval pending" in pending["guidance"]
+    blocked = body("DENIED")
+    assert blocked["retry_safe"] is False and "retry_after" not in blocked
+    assert "재시도하지 마십시오" in blocked["guidance"] and "do not retry" in blocked["guidance"]
+    transient = body("DEPENDENCY_FAILURE", dependency=Dependency.OPA)
+    assert transient["retry_safe"] is True and transient["retry_after"] > 0
+    assert "일시 오류" in transient["guidance"] and "Temporary error" in transient["guidance"]
+    assert transient["reference"] == pending["reference"] == blocked["reference"] == REF
+
+
+def call(h):
+    data = {
+        "mcp_server_name": "mslearn",
+        "mcp_tool_name": "search",
+        "mcp_arguments": {"q": "x"},
+        "messages": [{"role": "user", "content": "call\nArguments: {'q': 'x'}"}],
+    }
+    request = build_request(
+        data,
+        None,
+        operation=OperationType.TOOL_CALL,
+        instance_id="inst",
+        hook_parser=compat.parse_hook_data,
+        resolver=lambda hook: resolved_server(),
+        principal_factory=lambda auth, instance_id: user_principal(),
+    )
+    return asyncio.run(evaluate_request(request, h.deps))
+
+
+def test_an_allowed_call_keeps_passing_while_the_policy_engine_is_down(tmp_path):
+    h = harness(
+        tmp_path,
+        snapshot(server=SERVER, tool_contracts=CONTRACTS, approvals=(approval(),)),
+        evaluate=evaluator(),
+    )
+    assert call(h).allowed
+    h.deps.evaluate = evaluator(failure=StageResult.stop(Reason.DEPENDENCY_FAILURE))
+    outage = call(h)
+    assert outage.allowed and outage.snapshot.policy_reused is True
+    assert json.loads(outage.snapshot.model_dump_json())["policy_reused"] is True
+
+
+def test_a_call_never_allowed_before_is_blocked_while_the_policy_engine_is_down(tmp_path):
+    h = harness(
+        tmp_path,
+        snapshot(server=SERVER, tool_contracts=CONTRACTS, approvals=(approval(),)),
+        evaluate=evaluator(failure=StageResult.stop(Reason.DEPENDENCY_FAILURE)),
+    )
+    outcome = call(h)
+    assert not outcome.allowed and outcome.error.code == "MINT-DEPENDENCY-OPA"
+    assert outcome.error.retry_safe and outcome.error.retry_after

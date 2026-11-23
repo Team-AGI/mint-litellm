@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from mint_litellm.types.errors import (
     BLOCK_STATUS_CODE,
+    BLOCKED_GUIDANCE,
     REASON_EXPLANATIONS,
     Dependency,
     DispatchState,
@@ -73,7 +74,7 @@ def test_dependency_failure_is_retry_safe_before_dispatch(dependency, code):
     assert err.code == code
     assert err.dispatch_state is DispatchState.NOT_DISPATCHED
     assert err.retry_safe is True
-    assert err.guidance and "관리자" in err.guidance
+    assert err.guidance and "일시 오류" in err.guidance and err.retry_after
 
 
 def test_dependency_failure_requires_the_component():
@@ -134,7 +135,8 @@ def test_block_response_is_a_403_with_a_json_string_detail():
         "retry_safe": False,
         "reference": REF,
         "guidance": REASON_EXPLANATIONS[Reason.DENIED]
-        + ". 관리자에게 해당 설정과 승인 범위 확인을 요청하십시오.",
+        + ". "
+        + BLOCKED_GUIDANCE,
     }
 
 
@@ -153,7 +155,7 @@ def test_detail_survives_the_streamable_http_error_text():
 def test_a_call_approval_wait_tells_the_agent_to_ask_again_after_approval(reason):
     err = error_for_reason(reason, REF)
     assert (err.dispatch_state, err.retry_safe) == (DispatchState.NOT_DISPATCHED, True)
-    assert "승인된 뒤 같은 작업을 다시 요청하십시오" in json.loads(err.detail())["guidance"]
+    assert "승인 대기 중" in json.loads(err.detail())["guidance"]
     assert MintError.from_detail(err.detail()) == err
     # 다른 차단에는 안내 문구가 없다.
     assert "동의" in json.loads(error_for_reason("CONSENT_REQUIRED", REF).detail())["guidance"]

@@ -155,6 +155,11 @@ class PipelineDeps:
     list_seen: ListSeen | None = None
     # 원격 서버 주소의 이름 조회 결과 재확인. 없으면 하지 않는다.
     resolve_guard: ResolveGuard | None = None
+    # 직전에 정책이 깨끗하게 허용한 (주체, 서버, 도구, 정책 판본)의 판정과 시각. 정책 엔진이
+    # 응답하지 않는 동안 같은 호출을 이어 통과시키는 데만 쓴다.
+    policy_reuse: dict[tuple[str, str, str, str], tuple[float, PolicyStageResult]] = field(
+        default_factory=dict
+    )
 
 
 @dataclass(frozen=True)
@@ -936,6 +941,38 @@ class PolicyStageResult:
     dependency: Dependency | None = None
 
 
+POLICY_REUSE_SECONDS = 300.0
+POLICY_REUSE_MAX = 1000
+
+
+def _reuse_on_outage(run: _Run, deps: PipelineDeps, server_id: str, tool: str) -> PolicyStageResult:
+    """정책 엔진이 응답하지 않으면, 직전(5분 안)에 같은 주체·서버·도구·정책 판본이 의무와 지적 없이
+    허용된 판정을 다시 쓴다. 승인·서버 상태·철회는 이미 이번 호출의 스냅숏으로 검사했다.
+    그렇지 않으면 그대로 막는다(DB 장애는 선기록을 못 하므로 여기서 다루지 않는다)."""
+    policy, version = run.policy, run.snapshot.policy_version if run.snapshot else None
+    if policy is None or version is None:
+        return policy  # type: ignore[return-value]
+    key = (run.principal.principal_id or "", server_id, tool, version.id)
+    reuse, now = deps.policy_reuse, time.monotonic()
+    if policy.dependency is Dependency.OPA and deps.evaluate is not None:
+        kept = reuse.get(key)
+        if kept is not None and now - kept[0] <= POLICY_REUSE_SECONDS:
+            run.policy_reused = True
+            return replace(kept[1], dependency=None)
+        return policy
+    clean = (
+        policy.decision is PolicyDecision.ALLOW
+        and not policy.obligations
+        and all(isinstance(r, StageResult) and r.status is StageStatus.PASS
+                for _, r in policy.results)
+    )
+    if clean:
+        if len(reuse) >= POLICY_REUSE_MAX and key not in reuse:
+            reuse.pop(next(iter(reuse)))
+        reuse[key] = (now, policy)
+    return policy
+
+
 async def policy_stage(
     deps: PipelineDeps,
     snapshot: Snapshot,
@@ -1273,6 +1310,7 @@ class _Run:
     # 전달되는 호출자 토큰이 승인된 범위를 넘은 범위 이름, 확인하지 않은 이유
     scope_exceeded: list[str] = field(default_factory=list)
     scope_unchecked_reason: str | None = None
+    policy_reused: bool = False
 
 
 def _decision_snapshot(
@@ -1356,6 +1394,7 @@ def _decision_snapshot(
         decision_us=(time.perf_counter_ns() - run.started_at) // 1000,
         approval_hold=req.hold[0] if req.hold else None,
         approval_hold_ms=req.hold[1] if req.hold else None,
+        policy_reused=True if run.policy_reused else None,
         cause="control_key_call"
         if conclusion.stop is not None and conclusion.stop.detail == "control_key_call"
         else None,
@@ -1588,6 +1627,7 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         timing.wait()
     run.policy = await policy_stage(deps, snapshot, policy_input, run.deadline.remaining())
     timing.since("policy", started)
+    run.policy = _reuse_on_outage(run, deps, resolved.server_id, tool)
     if deps.shadow is not None and run.policy.decision is not None:
         with contextlib.suppress(Exception):
             deps.shadow(
