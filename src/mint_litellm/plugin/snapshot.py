@@ -1268,6 +1268,21 @@ class PluginDatabase:
             await self.insert_event(event)
         return str(status)
 
+    async def record_delivery(
+        self, instance_id: str, key_token: str, stage: str, servers: Sequence[str]
+    ) -> None:
+        """단말이 알린 적용 단계를 그 키 범위 승인 신청의 최신 결정 버전에 남긴다."""
+        if not servers:
+            return
+
+        async def write(conn: Any) -> None:
+            await conn.execute(
+                "SELECT mint.endpoint_record_delivery(%s, %s, %s, %s)",
+                (instance_id, key_token, stage, list(servers)),
+            )
+
+        await self._run(write)
+
     async def endpoint_scope(self, instance_id: str, key_token: str) -> list[dict[str, Any]]:
         """이 설치 키의 범위에 닿는 묶음 서버(DB 함수가 키·범위를 판정한다)."""
 

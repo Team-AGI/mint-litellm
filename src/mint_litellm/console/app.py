@@ -21,6 +21,7 @@ from mint_litellm.console import (
     password_login,
     sso_pages,
     staff_pages,
+    ui_launch,
 )
 from mint_litellm.console.cookies import delete_cookie, set_cookie
 from mint_litellm.console.core import (
@@ -40,6 +41,7 @@ from mint_litellm.console.core import (
 from mint_litellm.console.error_pages import error_reply, wants_page
 from mint_litellm.console.oidc import login_context
 from mint_litellm.console.templating import render
+from mint_litellm.control import directory, ui_sessions
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import console_sessions
 from mint_litellm.types.ids import new_uuid7
@@ -170,6 +172,8 @@ def create_app(
     app.include_router(chat.router)
     app.include_router(staff_pages.public)
     app.include_router(sso_pages.router)
+    app.include_router(ui_launch.router)
+    app.include_router(ui_launch.internal)
     app.include_router(staff_pages.router)
 
     @app.get("/healthz", include_in_schema=False)
@@ -202,6 +206,10 @@ def create_app(
         try:
             identity = login.verify(cfg.litellm_url, key)
             key = ""  # 평문 키는 여기서 버린다
+            directory.record_login(
+                conn, cfg.instance_id, identity.user_id, identity.key_token, identity.user,
+                identity.team_ids,
+            )
             session_id, _ = console_sessions.create(
                 conn, cfg.instance_id, cfg.stage2, user_id=identity.user_id,
                 key_token=identity.key_token,
@@ -227,6 +235,10 @@ def create_app(
                 console_sessions.revoke(
                     conn, cfg.instance_id, info.id_hash, actor=info.operator_name,
                     reason="logout",
+                )
+                ui_sessions.end_session(
+                    conn, cfg.instance_id, cfg.litellm_url, cfg.stage2.export_hmac_key,
+                    info.id_hash,
                 )
         target = "/login"
         if info is not None and console_sessions.is_oidc_session(info.key_token) and app.state.oidc:

@@ -530,6 +530,12 @@ def make_router(
         ):
             raise HTTPException(status_code=404, detail="no such allowed decision")
         ctx = result_context(payload)
+        if body.outcome == "success" and ctx["server_id"]:
+            try:
+                await runtime.database.record_delivery(
+                    runtime.config.instance_id, who.key_id, "first_response", [ctx["server_id"]])
+            except Exception:
+                log.exception("delivery receipt could not be stored")
         if body.outcome == "unknown":
             await observe_unknown_outcome(
                 ctx, exception_type="client_report", http_status=None, deps=runtime.result_deps
@@ -572,6 +578,18 @@ def make_router(
             raise HTTPException(status_code=404, detail="no such kit key")
         if outcome == "expired":
             raise HTTPException(status_code=403, detail="kit key expired; ask an admin to reissue")
+        if body.action == "installed":
+            seen = {
+                "device_received": body.mcp_servers,
+                "started": [i.server for i in body.processes or ()],
+                "discovered": [i.server for i in body.tool_lists or ()],
+            }
+            for stage, names in seen.items():
+                try:
+                    await runtime.database.record_delivery(
+                        runtime.config.instance_id, who.key_id, stage, names)
+                except Exception:
+                    log.exception("delivery receipt could not be stored")  # 보고 자체는 받는다
         try:
             retired = await runtime.database.retired_servers(
                 runtime.config.instance_id,
