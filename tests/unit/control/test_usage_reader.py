@@ -123,3 +123,22 @@ def test_ledger_counts_a_retried_call_once_and_limits_to_one_user(conn):
     assert sum(r["calls"] for r in everyone) == 3
     first = usage_reader.read_first_success(conn, INSTANCE, "me")
     assert [(f["user_id"], f["server_id"]) for f in first] == [("me", "s")]
+
+
+def test_ledger_reads_the_user_from_the_principal_and_cost_is_never_half_known(conn):
+    mine = {"principal": {"principal_type": "user", "principal_id": "me", "team_id": "t"},
+            "resolved_server_id": "s", "enforced_action": "allow"}
+    key = {"principal": {"principal_type": "team_key", "principal_id": "k1", "team_id": "t"},
+           "resolved_server_id": "s", "enforced_action": "allow"}
+    event(conn, "decision_evaluated", new_uuid7(), 1, mine)
+    event(conn, "decision_evaluated", new_uuid7(), 1, key)
+    start = datetime.now(UTC) - timedelta(days=1)
+    end = datetime.now(UTC) + timedelta(days=1)
+    rows = usage_reader.read_ledger(conn, INSTANCE, start, end, "me")
+    assert [(r["user_id"], r["team_id"], r["calls"]) for r in rows] == [("me", "t", 1)]
+    everyone = usage_reader.read_ledger(conn, INSTANCE, start, end, None)
+    assert {r["user_id"] for r in everyone} == {"me", ""}
+    # 팀별 지출을 못 읽었으면 사람별이 비어 있어도 상단 비용은 미수집이다.
+    out = usage_reader.combine(everyone, [], (None, None, {}), {}, scoped=False)
+    assert out["cost"]["text"] == "미수집"
+    assert usage_reader.read_tools(conn, INSTANCE, "s") == []

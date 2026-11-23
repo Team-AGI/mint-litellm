@@ -148,3 +148,23 @@ def test_server_permission_switch_tracks_the_saved_state(world, admin, page):
     assert form_post(world, admin, "/servers/srv-ok/resume", state_version=version,
                      next=page).status_code == 303
     assert 'role="switch" aria-checked="true"' in admin.get(page).text
+
+
+def test_delivery_stages_mark_done_next_and_waiting():
+    from mint_litellm.console.pages.servers import delivery_progress
+
+    rows = [{"decision_version": v, "stage": s}
+            for v, s in ((1, "approved"), (2, "approved"), (2, "registry_active"))]
+    levels = [lv for lv, _ in delivery_progress(rows)]
+    assert levels == ["ok", "ok", "wait", "off", "off", "off", "off"]
+    assert delivery_progress([]) == []
+
+
+def test_service_accounts_do_not_count_as_human_operators(monkeypatch):
+    seen = []
+    monkeypatch.setattr(setup_state, "_count", lambda a, sql, *args: seen.append(args) or 0)
+    monkeypatch.setattr(setup_state, "mark_time", lambda *args: None)
+    actor = SimpleNamespace(config=SimpleNamespace(stage2=SimpleNamespace(webhook_urls=())),
+                            role="admin")
+    setup_state._approval_flow(actor)
+    assert ["mint-control", "mint-kit-issuer"] in seen[0]
