@@ -378,7 +378,8 @@ def list_available(sctx: StaffContext) -> list[dict]:
     with sctx.control.transaction():
         return fetchall(
             sctx.control,
-            "SELECT s.server_id, r.org_id, o.name AS org_name, s.transport, s.auth_type,"
+            "SELECT DISTINCT ON (s.server_id, r.org_id) s.server_id, r.org_id, o.name AS org_name,"
+            " s.transport, s.auth_type,"
             " COALESCE((SELECT array_agg(DISTINCT t ORDER BY t) FROM mint.approvals a,"
             "   unnest(a.tools) AS t WHERE a.instance_id = s.instance_id"
             "   AND a.server_id = s.server_id AND a.org_id = r.org_id AND a.status = 'active'"

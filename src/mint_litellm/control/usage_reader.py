@@ -232,7 +232,8 @@ def read_tools(conn: psycopg.Connection, instance: str, server_id: str) -> list[
         conn,
         "SELECT payload->>'tool' AS tool,"
         f" count(DISTINCT {_CALL}) FILTER (WHERE kind = 'decision_evaluated') AS calls,"
-        f" count(DISTINCT {_CALL}) FILTER (WHERE {_BLOCKED}) AS blocked"
+        f" count(DISTINCT {_CALL}) FILTER (WHERE {_BLOCKED}) AS blocked,"
+        f" max(payload->'stop'->>'reason_code') FILTER (WHERE {_BLOCKED}) AS reason"
         " FROM mint.events WHERE instance_id = %s"
         " AND kind IN ('decision_evaluated', 'discovery_evaluated')"
         " AND COALESCE(payload->>'resolved_server_id', payload->>'server_id') = %s"
