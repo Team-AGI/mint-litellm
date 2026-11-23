@@ -20,7 +20,12 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from mint_litellm.endpoint.refresh import merge_local_mcp, revoke_names, scoped_desired
+from mint_litellm.endpoint.refresh import (
+    merge_local_mcp,
+    revoke_names,
+    scoped_desired,
+    without_network,
+)
 from mint_litellm.endpoint.remediation import remediation_events, retired_names
 from mint_litellm.plugin.buffer import ConsumeRequest, ConsumptionLost
 from mint_litellm.types.canonical import sha256
@@ -1405,7 +1410,22 @@ class PluginDatabase:
 
     async def desired_servers(self, instance_id: str, key_token: str) -> list[dict[str, Any]]:
         """설치 보고 응답에 실을 승인된 로컬 서버 목록(이름·계약·판본). 이 키의 범위에 닿는 것만."""
-        items = scoped_desired(await self.endpoint_scope(instance_id, key_token))
+        scope = await self.endpoint_scope(instance_id, key_token)
+
+        async def legacy(conn: Any) -> Any:
+            cursor = await conn.execute(
+                "SELECT server_id FROM mint.endpoint_legacy_network(%s, %s)",
+                (instance_id, key_token),
+            )
+            return await cursor.fetchall()
+
+        old = {name for (name,) in await self._run(legacy)} if scope else set()
+        scope = [  # 이전 신청의 network none은 직원이 정한 값이 아니다(열린 네트워크로 내려준다)
+            {**r, "exec_contract": without_network(r["exec_contract"])}
+            if r["server_id"] in old else r
+            for r in scope
+        ]
+        items = scoped_desired(scope)
 
         async def read(conn: Any) -> Any:
             cursor = await conn.execute(

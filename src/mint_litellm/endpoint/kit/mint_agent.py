@@ -1194,7 +1194,13 @@ def sandbox_python() -> str:
     raise Refuse("격리 안에서 쓸 시스템 파이썬을 찾지 못해 호스트 허용 서버를 시작하지 않았습니다.")
 
 
-_DENIED = b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+def _denied(host: str) -> bytes:
+    body = f"반출 허용 목록에 없는 주소입니다: {host}".encode()
+    head = (
+        "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\n"
+        f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n"
+    )
+    return head.encode() + body
 _BAD = b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 _BAD_GATEWAY = b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 _TIMEOUT = asyncio.TimeoutError  # noqa: UP041 (3.9·3.10에서는 내장 TimeoutError와 다르다)
@@ -1249,6 +1255,8 @@ class EgressProxy:
             self.loop.call_soon_threadsafe(self.loop.stop)
 
     def _decide(self, host: str, port: int, ok: bool, reason: str) -> None:
+        if not ok:
+            self.log(f"반출 허용 목록에 없는 주소입니다: {host}")
         self.log(f"mint-egress {'allow' if ok else 'refuse'} {host}:{port} ({reason})")
         if ok:
             self.allowed += 1
@@ -1302,7 +1310,7 @@ class EgressProxy:
             )
             self._decide(host, port, addr is not None, reason)
             if addr is None:
-                writer.write(_DENIED)
+                writer.write(_denied(host))
                 return
             try:
                 upstream = await asyncio.wait_for(asyncio.open_connection(addr, port), 15)
