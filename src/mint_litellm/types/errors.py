@@ -16,9 +16,20 @@ from mint_litellm.types.reason_codes import Reason, parse_reason_code, policy_de
 BLOCK_STATUS_CODE = 403
 
 # 호출별 승인 대기 오류가 에이전트에게 전하는 다음 행동. 승인 뒤 같은 작업을 다시 요청하면 된다.
+# 에이전트가 읽고 행동하는 세 갈래: 승인 대기(재시도), 정책 차단(재시도 금지), 일시 오류(재시도).
+APPROVAL_RETRY_AFTER = 30
+TRANSIENT_RETRY_AFTER = 5
 APPROVAL_GUIDANCE = (
-    "관리자 승인이 필요합니다. 승인된 뒤 같은 작업을 다시 요청하십시오. "
-    "승인 범위·기간 안에서 정책을 다시 검사합니다."
+    f"승인 대기 중입니다. 승인되면 같은 호출을 다시 하십시오(약 {APPROVAL_RETRY_AFTER}초 뒤 "
+    "재시도). Approval pending: retry the same call after approval."
+)
+TRANSIENT_GUIDANCE = (
+    f"일시 오류입니다. 잠시 뒤(약 {TRANSIENT_RETRY_AFTER}초) 같은 호출을 다시 하십시오. "
+    "Temporary error: retry shortly."
+)
+BLOCKED_GUIDANCE = (
+    "정책상 차단되었으니 같은 호출을 재시도하지 마십시오. 다른 방법을 쓰거나 관리자에게 "
+    "요청하십시오. Blocked by policy: do not retry the same call."
 )
 # 사용자 본인 확인이 필요한 호출. 확인 링크를 연 사람이 본인일 때만 확인된다.
 CONFIRMATION_GUIDANCE = (
@@ -112,6 +123,8 @@ class MintError(BaseModel):
     previous_expired: bool = False
     # 호출자(에이전트)가 취할 다음 행동 안내. 승인 대기·거부·결과 차단 오류에만 있다.
     guidance: str | None = None
+    # 다시 시도하기까지 기다릴 초. 승인 대기와 일시 오류에만 있다.
+    retry_after: int | None = None
     # 본인 확인 화면으로 가는 서명된 단기 링크. 본인 확인 요청을 열었을 때만 있다.
     confirm_link: str | None = None
 
@@ -139,6 +152,8 @@ class MintError(BaseModel):
             body["previous_expired"] = True
         if self.guidance is not None:
             body["guidance"] = self.guidance
+        if self.retry_after is not None:
+            body["retry_after"] = self.retry_after
         if self.confirm_link is not None:
             body["confirm_link"] = self.confirm_link
         return json.dumps(
@@ -184,8 +199,8 @@ def error_for_reason(
             dispatch_state=DispatchState.NOT_DISPATCHED,
             retry_safe=True,
             reference=reference,
-            guidance="필요한 서비스에 연결하지 못했습니다. 관리자에게 "
-            "서비스 상태 확인을 요청하십시오.",
+            guidance=TRANSIENT_GUIDANCE,
+            retry_after=TRANSIENT_RETRY_AFTER,
         )
     if family is Reason.CANCELLED:
         return cancelled_error(reference, dispatched=False)
@@ -197,12 +212,14 @@ def error_for_reason(
             retry_safe=True,
             reference=reference,
             guidance=APPROVAL_GUIDANCE,
+            retry_after=APPROVAL_RETRY_AFTER,
         )
     name = policy_detect_name(reason_code)
     guidance = {
         Reason.POLICY_DETECT: (
             f"정책 위반({name or '정책 탐지'})으로 막혔습니다. 호출 인자를 승인된 범위에 맞게 "
-            "고쳐 다시 요청하거나 관리자에게 승인 범위를 문의하십시오."
+            "고쳐 다시 요청하거나 관리자에게 승인 범위를 문의하십시오. 같은 인자로는 재시도하지 "
+            "마십시오. Blocked by policy: do not retry the same call."
         ),
         Reason.CALL_APPROVAL_DENIED: DENIAL_GUIDANCE,
         Reason.CONFIRMATION_REQUIRED: CONFIRMATION_GUIDANCE,
@@ -212,7 +229,7 @@ def error_for_reason(
             "본인에게 발급된 일반 키를 요청하십시오."
         ),
     }.get(family) or (
-        REASON_EXPLANATIONS[family] + ". 관리자에게 해당 설정과 승인 범위 확인을 요청하십시오."
+        REASON_EXPLANATIONS[family] + ". " + BLOCKED_GUIDANCE
     )
     return MintError(
         code=error_code(reason_code),

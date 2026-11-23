@@ -27,7 +27,11 @@ from mint_litellm.plugin.result import (
 )
 from mint_litellm.plugin.selfcheck import PluginRuntime, get_runtime, leave_startup_failure_marker
 from mint_litellm.types.decision import MINT_CTX_KEY, MintContext
-from mint_litellm.types.errors import error_for_reason
+from mint_litellm.types.errors import (
+    TRANSIENT_GUIDANCE,
+    TRANSIENT_RETRY_AFTER,
+    error_for_reason,
+)
 from mint_litellm.types.ids import new_uuid7
 from mint_litellm.types.reason_codes import Reason
 
@@ -37,7 +41,13 @@ log = logging.getLogger("mint_litellm.logger")
 def internal_block() -> HTTPException:
     """판정 코드 자체의 오류. 판정할 수 없으므로 차단한다."""
     reference = MintContext(invocation_id=new_uuid7(), attempt_id=1).decision_ref
-    error = error_for_reason(Reason.SCHEMA_ERROR.value, reference)
+    error = error_for_reason(Reason.SCHEMA_ERROR.value, reference).model_copy(
+        update={
+            "retry_safe": True,
+            "guidance": TRANSIENT_GUIDANCE,
+            "retry_after": TRANSIENT_RETRY_AFTER,
+        }
+    )
     return HTTPException(status_code=403, detail=error.detail())
 
 
