@@ -960,3 +960,14 @@ def test_parallel_requests_of_one_staff_session_do_not_deadlock(sworld):
     with concurrent.futures.ThreadPoolExecutor(8) as pool:
         codes = list(pool.map(lambda _: client.get("/staff").status_code, range(16)))
     assert codes == [200] * 16
+
+
+def test_my_usage_page_shows_only_my_own_calls(sworld):
+    sworld.query(
+        "INSERT INTO mint.events (event_id, instance_id, kind, source_key, invocation_id,"
+        " attempt_id, payload) VALUES (gen_random_uuid(), %s, 'decision_evaluated', 'u:1',"
+        " gen_random_uuid(), 1, %s)",
+        INSTANCE, '{"user_id": "someone-else", "resolved_server_id": "hidden-server"}',
+    )
+    page = logged_in(sworld).get("/staff/usage").text
+    assert "내 사용량" in page and "hidden-server" not in page and "someone-else" not in page

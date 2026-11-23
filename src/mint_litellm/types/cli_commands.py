@@ -28,6 +28,8 @@ CONTROL_PLANE_ALLOWED_ROUTES: tuple[str, ...] = (
     "/team/list",
     "/user/list",
     "/guardrails/list",
+    "/team/daily/activity",
+    "/user/daily/activity",
     "/key/update",
     "/team/update",
     "/key/block",

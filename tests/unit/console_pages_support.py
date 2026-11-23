@@ -7,7 +7,7 @@ PAGES = [
     "/", "/servers", "/servers/srv-ok", "/servers?filter=changed", "/servers/srv-ok?tab=contract",
     "/approvals", "/approvals?tab=calls", "/access", "/access?tab=dormant",
     "/endpoints", "/endpoints?tab=local-mcp", "/intakes/new", "/alerts", "/ledger", "/policy",
-    "/admin",
+    "/admin", "/reports/usage", "/reports/usage?period=30d",
 ]
 # 화면에 그대로 나오면 안 되는 영어 열거값(상세의 「코드」 칸과 원장의 사건 키는 예외)
 ENUMS = ["awaiting_approval", "enforce", "approver", "terminated", "suspended", "pending"]
