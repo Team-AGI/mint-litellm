@@ -1,0 +1,1 @@
+- Record approval and gateway key delivery receipts, retry registry provisioning, and isolate device key scopes.
