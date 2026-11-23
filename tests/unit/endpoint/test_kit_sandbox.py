@@ -619,3 +619,9 @@ def test_observed_token_status_beats_records_and_fills_the_admin_reporter(tmp_pa
     assert got == {"a": "none", "b": "appcontainer", "c": "unsupported"}
     (item,) = kit.with_sandbox([{"server": "b", "count": 1}], tmp_path, True, False, observed)
     assert item["sandbox"] == "appcontainer" and "egress_unfiltered" not in item
+
+
+def test_egress_refusal_says_the_host_in_korean():
+    reply = agent._denied("example.com").decode()
+    assert reply.startswith("HTTP/1.1 403")
+    assert reply.endswith("반출 허용 목록에 없는 주소입니다: example.com")

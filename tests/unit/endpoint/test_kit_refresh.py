@@ -220,3 +220,10 @@ def test_a_contract_file_owned_by_someone_else_is_not_trusted_by_a_root_run(tmp_
     os.chown(path, 1234, 1234)
     assert kit.refresh(state, [item("srv-4", NEW)]) == []
     assert "srv-4" not in listed(kit)
+
+
+def test_without_network_drops_only_none():
+    from mint_litellm.endpoint.refresh import without_network
+
+    assert without_network({"a": 1, "network": "none"}) == {"a": 1}
+    assert without_network({"network": "hosts"}) == {"network": "hosts"}

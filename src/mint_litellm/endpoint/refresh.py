@@ -30,6 +30,13 @@ def desired_servers(contracts: Mapping[str, Mapping[str, Any]]) -> list[dict[str
     ]
 
 
+def without_network(contract: Any) -> Any:
+    """계약의 ``network: none``을 뺀다(다른 값은 그대로)."""
+    if isinstance(contract, Mapping) and contract.get("network") == "none":
+        return {k: v for k, v in contract.items() if k != "network"}
+    return contract
+
+
 def scoped_desired(scope: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """범위 함수가 낸 서버(묶음 서버와 1판 로컬 서버 모두)를 응답에 실을 목록(이름 순)으로 만든다.
 
