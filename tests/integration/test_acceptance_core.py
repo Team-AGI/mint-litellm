@@ -285,7 +285,7 @@ def test_dependency_down_blocks_and_buffers_one_event(world, evidence, toxics, d
             evidence.assert_calls(outcome.mark, 0)
             assert buffered_rows(outcome.mark) == 1
         else:
-            # 정책 엔진이 없어도 승인된 호출은 내장 검사만으로 통과하고 나중에 기록된다.
+            # 정책 엔진이 없어도 승인된 호출은 내장 검사만으로 통과하고 뒤에 기록된다.
             assert outcome.allowed, outcome.body
             evidence.assert_calls(outcome.mark, 1)
     finally:
