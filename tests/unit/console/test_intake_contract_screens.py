@@ -540,19 +540,20 @@ def test_approving_an_intake_in_the_console_checks_litellm_permission(world, lit
     assert litellm_permission == [("user", "human-9")]
 
 
-def test_intake_selection_and_address_are_carried_to_creation(world, monkeypatch):
+def test_intake_address_resolves_the_registered_server_without_a_selector(world, monkeypatch):
     seen = {}
     admin_api = world.config.litellm_admin
     monkeypatch.setattr(
-        admin_api, "list_servers", lambda: [{"server_id": "docs", "server_name": "문서 서버"}]
+        admin_api, "list_servers", lambda: [{"server_id": "docs", "server_name": "문서 서버",
+                                           "url": "https://example.com/mcp"}]
     )
     monkeypatch.setattr(
         "mint_litellm.console.pages.servers.intake_service.create",
-        lambda *args, **kw: seen.update(kw),
+        lambda *args, **kw: seen.update(kw) or str(uuid.uuid4()),
     )
     client = world.session_client("admin")
     html = client.get("/intakes/new").text
-    assert "문서 서버" in html and 'value="docs"' in html and 'name="server_url"' in html
+    assert 'name="server_id"' not in html and 'name="server_url"' in html
     response = client.post(
         "/intakes",
         data={
@@ -627,11 +628,12 @@ def test_intake_and_approval_pages_prioritize_server_name_and_address(world, mon
     assert str(intake) in client.get("/intakes").text
 
 
-def test_intake_rejects_address_different_from_registry(world, monkeypatch):
+def test_intake_ignores_a_posted_identifier_and_uses_the_address(world, monkeypatch):
+    world.query("UPDATE mint.settings SET default_org_id='acme'")
     monkeypatch.setattr(
         world.config.litellm_admin,
-        "get_server",
-        lambda server_id: {"url": "https://real.example/mcp"},
+        "list_servers",
+        lambda: [{"server_id": "docs", "url": "https://real.example/mcp"}],
     )
     client = world.session_client("admin")
     response = client.post(
@@ -643,9 +645,8 @@ def test_intake_rejects_address_different_from_registry(world, monkeypatch):
             "purpose": "검색",
         },
     )
-    assert response.status_code == 400
-    assert "입력한 서버 주소가 등록된 주소와 다릅니다" in response.text
-    assert world.query("SELECT count(*) FROM mint.intakes")[0][0] == 0
+    assert response.status_code == 303, response.text
+    assert world.query("SELECT server_id FROM mint.intakes") == [("wrong-example",)]
 
 
 # --- 2인 예외 승인: 화면에서 두 번째 승인자 확인 ----------------------------------------------

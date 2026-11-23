@@ -76,17 +76,18 @@ def test_a_viewer_cannot_decide_and_an_approver_cannot_unblock(world):
     assert refused.status_code in (400, 403)
 
 
-def test_unblock_warns_then_queues_after_acknowledgement(world, admin):
+def test_unblock_queues_once_without_a_reason_or_acknowledgement(world, admin):
     proposal = seed(world, "applied", True, blocked=True)
     litellm_key(world, blocked=True, updated_at="other")
     world.with_control_key()
     path = f"/key-blocks/{proposal}/unblock"
-    warned = form_post(world, admin, path, reason="확인", state_version=version(world, proposal))
-    assert warned.status_code == 409 and "바뀐 것으로 보입니다" in warned.text
-    done = form_post(world, admin, path, reason="확인", acknowledge="1",
-                     state_version=version(world, proposal))
+    html = admin.get(f"/approvals?tab=blocks&focus={proposal}").text
+    assert 'name="acknowledge"' not in html and 'name="reason" required' not in html
+    done = form_post(world, admin, path, state_version=version(world, proposal))
     assert done.status_code == 303
     assert world.query("SELECT status FROM mint.key_block_proposals")[0][0] == "unblocking"
+    assert world.query("SELECT unblock_reason FROM mint.key_block_proposals")[0][0] == (
+        "관리자 차단 해제")
 
 
 def test_reject_closes_the_proposal(world, admin):

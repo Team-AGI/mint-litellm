@@ -13,9 +13,11 @@ from mint_litellm.console.pages.common import act, server_names
 from mint_litellm.console.templating import RANGES, local_time, render, span
 from mint_litellm.control import jobs, usage_reader
 from mint_litellm.control import status as control_status
+from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import alerts as alert_service
 from mint_litellm.control.services import approval_metrics, dashboard_reads, reads
+from mint_litellm.control.services import denials as denial_service
 from mint_litellm.control.services import policy as policy_service
 from mint_litellm.control.services import settings as settings_service
 from mint_litellm.types.settings import Mode
@@ -294,6 +296,47 @@ def dashboard(
 # --- 호출 기록 ------------------------------------------------------------------------------
 
 
+def ledger_targets(row: dict, subject: dict) -> dict:
+    if row["kind"] != "decision_evaluated" or row["result"] not in ("allow", "deny", "stop"):
+        return {}
+    if not row.get("server_id"):
+        return {}
+    payload = row.get("payload") or {}
+    return {
+        "tool": payload.get("tool"),
+        "user": subject.get("principal_id") if subject.get("principal_type") == "user" else None,
+    }
+
+
+@router.post("/ledger/{event_id}/block")
+def block_from_ledger(event_id: str, request: Request, target: str = Form(...),
+                      actor: Actor = Depends(page_actor)):
+    def action():
+        row = dashboard_reads.event(actor.conn, actor.instance, str(UUID(event_id)))
+        if row is None:
+            raise AdminError(AdminCode.NOT_FOUND, "기록을 찾을 수 없습니다.")
+        subject = fetchone(
+            actor.conn, "SELECT subject FROM mint.events WHERE instance_id = %s AND event_id = %s",
+            (actor.instance, event_id),
+        )["subject"] or {}
+        targets = ledger_targets(row, subject)
+        if target not in ("tool", "user") or not targets.get(target):
+            raise ControlError("차단할 대상을 확인할 수 없습니다.")
+        sid = row["server_id"]
+        denial_service.deny(
+            actor.ctx, scope_type="server" if target == "tool" else "user",
+            scope_id=sid if target == "tool" else targets["user"], server_id=sid,
+            tools=[targets["tool"]] if target == "tool" else None,
+            reason="호출 기록에서 관리자 차단", org_id=None,
+        )
+
+    return act(actor, action, "denied", "/ledger",
+               lambda **kw: render(request, "error.html", {
+                   **kw, "title": "차단 처리 확인", "message": kw["error"],
+                   "back_href": "/ledger", "back_name": "호출 기록", "reference": actor.request_id,
+               }, actor=actor, status=kw["status"]))
+
+
 def ledger_cards(series, previous):
     total, blocked = sum(series["total"]), sum(series["block"])
     before, blocked_before = sum(previous["total"]), sum(previous["block"])
@@ -399,6 +442,16 @@ def ledger(
     )
     more = len(rows) > reads.PAGE_SIZE
     rows = [] if bad_filter else rows[: reads.PAGE_SIZE]  # 잘못된 조건이면 표를 비운다
+    subjects = {
+        str(r["event_id"]): r["subject"] or {} for r in fetchall(
+            actor.conn,
+            "SELECT event_id, subject FROM mint.events WHERE instance_id = %s"
+            " AND event_id = ANY(%s::uuid[])",
+            (actor.instance, [r["event_id"] for r in rows]),
+        )
+    } if rows else {}
+    for row in rows:
+        row["targets"] = ledger_targets(row, subjects.get(str(row["event_id"]), {}))
     more = more and not bad_filter
     query = {
         "since": since,

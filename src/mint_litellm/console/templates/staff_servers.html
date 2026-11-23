@@ -2,30 +2,37 @@
 {% block title %}내 서버 · MINT{% endblock %}
 {% block body %}
 <h1>내 서버</h1>
+<div class="actions"><a class="button primary" href="/staff/intakes/new">서버 신청</a></div>
 <div class="cards">
   {{ m.kpi('승인됨', rows | length) }}
   {{ m.kpi('도구 발견', rows | selectattr('seen') | list | length) }}
   {{ m.kpi('동의 필요', need, level='wait' if need) }}
   {{ m.kpi('만료 임박(7일)', expiring, level='wait' if expiring) }}
 </div>
-{% if need %}<p>동의가 필요한 서버가 {{ need }}개 있습니다. 서버 이름을 눌러 동의를 확인하세요.</p>{% endif %}
-{{ m.tabs([('servers', '서버', none), ('records', '내 기록', none)], tab, '/staff') }}
-{% if tab == 'records' %}
+{% if need %}<p>동의가 필요한 서버가 {{ need }}개 있습니다.</p>{% endif %}
+{{ m.tabs([('servers', '서버 목록', none), ('applications', '내 신청 이력', none), ('records', '내 기록', none)], tab, '/staff') }}
+{% if tab == 'applications' %}
+{% include "_staff_applications.html" %}
+{% elif tab == 'records' %}
 {% if records %}
 <table><thead><tr><th>시각</th><th>종류</th></tr></thead><tbody>
 {% for r in records %}<tr><td class="nowrap">{{ r.at | when }}</td><td>{{ r.label }}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}{{ m.empty('기록이 없습니다', '/staff', '내 서버') }}{% endif %}
-{% elif rows %}
-<table class="clickable"><thead><tr><th>서버</th><th>조직</th><th>전송</th><th>인증</th><th>상태</th><th>도구</th><th>승인 만료</th><th>동의</th></tr></thead><tbody>
-{% for r in rows %}<tr>
-<td><a href="/staff?open={{ r.ref | urlencode }}">{{ r.server_name }}</a></td><td>{{ r.org_name }}</td>
-<td>{{ L.pick(L.TRANSPORT, r.transport) if r.transport else '—' }}</td><td>{{ L.pick(L.AUTH_TYPE, r.auth_type) if r.auth_type else '—' }}</td>
-<td>{{ ('도구 발견 ' ~ (r.seen | when)) if r.seen else '승인됨' }}</td><td>{{ (r.tools | join) or '—' }}</td><td class="nowrap">{{ r.valid_until | when if r.valid_until else '—' }}</td>
-<td>{{ m.badge(L.CONSENT_STATE, r.state) }}{% if r.expiring %} · <span class="nowrap">{{ r.consent_until | when }}</span>{% endif %}</td>
-</tr>{% endfor %}
-</tbody></table>
-{% else %}{% if pending_calls %}<p>처리 대기 중인 호출 승인 요청이 {{ pending_calls }}건 있습니다. <a href="/staff/confirmations?tab=mine">요청 상태 확인</a></p>{% endif %}{{ m.empty('쓸 수 있는 서버가 없습니다', '/staff/confirmations', '내 요청 확인') }}<p>담당자에게 서버 접근을 요청하세요. 내 요청에서 처리 상태를 확인하세요.</p>{% endif %}
+{% else %}
+<form method="get" action="/staff" class="filterbar"><label>서버 검색<input type="search" name="q" value="{{ search }}" maxlength="256"></label><button type="submit">검색</button></form>
+{% if catalog %}<div class="catalog">
+{% for r in catalog %}<article class="catalog-card">
+<h2><a href="/staff?open={{ r.ref | urlencode }}">{{ r.server_name }}</a></h2>
+<div class="muted">{{ r.org_name }}</div>
+<div>{{ m.badge(L.CONSENT_STATE, r.state) }}</div>
+<div>{{ ('도구 발견 ' ~ (r.seen | when)) if r.seen else '승인됨' }}</div>
+<dl class="detail"><dt>도구</dt><dd>{{ (r.tools | join) or '—' }}</dd><dt>승인 만료</dt><dd>{{ r.valid_until | when if r.valid_until else '기한 없음' }}</dd></dl>
+<div class="actions"><a class="button" href="/staff?open={{ r.ref | urlencode }}">{{ '동의 확인' if r.state == 'none' else '서버 보기' }}</a></div>
+</article>{% endfor %}</div>
+{% elif search %}{{ m.empty('조건에 맞는 서버가 없습니다', '/staff', '검색 지우기') }}
+{% else %}{% if pending_calls %}<p>처리 대기 중인 호출 요청이 {{ pending_calls }}건 있습니다. <a href="/staff/confirmations?tab=mine">요청 상태 확인</a></p>{% endif %}{{ m.empty('쓸 수 있는 서버가 없습니다', '/staff/intakes/new', '서버 신청') }}{% endif %}
+{% endif %}
 {% if selected %}{% call m.drawer(selected.server_name, '/staff', has_input=selected.can_consent) %}
 <dl class="detail">
   <dt>조직</dt><dd>{{ selected.org_name }}</dd>

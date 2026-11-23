@@ -28,7 +28,7 @@
     {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ a.state_version }}">
     <h3 id="revoke-{{ a.id }}-title">승인 철회</h3>
     <div class="effect">차단되는 대상: {{ L.pick(L.SCOPE, a.scope_type) }} {{ m.ident(a.scope_id) }}의 도구 {{ a.tools | length }}개, 서버 1개</div>
-    <label>사유<input name="reason" required></label>
+    <label>사유(선택)<input name="reason" maxlength="500"></label>
     <div class="actions"><button type="button" data-dialog-close>취소</button>
       <button type="submit" name="deny" value="0" class="danger">철회</button>
       <button type="submit" name="deny" value="1" class="danger">철회 + 거부</button></div>
@@ -81,7 +81,7 @@
   <label>대상 식별자<input name="scope_id" required></label>
   <label>서버<input name="server_id"></label>
   <label>도구(비우면 서버 전체)<input name="tools"></label>
-  <label>사유<input name="reason" required></label>
+  <label>사유(선택)<input name="reason" maxlength="500"></label>
   <div class="actions"><a class="button" href="/access?tab=denials">취소</a><button type="submit" class="danger">거부 등록</button></div>
 </form>
 {% endcall %}

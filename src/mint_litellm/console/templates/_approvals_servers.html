@@ -1,11 +1,18 @@
-{% import "macros.html" as m %}
+{% import "macros.html" as m %}{% import "_server_actions.html" as a %}
+<h2>승인 대기</h2>
 {% if queue %}
-<table><thead><tr><th>서버</th><th>조직</th><th>팀</th><th>목적</th><th>전송</th><th>등록자</th><th></th></tr></thead><tbody>
+<table><thead><tr><th>서버</th><th>목적</th><th>등록자</th><th>진행</th><th>결정</th></tr></thead><tbody>
 {% for q in queue %}<tr>
-<td><a href="/servers/{{ q.server_id | urlencode }}">{{ q.server_name }}</a>{% if q.server_url %}<br>{{ q.server_url }}{% endif %}<br><span class="muted">{{ m.ident(q.server_id) }}</span> <button type="button" class="copy" data-copy="{{ q.server_id }}">복사</button></td>
-<td>{{ q.org_name | blank }}</td><td>{{ q.team_id | blank }}</td><td>{{ q.purpose | blank }}</td>
-<td>{{ L.pick(L.TRANSPORT, q.transport) }}</td><td>{{ q.registered_by | who }}</td>
-<td>{% if can(actor, 'approve') %}<a class="button" href="/intakes">신청 결정</a>{% endif %}</td>
+<td><a href="/servers/{{ q.server_id | urlencode }}">{{ q.server_name }}</a> <button type="button" class="copy" data-copy="{{ q.server_id }}">복사</button>{% if q.server_url %}<div class="muted">{{ q.server_url }}</div>{% endif %}</td>
+<td>{{ q.purpose | blank }}</td><td>{{ q.registered_by | who }}</td>
+<td>{{ m.badge(L.INTAKE, q.intake_status) if q.intake_status else '승인 대기' }}</td>
+<td>{% if can(actor, 'approve') %}<a class="button primary" href="{{ '/intakes/' ~ q.intake_id if q.intake_id else '/intakes' }}">{{ '신청 확인' if q.intake_status in ('received', 'checking') else '승인·거부' }}</a>{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
 {% else %}{{ m.empty('승인을 기다리는 서버가 없습니다', '/servers', '서버 목록 보기') }}{% endif %}
+{% if permissions %}
+<h2>서버별 허용</h2>
+<table><thead><tr><th>서버</th><th>서버 허용</th></tr></thead><tbody>
+{% for s in permissions %}<tr><td><a href="/servers/{{ s.server_id | urlencode }}">{{ s.server_name }}</a>{% if s.server_url %}<div class="muted">{{ s.server_url }}</div>{% endif %}</td><td>{{ a.permission(s, actor, 'permission-' ~ loop.index, '/approvals?tab=servers') }}</td></tr>{% endfor %}
+</tbody></table>
+{% endif %}
