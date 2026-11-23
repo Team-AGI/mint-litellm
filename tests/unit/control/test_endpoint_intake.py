@@ -584,6 +584,50 @@ def _start_failed_after_approval(world):
     return request_id, row, ctx
 
 
+def test_an_old_start_failure_record_is_retried_and_shows_the_retry_line(seeded):
+    from types import SimpleNamespace
+
+    from mint_litellm.control import intake_checks as checks
+    from mint_litellm.control import intake_jobs
+    from mint_litellm.control.context import Context
+
+    world = seeded
+    request_id, _ = approved_local(world)
+    row = world.intake(request_id)
+    ctx = Context(world.conn, INSTANCE, Operator(svc.SYSTEM_ACTOR, "admin", None))
+    old = {"detail": {"stage": "start", "exit_code": 1, "stderr_tail": ""}}
+    svc.record_check(ctx, row, 1, "inspection", checks.Outcome(
+        "indeterminate", "INSPECTION_FAILED", "inspector:tools_list", old))
+    assert svc.retry_state(world.conn, INSTANCE, world.intake(request_id))["n"] == 1
+    job = SimpleNamespace(conn=world.conn, instance_id=INSTANCE, checkpoint=lambda: None)
+    intake_jobs.local_pack_retry(job)
+    assert world.jobs("intake_run")[-1]["target_ref"] == f"{request_id}/repack"
+
+
+def test_an_old_failure_outside_the_start_stage_is_not_retried(seeded):
+    from mint_litellm.control import intake_checks as checks
+    from mint_litellm.control.context import Context
+
+    world = seeded
+    request_id, _ = approved_local(world)
+    row = world.intake(request_id)
+    ctx = Context(world.conn, INSTANCE, Operator(svc.SYSTEM_ACTOR, "admin", None))
+    svc.record_check(ctx, row, 1, "inspection", checks.Outcome(
+        "indeterminate", "INSPECTION_FAILED", "inspector:tools_list",
+        {"detail": {"stage": "tools_list", "exit_code": 1}}))
+    assert svc.retry_state(world.conn, INSTANCE, world.intake(request_id)) is None
+
+
+def test_an_old_network_none_is_not_a_choice_unless_the_approver_narrowed_it():
+    from mint_litellm.control import intake_checks as checks
+
+    spec = {"index": "pypi", "name": "x", "version": "1", "command": "x", "network": "none"}
+    manifest = {"platform": {"python": "3.12"}, "entry": "x:main"}
+    kept = checks.local_exec_contract(spec, "a" * 64, manifest, "/usr/bin/python3")
+    opened = checks.local_exec_contract(spec, "a" * 64, manifest, "/usr/bin/python3", True)
+    assert kept["network"] == "none" and "network" not in opened
+
+
 def test_the_pack_retry_rebuilds_the_pack_of_an_approved_request_whose_server_cannot_start(seeded):
     from types import SimpleNamespace
 

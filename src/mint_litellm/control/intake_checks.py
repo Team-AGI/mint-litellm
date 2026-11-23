@@ -631,11 +631,15 @@ def inspection_outcome(result: dict) -> Outcome:
                    "inspector:tools_list", digest, {"definitions": defs})
 
 
-def local_exec_contract(spec: dict, digest: str, manifest: dict, executable: str) -> dict:
+def local_exec_contract(spec: dict, digest: str, manifest: dict, executable: str,
+                        legacy_network: bool = False) -> dict:
     """묶음으로 만든 실행 계약(판 2)의 저장 형식. 승인 때 읽는 형식과 같다(`document()`).
 
     실행 파일은 조직 런타임이고 해시 대신 묶음을 가리킨다. 형식이 어긋나면 묶음 오류로 본다.
     """
+    network = spec.get("network")
+    if legacy_network and network == "none":
+        network = None  # 이전 신청의 none은 직원이 정한 값인지 알 수 없다: 막지 않는다
     try:
         return ExecContract(
             schema_version=2,
@@ -646,7 +650,7 @@ def local_exec_contract(spec: dict, digest: str, manifest: dict, executable: str
             env=dict(spec.get("env") or {}),
             file_access=tuple(FileAccess(path=f["path"], mode=f.get("mode", "ro"))
                               for f in spec.get("file_access") or []),
-            network=spec.get("network"),
+            network=network,
             allowed_hosts=tuple(spec.get("allowed_hosts") or []),
         ).document()
     except (ValueError, KeyError, TypeError):
