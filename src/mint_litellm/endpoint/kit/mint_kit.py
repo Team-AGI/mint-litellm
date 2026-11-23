@@ -8,7 +8,8 @@
 상태를 되돌린다. 설치 상태는 MINT에 보고한다(실패해도 설치는 유지).
 
 설치한 묶음은 설치 상태를 주기적으로 다시 보고한다: Linux는 사용자 systemd 타이머, Windows는
-예약 작업이 ``report --tick`` 하위 명령(설치된 이 파일)을 자주(Linux 20초, Windows 1분) 부르고,
+예약 작업이 ``report --tick`` 하위 명령(설치된 이 파일)을 자주(Linux 20초, Windows 1분; 반영을
+기다리는 동안 Windows는 그 1분 안에서 20초 간격으로 세 번 돈다) 부르고,
 명령이 보고 간격을 정한다: 진행 중인 검사 권한이나 방금 있었던 승인 변화, 시작 허가를 못 받은
 묶음 서버가 있으면 20초, 아니면 6시간. 서버 실행기가 시작될 때도 한 번 부른다(1시간 안에 보냈으면
 건너뛴다). 키가 만료되기 전 14일 안의 보고는 MINT가 키의 만료
@@ -177,6 +178,18 @@ def report_gap(fast_until: float | None, now: float, tick: bool) -> int:
     if fast_until is not None and now < fast_until <= now + FAST_WINDOW:
         return FAST_GAP
     return REPORT_INTERVAL_HOURS * 3600 if tick else REPORT_MIN_GAP
+
+
+def fast_marked(folder: Path, home: Path | None) -> bool:
+    """짧은 주기 표식이 살아 있나(설치 폴더나 사용자 홈 어느 쪽이든)."""
+    home = home or Path(os.path.expanduser("~"))
+    for path in (folder / FAST_FILE, home / STATE_REL / FAST_FILE):
+        try:
+            if report_gap(float(path.read_text()[:64]), time.time(), True) == FAST_GAP:
+                return True
+        except (OSError, ValueError):
+            pass
+    return False
 
 
 def mark_fast(folder: Path, now: float) -> None:
@@ -2397,6 +2410,9 @@ class Kit:
         }
         if installed:
             payload["capabilities"] = ["inspect"]
+            versions = self.stored_versions()
+            if versions:
+                payload["decision_versions"] = versions
         if pending:
             payload["removed"] = pending
         trust = self.hook_trust(state) if installed else None
@@ -2770,6 +2786,35 @@ class Kit:
     def writable(self) -> bool:
         return self.managed and os.access(self.programs, os.W_OK)
 
+    def stored_versions(self) -> dict[str, int]:
+        try:
+            data = json.loads((self.programs / VERSIONS).read_text(encoding="utf-8"))["versions"]
+            return {n: v for n, v in data.items() if isinstance(v, int) and v > 0}
+        except (OSError, ValueError, KeyError, AttributeError):
+            return {}
+
+    def apply_versions(self, state: dict, desired: list, dropped: set[str]) -> bool:
+        """받은 서버별 결정 버전을 ``versions.json``에 쓴다(보고·첫 호출 보고가 되돌려 보낸다)."""
+        if not self.writable():
+            return False
+        wanted = self.desired_items(desired, dropped)
+        versions = {
+            i["name"]: i["decision_version"] for i in desired[:MAX_PENDING]
+            if isinstance(i, dict) and i.get("name") in wanted
+            and isinstance(i.get("decision_version"), int) and i["decision_version"] > 0
+        }
+        data = json.dumps({"versions": versions}, indent=1, sort_keys=True).encode()
+        path, logical = self.programs / VERSIONS, f"{self.logical_programs}/{VERSIONS}"
+        try:
+            if path.exists() and path.read_bytes() == data:
+                return False
+            write_atomic(path, data, 0o644)
+        except OSError:
+            return False
+        state.setdefault("files", {})[logical] = sha256_bytes(data)
+        self.save_state(state)
+        return True
+
     def apply_permits(self, state: dict, desired: list, dropped: set[str]) -> bool:
         """응답의 시작 허가를 계약 파일 옆 ``permits.json``에 쓴다(서버가 허가를 빼면 지워진다)."""
         if not self.writable():
@@ -2963,6 +3008,7 @@ class Kit:
 # 바꿔 놓으므로 반쯤 된 폴더는 「사용 가능」으로 보이지 않는다.
 PACKS = "packs"  # 설치 폴더 아래: 준비된 묶음(<해시 앞 16>/)
 PERMITS = "permits.json"  # 계약 파일 옆: 서버별 시작 허가(만료 시각)
+VERSIONS = "versions.json"  # 계약 파일 옆: 서버별로 받아 둔 결정 버전
 READY = ".ready.json"
 PACK_VERIFIED = "pack-verified.json"  # 검증 작업이 남긴 묶음 검증 기록(목록이 읽는다)
 PACK_ERRORS = "pack-errors.json"  # 자동 받기가 실패한 서버의 사유(화면이 읽는다)
@@ -4879,6 +4925,7 @@ def report_installed(
     if isinstance(desired, list):
         changed = bool(kit.refresh(state, desired, names)) or changed
         changed = kit.apply_permits(state, desired, set(names)) or changed
+        changed = kit.apply_versions(state, desired, set(names)) or changed
         changed = bool(kit.auto_fetch(state, desired, set(names))) or changed
         changed = bool(kit.promote_packs()) or changed
     if needs_fast(kit.answer, changed, now()):
@@ -4969,10 +5016,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--kit", default=str(KIT))
     args = parser.parse_args(argv)
     if args.action == "report":
-        return report_installed(
-            Path(args.kit), if_due=args.if_due, tick=args.tick, jitter=args.jitter,
-            home=Path(args.home) if args.home else None, user=args.user,
-        )
+        def once() -> int:
+            return report_installed(
+                Path(args.kit), if_due=args.if_due, tick=args.tick, jitter=args.jitter,
+                home=Path(args.home) if args.home else None, user=args.user,
+            )
+
+        code = once()
+        # 예약 작업은 최소 1분이라, 반영을 기다리는 동안은 한 번 불린 김에 20초 간격으로 더 돈다.
+        for _ in range(2 if args.tick and sys.platform == "win32" else 0):
+            if not fast_marked(Path(args.kit), Path(args.home) if args.home else None):
+                break
+            time.sleep(FAST_GAP)
+            code = once()
+        return code
     windows = sys.platform == "win32"
     if windows:
         name = args.user or os.environ.get("USERNAME", "")

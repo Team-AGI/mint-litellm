@@ -282,3 +282,18 @@ def test_a_start_permit_that_never_arrives_is_refused_after_a_few_tries():
     with pytest.raises(agent.Refuse):
         agent.start_with_permit_retry(start, lambda: None, 8, sleep=naps.append)
     assert naps == [8, 8]
+
+
+def test_a_windows_tick_repeats_every_twenty_seconds_only_while_a_fast_mark_is_live(
+    tmp_path, monkeypatch
+):
+    import time
+
+    runs, naps = [], []
+    monkeypatch.setattr(kit_module.sys, "platform", "win32")
+    monkeypatch.setattr(kit_module, "report_installed", lambda *a, **k: runs.append(1) or 0)
+    monkeypatch.setattr(kit_module.time, "sleep", naps.append)
+    argv = ["report", "--tick", "--kit", str(tmp_path), "--home", str(tmp_path)]
+    assert kit_module.main(argv) == 0 and len(runs) == 1  # 표식이 없으면 가볍게 한 번
+    (tmp_path / kit_module.FAST_FILE).write_text(str(time.time() + 300))
+    assert kit_module.main(argv) == 0 and len(runs) == 4 and naps == [20, 20]

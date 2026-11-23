@@ -99,6 +99,8 @@ class ResultBody(BaseModel):
     # unknown: 훅이 도구가 실행됐는지 모른다고 보고(중단·시간 초과 등)
     outcome: Literal["success", "error", "unknown"]
     size_bytes: int | None = Field(default=None, ge=0, le=2**40)
+    # 단말이 그 서버에 대해 받아 둔 결정 버전(옛 단말은 보내지 않는다: 최신 버전으로 본다).
+    decision_version: int | None = Field(default=None, ge=1, le=2**31)
 
 
 class OutcomesBody(BaseModel):
@@ -358,6 +360,10 @@ class ReportBody(BaseModel):
     tool_lists: list[ToolListItem] | None = Field(default=None, max_length=8)
     # 사용자 수준 Codex 훅을 Codex가 신뢰했는가(단말 설정에서 읽은 값). 이전 묶음은 보내지 않는다.
     hook_trust: Literal["trusted", "untrusted"] | None = None
+    # 서버 이름 -> 단말이 받아 둔 결정 버전. 옛 단말은 보내지 않는다(최신 버전으로 본다).
+    decision_versions: dict[str, Annotated[int, Field(ge=1, le=2**31)]] | None = Field(
+        default=None, max_length=256
+    )
     # 키트가 할 수 있는 일(예: 검사용 승인 수행). 모르는 이름은 무시한다.
     capabilities: list[Annotated[str, Field(min_length=1, max_length=32)]] | None = Field(
         default=None, max_length=8
@@ -533,7 +539,8 @@ def make_router(
         if body.outcome == "success" and ctx["server_id"]:
             try:
                 await runtime.database.record_delivery(
-                    runtime.config.instance_id, who.key_id, "first_response", [ctx["server_id"]])
+                    runtime.config.instance_id, who.key_id, "first_response", [ctx["server_id"]],
+                    {ctx["server_id"]: body.decision_version} if body.decision_version else None)
             except Exception:
                 log.exception("delivery receipt could not be stored")
         if body.outcome == "unknown":
@@ -587,7 +594,8 @@ def make_router(
             for stage, names in seen.items():
                 try:
                     await runtime.database.record_delivery(
-                        runtime.config.instance_id, who.key_id, stage, names)
+                        runtime.config.instance_id, who.key_id, stage, names,
+                        body.decision_versions)
                 except Exception:
                     log.exception("delivery receipt could not be stored")  # 보고 자체는 받는다
         try:

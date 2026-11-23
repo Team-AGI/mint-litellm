@@ -1269,16 +1269,20 @@ class PluginDatabase:
         return str(status)
 
     async def record_delivery(
-        self, instance_id: str, key_token: str, stage: str, servers: Sequence[str]
+        self, instance_id: str, key_token: str, stage: str, servers: Sequence[str],
+        versions: Mapping[str, int] | None = None,
     ) -> None:
-        """단말이 알린 적용 단계를 그 키 범위 승인 신청의 최신 결정 버전에 남긴다."""
+        """단말이 알린 적용 단계를 그 키 범위 승인 신청의 결정 버전에 남긴다.
+
+        단말이 받은 버전(서버 이름 -> 버전)이 있으면 그 버전에, 없으면 최신 버전에 남긴다."""
         if not servers:
             return
+        pinned = json.dumps({n: int(v) for n, v in (versions or {}).items() if n in servers})
 
         async def write(conn: Any) -> None:
             await conn.execute(
-                "SELECT mint.endpoint_record_delivery(%s, %s, %s, %s)",
-                (instance_id, key_token, stage, list(servers)),
+                "SELECT mint.endpoint_record_delivery(%s, %s, %s, %s, %s::jsonb)",
+                (instance_id, key_token, stage, list(servers), pinned),
             )
 
         await self._run(write)
@@ -1400,7 +1404,22 @@ class PluginDatabase:
 
     async def desired_servers(self, instance_id: str, key_token: str) -> list[dict[str, Any]]:
         """설치 보고 응답에 실을 승인된 로컬 서버 목록(이름·계약·판본). 이 키의 범위에 닿는 것만."""
-        return scoped_desired(await self.endpoint_scope(instance_id, key_token))
+        items = scoped_desired(await self.endpoint_scope(instance_id, key_token))
+
+        async def read(conn: Any) -> Any:
+            cursor = await conn.execute(
+                "SELECT server_id, decision_version"
+                " FROM mint.endpoint_decision_versions(%s, %s, %s)",
+                (instance_id, key_token, [i["name"] for i in items]),
+            )
+            return await cursor.fetchall()
+
+        if items:
+            versions = {name: int(v) for name, v in await self._run(read)}
+            for item in items:
+                if item["name"] in versions:
+                    item["decision_version"] = versions[item["name"]]
+        return items
 
     async def revoke_servers(
         self, instance_id: str, reported: Sequence[str], desired: Sequence[str]

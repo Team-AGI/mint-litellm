@@ -817,3 +817,16 @@ def test_found_items_with_a_request_are_left_out_and_managed_codex_items_are_mar
     assert "codex:tool  관리 정책으로 막힘 · 신청 필요" in text
     user_level = kit_module.build_model(Kit(), {"mode": "user"}, FakeGateway(me=me))
     assert not any(i["blocked"] for i in user_level["found"])
+
+
+def test_the_decision_version_is_kept_and_sent_back_in_the_report(tmp_path, folder, reports):
+    kit = make_kit(folder, tmp_path, managed=True)
+    state = kit.install()
+    kit.config.update(decide_url="https://gw.example.com", key="k")
+    item = {**desired_item("s", pack_of(GOOD)[0]), "decision_version": 4}
+    old = {**desired_item("t", pack_of(GOOD)[0])}  # 옛 서버: 버전 없음
+    assert kit.apply_versions(state, [item, old], set()) is True
+    assert kit.apply_versions(state, [item, old], set()) is False
+    assert kit.stored_versions() == {"s": 4}
+    assert kit.apply_versions(state, [item], {"s"}) is True  # 빠진 서버는 지운다
+    assert kit.stored_versions() == {}
