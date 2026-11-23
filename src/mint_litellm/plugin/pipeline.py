@@ -68,7 +68,6 @@ from mint_litellm.types.decision import (
     Stage,
     StageResult,
     StageStatus,
-    apply_record_failure,
     conclude,
     entries_from_results,
     is_builtin_server,
@@ -155,11 +154,8 @@ class PipelineDeps:
     list_seen: ListSeen | None = None
     # 원격 서버 주소의 이름 조회 결과 재확인. 없으면 하지 않는다.
     resolve_guard: ResolveGuard | None = None
-    # 직전에 정책이 깨끗하게 허용한 (주체, 서버, 도구, 정책 판본)의 판정과 시각. 정책 엔진이
-    # 응답하지 않는 동안 같은 호출을 이어 통과시키는 데만 쓴다.
-    policy_reuse: dict[tuple[str, str, str, str], tuple[float, PolicyStageResult]] = field(
-        default_factory=dict
-    )
+    # 질의별 마지막 정상 스냅숏. DB가 응답하지 않는 동안 승인·차단 목록을 이것으로 판정한다.
+    snapshot_cache: dict[SnapshotQuery, Snapshot] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -941,36 +937,21 @@ class PolicyStageResult:
     dependency: Dependency | None = None
 
 
-POLICY_REUSE_SECONDS = 300.0
-POLICY_REUSE_MAX = 1000
+SNAPSHOT_CACHE_MAX = 4096
 
 
-def _reuse_on_outage(run: _Run, deps: PipelineDeps, server_id: str, tool: str) -> PolicyStageResult:
-    """정책 엔진이 응답하지 않으면, 직전(5분 안)에 같은 주체·서버·도구·정책 판본이 의무와 지적 없이
-    허용된 판정을 다시 쓴다. 승인·서버 상태·철회는 이미 이번 호출의 스냅숏으로 검사했다.
-    그렇지 않으면 그대로 막는다(DB 장애는 선기록을 못 하므로 여기서 다루지 않는다)."""
+def _degrade_on_outage(run: _Run) -> PolicyStageResult:
+    """정책 엔진이 응답하지 않으면 로컬 검사(입력 비밀·패턴)만으로 판정한다. 미승인·차단은 이미
+    앞 단계에서 중단됐으므로, 여기까지 온 승인된 호출은 막을 지적이 없으면 통과하고 사건에
+    ``policy_degraded``를 남긴다."""
     policy, version = run.policy, run.snapshot.policy_version if run.snapshot else None
-    if policy is None or version is None:
+    if policy is None or policy.dependency is not Dependency.OPA:
         return policy  # type: ignore[return-value]
-    key = (run.principal.principal_id or "", server_id, tool, version.id)
-    reuse, now = deps.policy_reuse, time.monotonic()
-    if policy.dependency is Dependency.OPA and deps.evaluate is not None:
-        kept = reuse.get(key)
-        if kept is not None and now - kept[0] <= POLICY_REUSE_SECONDS:
-            run.policy_reused = True
-            return replace(kept[1], dependency=None)
-        return policy
-    clean = (
-        policy.decision is PolicyDecision.ALLOW
-        and not policy.obligations
-        and all(isinstance(r, StageResult) and r.status is StageStatus.PASS
-                for _, r in policy.results)
+    run.policy_degraded = True
+    return PolicyStageResult(
+        [(Stage.POLICY, StageResult.passed())], False, PolicyDecision.ALLOW, (), (),
+        version.id if version else None, version.bundle_sha256 if version else None,
     )
-    if clean:
-        if len(reuse) >= POLICY_REUSE_MAX and key not in reuse:
-            reuse.pop(next(iter(reuse)))
-        reuse[key] = (now, policy)
-    return policy
 
 
 async def policy_stage(
@@ -986,7 +967,10 @@ async def policy_stage(
 
     version = snapshot.policy_version
     if version is None:
-        return stopped(StageResult.stop(Reason.POLICY_VERSION_MISMATCH, detail="no active policy"))
+        return stopped(
+            StageResult.stop(Reason.POLICY_VERSION_MISMATCH, detail="no active policy"),
+            Dependency.OPA,
+        )
     if deps.evaluate is None:
         return stopped(
             StageResult.stop(Reason.DEPENDENCY_FAILURE, detail="no policy engine"), Dependency.OPA
@@ -1002,15 +986,16 @@ async def policy_stage(
     except Exception:
         return stopped(StageResult.stop(Reason.DEPENDENCY_FAILURE), Dependency.OPA)
     if evaluation.failure is not None:
-        dependency = (
-            Dependency.OPA if evaluation.failure.reason_code == Reason.DEPENDENCY_FAILURE else None
-        )
-        return stopped(evaluation.failure, dependency)
+        # 엔진이 쓸 수 없는 응답을 준 경우도 장애로 본다. 의무 미지원만 정책의 뜻이다.
+        unsupported = evaluation.failure.reason_code == Reason.UNSUPPORTED
+        return stopped(evaluation.failure, None if unsupported else Dependency.OPA)
     output = evaluation.output
     if output is None or output.missing_inputs:
-        return stopped(StageResult.stop(Reason.SCHEMA_ERROR, detail="missing policy inputs"))
+        return stopped(
+            StageResult.stop(Reason.SCHEMA_ERROR, detail="missing policy inputs"), Dependency.OPA
+        )
     if (output.policy_version_id, output.bundle_sha256) != (version.id, version.bundle_sha256):
-        return stopped(StageResult.stop(Reason.POLICY_VERSION_MISMATCH))
+        return stopped(StageResult.stop(Reason.POLICY_VERSION_MISMATCH), Dependency.OPA)
     normalized = normalize_policy_output(output.decision, output.policy_ids, output.obligations)
     if normalized.failure is not None:
         stage = (
@@ -1310,7 +1295,8 @@ class _Run:
     # 전달되는 호출자 토큰이 승인된 범위를 넘은 범위 이름, 확인하지 않은 이유
     scope_exceeded: list[str] = field(default_factory=list)
     scope_unchecked_reason: str | None = None
-    policy_reused: bool = False
+    policy_degraded: bool = False
+    snapshot_stale: bool = False
 
 
 def _decision_snapshot(
@@ -1394,7 +1380,8 @@ def _decision_snapshot(
         decision_us=(time.perf_counter_ns() - run.started_at) // 1000,
         approval_hold=req.hold[0] if req.hold else None,
         approval_hold_ms=req.hold[1] if req.hold else None,
-        policy_reused=True if run.policy_reused else None,
+        policy_degraded=True if run.policy_degraded else None,
+        snapshot_stale=True if run.snapshot_stale else None,
         cause="control_key_call"
         if conclusion.stop is not None and conclusion.stop.detail == "control_key_call"
         else None,
@@ -1470,6 +1457,10 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
             try:
                 async with asyncio.timeout(run.deadline.remaining()):
                     snapshot = await deps.snapshots.read_snapshot(query)
+                cache = deps.snapshot_cache
+                if len(cache) >= SNAPSHOT_CACHE_MAX and query not in cache:
+                    cache.pop(next(iter(cache)))
+                deps.snapshot_cache[query] = snapshot
             finally:
                 timing.since("snapshot", started)
             break
@@ -1483,13 +1474,18 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
             # 조회는 읽기 전용이라 다시 읽어도 안전하다. 풀에서 나온 끊어진 연결 같은 일시 오류는
             # 같은 예산 안에서 한 번 흡수한다. 시간 초과나 남은 예산이 없으면 다시 읽지 않는다.
             if attempt == 2 or isinstance(exc, TimeoutError) or run.deadline.remaining() <= 0:
-                stages.dependency = Dependency.DB
-                stages.add(Stage.SNAPSHOT, StageResult.stop(Reason.DEPENDENCY_FAILURE))
-                return
+                # 마지막 정상 스냅숏이 있으면 그것으로 판정한다. 기동 직후처럼 없을 때만 일시 오류.
+                snapshot = deps.snapshot_cache.get(query)
+                if snapshot is None:
+                    stages.dependency = Dependency.DB
+                    stages.add(Stage.SNAPSHOT, StageResult.stop(Reason.DEPENDENCY_FAILURE))
+                    return
+                run.snapshot_stale = True
+                break
     assert snapshot is not None
     stages.add(Stage.SNAPSHOT, StageResult.passed())
     run.snapshot = snapshot
-    run.evaluated_at = snapshot.now
+    run.evaluated_at = deps.clock() if run.snapshot_stale else snapshot.now
     settings = snapshot.settings
     run.mode = effective_mode(config.mode_ceiling, settings.mode if settings else Mode.ENFORCE)
     if settings is not None:
@@ -1591,11 +1587,8 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         except Exception:
             fetched = None
         timing.since("markers", started)
-        if fetched is None:
-            stages.add(Stage.POLICY, StageResult.stop(Reason.DEPENDENCY_FAILURE))
-            stages.dependency = Dependency.OPA
-            return
-        markers = fetched
+        # 비밀 표지를 못 받아도 기본 비밀 검사는 그대로 하고 통과시킨다(정책 엔진 장애와 같다).
+        markers = fetched or ()
     started = timing.now()
     try:
         policy_input = build_policy_input(
@@ -1627,8 +1620,8 @@ async def _run_stages(run: _Run, deps: PipelineDeps) -> None:
         timing.wait()
     run.policy = await policy_stage(deps, snapshot, policy_input, run.deadline.remaining())
     timing.since("policy", started)
-    run.policy = _reuse_on_outage(run, deps, resolved.server_id, tool)
-    if deps.shadow is not None and run.policy.decision is not None:
+    run.policy = _degrade_on_outage(run)
+    if deps.shadow is not None and run.policy.decision is not None and not run.policy_degraded:
         with contextlib.suppress(Exception):
             deps.shadow(
                 policy_input, invocation_id=req.invocation_id, server_id=resolved.server_id,
@@ -1829,8 +1822,8 @@ async def evaluate_request(
 ) -> Outcome:
     """한 호출(또는 목록의 도구 하나)을 판정하고 증거를 남긴다.
 
-    허용 경로에서 DB 선기록이 실패하면 호출은 ``AUDIT_FAILURE``로 차단된다. 차단 경로의 기록
-    실패는 결과를 바꾸지 않고 버퍼(안 되면 표준 오류)에 남긴다. 도구 호출 판정이 외부 취소로
+    DB 기록이 실패하면 허용·차단 모두 결과를 바꾸지 않고 사건을 버퍼(안 되면 표준 오류)에 남겨
+    DB 복구 뒤 올린다. 도구 호출 판정이 외부 취소로
     끝나면 아직 기록하지 못한 판정을 ``CANCELLED`` 사건으로 남기고 취소를 다시 전파한다.
     """
     run = _Run(
@@ -1953,16 +1946,9 @@ async def _evaluate(run: _Run, deps: PipelineDeps) -> Outcome:
             else:
                 evidence = await deps.recorder.fallback(event, on_written=_mark_written(run))
         else:
-            if conclusion.enforced_action is Action.ALLOW:
-                # 허용 사건이 커밋됐는지 알 수 없다. 같은 키로 차단 사건을 쓰면 재적재가 그것을
-                # 허용 사건의 중복으로 버리므로, 차단은 같은 호출의 다음 시도로 남긴다.
-                conclusion = apply_record_failure(conclusion)
-                consume = None
-                attempt = req.attempt_id + 1
-                run.last_attempt = attempt
-                event = decision_event(
-                    _decision_snapshot(run, conclusion, None, attempt_id=attempt)
-                )
+            # DB에 못 써도 허용은 유지한다. 같은 사건을 로컬 버퍼에 남겨 DB 복구 뒤 올린다(중복은
+            # 같은 키로 걸러진다). 사용 횟수 승인의 소비는 복구 뒤로 미뤄진다.
+            consume = None
             evidence = await deps.recorder.fallback(event, on_written=_mark_written(run))
 
     snapshot_doc = _decision_snapshot(run, conclusion, consume, attempt_id=attempt)

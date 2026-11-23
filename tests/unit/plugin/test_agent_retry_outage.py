@@ -6,6 +6,8 @@ import json
 from plugin_helpers import (
     NOW,
     approval,
+    buffered,
+    denial,
     evaluator,
     harness,
     resolved_server,
@@ -61,25 +63,64 @@ def call(h):
     return asyncio.run(evaluate_request(request, h.deps))
 
 
-def test_an_allowed_call_keeps_passing_while_the_policy_engine_is_down(tmp_path):
-    h = harness(
+def ready(tmp_path, **kw):
+    return harness(
         tmp_path,
         snapshot(server=SERVER, tool_contracts=CONTRACTS, approvals=(approval(),)),
-        evaluate=evaluator(),
+        evaluate=kw.get("evaluate", evaluator()),
     )
-    assert call(h).allowed
-    h.deps.evaluate = evaluator(failure=StageResult.stop(Reason.DEPENDENCY_FAILURE))
+
+
+def test_an_approved_call_passes_while_the_policy_engine_is_down_even_the_first_time(tmp_path):
+    h = ready(tmp_path, evaluate=evaluator(failure=StageResult.stop(Reason.DEPENDENCY_FAILURE)))
     outage = call(h)
-    assert outage.allowed and outage.snapshot.policy_reused is True
-    assert json.loads(outage.snapshot.model_dump_json())["policy_reused"] is True
+    assert outage.allowed and outage.snapshot.policy_degraded is True
+    assert json.loads(outage.snapshot.model_dump_json())["policy_degraded"] is True
 
 
-def test_a_call_never_allowed_before_is_blocked_while_the_policy_engine_is_down(tmp_path):
+def test_a_denied_call_is_still_blocked_while_the_policy_engine_is_down(tmp_path):
     h = harness(
         tmp_path,
-        snapshot(server=SERVER, tool_contracts=CONTRACTS, approvals=(approval(),)),
+        snapshot(server=SERVER, tool_contracts=CONTRACTS, denials=(denial(),)),
         evaluate=evaluator(failure=StageResult.stop(Reason.DEPENDENCY_FAILURE)),
     )
+    assert not call(h).allowed
+
+
+def test_the_last_good_snapshot_decides_while_the_database_is_down(tmp_path):
+    h = ready(tmp_path)
+    assert call(h).allowed
+    h.snapshots.snap = RuntimeError("db down")
+    outage = call(h)
+    assert outage.allowed and outage.snapshot.snapshot_stale is True
+
+
+def test_a_call_with_no_good_snapshot_yet_is_a_transient_error(tmp_path):
+    h = ready(tmp_path)
+    h.snapshots.snap = RuntimeError("db down")
+    outage = call(h)
+    assert not outage.allowed and outage.error.code == "MINT-DEPENDENCY-DB"
+    assert outage.error.retry_safe
+
+
+def test_an_allowed_call_is_buffered_when_the_event_cannot_be_stored(tmp_path):
+    h = ready(tmp_path)
+    h.store.fail = RuntimeError("db down")
     outcome = call(h)
-    assert not outcome.allowed and outcome.error.code == "MINT-DEPENDENCY-OPA"
-    assert outcome.error.retry_safe and outcome.error.retry_after
+    assert outcome.allowed and outcome.evidence.value == "buffer"
+    assert buffered(h)
+
+
+def test_a_litellm_admin_outage_only_retries_the_sync_job():
+    from types import SimpleNamespace
+
+    import pytest
+
+    from mint_litellm.control.litellm_write import LiteLLMUnreachable
+    from mint_litellm.control.sync_jobs import _reachable
+
+    def handler(ctx):
+        raise LiteLLMUnreachable("down")
+
+    with pytest.raises(LiteLLMUnreachable):
+        _reachable(handler)(SimpleNamespace(instance_id="avl-test", conn=None))
