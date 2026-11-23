@@ -64,3 +64,26 @@ def test_the_staff_row_follows_the_inspection_state():
     plain = {**row, "inspect": False}
     assert intake_text.next_of(plain) == "관리자 검토 중"
     assert intake_text.reason_of(plain) == "검사 중 서버가 도구 목록을 내지 못했습니다"
+
+
+def test_approved_intake_hides_missing_proof_step():
+    intake = {"status": "decided", "decision": "approved"}
+    steps = servers.intake_progress(intake, ["a", "b"], [{"result": "pass"}])
+    assert steps[2] == ("off", "증빙 해당 없음")
+
+
+def test_refused_first_call_is_failure_not_answer():
+    receipts = [{"stage": s, "decision_version": 1, "reason": None} for s in
+                ("approved", "device_received", "started", "discovered")]
+    steps = servers.delivery_progress(
+        receipts, local=True, called=False, failure=("first_response", "계약 변경 차단"))
+    assert steps[-1] == ("error", "첫 응답 실패 · 계약 변경 차단")
+    assert steps[-2][0] == "ok"
+
+
+def test_old_start_failure_traceback_gets_korean_reason():
+    check = {"result": "indeterminate", "reason_code": "INSPECTION_INCOMPLETE",
+             "inputs": {"detail": {"stage": "start", "stderr_tail": "ModuleNotFoundError: x"}}}
+    assert "의존 라이브러리" in labels.check_reason(check)
+    check["inputs"]["detail"]["stderr_tail"] = "boom"
+    assert labels.check_reason(check) == labels.CHECK_REASON["SERVER_START_FAILED"]

@@ -434,6 +434,8 @@ def intake_progress(
         checked = ("ok", f"도구 {seen}개 확인")  # 검사는 못 읽었지만 실제 호출로 발견됐다
     if st in ("received", "checking", "failed") or checked[0] == "error" or cause:
         proof = ("off", "증빙")
+    elif st == "decided" and intake.get("decision") in ("approved", "exception"):
+        proof = ("off", "증빙 해당 없음")  # 승인된 뒤에는 부족 표시를 남기지 않는다
     else:
         proof = ("error", f"증빙 {len(lacking)}건 부족") if lacking else ("ok", "증빙 충족")
     if st == "decided":
@@ -564,9 +566,13 @@ def intake_page(
     why = labels.pick(labels.CHECK_REASON, bad["reason_code"]) if bad else ""
     lost = bad and not tools and not seen
     cause = f"검사로 도구 목록을 받지 못했습니다 · {why}" if lost else None
+    answered = any(t["calls"] > t["blocked"] for t in seen)  # 응답이 돌아온 호출만
+    refused = next((t for t in seen if t["blocked"]), None)
+    failure = ("discovered", why) if lost else None
+    if refused and not answered and not lost:
+        failure = ("first_response", labels.outcome_reason(refused.get("reason")))
     delivery = delivery_progress(
-        receipts, local=intake["source"] == "endpoint", called=any(t["calls"] for t in seen),
-        failure=("discovered", why) if lost else None,
+        receipts, local=intake["source"] == "endpoint", called=answered, failure=failure,
     )
     inspections = (
         inspection_service.for_intake(actor.conn, actor.instance, intake["id"]) if local else []

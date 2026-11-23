@@ -32,10 +32,10 @@ BLOCKED_GUIDANCE = (
     "요청하십시오. Blocked by policy: do not retry the same call."
 )
 # 관리자의 사후 차단: 해제되면 같은 호출을 다시 할 수 있다(정책 차단과 다르다).
-ADMIN_BLOCK_RETRY_AFTER = 300
+ADMIN_BLOCK_RETRY_AFTER = 1
 ADMIN_BLOCK_GUIDANCE = (
-    "관리자가 이 도구를 잠시 막았습니다. 해제되면 같은 호출을 다시 할 수 있습니다"
-    "(Blocked by an administrator; retry after it is unblocked)."
+    "관리자가 막은 도구입니다. 해제되면 바로 다시 호출하십시오. "
+    "Blocked by an administrator; call again once unblocked."
 )
 # 사용자 본인 확인이 필요한 호출. 확인 링크를 연 사람이 본인일 때만 확인된다.
 CONFIRMATION_GUIDANCE = (
