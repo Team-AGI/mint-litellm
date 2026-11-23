@@ -130,10 +130,22 @@ def test_a_failed_inspection_records_the_stage_exit_code_and_stderr_tail(monkeyp
         "status": "failed", "reason": "INSPECTION_FAILED", "tools": [], "complete": False,
         "detail": detail})
     fake.run()
-    assert fake.outcomes["inspection"].reason == "INSPECTION_FAILED"
+    assert fake.outcomes["inspection"].reason == "SERVER_START_FAILED"
     recorded = fake.outcomes["inspection"].inputs["detail"]
     assert (recorded["stage"], recorded["exit_code"]) == ("start", 1)
     assert len(recorded["stderr_tail"]) == 2048 and recorded["stderr_tail"].endswith("z")
+
+
+def test_a_server_that_dies_on_a_library_error_is_reported_as_a_version_mismatch():
+    tail = "Traceback...\nImportError: cannot import name 'McpError' from 'mcp.shared.exceptions'"
+    out = checks.inspection_outcome({
+        "status": "failed", "reason": "INSPECTION_FAILED",
+        "detail": {"stage": "start", "exit_code": 1, "stderr_tail": tail}})
+    assert out.reason == "SERVER_DEPS_MISMATCH" and tail in out.inputs["detail"]["stderr_tail"]
+    later = checks.inspection_outcome({
+        "status": "failed", "reason": "TIMEOUT",
+        "detail": {"stage": "tools_list", "exit_code": None, "stderr_tail": tail}})
+    assert later.reason == "TIMEOUT"
 
 
 def test_a_malformed_detail_is_dropped_to_safe_values():

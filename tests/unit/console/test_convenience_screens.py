@@ -160,6 +160,17 @@ def test_delivery_stages_mark_done_next_and_waiting():
     assert delivery_progress([]) == []
 
 
+def test_a_failed_start_shows_the_reason_on_the_start_step():
+    from mint_litellm.console.pages.servers import delivery_progress
+
+    rows = [{"decision_version": 1, "stage": s, "reason": None} for s in
+            ("approved", "registry_active", "key_applied", "device_received")]
+    rows.append({"decision_version": 1, "stage": "start_failed", "reason": "종료 코드 1"})
+    steps = delivery_progress(rows)
+    assert steps[4] == ("error", "시작 실패 · 종료 코드 1")
+    assert [lv for lv, _ in steps[5:]] == ["off", "off"]
+
+
 def test_delivery_stages_are_monotonic_and_skip_registry_for_local():
     from mint_litellm.console.pages.servers import delivery_progress
 
@@ -172,6 +183,17 @@ def test_delivery_stages_are_monotonic_and_skip_registry_for_local():
     assert "해당 없음" in local[1][1]
     failed = delivery_progress(rows, local=True, failure=("discovered", "시험 사유"))
     assert failed[5][0] == "error" and "실패 · 시험 사유" in failed[5][1]
+
+
+def test_a_start_failure_report_shows_the_reason_on_the_start_step():
+    from mint_litellm.console.pages.servers import delivery_progress
+
+    rows = [{"decision_version": 1, "stage": s, "reason": None} for s in
+            ("approved", "key_applied", "device_received")]
+    rows.append({"decision_version": 1, "stage": "start_failed", "reason": "종료 코드 1"})
+    steps = delivery_progress(rows, local=True)
+    assert steps[4] == ("error", "시작 실패 · 종료 코드 1")
+    assert [lv for lv, _ in steps[5:]] == ["off", "off"]
 
 
 def test_service_accounts_do_not_count_as_human_operators(monkeypatch):

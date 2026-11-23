@@ -264,7 +264,7 @@ def intake_detail(intake_id: str, request: Request, actor: StaffActor = Depends(
         seen = usage_reader.read_tools(actor.sctx.control, actor.sctx.instance_id, row["server_id"])
         delivery = delivery_progress(fetchall(
             actor.sctx.control,
-            "SELECT decision_version, stage FROM mint.delivery_receipts"
+            "SELECT decision_version, stage, reason FROM mint.delivery_receipts"
             " WHERE instance_id = %s AND intake_id = %s",
             (actor.sctx.instance_id, row["id"])),
             local=source == "endpoint", called=any(t["calls"] for t in seen))
@@ -429,6 +429,24 @@ def event_label(row: dict) -> str:
     return labels.EVENT_KIND.get(row["kind"], "기록")
 
 
+START_FAILED = ("SERVER_START_FAILED", "SERVER_DEPS_MISMATCH")
+
+
+def start_failures(actor: StaffActor, server_ids: list[str]) -> set[str]:
+    """가장 최근 도구 목록 검사에서 서버가 시작되지 않은 서버(승인과 별개의 상태)."""
+    if not server_ids:
+        return set()
+    found = fetchall(
+        actor.sctx.control,
+        "SELECT DISTINCT ON (i.server_id) i.server_id, c.reason_code FROM mint.intake_checks c"
+        " JOIN mint.intakes i ON i.instance_id = c.instance_id AND i.id = c.intake_id"
+        " WHERE c.instance_id = %s AND i.server_id = ANY(%s) AND c.\"check\" = 'inspection'"
+        " ORDER BY i.server_id, c.ran_at DESC",
+        (actor.sctx.instance_id, server_ids),
+    )
+    return {r["server_id"] for r in found if r["reason_code"] in START_FAILED}
+
+
 def servers_page(request: Request, actor: StaffActor, error=None, status=200, form=None):
     now = datetime.now(UTC)
     by_server: dict[tuple, list[dict]] = {}
@@ -457,6 +475,9 @@ def servers_page(request: Request, actor: StaffActor, error=None, status=200, fo
         row["expiring"] = bool(active) and row["consent_until"] < now + EXPIRING
         row["can_consent"] = key in can_consent
         row["seen"] = seen.get(row["server_id"])
+    failed = start_failures(actor, [r["server_id"] for r in rows if not r["seen"]])
+    for row in rows:
+        row["start_failed"] = row["server_id"] in failed
     name_servers(actor, rows)
     tab = request.query_params.get("tab", "servers")
     tab = tab if tab in ("servers", "applications", "records") else "servers"

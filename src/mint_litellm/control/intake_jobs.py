@@ -25,6 +25,8 @@ from mint_litellm.types.jobs import intake_run_job_key
 
 POLL_LIMIT = 500
 PACK_PYTHON = "3.12"
+# 시간이 지나면 풀릴 수 있는 묶음 실패(기본 저장소 미등록, 네트워크·의존 판본 해석 실패)
+RETRYABLE_PACK_REASONS = ("PACK_INDEX_NOT_ALLOWED", "PACK_RESOLVE_FAILED")
 PACK_RETRIES = 12  # 5분 간격으로 약 1시간
 DEFAULT_LOCAL_PYTHON = "/usr/bin/python3"
 EXPIRY_WARNING = timedelta(days=7)
@@ -516,14 +518,14 @@ def local_pack_retry(job: JobContext) -> None:
     rows = fetchall(
         job.conn,
         "SELECT i.id FROM mint.intakes i WHERE i.instance_id = %s AND i.source = 'endpoint'"
-        " AND i.status IN ('indeterminate', 'failed') AND NOT EXISTS ("
+        " AND i.status IN ('indeterminate', 'failed', 'passed') AND NOT EXISTS ("
         " SELECT 1 FROM mint.deployment_contracts d WHERE d.instance_id = i.instance_id"
         " AND d.server_id = i.server_id AND d.status = 'candidate' AND d.pack_sha256 IS NOT NULL)"
         " AND (i.approve_when_ready IS NOT NULL OR EXISTS ("
         " SELECT 1 FROM mint.intake_checks c WHERE c.instance_id = i.instance_id"
         " AND c.intake_id = i.id AND c.\"check\" = 'pack_build'"
-        " AND c.reason_code = 'PACK_INDEX_NOT_ALLOWED'))",
-        (job.instance_id,),
+        " AND c.reason_code = ANY(%s)))",
+        (job.instance_id, list(RETRYABLE_PACK_REASONS)),
     )
     for row in rows:
         job.checkpoint()

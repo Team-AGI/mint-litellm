@@ -28,7 +28,7 @@ class PackTests(unittest.TestCase):
         ]
         self.digest = ""
 
-    def download(self, requirement, destination, python):
+    def download(self, requirement, destination, python, before=None):
         wheel = destination / "example-1.0-py3-none-any.whl"
         with zipfile.ZipFile(wheel, "w") as z:
             z.writestr(
@@ -101,7 +101,7 @@ class PackTests(unittest.TestCase):
             self.build()
 
     def test_direct_url_dependency(self):
-        def download(requirement, destination, python):
+        def download(requirement, destination, python, before=None):
             self.download(requirement, destination, python)
             with zipfile.ZipFile(destination / "example-1.0-py3-none-any.whl", "a") as z:
                 z.writestr(
@@ -113,7 +113,7 @@ class PackTests(unittest.TestCase):
             self.build(download=download)
 
     def test_marker_alone_is_not_direct_url(self):
-        def download(requirement, destination, python):
+        def download(requirement, destination, python, before=None):
             self.download(requirement, destination, python)
             with zipfile.ZipFile(destination / "example-1.0-py3-none-any.whl", "a") as z:
                 z.writestr(
@@ -125,6 +125,22 @@ class PackTests(unittest.TestCase):
             ).hexdigest()
 
         self.assertTrue(self.build(download=download)[0])
+
+    def test_dependencies_are_resolved_as_of_the_pinned_release_time(self):
+        seen = []
+
+        def download(requirement, destination, python, before=None):
+            seen.append(before)
+            self.download(requirement, destination, python)
+
+        def metadata(name, version):
+            return {"urls": [{
+                "filename": "example-1.0-py3-none-any.whl", "digests": {"sha256": self.digest},
+                "upload_time_iso_8601": "2025-04-07T09:11:05.096297Z",
+            }]}
+
+        self.build(download=download, metadata=metadata)
+        self.assertEqual(seen, ["2025-04-07T09:11:05.096297Z"])
 
     def test_index_denied(self):
         with self.assertRaisesRegex(packs.PackError, "PACK_INDEX_NOT_ALLOWED"):

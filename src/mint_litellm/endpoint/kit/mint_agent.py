@@ -2510,6 +2510,8 @@ def unsandboxed(policy: Sandbox, message: str) -> tuple[None, str]:
 # 서버가 ``tools/list``에 답한 도구 목록(이름·설명·입력 정의)만 사용자 캐시에 남긴다. 호출 인자와
 # 결과는 읽지도 남기지도 않는다. 보고기가 바뀐 목록만 MINT에 보낸다.
 TOOLS_DIR = "tools"
+FAILED_DIR = "start-failed"  # 도구 목록을 내기 전에 죽은 서버의 짧은 사유
+STDERR_TAIL = 4096
 TOOLS_MAX = 100
 TOOL_NAME_MAX = 128
 TOOL_DESC_MAX = 500
@@ -2585,6 +2587,12 @@ class ToolListTap:
         self.server = server
         self.pending: dict[Any, bool] = {}  # 요청 식별자 -> 첫 쪽(커서 없음)인가
         self.pages: list[Any] = []
+        self.state_dir = state_dir
+        self.listed = False  # 도구 목록을 한 번이라도 받았는가
+
+    def fail(self, reason: str) -> None:
+        """서버가 도구 목록을 내기 전에 죽었다. 짧은 사유만 남긴다(보고기가 MINT에 알린다)."""
+        record_start_failure(self.state_dir, self.server, reason)
 
     def client_line(self, line: bytes) -> None:
         if b"tools/list" not in line:
@@ -2625,6 +2633,8 @@ class ToolListTap:
         """바뀐 목록만 쓴다(같으면 쓰지 않는다). 쓰지 못해도 서버에는 영향이 없다."""
         tools, cut = clean_tools(self.pages)
         self.pages = []
+        self.listed = True
+        clear_start_failure(self.state_dir, self.server)
         digest = tools_digest(tools)
         name = re.sub(r"[^A-Za-z0-9_.-]", "_", self.server)[:100]
         path = os.path.join(self.folder, f"{name}.json")
@@ -2645,6 +2655,39 @@ class ToolListTap:
         except OSError:
             return False
         return True
+
+
+_LIBRARY_ERROR = re.compile(rb"ImportError|ModuleNotFoundError|cannot import name")
+
+
+def start_failure_reason(tail: bytes, code: int) -> str:
+    """서버 오류 출력 끝에서 사람이 읽을 짧은 사유(원문은 남기지 않는다)."""
+    if _LIBRARY_ERROR.search(tail):
+        return "의존 라이브러리 판본 불일치"
+    return f"종료 코드 {code}"
+
+
+def _failure_path(state_dir: str, server: str) -> str:
+    name = re.sub(r"[^A-Za-z0-9_.-]", "_", server)[:100]
+    return os.path.join(os.path.expanduser(state_dir), FAILED_DIR, f"{name}.json")
+
+
+def record_start_failure(state_dir: str, server: str, reason: str) -> None:
+    path = _failure_path(state_dir, server)
+    try:
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        with open(f"{path}.tmp", "w", encoding="utf-8") as handle:
+            json.dump({"server": server, "reason": reason[:80]}, handle, ensure_ascii=False)
+        os.replace(f"{path}.tmp", path)
+    except OSError:
+        pass
+
+
+def clear_start_failure(state_dir: str, server: str) -> None:
+    try:
+        os.unlink(_failure_path(state_dir, server))
+    except OSError:
+        pass
 
 
 def relay(source: Any, sink: Any, watch: Callable[[bytes], None] | None) -> None:
@@ -2686,8 +2729,26 @@ def spawn_and_relay(
     if pass_fd is not None:
         extra = {"executable": f"/proc/self/fd/{pass_fd}", "pass_fds": (pass_fd,)}
     child = subprocess.Popen(
-        [path, *argv[1:]], env=dict(env), stdin=subprocess.PIPE, stdout=subprocess.PIPE, **extra
+        [path, *argv[1:]], env=dict(env), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE if tap is not None else None, **extra,
     )
+    tail = bytearray()
+
+    def pump_errors() -> None:
+        """오류 출력은 그대로 내보내고 끝부분만 기억한다(죽은 사유를 짧게 알리기 위해)."""
+        try:
+            while chunk := child.stderr.read1(4096):
+                sys.stderr.buffer.write(chunk)
+                sys.stderr.buffer.flush()
+                tail.extend(chunk)
+                del tail[:-STDERR_TAIL]
+        except (OSError, ValueError):
+            pass
+
+    errors = None
+    if tap is not None:
+        errors = threading.Thread(target=pump_errors, daemon=True)
+        errors.start()
 
     def feed() -> None:
         try:
@@ -2706,7 +2767,12 @@ def spawn_and_relay(
         pass
     except KeyboardInterrupt:
         child.terminate()
-    return child.wait()
+    code = child.wait()
+    if errors is not None:
+        errors.join(2)
+        if code != 0 and not tap.listed:
+            tap.fail(start_failure_reason(bytes(tail), code))
+    return code
 
 
 def spawn_and_exit(

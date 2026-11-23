@@ -74,7 +74,7 @@ def delivery_receipts(ctx: Context, intake_id: str) -> list[dict]:
     get(ctx, intake_id)
     return fetchall(
         ctx.conn,
-        "SELECT decision_version, stage, target, recorded_at FROM mint.delivery_receipts"
+        "SELECT decision_version, stage, target, recorded_at, reason FROM mint.delivery_receipts"
         " WHERE instance_id = %s AND intake_id = %s ORDER BY decision_version, recorded_at, stage",
         (ctx.instance_id, intake_id),
     )

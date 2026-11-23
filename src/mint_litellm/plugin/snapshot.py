@@ -1270,7 +1270,7 @@ class PluginDatabase:
 
     async def record_delivery(
         self, instance_id: str, key_token: str, stage: str, servers: Sequence[str],
-        versions: Mapping[str, int] | None = None,
+        versions: Mapping[str, int] | None = None, reasons: Mapping[str, str] | None = None,
     ) -> None:
         """단말이 알린 적용 단계를 그 키 범위 승인 신청의 결정 버전에 남긴다.
 
@@ -1278,11 +1278,12 @@ class PluginDatabase:
         if not servers:
             return
         pinned = json.dumps({n: int(v) for n, v in (versions or {}).items() if n in servers})
+        why = json.dumps({n: str(v)[:80] for n, v in (reasons or {}).items() if n in servers})
 
         async def write(conn: Any) -> None:
             await conn.execute(
-                "SELECT mint.endpoint_record_delivery(%s, %s, %s, %s, %s::jsonb)",
-                (instance_id, key_token, stage, list(servers), pinned),
+                "SELECT mint.endpoint_record_delivery(%s, %s, %s, %s, %s::jsonb, %s::jsonb)",
+                (instance_id, key_token, stage, list(servers), pinned, why),
             )
 
         await self._run(write)

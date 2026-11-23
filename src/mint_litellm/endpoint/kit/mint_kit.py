@@ -85,6 +85,7 @@ LAST_REPORT = "last_report"
 REPORTER_KEY = "reporter.key"  # Windows 관리형: SYSTEM 보고기가 읽는 키 사본
 RETIRED_FILE = "retired.json"  # 마지막 보고 응답의 폐기 서버 목록(실행기가 읽는다)
 LAUNCHED = "launched"  # 실행기가 띄운 서버 프로세스의 기록
+FAILED_DIR = "start-failed"  # 실행기가 남긴 서버별 시작 실패 사유
 TOOLS_DIR = "tools"  # 실행기가 본 서버별 도구 목록(이름·설명·입력 정의)
 KEY_REJECTED = "key_rejected"  # 서버가 키를 거절(401·403)했다는 표시. check가 문제로 보인다.
 KEY_REJECTED_TEXT = "한 줄 설치 명령을 다시 붙여 넣으십시오 (mint relink 주소)"
@@ -889,6 +890,53 @@ def put_block_tables(text: str, mcp: dict) -> tuple[str, list[str]]:
     return text[: found.start()] + body + END + text[found.end() :], done
 
 
+APPROVE_LINE = 'default_tools_approval_mode = "approve"'
+_SERVER_APPROVAL = re.compile(r"\s*default_tools_approval_mode\s*=")
+_TOOL_APPROVAL = re.compile(r'^(\s*approval_mode\s*=\s*)"(?!approve")[^"]*"')
+
+
+def approve_tables(text: str, names, servers: bool = True) -> str:
+    """``names`` 서버 표에 서버 단위 자동 허용을 보장하고, 그 서버의 도구별 확인 설정은 허용으로
+    맞춘다(도구별 값이 서버 값보다 앞서 일부 도구만 묻는 일을 없앤다). 다른 줄은 그대로 둔다.
+    ``servers``가 거짓이면 도구별 설정만 고친다(사용자가 쓴 서버 표는 건드리지 않는다)."""
+    heads = {f"[mcp_servers.{q}]" for n in names for q in (toml(n), n)}
+    tools = tuple(f"[mcp_servers.{q}.tools." for n in names for q in (toml(n), n))
+    eol = "\r\n" if "\r\n" in text else NL
+    parts: list[tuple[str | None, list[str]]] = []
+    for line in text.splitlines(keepends=True):
+        bare = line.strip()
+        if bare.startswith("[") or bare in (BEGIN, END):
+            parts.append((bare, [line]))
+        elif parts:
+            parts[-1][1].append(line)
+        else:
+            parts.append((None, [line]))
+    out: list[str] = []
+    for head, lines in parts:
+        if head in heads and servers:
+            lines = [ln for ln in lines if not _SERVER_APPROVAL.match(ln)]
+            last = max((i for i, ln in enumerate(lines) if ln.strip()), default=0)
+            if not lines[last].endswith(("\n", "\r")):
+                lines[last] += eol
+            lines.insert(last + 1, APPROVE_LINE + eol)
+        elif head and head.startswith(tools):
+            lines = [_TOOL_APPROVAL.sub(r'\1"approve"', ln) for ln in lines]
+        out += lines
+    return "".join(out)
+
+
+def approve_user_config(text: str, names) -> str:
+    """사용자 설정: 표식 구간 안은 전부, 구간 밖은 이 서버들의 도구별 확인 설정만 맞춘다."""
+    found = re.search(rf"{re.escape(BEGIN)}.*?{re.escape(END)}", text, flags=re.S)
+    if found is None:
+        return approve_tables(text, names, servers=False)
+    return (
+        approve_tables(text[: found.start()], names, servers=False)
+        + approve_tables(found.group(0), names)
+        + approve_tables(text[found.end() :], names, servers=False)
+    )
+
+
 # --- Cursor·Grok Build CLI: 훅 파일·MCP 설정 조각 ---
 
 CURSOR_DIR = "/etc/cursor"
@@ -1062,6 +1110,24 @@ def scan_tool_lists(home: Path) -> list[dict]:
                           "truncated": bool(doc.get("truncated"))})
         if len(items) >= MAX_TOOL_LISTS:
             break
+    return items
+
+
+def scan_start_failures(home: Path) -> list[dict]:
+    """실행기가 남긴 시작 실패(서버 이름·짧은 사유). 도구 목록을 받으면 실행기가 지운다."""
+    items: list[dict] = []
+    try:
+        files = sorted((home / STATE_REL / FAILED_DIR).glob("*.json"))
+    except OSError:
+        return items
+    for path in files[:MAX_TOOL_LISTS]:
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+            server, reason = doc["server"], doc["reason"]
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if isinstance(server, str) and isinstance(reason, str):
+            items.append({"server": server, "reason": reason[:80]})
     return items
 
 
@@ -2320,9 +2386,82 @@ class Kit:
         new, put = put_block_tables(current, mcp)
         todo["added"] = [n for n in put if codex_table(current, n) is None]
         new, todo["dropped"] = drop_block_tables(new, retired)
+        new = approve_user_config(new, [*mcp, *(listing.get("gateways") or [])])
         if write and new != current:
             write_atomic(path, new.encode(), path.stat().st_mode & 0o777, self.owner)
         return todo
+
+    def approval_names(self) -> list[str]:
+        """자동 허용 대상: 승인된 서버와 게이트웨이."""
+        named = self.config.get("gateway")
+        gateway = [named["name"]] if isinstance(named, dict) and named.get("name") else []
+        return sorted({*self.local_contracts(), *gateway})
+
+    def refresh_approvals(self, state: dict) -> bool:
+        """이미 설치된 PC의 하네스 도구 확인 설정을 현재 판본(서버 단위 자동 허용)으로 맞춘다.
+
+        보고 때마다 불러도 같은 결과이다. MINT 관리 서버의 항목만 고치고 사용자 설정은 보존한다.
+        권한이 없어 못 쓰는 파일은 건너뛴다(관리자 보고기가 맞춘다).
+        """
+        names = self.approval_names()
+        if not names:
+            return False
+        changed = False
+        if "claude" in self.harnesses:
+            rules = claude_allow(names)
+
+            def edit_allow(text: str) -> tuple[str, list[str]]:
+                data = json.loads(text)
+                allow = data.setdefault("permissions", {}).setdefault("allow", [])
+                add = [r for r in rules if r not in allow]
+                allow.extend(add)
+                return json.dumps(data, indent=2) + (NL if not self.managed else ""), add
+
+            if self.managed:
+                gone, _ = self.edit_file(
+                    state, self.managed_dir / "managed-settings.json",
+                    f"{self.claude_dir}/managed-settings.json", edit_allow,
+                )  # fmt: skip
+                changed |= bool(gone)
+            else:
+                changed |= bool(self.run_as_user(lambda: self.edit_user_file(
+                    state, self.home / ".claude/settings.json", "settings_sha", edit_allow,
+                )))  # fmt: skip
+        if "codex" in self.harnesses:
+            def edit_toml(fix):
+                def edit(text: str) -> tuple[str, list[str]]:
+                    new = fix(text, names)
+                    return new, ([""] if new != text else [])
+
+                return edit
+
+            if self.managed and not self.windows:
+                gone, _ = self.edit_file(
+                    state, self.codex_managed_dir / "managed_config.toml",
+                    f"{self.codex_dir}/managed_config.toml", edit_toml(approve_tables),
+                )  # fmt: skip
+                changed |= bool(gone)
+            if (not self.managed or self.windows) and not self.system_mode:
+                changed |= bool(self.run_as_user(lambda: self.edit_user_file(
+                    state, self.codex_config(), "codex_config_sha", edit_toml(approve_user_config),
+                )))  # fmt: skip
+        if changed:
+            self.save_state(state)
+        return changed
+
+    def edit_user_file(self, state: dict, path: Path, sha_key: str, edit) -> bool:
+        """사용자 홈의 설정 파일을 고친다(바뀐 것이 없으면 쓰지 않는다). 쓴 뒤의 해시를 기록한다."""
+        try:
+            raw = path.read_bytes().decode("utf-8-sig")
+            new, gone = edit(raw)
+            if not gone:
+                return False
+            write_atomic(path, new.encode(), path.stat().st_mode & 0o777, self.owner)
+        except (OSError, ValueError):
+            return False
+        if sha256_bytes(raw.encode()) == state.get(sha_key):
+            state[sha_key] = sha256_bytes(new.encode())  # 제거 때 되돌릴 수 있게 맞춘다
+        return True
 
     def uninstall_user(self, state: dict) -> None:
         settings_path = self.home / ".claude/settings.json"
@@ -2398,7 +2537,10 @@ class Kit:
             return {}
         found = (
             {} if self.system_mode
-            else {"local_mcp": scan_local_mcp(self.home), "tool_lists": scan_tool_lists(self.home)}
+            else {
+                "local_mcp": scan_local_mcp(self.home), "tool_lists": scan_tool_lists(self.home),
+                "start_failures": scan_start_failures(self.home),
+            }
         )
         return {
             "processes": processes, "autostart": autostart, "outside_processes": outside, **found
@@ -3821,7 +3963,8 @@ def run_add(
             ("명령", " ".join([spec["command"], *spec["argv"]])[:70]),
             ("파일 접근", ", ".join(
                 f"{p} ({'쓰기' if m == 'rw' else '읽기'})" for p, m in access.items()) or "없음"),
-            ("네트워크", "없음" if network == "none" else ", ".join(hosts)),
+            ("네트워크", "자동" if args.network is None and not hosts
+             else "없음" if network == "none" else ", ".join(hosts)),
             ("환경 변수", ", ".join([*env_names, *(f"{k}={v}" for k, v in env_values.items())])[:70]
              or "없음"), ("목적", purpose[:70]),
         ]  # fmt: skip
@@ -4868,7 +5011,10 @@ def cli_main(argv: list[str]) -> int:
         return "이상 없음" if not problems else f"문제 {len(problems)}건"
 
     def report_action(model, ui):
-        return "보고했습니다" if kit.report(state, "installed") else NO_GATEWAY
+        if not kit.report(state, "installed"):
+            return NO_GATEWAY
+        kit.refresh_approvals(state)
+        return "보고했습니다"
 
     def new_action(model, ui):
         return interactive_add(kit, gateway, kit.home, None, key=read_key)
@@ -4994,6 +5140,7 @@ def report_installed(
         changed = kit.apply_versions(state, desired, set(names)) or changed
         changed = bool(kit.auto_fetch(state, desired, set(names))) or changed
         changed = bool(kit.promote_packs()) or changed
+    changed = kit.refresh_approvals(state) or changed
     if needs_fast(kit.answer, changed, now()):
         fast_file = stamp.parent / FAST_FILE
 

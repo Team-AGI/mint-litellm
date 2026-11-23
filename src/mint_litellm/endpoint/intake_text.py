@@ -20,6 +20,8 @@ REASON = {
     "PACK_TOO_LARGE": "묶음이 너무 큽니다",
     "PACK_UNAVAILABLE": "묶음이 없어 검사하지 못했습니다",
     "EXEC_CONTRACT_INVALID": "실행 계약을 만들 수 없습니다",
+    "SERVER_START_FAILED": "서버가 시작되지 않습니다",
+    "SERVER_DEPS_MISMATCH": "서버가 시작되지 않습니다(의존 라이브러리 판본 불일치)",
     "INSPECTION_FAILED": "검사 중 서버가 도구 목록을 내지 못했습니다",
     "INSPECTION_INCOMPLETE": "도구 목록을 끝까지 받지 못했습니다",
     "INSPECTION_UNAVAILABLE": "검사기가 응답하지 않았습니다",
@@ -32,7 +34,7 @@ REASON = {
 # 판본을 바꾸면 달라질 수 있는 사유
 RETRY_VERSION = {
     "PACK_RESOLVE_FAILED", "PACK_SDIST_ONLY", "PACK_DIRECT_URL", "PACK_DIGEST_MISMATCH",
-    "PACK_ENTRY_NOT_FOUND", "PACK_TOO_LARGE",
+    "PACK_ENTRY_NOT_FOUND", "PACK_TOO_LARGE", "SERVER_DEPS_MISMATCH",
 }
 CHECK_FAILED = "check_failed:"
 NEXT_WAIT = "검사가 끝나기를 기다림"

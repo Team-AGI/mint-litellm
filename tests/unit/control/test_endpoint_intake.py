@@ -530,3 +530,22 @@ def test_official_package_hosts_are_seeded_once_and_a_lift_is_respected(seeded):
     world.call(allowlists.ensure_defaults)
     assert "pypi.org" not in [r["value"] for r in rows(world, "allowlists")
                               if r["status"] == "active"]
+
+
+def test_the_pack_retry_picks_up_a_pending_request_whose_pack_could_not_be_built(seeded):
+    from types import SimpleNamespace
+
+    from mint_litellm.control import intake_checks as checks
+    from mint_litellm.control import intake_jobs
+    from mint_litellm.control.context import Context
+
+    world = seeded
+    request_id = submit(world)
+    pass_the_checks(world, request_id, pack=False, final="indeterminate")
+    row = world.intake(request_id)
+    ctx = Context(world.conn, INSTANCE, Operator(svc.SYSTEM_ACTOR, "admin", None))
+    svc.record_check(ctx, row, 1, "pack_build", checks.pack_build_failed("PACK_RESOLVE_FAILED"))
+    job = SimpleNamespace(conn=world.conn, instance_id=INSTANCE, checkpoint=lambda: None)
+    before = len(world.jobs("intake_run"))
+    intake_jobs.local_pack_retry(job)
+    assert len(world.jobs("intake_run")) == before + 1  # 승인 보류가 없어도 다시 검사한다
