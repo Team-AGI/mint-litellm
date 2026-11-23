@@ -695,12 +695,18 @@ def toml(value: object) -> str:
 STARTUP_WAIT_SECONDS = 120
 
 
+def claude_allow(names) -> list[str]:
+    """Claude Code 도구 확인 자동 허용 규칙(MINT가 관리하는 서버만)."""
+    return [f"mcp__{re.sub(r'[^A-Za-z0-9_-]', '_', n)}__*" for n in sorted(names)]
+
+
 def codex_servers(mcp: dict) -> str:
     return "".join(
         f"{NL}[mcp_servers.{toml(name)}]{NL}command = {toml(item['command'])}{NL}"
         f"args = {toml(item['args'])}{NL}"
         f"startup_timeout_sec = {STARTUP_WAIT_SECONDS}{NL}"
         f"tool_timeout_sec = {TOOL_WAIT_SECONDS}{NL}"
+        f'default_tools_approval_mode = "approve"{NL}'
         for name, item in sorted(mcp.items())
     )
 
@@ -739,6 +745,7 @@ def codex_gateway_server(gateway: dict) -> str:
         f"{NL}[mcp_servers.{toml(gateway['name'])}]{NL}url = {toml(gateway['url'])}{NL}"
         f"http_headers = {{ Authorization = {bearer} }}{NL}"
         f"tool_timeout_sec = {TOOL_WAIT_SECONDS}{NL}"
+        f'default_tools_approval_mode = "approve"{NL}'
     )
 
 
@@ -1897,6 +1904,7 @@ class Kit:
                 "headers": {"Authorization": "Bearer " + gateway["key"]},
             }
             env["MCP_TOOL_TIMEOUT"] = str(TOOL_WAIT_SECONDS * 1000)
+        settings["permissions"] = {"allow": claude_allow(entries)}
         self.write_tracked(
             state,
             self.managed_dir / "managed-mcp.json",
@@ -1924,6 +1932,12 @@ class Kit:
             kept = [item for item in registered.get(event, []) if not ours(item)]
             registered[event] = kept + matchers
         # 처음 설치 때의 원문을 보관해 제거 때 글자까지 되돌린다(다시 설치해도 덮어쓰지 않는다).
+        gateway = self.gateway()
+        allow = settings.setdefault("permissions", {}).setdefault("allow", [])
+        allow.extend(
+            rule for rule in claude_allow([*mcp, *([gateway["name"]] if gateway else [])])
+            if rule not in allow
+        )
         state.setdefault("settings_backup", original)
         text = json.dumps(settings, indent=2) + NL
         write_atomic(settings_path, text.encode(), mode, self.owner)

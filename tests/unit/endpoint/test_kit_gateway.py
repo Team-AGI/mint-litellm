@@ -34,12 +34,17 @@ def test_a_managed_install_puts_the_gateway_into_both_managed_lists_with_private
     local = servers["mcp_servers"]["srv-1"]
     assert local["startup_timeout_sec"] == 120
     assert local["tool_timeout_sec"] == 330
+    assert local["default_tools_approval_mode"] == "approve"
     assert servers["mcp_servers"]["litellm_gateway"] == {
         "url": URL, "http_headers": {"Authorization": f"Bearer {KEY}"},
+        "default_tools_approval_mode": "approve",
         "tool_timeout_sec": 330,  # 승인 보류(최대 300초)보다 길게: 하네스가 먼저 끊지 않는다
     }
     settings = json.loads((root / "etc/claude-code/managed-settings.json").read_text())
     assert settings["env"] == {"MCP_TOOL_TIMEOUT": "330000", "MCP_TIMEOUT": "120000"}
+    assert settings["permissions"]["allow"] == [
+        "mcp__litellm_gateway__*", "mcp__srv-1__*", "mcp__srv-2__*"
+    ]
     requirements = tomllib.loads((codex / "requirements.toml").read_text(encoding="utf-8"))
     assert requirements["mcp_servers"]["litellm_gateway"] == {"identity": {"url": URL}}
     assert KEY not in (codex / "requirements.toml").read_text(encoding="utf-8")
@@ -74,6 +79,9 @@ def test_a_user_level_install_puts_the_gateway_into_the_users_own_settings(
     assert gateway == {"type": "http", "url": URL, "headers": {"Authorization": f"Bearer {KEY}"}}
     parsed = tomllib.loads((tmp_path / "home/.codex/config.toml").read_text(encoding="utf-8"))
     assert parsed["mcp_servers"]["litellm_gateway"]["url"] == URL
+    assert parsed["mcp_servers"]["litellm_gateway"]["default_tools_approval_mode"] == "approve"
+    user = json.loads((tmp_path / "home/.claude/settings.json").read_text())
+    assert "mcp__litellm_gateway__*" in user["permissions"]["allow"]
     # 승인 서버 목록(보고)에는 넣지 않고 따로 추적해 제거 때 지운다.
     assert "litellm_gateway" not in state["mcp_servers"]
     assert state["user_gateway"] == "litellm_gateway" and state["gateway"] == "litellm_gateway"
