@@ -75,12 +75,23 @@ class MintGuardrail(CustomGuardrail):
             self._register_output_guardrail()
             self._runtime.ensure_started()
             install_from_env(os.environ)
+            self._install_ui_session()
         except RuntimeError:
             leave_startup_failure_marker()
             raise
         except Exception as exc:
             leave_startup_failure_marker()
             raise RuntimeError(f"MintGuardrail could not start: {type(exc).__name__}") from exc
+
+    @staticmethod
+    def _install_ui_session() -> None:
+        """MINT 콘솔에서 넘어온 사람의 LiteLLM 화면 세션 어댑터. 못 붙여도 판정에는 영향이 없다."""
+        try:
+            from mint_litellm.compat import ui_session_1_106
+
+            ui_session_1_106.install_from_env(compat.proxy_app(), os.environ)
+        except Exception:
+            log.exception("MINT UI session adapter could not be installed")
 
     def _register_logger(self) -> None:
         """응답·실패 관측용 MINT 로거를 등록한다.

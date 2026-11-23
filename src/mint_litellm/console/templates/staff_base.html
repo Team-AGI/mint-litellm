@@ -16,6 +16,7 @@
   <span>
     <span class="who">{{ zone_label }}</span>
     <span class="who">{{ actor.user_id }}</span>
+    {% if litellm_open %}<a class="button" href="/staff/litellm/open" hx-boost="false">LiteLLM 콘솔</a>{% endif %}
     {% if (actor.key_token or "").startswith("pw:") %}<a class="button" href="/staff/account/password">비밀번호 바꾸기</a>{% endif %}
     <form method="post" action="/staff/logout" hx-boost="false"><input type="hidden" name="csrf" value="{{ actor.csrf }}"><button type="submit">로그아웃</button></form>
   </span>

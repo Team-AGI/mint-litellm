@@ -172,6 +172,9 @@ def render(
     base = {
         "actor": actor, "path": request.url.path, "notice": notice, "error": None,
         "zone_label": labels.pick(labels.TIME_ZONE, zone),
+        "litellm_open": bool(
+            getattr(getattr(request.app.state, "config", None), "litellm_ui_url", None)
+        ),
     }
     if actor is not None and not name.startswith("staff"):
         base["badges"] = {

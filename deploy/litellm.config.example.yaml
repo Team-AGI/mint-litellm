@@ -7,6 +7,8 @@ general_settings:
   mcp_allow_all_keys_respects_mcp_scope: true
   store_prompts_in_spend_logs: false
   disable_env_credential_login: true
+  # 로그인 실패 횟수 제한이 직원마다 따로 세도록, 콘솔이 넘기는 접속 주소(X-Forwarded-For)를 믿을 앞단의 범위(.env)
+  trusted_proxy_ranges: os.environ/MINT_TRUSTED_PROXY_RANGES
   password_policy_min_length: 12
   password_policy_require_uppercase: false
   password_policy_require_lowercase: false

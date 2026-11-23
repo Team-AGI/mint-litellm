@@ -1,0 +1,1 @@
+- 콘솔 상단·직원 화면의 「LiteLLM 콘솔」 버튼으로 MINT 로그인 한 번에 본인 LiteLLM 화면이 열린다(비밀번호·키·SSO 공통, 1회용 인계 코드). LiteLLM 사용자·팀·키를 읽어 사람 명부를 맞추고 LiteLLM 관리자는 MINT 관리자로 자동 등록된다. MINT 로그아웃 때 연 LiteLLM 화면 세션도 지운다.
