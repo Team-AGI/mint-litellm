@@ -490,7 +490,7 @@ def _call(post: Post, base: str, path: str, key: str, payload: dict, timeout: fl
         raise Refuse(f"decision service is unreachable ({type(exc).__name__})") from exc
     if status != 200:
         hint = (
-            " MINT 키가 해제되었거나 교체되었습니다. 직원 화면에서 설치 묶음을 다시 받으세요."
+            " MINT 키가 거절되었습니다. 한 줄 설치 명령을 다시 붙여 넣으십시오."
             if status == 401 else ""
         )
         raise Refuse(

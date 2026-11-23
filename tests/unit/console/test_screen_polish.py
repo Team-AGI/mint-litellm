@@ -237,8 +237,8 @@ def test_the_endpoint_install_screens_show_korean_states_only():
         for enum in ("managed", "pending", "removed", "revoked"):
             assert enum not in html, (name, enum)
         assert "team-a" in html
-    assert "설치 묶음 받기" in render("staff_endpoint.html", rows=[], active=False)
-    assert "설치 묶음 다시 받기" in pages["staff_endpoint.html"]
+    assert "설치 명령 만들기" in render("staff_endpoint.html", rows=[], active=False)
+    assert "설치 명령 만들기" in pages["staff_endpoint.html"]
     assert "./install.sh" not in pages["staff_endpoint.html"]
 
 

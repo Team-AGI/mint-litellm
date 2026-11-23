@@ -13,7 +13,7 @@ ALL = [name for name, _ in migrate._migration_files()]
 def test_migration_numbers_are_unique_and_contiguous():
     numbers = [int(name.split("_", 1)[0]) for name in ALL]
     assert len(numbers) == len(set(numbers))
-    retired = {5}  # 번호만 비어 있는 옛 자리
+    retired = {5, 69}  # 번호만 비어 있는 옛 자리
     assert numbers == [n for n in range(1, numbers[-1] + 1) if n not in retired]
     assert ALL[0] == "001_initial"
 
