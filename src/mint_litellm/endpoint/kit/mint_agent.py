@@ -98,6 +98,10 @@ class Refuse(Exception):
     """호출이나 서버 시작을 막아야 하는 사유. 메시지는 사용자에게 보인다."""
 
 
+class NoPermit(Refuse):
+    """시작 허가가 없거나 만료됐다. 보고를 당겨 받으면 풀릴 수 있다."""
+
+
 def sha256_fd(fd: int) -> str:
     digest = hashlib.sha256()
     os.lseek(fd, 0, os.SEEK_SET)
@@ -963,7 +967,7 @@ def verify_pack(
         permit = {}
     until = parse_time(permit.get("permit_until"))
     if permit.get("pack_sha256") != digest or until is None or until <= (now or time.time()):
-        raise Refuse("start permit is missing or expired; wait for the next report")
+        raise NoPermit("start permit is missing or expired; wait for the next report")
     module, function = match.groups()
     if function == "__main__":
         code = (
@@ -2818,10 +2822,27 @@ def run_server(
         execve(executable, argv, env)
 
 
-def kick_report(folder: str) -> None:
+FAST_FILE = "fast_until"  # 사용자 캐시: 이 시각까지 단말 보고기가 짧은 주기로 돈다
+FAST_WINDOW = 600
+PERMIT_RETRIES = 3
+PERMIT_WAIT = 8
+
+
+def mark_fast(state_dir: str, now: float | None = None) -> None:
+    try:
+        path = os.path.join(os.path.expanduser(state_dir), FAST_FILE)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(str((time.time() if now is None else now) + FAST_WINDOW))
+    except OSError:
+        pass
+
+
+def kick_report(folder: str, wait: bool = False) -> None:
     """서버 실행기가 시작될 때 설치 상태 보고를 백그라운드로 부른다(1시간 안에 보냈으면 건너뜀).
 
-    설치된 ``mint_kit.py``가 없거나 띄우지 못해도 서버 시작에는 영향이 없다.
+    ``wait``이면 보고가 끝날 때까지 기다린다(시작 허가가 없을 때). 설치된 ``mint_kit.py``가 없거나
+    띄우지 못해도 서버 시작에는 영향이 없다.
     """
     tool = os.path.join(folder, "mint_kit.py")
     if not os.path.isfile(tool):
@@ -2829,13 +2850,29 @@ def kick_report(folder: str) -> None:
     null = subprocess.DEVNULL
     quiet = {"stdin": null, "stdout": null, "stderr": null}
     detach = {"creationflags": 0x08000008} if os.name == "nt" else {"start_new_session": True}
+    command = [sys.executable, "-I", "-B", tool, "report", "--kit", folder, "--if-due"]
     try:
-        subprocess.Popen(
-            [sys.executable, "-I", "-B", tool, "report", "--kit", folder, "--if-due"],
-            **quiet, **detach,
-        )
-    except OSError:
+        if wait:
+            subprocess.run(command, timeout=30, **quiet)
+        else:
+            subprocess.Popen(command, **quiet, **detach)
+    except (OSError, subprocess.SubprocessError):
         pass
+
+
+def start_with_permit_retry(start, report, wait, sleep=time.sleep) -> None:
+    """시작 허가가 없으면 보고를 한 번 당겨 받고 다시 시도한다(승인 직후 기다리지 않게)."""
+    try:
+        return start()
+    except NoPermit:
+        report()
+    for attempt in range(PERMIT_RETRIES):
+        try:
+            return start()
+        except NoPermit:
+            if attempt + 1 == PERMIT_RETRIES:
+                raise
+            sleep(wait)
 
 
 def utf8_streams(*streams) -> None:
@@ -2910,10 +2947,20 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "run":
         kick_report(os.path.dirname(os.path.abspath(__file__)))
+        folder = os.path.dirname(os.path.abspath(__file__))
+        state_dir = args.state_dir or STATE_DIR
+
+        def pull_report() -> None:
+            mark_fast(state_dir)  # 관리형 타이머도 곧 보고하게 한다
+            kick_report(folder, wait=True)
+
         try:
-            run_server(
-                args.server or "", args.contracts, os.environ,
-                state_dir=args.state_dir or STATE_DIR, sandbox=sandbox_policy(),
+            start_with_permit_retry(
+                lambda: run_server(
+                    args.server or "", args.contracts, os.environ,
+                    state_dir=state_dir, sandbox=sandbox_policy(),
+                ),
+                pull_report, PERMIT_WAIT,
             )  # fmt: skip
         except SystemExit:
             raise  # 격리·Windows 실행은 서버의 종료 코드로 끝난다.
