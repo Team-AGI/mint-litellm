@@ -616,6 +616,7 @@ def intake_page(
         "progress": intake_progress(intake, lacking, checks, hold is not None, cause is not None,
                                  len(seen)),
         "cause": cause,
+        "retry": intake_service.retry_state(actor.conn, actor.instance, intake),
         "decision_form": decision_form or {},
         "hold": hold,
         "provider_blocked": any(c["reason_code"] == "PROVIDER_NOT_ALLOWED" for c in checks),

@@ -799,7 +799,7 @@ OUTCOME_REASON = {
     "RESOLVED_ADDRESS_FORBIDDEN": "허용되지 않은 주소",
     "TOKEN_AUDIENCE_MISMATCH": "토큰 대상 불일치",
     "TOKEN_SCOPE_EXCEEDED": "토큰 범위 초과",
-    "UNSUPPORTED": "지원하지 않는 호출",
+    "UNSUPPORTED": CHECK_REASON["UNSUPPORTED"],  # 검사 표·막대가 같은 이름을 쓴다
     "SCHEMA_ERROR": "형식 오류",
     "POLICY_VERSION_MISMATCH": "정책 판본 불일치",
     "DEPENDENCY_FAILURE": "검사 실패",
@@ -837,4 +837,4 @@ def outcome_reason(code: str | None) -> str:
     if code.startswith("POLICY_DETECT_"):
         return OUTCOME_REASON["POLICY_DETECT"]
     head = re.split(r"_(?=[a-z])", code, maxsplit=1)[0]
-    return OUTCOME_REASON.get(head, "기타")
+    return OUTCOME_REASON.get(head) or CHECK_REASON.get(code) or "기타"

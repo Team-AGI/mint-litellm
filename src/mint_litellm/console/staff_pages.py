@@ -46,6 +46,7 @@ from mint_litellm.control.db.connection import connect, fetchall, fetchone
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.litellm_admin import LiteLLMError
 from mint_litellm.control.services import console_sessions, reads, staff, staff_intakes
+from mint_litellm.control.services import intakes as intakes_service
 from mint_litellm.endpoint.kit_build import HARNESSES, build_kit, kit_version
 from mint_litellm.plugin.snapshot import WINDOW_MAX_USES
 from mint_litellm.types.ids import new_uuid7
@@ -270,7 +271,10 @@ def intake_detail(intake_id: str, request: Request, actor: StaffActor = Depends(
             local=source == "endpoint", called=any(t["calls"] for t in seen))
     return staff_render(request, "staff_intake_detail.html",
                         {"i": row, "decision_reason": reason, "source": source,
-                         "stages": stages, "delivery": delivery}, actor)
+                         "stages": stages, "delivery": delivery,
+                         "retry": intakes_service.retry_state(
+                             actor.sctx.control, actor.sctx.instance_id,
+                             {**row, "source": source})}, actor)
 
 
 # --- 로그인·로그아웃 --------------------------------------------------------------------------

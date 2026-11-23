@@ -569,3 +569,52 @@ def test_the_pack_retry_also_picks_up_a_request_whose_server_failed_during_inspe
     before = len(world.jobs("intake_run"))
     intake_jobs.local_pack_retry(job)
     assert len(world.jobs("intake_run")) == before + 1
+
+
+def _start_failed_after_approval(world):
+    from mint_litellm.control import intake_checks as checks
+    from mint_litellm.control.context import Context
+
+    request_id, _ = approved_local(world)
+    row = world.intake(request_id)
+    ctx = Context(world.conn, INSTANCE, Operator(svc.SYSTEM_ACTOR, "admin", None))
+    svc.record_check(ctx, row, 1, "inspection",
+                     checks.Outcome("indeterminate", "SERVER_DEPS_MISMATCH",
+                                    "inspector:tools_list"))
+    return request_id, row, ctx
+
+
+def test_the_pack_retry_rebuilds_the_pack_of_an_approved_request_whose_server_cannot_start(seeded):
+    from types import SimpleNamespace
+
+    from mint_litellm.control import intake_jobs
+
+    world = seeded
+    request_id, row, _ = _start_failed_after_approval(world)
+    state = svc.retry_state(world.conn, INSTANCE, world.intake(request_id))
+    assert (state["n"], state["limit"]) == (1, 12) and state["next"] > state["last"]
+    job = SimpleNamespace(conn=world.conn, instance_id=INSTANCE, checkpoint=lambda: None)
+    before = len(world.jobs("intake_run"))
+    intake_jobs.local_pack_retry(job)
+    queued = world.jobs("intake_run")
+    assert len(queued) == before + 1 and queued[-1]["target_ref"] == f"{request_id}/repack"
+
+
+def test_a_repack_swaps_the_approved_contract_for_one_with_the_new_pack(seeded):
+    from types import SimpleNamespace
+
+    from mint_litellm.control import intake_jobs
+
+    world = seeded
+    request_id, row, ctx = _start_failed_after_approval(world)
+    approved = fetchone(world.conn, "SELECT * FROM mint.deployment_contracts"
+                        " WHERE status = 'approved'")
+    new = "b" * 64
+    job = SimpleNamespace(conn=world.conn, instance_id=INSTANCE)
+    manifest = {"platform": {"python": "3.12"}, "entry": "pyghidra_mcp.server:main"}
+    intake_jobs._swap_pack(job, ctx, approved, new, manifest)
+    now = fetchone(world.conn, "SELECT * FROM mint.deployment_contracts WHERE status = 'approved'")
+    assert now["id"] != approved["id"] and now["pack_sha256"] == new
+    assert now["exec_contract"]["pack"]["sha256"] == new
+    assert world.server("pyg")["exec_contract_sha256"] == now["exec_contract_sha256"]
+    assert world.intake(request_id)["decision"] == "approved"

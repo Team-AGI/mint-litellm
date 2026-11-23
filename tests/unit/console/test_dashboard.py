@@ -381,3 +381,8 @@ def test_the_export_links_carry_the_same_filters_as_the_screen(world, admin):
     assert query["until"][0].startswith("-".join(("2026", "02", "01")))  # 끝 날짜 다음 날 0시
     exported = admin.get(html_lib.unescape(link))
     assert exported.status_code == 200
+
+
+def test_the_delivery_bar_and_the_check_table_name_a_refusal_the_same_way():
+    assert labels.outcome_reason("CONTRACT_DRIFT_deployment") == "계약 변경"
+    assert labels.outcome_reason("UNSUPPORTED") == labels.CHECK_REASON["UNSUPPORTED"]
