@@ -267,7 +267,8 @@ def test_a_browser_that_sends_origin_null_is_accepted_when_fetch_metadata_says_s
 def test_logout_and_expiry_clear_the_litellm_screen_cookie(world):
     client = world.session_client()
     response = client.post("/logout", data={"csrf": world.csrf(client)})
-    assert any(h.lower().startswith("token=") and "max-age=0" in h.lower() and "samesite=lax" in h.lower()
+    assert any(h.lower().startswith("token=") and "max-age=0" in h.lower()
+               and "samesite=lax" in h.lower()
                and "path=/" in h.lower() for h in response.headers.get_list("set-cookie"))
     expired = client.get("/")
     assert expired.status_code == 303
