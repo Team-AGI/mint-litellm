@@ -5,7 +5,7 @@
   <dt>패키지</dt><dd>{{ pack.name | blank }} {{ pack.version | blank }}</dd>
   <dt>묶음 해시</dt><dd>{{ m.ident(pack.sha12) }} <button type="button" class="copy" data-copy="{{ pack.sha }}">복사</button></dd>
   <dt>진입점</dt><dd>{{ pack.entry | blank }}</dd>
-  <dt>네트워크</dt><dd>{% if pack.network == 'none' %}차단{% elif pack.network == 'hosts' %}허용 호스트만: {{ pack.hosts | join }}{% else %}제한 없음{% endif %}</dd>
+  <dt>네트워크</dt><dd>{% if pack.network == 'none' %}차단{% elif pack.network == 'auto' %}자동{% elif pack.network == 'hosts' %}허용 호스트만: {{ pack.hosts | join }}{% else %}제한 없음{% endif %}</dd>
 </dl>
 {% if pack.env %}<h2>환경 변수</h2>
 <table><thead><tr><th>이름</th><th>값</th></tr></thead><tbody>

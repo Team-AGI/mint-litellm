@@ -216,7 +216,14 @@ def build(conn, instance, admin, names: dict, period: str, user: str | None = No
     users = sorted(per_user, key=lambda u: -per_user[u])
     spend = read_spend(admin, start, end, users, user) if admin else (None, None, None)
     first = read_first_success(conn, instance, user)
-    return {"period": period, **combine(ledger, first, spend, names, scoped=user is not None)}
+    report = combine(ledger, first, spend, names, scoped=user is not None)
+    emails = {r["user_id"]: r["email"] for r in fetchall(
+        conn, "SELECT user_id, email FROM mint.directory_users"
+        " WHERE instance_id = %s AND user_id = ANY(%s) AND email IS NOT NULL",
+        (instance, [r["name"] for r in report["users"]]))}
+    for r in report["users"]:  # 사용자 번호 대신 이메일(없으면 번호)
+        r["name"] = emails.get(r["name"], r["name"])
+    return {"period": period, **report}
 
 
 def read_tools(conn: psycopg.Connection, instance: str, server_id: str) -> list[dict]:

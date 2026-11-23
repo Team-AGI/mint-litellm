@@ -35,10 +35,7 @@
 <td>{% if e.kind == 'call_response_received' %}{% for line in L.response_notes(e.get('payload')) %}<div>{{ line }}</div>{% else %}—{% endfor %}{% else %}—{% endif %}</td>
 <td class="actions">{% if can(actor, 'deny') and e.targets %}
 {% for target, name in [('tool', '이 도구 차단'), ('user', '이 사용자 차단')] %}{% if e.targets[target] %}
-{% call m.confirm_dialog('block-' ~ e.event_id ~ '-' ~ target, name, name, e.server_id ~ ' · ' ~ e.targets[target], '/ledger/' ~ e.event_id ~ '/block', actor, '차단') %}
-<input type="hidden" name="target" value="{{ target }}">
-{% if target == 'user' %}<p>이 서버에서 사용자의 호출을 차단합니다.</p>{% else %}<p>이 서버에서 이 도구를 차단합니다.</p>{% endif %}
-{% endcall %}{% endif %}{% endfor %}
+<form method="post" action="/ledger/{{ e.event_id }}/block" class="inline" hx-boost="false">{{ m.csrf(actor) }}<input type="hidden" name="target" value="{{ target }}"><button type="submit" class="danger" title="{{ e.server_id }} · {{ e.targets[target] }}">{{ name }}</button></form>{% endif %}{% endfor %}
 {% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
