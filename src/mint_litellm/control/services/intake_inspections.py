@@ -48,7 +48,7 @@ def issue(ctx: Context, intake_id: str) -> str:
         deployment = intakes.deployment_candidate(ctx.conn, ctx.instance_id, row["server_id"])
         if (deployment is None or not deployment["pack_sha256"]
                 or not isinstance(deployment["exec_contract"], dict)):
-            raise ControlError("실행 묶음이 준비되지 않았습니다. 재검사한 뒤 시도하십시오.")
+            raise ControlError("실행 묶음을 준비하는 중입니다.")
         key = fetchone(
             ctx.conn,
             "SELECT 1 AS ok FROM mint.endpoint_installs WHERE instance_id = %s AND key_token = %s"

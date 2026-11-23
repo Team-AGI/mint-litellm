@@ -51,6 +51,7 @@ KINDS: dict[str, JobKind] = {
     "approval_expiry_scan": JobKind(),
     "endpoint_result_scan": JobKind(),
     "evidence_expiry_scan": JobKind(),
+    "local_pack_retry": JobKind(),
     "session_verify": JobKind(),
     "call_spike_scan": JobKind(),
     "bulk_extraction_scan": JobKind(),
@@ -424,6 +425,7 @@ SCHEDULES: dict[str, Callable[[Any], int]] = {
     "export_checkpoint": lambda s: s.checkpoint_seconds,
     "session_verify": lambda s: s.session_verify_seconds,
     "evidence_expiry_scan": lambda s: 3600,  # 1시간(고정)
+    "local_pack_retry": lambda s: 300,  # 5분(고정)
     "call_spike_scan": lambda s: 60,
     "bulk_extraction_scan": lambda s: 60,
     "content_finding_scan": lambda s: 60,

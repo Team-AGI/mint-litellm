@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from mint_litellm.control import alerts, inspection, packs
+from mint_litellm.control import allowlists as allowlist_domain
 from mint_litellm.control import intake_checks as checks
 from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import fetchall, fetchone
@@ -24,6 +25,7 @@ from mint_litellm.types.jobs import intake_run_job_key
 
 POLL_LIMIT = 500
 PACK_PYTHON = "3.12"
+PACK_RETRIES = 12  # 5분 간격으로 약 1시간
 DEFAULT_LOCAL_PYTHON = "/usr/bin/python3"
 EXPIRY_WARNING = timedelta(days=7)
 
@@ -350,6 +352,8 @@ def _record_pack(job: JobContext, ctx: Context, contract: dict, spec: dict,
 def _run_local_checks(job: JobContext, ctx: Context, row: dict, attempt: int) -> None:
     """단말 출처 신청의 검사. 이름·인자 수 위반만 거절이고 나머지 실패는 판별 불가이다."""
     server_id = row["server_id"]
+    with transact(ctx):
+        allowlist_domain.ensure_defaults(ctx)
     contract = intakes.deployment_candidate(job.conn, job.instance_id, server_id)
     spec = contract and contract.get("pack_spec")
     data = job.policy_data.get(job.conn, job.instance_id) if job.policy_data else None
@@ -481,6 +485,52 @@ def intake_run(job: JobContext) -> None:
     else:
         needs = _run_checks(job, ctx, started, attempt, mode, persist=True)
     intakes.conclude(ctx, target, needs_registry_credentials=needs)
+    _finish_deferred(job, ctx, target)
+
+
+def _finish_deferred(job: JobContext, ctx: Context, intake_id: str) -> None:
+    """보류된 승인이 있으면 묶음이 준비된 때 적용한다. 끝내 안 되면 경보 한 줄을 남긴다."""
+    result = intakes.apply_deferred_approval(
+        ctx, intake_id, (lambda: _client(job)) if job.litellm is not None else None)
+    row = intakes.get(ctx, intake_id)
+    if result is None and row["approve_when_ready"] is None:
+        return
+    if result is not None and not result.startswith("failed"):
+        return
+    reason = result or "묶음을 만들지 못했습니다."
+    tries = intakes.next_attempt(job.conn, job.instance_id, row["id"])
+    if result is None and tries <= PACK_RETRIES:
+        return  # 자동 재시도가 이어진다
+    with job.conn.transaction():
+        alerts.raise_alert(
+            job.conn, job.instance_id, kind="job_failed", severity="high",
+            dedup_key=f"job_failed:pack:{row['id']}",
+            subject={"target_ref": row["server_id"], "reason": reason[:200]})
+
+
+def local_pack_retry(job: JobContext) -> None:
+    """기본 저장소를 넣고, 묶음이 없어 막힌 단말 신청을 다시 검사한다(횟수 상한까지)."""
+    ctx = _context(job)
+    with transact(ctx):
+        allowlist_domain.ensure_defaults(ctx)
+    rows = fetchall(
+        job.conn,
+        "SELECT i.id FROM mint.intakes i WHERE i.instance_id = %s AND i.source = 'endpoint'"
+        " AND i.status IN ('indeterminate', 'failed') AND NOT EXISTS ("
+        " SELECT 1 FROM mint.deployment_contracts d WHERE d.instance_id = i.instance_id"
+        " AND d.server_id = i.server_id AND d.status = 'candidate' AND d.pack_sha256 IS NOT NULL)"
+        " AND (i.approve_when_ready IS NOT NULL OR EXISTS ("
+        " SELECT 1 FROM mint.intake_checks c WHERE c.instance_id = i.instance_id"
+        " AND c.intake_id = i.id AND c.\"check\" = 'pack_build'"
+        " AND c.reason_code = 'PACK_INDEX_NOT_ALLOWED'))",
+        (job.instance_id,),
+    )
+    for row in rows:
+        job.checkpoint()
+        if intakes.next_attempt(job.conn, job.instance_id, row["id"]) <= PACK_RETRIES:
+            intakes.enqueue_run(ctx, intakes.get(ctx, str(row["id"])))
+        else:
+            _finish_deferred(job, ctx, str(row["id"]))
 
 
 # --- evidence_expiry_scan -------------------------------------------------------------------
@@ -526,4 +576,5 @@ HANDLERS = {
     "submission_poll": submission_poll,
     "intake_run": intake_run,
     "evidence_expiry_scan": evidence_expiry_scan,
+    "local_pack_retry": local_pack_retry,
 }

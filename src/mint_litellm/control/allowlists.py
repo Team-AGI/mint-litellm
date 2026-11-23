@@ -1,7 +1,8 @@
 """허용 목록. 종료일이 필수이고 해제는 명시적 행위이다."""
 
 import ipaddress
-from datetime import datetime
+from dataclasses import replace
+from datetime import UTC, datetime
 
 from mint_litellm.control import orgs
 from mint_litellm.control.context import Context
@@ -69,6 +70,25 @@ def add(
         },
     )
     return str(entry_id)
+
+
+# 묶음 만들기용 공식 패키지 저장소. 자동으로 한 번 넣고, 관리자가 해제하면 다시 넣지 않는다.
+DEFAULT_EGRESS = ("pypi.org", "files.pythonhosted.org", "registry.npmjs.org")
+DEFAULT_ACTOR = "mint-default"
+
+
+def ensure_defaults(ctx: Context) -> None:
+    far = datetime(2999, 12, 31, tzinfo=UTC)
+    for host in DEFAULT_EGRESS:
+        if fetchone(
+            ctx.conn,
+            "SELECT 1 AS x FROM mint.allowlists WHERE instance_id = %s AND kind = 'egress_target'"
+            " AND value = %s AND org_id IS NULL AND (status = 'active' OR created_by = %s)",
+            (ctx.instance_id, host, DEFAULT_ACTOR),
+        ):
+            continue
+        add(replace(ctx, operator=replace(ctx.operator, name=DEFAULT_ACTOR)), "egress_target",
+            host, datetime.now(UTC), far, None, "공식 패키지 저장소")
 
 
 def lift(ctx: Context, allowlist_id: str) -> None:
