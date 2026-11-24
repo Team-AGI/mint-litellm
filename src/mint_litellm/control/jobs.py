@@ -32,6 +32,7 @@ class JobKind:
 
 
 KINDS: dict[str, JobKind] = {
+    "staff_signup": JobKind(external_write=True),
     "submission_poll": JobKind(),
     "intake_run": JobKind(),
     "endpoint_inspection": JobKind(),
@@ -581,6 +582,13 @@ def _requeue(
         if row is None:
             return None
         attempts = row["attempts"] + (1 if count else 0)
+        if count and row["kind"] == "staff_signup":
+            from mint_litellm.control import signup
+
+            signup.record_failure(
+                conn, row["instance_id"], row["target_ref"], code or "error",
+                "failed" if attempts >= row["max_attempts"] else "pending",
+            )
         if count and attempts >= row["max_attempts"]:
             conn.execute(
                 "UPDATE mint.jobs SET status = 'failed', attempts = %s, last_error_code = %s,"

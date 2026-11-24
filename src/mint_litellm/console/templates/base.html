@@ -23,7 +23,7 @@
   </span>
 </header>
 <nav class="sidebar" aria-label="메뉴"><details class="mobile-menu"><summary>메뉴</summary><div class="menu">
-{{ ui.nav(MENU, path, badges) }}
+{{ ui.nav(MENU, path, badges, actor) }}
 </div></details></nav>
 <main><div class="page {% block page_class %}{% endblock %}">
 {% if notice %}<div class="banner ok" role="status">{{ notice }}</div>{% endif %}
