@@ -164,7 +164,7 @@ def test_every_role_can_open_the_checklist_and_the_menu_lists_it(world, role):
 def test_setup_shows_ordered_introduction_and_password_change_link(world, admin, monkeypatch):
     monkeypatch.setenv("MINT_LITELLM_UI_URL", "https://gateway.example.test/ui")
     html = admin.get("/setup").text
-    labels = ["root / rootrootroot로 로그인", "허용 목록에 제공자 추가", "서버 신청",
+    labels = ["root / rootroot로 로그인", "허용 목록에 제공자 추가", "서버 신청",
               "검사 결과 확인", "신청 결정"]
     assert [html.index(label) for label in labels] == sorted(html.index(label) for label in labels)
     assert 'href="/account/password"' in html

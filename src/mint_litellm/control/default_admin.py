@@ -1,4 +1,7 @@
-"""설치 직후 로그인할 기본 관리자(LiteLLM 사용자 ``root``)를 만든다. ``mint.sh up``이 실행한다.
+"""설치 직후 기본 관리자(root, admin1~3)를 LiteLLM 사용자로 만든다. ``mint.sh up``이 실행한다.
+
+기본 비밀번호는 root는 ``rootroot``, admin1~3은 ``adminadmin``이다(LiteLLM 최소 길이 8자).
+LiteLLM 화면과 MINT 화면에 같은 값으로 로그인하며, 기본값으로 로그인하면 콘솔이 바꾸라고 알린다.
 
 LiteLLM은 /user/new에 비밀번호를 받지 않고, 관리자가 정한 비밀번호에는 재설정을 강제하며,
 변경은 새 값이 현재 값과 달라야 한다. 그래서 임시 값으로 정한 뒤 로그인해 기본 비밀번호로 바꾼다.
@@ -14,9 +17,17 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-USER = "root"
-PASSWORD = "rootrootroot"  # noqa: S105  # 공개된 기본값. 첫 로그인 뒤 콘솔에서 바꾼다.
-TEMPORARY = "rootrootroot0"  # noqa: S105  # 변경 규칙(현재와 달라야 함) 때문에 거치는 값
+# 공개된 기본값(아이디, 비밀번호). 첫 로그인 뒤 콘솔에서 바꾼다.
+ACCOUNTS: tuple[tuple[str, str], ...] = (
+    ("root", "rootroot"), ("admin1", "adminadmin"), ("admin2", "adminadmin"),
+    ("admin3", "adminadmin"),
+)
+DEFAULTS = dict(ACCOUNTS)
+
+
+def is_default(username: str, password: str) -> bool:
+    """기본 계정을 기본 비밀번호 그대로 쓰는가(첫 접속 변경 알림용)."""
+    return DEFAULTS.get(username.strip().lower()) == password
 
 
 def _call(
@@ -33,60 +44,67 @@ def _call(
         return error.code, {}
 
 
-def _login_key(base: str, password: str) -> str | None:
+def _login_key(base: str, user: str, password: str) -> str | None:
     """화면 로그인에 성공하면 그 세션의 키, 아니면 None."""
-    status, body = _call(base, "/v2/login", {"username": USER, "password": password}, "")
+    status, body = _call(base, "/v2/login", {"username": user, "password": password}, "")
     if status != 200:
         return None
     part = str(body.get("token", "")).split(".")[1]
     return json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4))).get("key")
 
 
-def _finish(base: str) -> None:
-    session = _login_key(base, TEMPORARY)
+def _finish(base: str, user: str, temporary: str, final: str) -> None:
+    session = _login_key(base, user, temporary)
     if session is None:
-        raise RuntimeError("임시 비밀번호로 로그인하지 못했습니다.")
+        raise RuntimeError(f"{user}: 임시 비밀번호로 로그인하지 못했습니다.")
     status, _ = _call(
-        base, "/user/password/change", {"current_password": TEMPORARY, "new_password": PASSWORD},
+        base, "/user/password/change", {"current_password": temporary, "new_password": final},
         session,
     )
     if status != 200:
-        raise RuntimeError(f"기본 비밀번호로 바꾸지 못했습니다(HTTP {status}).")
+        raise RuntimeError(f"{user}: 기본 비밀번호로 바꾸지 못했습니다(HTTP {status}).")
 
 
-def ensure(base: str, master_key: str) -> str:
+def ensure(base: str, master_key: str, user: str = "root", password: str = "rootroot") -> str:
     """``created`` | ``completed`` | ``exists``. 실패하면 RuntimeError."""
-    status, body = _call(base, "/user/info?user_id=" + USER, None, master_key, "GET")
+    final = password
+    temporary = final + "0"  # 변경 규칙(현재와 달라야 함) 때문에 거치는 값
+    status, body = _call(base, "/user/info?user_id=" + user, None, master_key, "GET")
     if status == 200 and (body or {}).get("user_info"):
-        if _login_key(base, TEMPORARY) is None:
+        if _login_key(base, user, temporary) is None:
             return "exists"
-        _finish(base)
+        _finish(base, user, temporary, final)
         return "completed"
     if status not in (200, 400, 404):
         raise RuntimeError(f"LiteLLM 사용자 조회 실패(HTTP {status}).")
     status, _ = _call(
         base, "/user/new",
-        {"user_id": USER, "user_email": USER, "user_role": "proxy_admin",
+        {"user_id": user, "user_email": user, "user_role": "proxy_admin",
          "auto_create_key": False},
         master_key,
     )
     if status != 200:
-        raise RuntimeError(f"LiteLLM 사용자 {USER}를 만들지 못했습니다(HTTP {status}).")
-    status, _ = _call(base, "/user/update", {"user_id": USER, "password": TEMPORARY}, master_key)
+        raise RuntimeError(f"LiteLLM 사용자 {user}를 만들지 못했습니다(HTTP {status}).")
+    status, _ = _call(base, "/user/update", {"user_id": user, "password": temporary}, master_key)
     if status != 200:
         raise RuntimeError(
             f"비밀번호를 정하지 못했습니다(HTTP {status}). "
             "LiteLLM 설정의 password_policy_*를 확인하십시오."
         )
-    _finish(base)
+    _finish(base, user, temporary, final)
     return "created"
 
 
 def main() -> None:
-    try:
-        result = ensure("http://litellm:4000", os.environ["LITELLM_MASTER_KEY"])
-    except (RuntimeError, OSError, ValueError, KeyError, IndexError) as error:
-        print(f"기본 관리자를 만들지 못했습니다: {error}", file=sys.stderr)
+    failed = False
+    for user, password in ACCOUNTS:
+        try:
+            result = ensure("http://litellm:4000", os.environ["LITELLM_MASTER_KEY"], user, password)
+        except (RuntimeError, OSError, ValueError, KeyError, IndexError) as error:
+            print(f"기본 관리자 {user}를 만들지 못했습니다: {error}", file=sys.stderr)
+            failed = failed or user == "root"
+            continue
+        if result != "exists":
+            print(f"기본 관리자 {user}를 만들었습니다.")
+    if failed:
         sys.exit(1)
-    if result != "exists":
-        print("기본 관리자 root를 만들었습니다.")

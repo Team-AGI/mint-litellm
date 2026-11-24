@@ -12,6 +12,7 @@ from fastapi.templating import Jinja2Templates
 from jinja2 import pass_context
 
 from mint_litellm.console import labels, setup_state
+from mint_litellm.console.cookies import DEFAULT_PASSWORD, read_cookie
 from mint_litellm.console.core import DEFAULT_TIME_ZONE, can, can_attach
 from mint_litellm.control.db.connection import fetchone
 from mint_litellm.control.services import reads
@@ -173,6 +174,7 @@ def render(
     base = {
         "actor": actor, "path": request.url.path, "notice": notice, "error": None,
         "zone_label": labels.pick(labels.TIME_ZONE, zone),
+        "default_password": read_cookie(request, DEFAULT_PASSWORD) == "1",
         "litellm_open": bool(
             getattr(getattr(request.app.state, "config", None), "litellm_ui_url", None)
         ),

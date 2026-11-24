@@ -546,7 +546,7 @@ cmd_bootstrap() {
     issue_ui_password "$2" || true
 }
 
-# 새 설치와 DB 초기화 뒤(MINT 운영자가 한 명도 없을 때)는 기본 관리자 root(비밀번호 rootrootroot)를 만든다.
+# 새 설치와 DB 초기화 뒤(MINT 운영자가 한 명도 없을 때)는 기본 관리자 root(비밀번호 rootroot)와 admin1~3(adminadmin)을 만든다.
 # LiteLLM이 뜨기 전에 확인해, 설정에 비밀번호 규칙이 없으면 완화 값을 넣고(운영자가 적은 값은 그대로 둔다)
 # 뜬 뒤에 root를 LiteLLM 사용자와 MINT 운영자로 만든다. 운영자가 있으면(업그레이드·재기동) 아무것도 하지 않는다.
 NEED_DEFAULT_ROOT=0
@@ -570,7 +570,7 @@ print(len(ensure_password_policy(Path('/app/config/litellm.config.yaml'))))
 # 실패해도 기동은 계속한다.
 ensure_default_root() {
     [ "$NEED_DEFAULT_ROOT" = "1" ] || return 0
-    env "LITELLM_MASTER_KEY=$(env_value LITELLM_MASTER_KEY)"         "${COMPOSE[@]}" run --rm --no-deps -T -e LITELLM_MASTER_KEY         --entrypoint python control -c 'from mint_litellm.control.default_admin import main; main()'         && create_first_operator root root         && echo "관리자 콘솔 로그인: 아이디 root / 비밀번호 rootrootroot (로그인 뒤 콘솔에서 바꾸십시오)"         || echo "기본 관리자를 만들지 못했습니다. ./mint.sh bootstrap <이름> <LiteLLM 사용자>로 만드십시오." >&2
+    env "LITELLM_MASTER_KEY=$(env_value LITELLM_MASTER_KEY)"         "${COMPOSE[@]}" run --rm --no-deps -T -e LITELLM_MASTER_KEY         --entrypoint python control -c 'from mint_litellm.control.default_admin import main; main()'         && create_first_operator root root         && echo "관리자 콘솔 로그인: 아이디 root / 비밀번호 rootroot, admin1~3 / adminadmin (첫 로그인 뒤 바꾸십시오)"         || echo "기본 관리자를 만들지 못했습니다. ./mint.sh bootstrap <이름> <LiteLLM 사용자>로 만드십시오." >&2
 }
 
 # LiteLLM 사용자에게 관리 화면(과 콘솔)에 로그인할 비밀번호를 정해 비밀 폴더에 0600으로 두고 안내한다.

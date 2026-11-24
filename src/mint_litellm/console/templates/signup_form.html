@@ -5,7 +5,7 @@
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <label>이메일<input type="email" name="email" maxlength="320" required></label>
 <label>이름<input name="name" maxlength="200" required></label>
-<label>비밀번호(12자 이상)<input type="password" name="password" autocomplete="new-password" minlength="12" maxlength="256" required></label>
-<label>비밀번호 확인<input type="password" name="confirm" autocomplete="new-password" minlength="12" maxlength="256" required></label>
+<label>비밀번호(8자 이상)<input type="password" name="password" autocomplete="new-password" minlength="8" maxlength="256" required></label>
+<label>비밀번호 확인<input type="password" name="confirm" autocomplete="new-password" minlength="8" maxlength="256" required></label>
 <button class="primary" type="submit">가입 요청</button></form>{% endif %}
 <p><a href="/staff/login">직원 화면 로그인</a></p></div></body></html>

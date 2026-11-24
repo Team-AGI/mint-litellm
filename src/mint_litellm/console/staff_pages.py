@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 
 from mint_litellm.console import labels, login, pack_view
-from mint_litellm.console.cookies import delete_cookie, set_cookie
+from mint_litellm.console.cookies import DEFAULT_PASSWORD, delete_cookie, set_cookie
 from mint_litellm.console.core import (
     STAFF_COOKIE,
     STATUS,
@@ -402,7 +402,9 @@ def password_submit(
     )
     if error:
         return password_page(request, actor, error, status)
-    return RedirectResponse("/staff/account/password?ok=password_changed", status_code=303)
+    response = RedirectResponse("/staff/account/password?ok=password_changed", status_code=303)
+    delete_cookie(response, request, DEFAULT_PASSWORD)
+    return response
 
 
 @router.post("/staff/logout")
@@ -418,6 +420,7 @@ def logout(request: Request, actor: StaffActor = Depends(staff_actor)) -> Respon
         target = oidc_client.logout_url(request, target) or target
     response = RedirectResponse(target, status_code=303)
     delete_cookie(response, request, STAFF_COOKIE)
+    delete_cookie(response, request, DEFAULT_PASSWORD)
     return response
 
 

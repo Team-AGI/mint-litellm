@@ -32,7 +32,8 @@ class FakeLiteLLM:
             self.password = body["password"]
             return 200, {}
         if path == "/v2/login":
-            ok = self.user and body["username"] == "root" and body["password"] == self.password
+            ok = (self.user and body["username"] == self.user["user_id"]
+                  and body["password"] == self.password)
             return (200, {"token": _jwt("session-key")}) if ok else (401, {})
         if path == "/user/password/change":
             assert key == "session-key" and body["current_password"] == self.password
@@ -46,7 +47,7 @@ def test_creates_root_as_proxy_admin_with_the_default_password(monkeypatch):
     fake = FakeLiteLLM()
     monkeypatch.setattr(da, "_call", fake)
     assert da.ensure("http://l", "mk") == "created"
-    assert fake.password == "rootrootroot"
+    assert fake.password == "rootroot"
     assert fake.user["user_email"] == "root" and fake.user["user_role"] == "proxy_admin"
 
 
@@ -60,10 +61,22 @@ def test_leaves_an_existing_root_alone_even_with_a_changed_password(monkeypatch)
 
 
 def test_finishes_a_half_made_root(monkeypatch):
-    fake = FakeLiteLLM(user={"user_id": "root"}, password=da.TEMPORARY)
+    fake = FakeLiteLLM(user={"user_id": "root"}, password="rootroot0")
     monkeypatch.setattr(da, "_call", fake)
     assert da.ensure("http://l", "mk") == "completed"
-    assert fake.password == da.PASSWORD
+    assert fake.password == "rootroot"
+
+
+def test_admin_accounts_and_login_translation(monkeypatch):
+    fake = FakeLiteLLM()
+    monkeypatch.setattr(da, "_call", fake)
+    assert da.ensure("http://l", "mk", "admin1", "adminadmin") == "created"
+    assert fake.password == "adminadmin" and fake.user["user_id"] == "admin1"
+    assert da.ACCOUNTS == (("root", "rootroot"), ("admin1", "adminadmin"),
+                           ("admin2", "adminadmin"), ("admin3", "adminadmin"))
+    assert da.is_default("Root", "rootroot") and da.is_default("admin2", "adminadmin")
+    assert not da.is_default("root", "changed-password")
+    assert not da.is_default("person@example.test", "rootroot")
 
 
 def test_reports_a_refused_password_policy(monkeypatch):

@@ -55,7 +55,7 @@ def test_signup_flow(world, monkeypatch):
     response = client.post("/staff/signup", data={"email": "x@example.test", "name": "직원"})
     assert response.status_code == 403
     assert "두 칸이 같아야" in submit(client, "person@example.test", confirm="other-pass-123").text
-    assert "12자 이상" in submit(client, "person@example.test", password="short").text
+    assert "8자 이상" in submit(client, "person@example.test", password="short").text
     page = submit(client, "person@example.test").text
     assert "관리자가 승인하면 이 이메일과 비밀번호로 로그인할 수 있습니다" in page
     sealed, token = world.query(

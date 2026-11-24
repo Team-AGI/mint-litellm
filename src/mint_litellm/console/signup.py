@@ -60,8 +60,8 @@ def signup_submit(request: Request, email: str = Form(""), name: str = Form(""),
     if (len(email) > 320 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email)
             or not name or len(name) > 200):
         return form(request, "이메일과 이름을 확인하십시오.", 400)
-    if not 12 <= len(password) <= 256 or password != confirm:
-        return form(request, "비밀번호는 12자 이상이고 두 칸이 같아야 합니다.", 400)
+    if not 8 <= len(password) <= 256 or password != confirm:
+        return form(request, "비밀번호는 8자 이상이고 두 칸이 같아야 합니다.", 400)
     instance, request_id = config_of(request).instance_id, new_uuid7()
     try:
         sealed = signup.seal(instance, str(request_id), password)

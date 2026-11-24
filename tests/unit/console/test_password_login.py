@@ -62,6 +62,15 @@ def test_the_default_root_account_with_a_plain_email_signs_in(pw):
     assert pw.client.get("/").status_code == 200
 
 
+def test_the_default_password_turns_on_the_change_reminder(pw):
+    pw.stub.logins["root"] = ("rootroot", claims("human-1", "root"))
+    response = attempt(pw, "root", "rootroot")
+    assert response.status_code == 303
+    assert "mint_default_pw=1" in response.headers.get("set-cookie", "")
+    other = attempt(pw, "admin@acme.test")
+    assert "mint_default_pw" not in other.headers.get("set-cookie", "")
+
+
 def test_the_audit_event_says_password_and_no_password_is_stored(pw):
     attempt(pw, "admin@acme.test")
     [(payload,)] = pw.query(

@@ -1,0 +1,1 @@
+- 새 설치의 기본 관리자는 root / rootroot와 admin1~3 / adminadmin이다. 기본 비밀번호로 로그인하면 관리자·직원 화면 위에 바꾸라는 알림이 뜬다. 직원 가입·LiteLLM 비밀번호 최소 길이는 8자(LiteLLM 최솟값)다.
