@@ -4463,15 +4463,44 @@ def remote_problem(url: str) -> str | None:
         return "주소에 계정·쿼리·조각을 넣을 수 없습니다"
     if (port or 443) not in REMOTE_PORTS:
         return f"포트 {port}은(는) 쓸 수 없습니다. 허용 포트: " + ", ".join(map(str, REMOTE_PORTS))
+    if repo_parts(url):
+        return ("소스 저장소 주소입니다(MCP 서버 주소가 아님). 원격 MCP라면 서버의 MCP 주소"
+                "(예: …/mcp)를, 이 PC에서 실행하는 MCP라면"
+                f" `mint add {remote_name(url)} -- <실행 명령>`으로 신청하십시오")
     return None
 
 
+CODE_HOSTS = ("github.com", "gitlab.com", "bitbucket.org", "codeberg.org")
+
+
+def repo_parts(url: str) -> tuple[str, str] | None:
+    """소스 저장소 주소(``https://github.com/<소유자>/<저장소>``)면 (소유자, 저장소)."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        return None
+    segs = [s for s in parts.path.split("/") if s]
+    if (parts.hostname or "").lower() not in CODE_HOSTS or len(segs) < 2:
+        return None
+    if len(segs) > 2 and segs[2] not in ("tree", "blob", "-"):
+        return None
+    return segs[0], segs[1].removesuffix(".git")
+
+
 def remote_name(url: str) -> str:
-    """주소에서 서버 이름: 맨 앞 mcp·www·api 칸을 빼고 점을 하이픈으로."""
-    labels = (urllib.parse.urlsplit(url).hostname or "server").split(".")
-    while len(labels) > 2 and labels[0] in ("mcp", "www", "api"):
-        labels.pop(0)
-    return re.sub(r"[^A-Za-z0-9._-]", "-", "-".join(labels))[:128] or "server"
+    """주소에서 서버 이름. 저장소 주소면 저장소 이름, 아니면 호스트(맨 앞 mcp·www·api 칸 제외).
+
+    LiteLLM은 서버 이름에 하이픈을 받지 않으므로 영문·숫자·밑줄만 쓴다.
+    """
+    repo = repo_parts(url)
+    if repo:
+        base = repo[1]
+    else:
+        labels = (urllib.parse.urlsplit(url).hostname or "server").split(".")
+        while len(labels) > 2 and labels[0] in ("mcp", "www", "api"):
+            labels.pop(0)
+        base = "_".join(labels)
+    return re.sub(r"[^A-Za-z0-9_]+", "_", base).strip("_")[:128] or "server"
 
 
 def inferred_hosts(argv: list[str], env_values: dict[str, str]) -> list[str]:
@@ -4531,6 +4560,8 @@ def run_add(
         server_id, url, tokens, env_names = resolve_target(args, home)
         spec = None if url else parse_command(tokens, home)
         server_id = server_id or (remote_name(url) if url else spec["name"])
+        if url:
+            server_id = server_id.replace("-", "_")  # LiteLLM은 서버 이름에 하이픈을 받지 않는다
         if not SERVER_NAME.match(server_id):
             raise AddError("서버 이름은 영문·숫자·._-로 적으십시오")
         if url and (why := remote_problem(url)):

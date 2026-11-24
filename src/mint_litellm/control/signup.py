@@ -152,7 +152,7 @@ def record_failure(conn, instance_id, request_id, code, job_status):
 
 
 def login_hint(conn, instance_id: str, email: str) -> str | None:
-    """로그인에 실패한 이메일의 가장 최근 가입 요청 상태를 직원이 읽을 문장으로."""
+    """로그인에 실패한 아이디의 가장 최근 가입 요청 상태를 직원이 읽을 문장으로."""
     row = fetchone(
         conn, "SELECT status, reason FROM mint.signup_requests WHERE instance_id = %s"
         " AND lower(email) = lower(%s) ORDER BY requested_at DESC LIMIT 1",
@@ -161,7 +161,7 @@ def login_hint(conn, instance_id: str, email: str) -> str | None:
     if row is None or row["status"] == "approved":
         return None
     if row["status"] == "pending":
-        return ("가입 승인 대기 중입니다. 관리자가 승인하면 이 이메일과 비밀번호로 로그인할 수"
+        return ("가입 승인 대기 중입니다. 관리자가 승인하면 이 아이디와 비밀번호로 로그인할 수"
                 " 있습니다.")
     if row["status"] == "rejected":
         return "가입 요청이 거절되었습니다." + (f" 사유: {row['reason']}" if row["reason"] else "")

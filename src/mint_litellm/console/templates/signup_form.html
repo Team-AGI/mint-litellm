@@ -3,7 +3,7 @@
 {% if error %}<div class="banner error" role="alert">{{ error }}</div>{% endif %}
 {% if done %}<p>{{ done }}</p>{% else %}<form method="post" action="/staff/signup" class="form">
 <input type="hidden" name="csrf" value="{{ csrf }}">
-<label>이메일<input type="email" name="email" maxlength="320" required></label>
+<label>아이디<input name="email" maxlength="64" minlength="3" autocomplete="username" required></label>
 <label>이름<input name="name" maxlength="200" required></label>
 <label>비밀번호(8자 이상)<input type="password" name="password" autocomplete="new-password" minlength="8" maxlength="256" required></label>
 <label>비밀번호 확인<input type="password" name="confirm" autocomplete="new-password" minlength="8" maxlength="256" required></label>

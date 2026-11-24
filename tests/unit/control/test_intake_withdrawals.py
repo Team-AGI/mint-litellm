@@ -63,13 +63,13 @@ def test_other_user_and_stale_version_cannot_withdraw(world):
     assert world.intake(identifier)["status"] == "received"
 
 
-def test_empty_reason_and_checking_state_cannot_withdraw(world):
+def test_empty_reason_cannot_withdraw_but_a_stuck_check_can(world):
     identifier = world.create()
     with pytest.raises(ControlError):
         withdraw(world, identifier, reason=" ")
+    # 검사가 실패해 재시도를 기다리는(실행 중이 아닌) 신청은 화면에서 철회할 수 있다.
     world.conn.execute("UPDATE mint.intakes SET status='checking' WHERE id=%s", (identifier,))
-    with pytest.raises(ControlError):
-        withdraw(world, identifier)
+    assert withdraw(world, identifier)["decision"] == "withdrawn"
 
 
 def test_leased_validation_job_blocks_withdrawal_even_before_checking(world):
