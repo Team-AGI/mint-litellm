@@ -29,6 +29,10 @@
 {% endif %}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}{{ m.empty('등록된 운영자가 없습니다', '/setup', '시작하기') }}{% endif %}
+{% if system_accounts %}<h2>시스템 계정</h2>
+<table><thead><tr><th>이름</th><th>만료</th></tr></thead><tbody>
+{% for o in system_accounts %}<tr><td>{{ o.name }}</td><td class="nowrap">{{ o.expires_at | when }}</td></tr>{% endfor %}
+</tbody></table>{% endif %}
 {% elif tab == 'orgs' %}
 {% if orgs %}
 <table><thead><tr><th>식별자</th><th>이름</th><th>상태</th><th class="num">연결</th><th class="num">이용 관계</th><th></th></tr></thead><tbody>

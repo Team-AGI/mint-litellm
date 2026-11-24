@@ -227,8 +227,7 @@ def dashboard(
         "links": [f"/alerts?status=open&severity={k}" for k in order],
     }
     month = usage_reader.build(
-        conn, instance, actor.config.litellm_admin, server_names(actor.config.litellm_admin),
-        "month",
+        conn, instance, server_names(actor.config.litellm_admin), "month",
     )
     latency = dashboard_reads.latency_series(conn, instance, hours, zone)
     cards = dashboard_cards(

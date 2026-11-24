@@ -98,9 +98,9 @@ def saved_target(request: Request) -> str:
     try:
         packed = read_cookie(request, STATE_COOKIE) or ""
         saved = json.loads(base64.urlsafe_b64decode(packed + "=="))
-        return "staff" if saved["t"] == "staff" else "admin"
+        return saved["t"] if saved["t"] in ("staff", "admin") else "auto"
     except (ValueError, KeyError, TypeError):
-        return "admin"
+        return "auto"
 
 
 def _b64(raw: bytes) -> str:

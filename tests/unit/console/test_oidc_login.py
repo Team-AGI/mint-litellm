@@ -127,7 +127,7 @@ def test_an_operator_signs_in_through_the_identity_provider(sso, idp):
     response = callback(sso, idp)
     assert response.status_code == 303 and response.headers["location"] == "/"
     assert COOKIE in sso.client.cookies
-    [(user_id, key_token, subject, role, _)] = sessions(sso)
+    [(user_id, key_token, subject, role, _)] = [r for r in sessions(sso) if r[2] == "admin"]
     assert (user_id, subject, role) == ("human-1", "admin", "admin")
     assert key_token.startswith("sso:") and len(key_token) == 4 + 64
     assert idp.last_form["code_verifier"] and idp.last_form["client_secret"] == ["s3cret"]
@@ -137,7 +137,8 @@ def test_an_operator_signs_in_through_the_identity_provider(sso, idp):
 def test_the_audit_event_names_issuer_and_subject_but_no_token(sso, idp):
     callback(sso, idp)
     [(payload,)] = sso.query(
-        "SELECT payload::text FROM mint.events WHERE kind = 'console_session_started'")
+        "SELECT payload::text FROM mint.events WHERE kind = 'console_session_started'"
+        " AND payload->>'subject' = 'admin'")
     event = json.loads(payload)
     assert event["method"] == "oidc" and event["issuer"] == ISSUER
     assert event["idp_subject"] == "sub-1" and event["user_id"] == "human-1"
@@ -239,7 +240,8 @@ def test_the_signing_key_set_is_cached_and_refetched_on_an_unknown_key_id(sso, i
 def test_the_login_pages_offer_sso_first_and_key_login_second(sso):
     page = sso.client.get("/login").text
     assert "회사 계정으로 로그인" in page and 'name="key"' in page
-    assert "target=staff" in sso.client.get("/staff/login").text
+    redirect = sso.client.get("/staff/login")
+    assert redirect.status_code == 303 and redirect.headers["location"] == "/login"
 
 
 def test_key_login_can_be_switched_off(sso):

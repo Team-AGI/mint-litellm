@@ -98,7 +98,7 @@ def create_app(
         back = response.headers.get("location") or response.headers.get("hx-redirect") or ""
         had_session = read_cookie(request, COOKIE) or read_cookie(request, STAFF_COOKIE)
         if had_session and (
-            request.url.path.endswith("/logout") or back.startswith(("/login", "/staff/login"))
+            request.url.path.endswith("/logout") or back.startswith("/login")
         ):
             delete_litellm_token(response, request)
         response.headers["X-Request-Id"] = request.state.request_id
@@ -207,7 +207,7 @@ def create_app(
     ) -> Response:
         cfg = config_of(request)
         if not key:
-            return password_login.sign_in(request, conn, "admin", username, password)
+            return password_login.sign_in(request, conn, "auto", username, password)
         if not cfg.key_login:
             return render(
                 request, "login.html", login_context(request, "키 로그인은 사용하지 않습니다."),

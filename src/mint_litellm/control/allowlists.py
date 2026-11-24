@@ -73,7 +73,11 @@ def add(
 
 
 # 묶음 만들기용 공식 패키지 저장소. 자동으로 한 번 넣고, 관리자가 해제하면 다시 넣지 않는다.
-DEFAULT_EGRESS = ("pypi.org", "files.pythonhosted.org", "registry.npmjs.org")
+DEFAULT_EGRESS = (
+    "pypi.org", "files.pythonhosted.org", "registry.npmjs.org",
+    "github.com", "codeload.github.com", "objects.githubusercontent.com",
+    "raw.githubusercontent.com",
+)
 DEFAULT_ACTOR = "mint-default"
 
 

@@ -1,25 +1,18 @@
-"""비용·호출·차단 한 화면의 자료. 지출은 LiteLLM 관리 API로만 읽고, 호출·차단은 MINT 기록에서 센다.
+"""호출·차단·첫 성공 한 화면의 자료와 MINT 판정 지연. 모두 MINT 기록에서 읽는다.
 
-LiteLLM 일별 활동(``/team/daily/activity``, ``/user/daily/activity``)은 날짜별 누적 값이라 다시
-읽어도 합계가 겹치지 않는다. MINT 쪽 호출은 같은 호출의 재시도를 한 건으로 센다. 기간은 UTC 날짜
-단위(끝은 지금)다. 지출을 읽지 못하면 비용 칸은 ``missing``이고, 호출 수는 그대로 보인다.
+MINT의 판정은 모델을 부르지 않으므로 모델 비용을 만들지 않는다. 그래서 비용 칸은 없고,
+대신 판정 사건에 남은 판정 시간(``decision_us``)의 중앙값·95번째 값을 보인다. 같은 호출의
+재시도는 한 건으로 센다. 기간은 UTC 날짜 단위(끝은 지금)다.
 """
 
-import time
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 import psycopg
 
 from mint_litellm.control.db.connection import fetchall, fetchone
-from mint_litellm.control.errors import ControlError
 
-USAGE_ROUTES = ("/team/daily/activity", "/user/daily/activity")
 PERIODS = {"today": ("오늘", 1), "7d": ("7일", 7), "30d": ("30일", 30), "month": ("이번 달", 0)}
 DEFAULT_PERIOD = "7d"
-TOP_USERS = 20  # 사람별 지출은 호출이 많은 순으로 이만큼만 읽는다
-CACHE_SECONDS = 60
-_cache: dict[tuple, tuple[float, Any]] = {}
 
 # 차단은 대시보드와 같은 갈래(허용·관측·승인 필요가 아닌 모두)로 센다.
 _BLOCKED = (
@@ -41,92 +34,6 @@ def window(period: str, now: datetime | None = None) -> tuple[datetime, datetime
     days = PERIODS[period][1]
     start = today.replace(day=1) if period == "month" else today - timedelta(days=days - 1)
     return start, now
-
-
-def cost_cell(value: float | None, listed: bool) -> dict:
-    """``missing``은 못 읽음, ``none``은 지출에 대상 없음, ``ok``는 읽은 값(0원 포함)."""
-    if value is None:
-        return {"state": "missing", "text": "미수집", "value": 0.0}
-    if not listed:
-        return {"state": "none", "text": "해당 없음", "value": 0.0}
-    return {"state": "ok", "text": f"${value:,.2f}", "value": value}
-
-
-def total_cost(value: float | None, model_calls: int | None = None) -> dict:
-    """합계 칸. 모델 요청 없이 0이면(도구 호출만) 「해당 없음」, 모델을 썼는데 0이면 $0.00이다."""
-    if value == 0 and not model_calls:
-        return {"state": "none", "text": "해당 없음(모델 지출 없음)", "value": 0.0}
-    return cost_cell(value, True)
-
-
-# --- LiteLLM 지출 -----------------------------------------------------------------------------
-
-
-def _daily(admin, path: str, start: datetime, end: datetime, **extra) -> list[dict]:
-    key = (id(admin), path, start.date(), end.date(), tuple(sorted(extra.items())))
-    hit = _cache.get(key)
-    if hit and time.monotonic() - hit[0] < CACHE_SECONDS:
-        return hit[1]
-    results: list[dict] = []
-    page = 1
-    while True:
-        body = admin.daily_activity(
-            path,
-            {"start_date": start.date().isoformat(), "end_date": end.date().isoformat(),
-             "page": page, "page_size": 1000, **extra},
-        )
-        results.extend(r for r in body["results"] if isinstance(r, dict))
-        if page >= int((body.get("metadata") or {}).get("total_pages", 1)):
-            break
-        page += 1
-    _cache[key] = (time.monotonic(), results)
-    return results
-
-
-def _sum(days: list[dict], section: str) -> dict[str, tuple[float, int]]:
-    """날짜별 분해 값을 이름별로 더한다: 이름 → (지출, 요청 수)."""
-    out: dict[str, tuple[float, int]] = {}
-    for day in days:
-        for name, item in ((day.get("breakdown") or {}).get(section) or {}).items():
-            metrics = (item or {}).get("metrics") or {}
-            if section == "mcp_servers":  # 키는 「서버/도구」이다: 서버 단위로 모은다
-                name = name.split("/", 1)[0]
-            spend, calls = out.get(name, (0.0, 0))
-            out[name] = (spend + float(metrics.get("spend") or 0),
-                         calls + int(metrics.get("api_requests") or 0))
-    return out
-
-
-def _total(days: list[dict]) -> tuple[float, int]:
-    return (sum(float((d.get("metrics") or {}).get("spend") or 0) for d in days),
-            sum(int((d.get("metrics") or {}).get("api_requests") or 0) for d in days))
-
-
-def read_spend(admin, start: datetime, end: datetime, users: list[str], user: str | None):
-    """(팀별, 서버별, 사람별, 모델 요청 수) 지출. 못 읽은 부분은 None이다. 직원이면 본인 호출만
-    읽는다."""
-    teams = servers = people = models = None
-    errors = (ControlError, ValueError, TypeError, AttributeError)
-    try:
-        if user is None:
-            days = _daily(admin, "/team/daily/activity", start, end)
-            teams, servers = _sum(days, "entities"), _sum(days, "mcp_servers")
-        else:
-            days = _daily(admin, "/user/daily/activity", start, end, user_id=user)
-            servers, people = _sum(days, "mcp_servers"), {user: _total(days)}
-        models = sum(calls for _, calls in _sum(days, "models").values())
-    except errors:
-        pass
-    if user is None:
-        try:
-            people = {u: _total(_daily(admin, "/user/daily/activity", start, end, user_id=u))
-                      for u in users[:TOP_USERS]}
-        except errors:
-            people = None
-    return teams, servers, people, models
-
-
-# --- MINT 기록 --------------------------------------------------------------------------------
 
 
 def read_ledger(conn: psycopg.Connection, instance: str, start: datetime, end: datetime,
@@ -169,10 +76,32 @@ def read_first_success(conn: psycopg.Connection, instance: str, user: str | None
 # --- 합치기 -----------------------------------------------------------------------------------
 
 
-def combine(ledger: list[dict], first: list[dict], spend, names: dict, *, scoped: bool) -> dict:
-    """호출·차단 집계와 지출을 하나로 합친다. ``spend``는 (팀별, 서버별, 사람별) 읽은 결과."""
-    teams_s, servers_s, people_s, *rest = spend
-    model_calls = rest[0] if rest else None
+def decision_latency(
+    conn: psycopg.Connection, instance: str, start: datetime, end: datetime,
+    user: str | None = None,
+) -> dict:
+    """기간 안 판정 사건의 판정 시간(ms): ``{"p50", "p95", "count"}``. 기록이 없으면 값은 None."""
+    who, args = "", [instance, start, end]
+    if user:
+        who, args = f" AND {_USER} = %s", [*args, user]
+    row = fetchone(
+        conn,
+        "SELECT count(*) AS n,"
+        " percentile_cont(0.5) WITHIN GROUP (ORDER BY us) AS p50,"
+        " percentile_cont(0.95) WITHIN GROUP (ORDER BY us) AS p95 FROM ("
+        " SELECT (payload->>'decision_us')::bigint AS us FROM mint.events"
+        " WHERE instance_id = %s AND kind = 'decision_evaluated'"
+        f" AND payload->>'decision_us' IS NOT NULL AND inserted_at >= %s AND inserted_at < %s{who}"
+        ") t",
+        tuple(args),
+    )
+    n = int(row["n"])
+    return {"p50": round(row["p50"] / 1000, 1) if n else None,
+            "p95": round(row["p95"] / 1000, 1) if n else None, "count": n}
+
+
+def combine(ledger: list[dict], first: list[dict], names: dict, *, scoped: bool) -> dict:
+    """호출·차단 집계를 하나로 합친다."""
 
     def fold(key: str) -> dict[str, list[int]]:
         out: dict[str, list[int]] = {}
@@ -183,14 +112,10 @@ def combine(ledger: list[dict], first: list[dict], spend, names: dict, *, scoped
                 row[1] += r["blocked"]
         return out
 
-    def rows(folded, source, label=lambda n: n, firsts=None):
-        result = []
-        for name, (calls, blocked) in sorted(folded.items(), key=lambda i: -i[1][0]):
-            spent = None if source is None else source.get(name, (0.0, 0))[0]
-            result.append({"name": label(name), "calls": calls, "blocked": blocked,
-                           "cost": cost_cell(spent, source is not None and name in source),
-                           "first": (firsts or {}).get(name)})
-        return result
+    def rows(folded, label=lambda n: n, firsts=None):
+        return [{"name": label(name), "calls": calls, "blocked": blocked,
+                 "first": (firsts or {}).get(name)}
+                for name, (calls, blocked) in sorted(folded.items(), key=lambda i: -i[1][0])]
 
     first_server: dict[str, datetime] = {}
     first_user: dict[str, datetime] = {}
@@ -198,37 +123,25 @@ def combine(ledger: list[dict], first: list[dict], spend, names: dict, *, scoped
         for table, key in ((first_server, f["server_id"]), (first_user, f["user_id"])):
             if key and (key not in table or f["first_at"] < table[key]):
                 table[key] = f["first_at"]
-    # LiteLLM은 서버를 이름으로 묶으므로 식별자로도 찾을 수 있게 한다.
-    server_source = None if servers_s is None else {
-        **servers_s, **{k: servers_s[v] for k, v in names.items() if v in servers_s}}
-    servers = rows(fold("server_id"), server_source, lambda n: names.get(n) or n, first_server)
-    # 전체 합계는 팀별 지출에서만 낸다(사람별은 상위 몇 명뿐). 못 읽었으면 어디서나 미수집이다.
-    known = people_s if scoped else teams_s
+    servers = rows(fold("server_id"), lambda n: names.get(n) or n, first_server)
     return {
         "calls": sum(r["calls"] for r in ledger),
         "blocked": sum(r["blocked"] for r in ledger),
-        "cost": total_cost(
-            None if known is None else sum(v[0] for v in known.values()), model_calls),
-        "teams": [] if scoped else rows(fold("team_id"), teams_s),
-        "users": rows(fold("user_id"), people_s, firsts=first_user),
+        "teams": [] if scoped else rows(fold("team_id")),
+        "users": rows(fold("user_id"), firsts=first_user),
         "servers": servers,
         "bars": {"labels": [r["name"] for r in servers[:8]],
                  "values": [r["calls"] for r in servers[:8]]},
     }
 
 
-def build(conn, instance, admin, names: dict, period: str, user: str | None = None) -> dict:
+def build(conn, instance, names: dict, period: str, user: str | None = None) -> dict:
     """사용량 화면의 자료. ``user``가 있으면 그 사람의 것만 읽고 센다."""
     start, end = window(period)
     ledger = read_ledger(conn, instance, start, end, user)
-    per_user: dict[str, int] = {}
-    for r in ledger:
-        if r["user_id"]:
-            per_user[r["user_id"]] = per_user.get(r["user_id"], 0) + r["calls"]
-    users = sorted(per_user, key=lambda u: -per_user[u])
-    spend = read_spend(admin, start, end, users, user) if admin else (None, None, None, None)
     first = read_first_success(conn, instance, user)
-    report = combine(ledger, first, spend, names, scoped=user is not None)
+    report = combine(ledger, first, names, scoped=user is not None)
+    report["latency"] = decision_latency(conn, instance, start, end, user)
     emails = {r["user_id"]: r["email"] for r in fetchall(
         conn, "SELECT user_id, email FROM mint.directory_users"
         " WHERE instance_id = %s AND user_id = ANY(%s) AND email IS NOT NULL",

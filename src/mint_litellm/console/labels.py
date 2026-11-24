@@ -354,7 +354,7 @@ ALLOWLIST_KIND = {
     "registry_source": "레지스트리 출처",
 }
 ALLOWLIST_KIND_HELP = {
-    "provider": "서버를 운영하는 업체의 호스트 주소",
+    "provider": "제공자 제한을 켰을 때만 쓰는 업체 호스트 주소",
     "auth_server": "OAuth 인증 서버의 발급자 주소",
     "egress_target": "공개 주소가 아니어도 연결을 허용할 내부 대상",
     "registry_source": "패키지를 받아 올 레지스트리",

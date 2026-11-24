@@ -37,7 +37,8 @@ def attempt(world, username, password=PASSWORD, path="/login"):
 
 
 def sessions(world):
-    return world.query("SELECT user_id, key_token, role FROM mint.console_sessions")
+    return world.query(
+        "SELECT user_id, key_token, role FROM mint.console_sessions WHERE subject = 'admin'")
 
 
 def refused(response, text, status=401):
@@ -75,6 +76,7 @@ def test_the_audit_event_says_password_and_no_password_is_stored(pw):
     attempt(pw, "admin@acme.test")
     [(payload,)] = pw.query(
         "SELECT payload::text FROM mint.events WHERE kind = 'console_session_started'"
+        " AND payload->>'subject' = 'admin'"
     )
     assert json.loads(payload)["method"] == "password"
     stored = pw.query(
@@ -120,7 +122,8 @@ def test_the_master_key_admin_is_not_a_person_and_is_refused(pw):
 
 
 def test_a_user_who_is_not_an_operator_cannot_open_the_admin_console(pw):
-    refused(attempt(pw, "stranger@acme.test"), "운영자로 등록된", 403)
+    response = attempt(pw, "stranger@acme.test")  # 운영자가 아니면 직원 화면으로 간다
+    assert response.headers["location"] == "/staff" and COOKIE not in pw.client.cookies
     assert sessions(pw) == []
 
 
@@ -161,10 +164,9 @@ def test_key_login_is_off_by_default_and_hidden(pw, tmp_path):
     assert ConsoleConfig.from_env(base_env(tmp_path)).key_login is False
     assert ConsoleConfig.from_env({**base_env(tmp_path), "MINT_CONSOLE_KEY_LOGIN": "on"}).key_login
     object.__setattr__(pw.config, "key_login", False)
-    for path in ("/login", "/staff/login"):
-        page = pw.client.get(path).text
-        assert 'name="username"' in page and 'name="password"' in page
-        assert 'name="key"' not in page
+    page = pw.client.get("/login").text
+    assert 'name="username"' in page and 'name="password"' in page
+    assert 'name="key"' not in page
     refused(
         pw.client.post("/login", data={"key": Keys.admin}), "키 로그인은 사용하지 않습니다", 403
     )

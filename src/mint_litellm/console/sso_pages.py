@@ -26,7 +26,11 @@ from mint_litellm.types.events import EventKind
 router = APIRouter()
 
 TOO_MANY = "로그인 시도가 너무 많습니다. 잠시 뒤 다시 시도하십시오."
-PAGES = {"admin": ("login.html", "/login"), "staff": ("staff_login.html", "/staff/login")}
+# 로그인 화면은 하나다. auto는 로그인한 사람의 역할로 관리자·직원 화면을 고른다.
+PAGES = {
+    "auto": ("login.html", "/login"), "admin": ("login.html", "/login"),
+    "staff": ("login.html", "/login"),
+}
 
 
 def _client(request: Request) -> oidc.OidcClient:
@@ -43,9 +47,9 @@ def _refuse(request: Request, target: str, message: str, status: int) -> Respons
 
 
 @router.get("/auth/oidc/login")
-def oidc_login(request: Request, target: str = "admin") -> Response:
+def oidc_login(request: Request, target: str = "auto") -> Response:
     client = _client(request)
-    target = target if target in PAGES else "admin"
+    target = target if target in PAGES else "auto"
     if too_many_attempts(request):
         return _refuse(request, target, TOO_MANY, 429)
     try:
@@ -95,6 +99,30 @@ def open_session(
     return STAFF_COOKIE, session_id
 
 
+def open_sessions(
+    config, conn: psycopg.Connection, target: str, user_id: str, key_token: str, user: dict,
+    via: dict,
+) -> list[tuple[str, str]]:
+    """로그인 한 번에 맞는 세션을 연다. auto는 운영자이면 관리자·직원 세션을, 아니면 직원 세션을."""
+    if target != "auto":
+        return [open_session(config, conn, target, user_id, key_token, user, via)]
+    try:
+        opened = [open_session(config, conn, "admin", user_id, key_token, user, via)]
+    except AdminError as refused:
+        if refused.code != AdminCode.FORBIDDEN:
+            raise
+        return [open_session(config, conn, "staff", user_id, key_token, user, via)]
+    try:  # 운영자가 직원 화면 링크를 눌러도 다시 로그인하지 않게 한다
+        opened.append(open_session(config, conn, "staff", user_id, key_token, user, via))
+    except AdminError:
+        pass  # 직원 화면을 쓰지 않는 배포
+    return opened
+
+
+def landing(opened: list[tuple[str, str]]) -> str:
+    return "/" if opened[0][0] == COOKIE else "/staff"
+
+
 @router.get("/auth/oidc/callback")
 def oidc_callback(
     request: Request, code: str = "", state: str = "", error: str = "",
@@ -109,16 +137,17 @@ def oidc_callback(
         if error:
             raise LoginRefused("SSO 서버가 로그인을 허용하지 않았습니다.")
         identity = client.finish(request, code, state)
-        target = identity.target if identity.target in PAGES else "admin"
+        target = identity.target if identity.target in PAGES else "auto"
         user = human_user(config, identity.user_id)
         via = {"method": "oidc", "issuer": identity.issuer, "idp_subject": identity.subject}
-        cookie, session_id = open_session(
+        opened = open_sessions(
             config, conn, target, identity.user_id, identity.key_token, user, via)
     except LoginRefused as refused:
         return _refuse(request, target, str(refused), 401)
     except AdminError as refused:
         return _refuse(request, target, refused.message, 403)
-    response = RedirectResponse("/" if target == "admin" else "/staff", status_code=303)
-    set_cookie(response, request, cookie, session_id)
+    response = RedirectResponse(landing(opened), status_code=303)
+    for cookie, session_id in opened:
+        set_cookie(response, request, cookie, session_id)
     delete_cookie(response, request, oidc.STATE_COOKIE, samesite="lax")
     return response

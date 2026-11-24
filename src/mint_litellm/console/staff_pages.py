@@ -15,7 +15,7 @@ from typing import Any
 
 import psycopg
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 
 from mint_litellm.console import labels, login, pack_view
 from mint_litellm.console.cookies import DEFAULT_PASSWORD, delete_cookie, set_cookie
@@ -330,9 +330,9 @@ def start_staff_session(
     return session_id
 
 
-@public.get("/staff/login", response_class=HTMLResponse)
-def login_form(request: Request) -> Response:
-    return render(request, "staff_login.html", login_context(request, None))
+@public.get("/staff/login")
+def login_form() -> Response:
+    return RedirectResponse("/login", status_code=303)
 
 
 @public.post("/staff/login", dependencies=[Depends(require_origin)])
@@ -348,22 +348,22 @@ def login_submit(
     if not key:
         from mint_litellm.console.password_login import sign_in  # 순환 참조를 피한다
 
-        return sign_in(request, control, "staff", username, password)
+        return sign_in(request, control, "auto", username, password)
     if not config.key_login:
         return render(
-            request, "staff_login.html", login_context(request, "키 로그인은 사용하지 않습니다."),
+            request, "login.html", login_context(request, "키 로그인은 사용하지 않습니다."),
             status=403,
         )
     if too_many_attempts(request):
         return render(
-            request, "staff_login.html",
+            request, "login.html",
             login_context(request, "로그인 시도가 너무 많습니다. 잠시 뒤 다시 시도하십시오."),
             status=429,
         )
     try:
         identity = login.verify(config.litellm_url, key)
     except login.LoginRefused as refused:
-        return render(request, "staff_login.html", login_context(request, str(refused)), status=401)
+        return render(request, "login.html", login_context(request, str(refused)), status=401)
     finally:
         key = ""  # 평문 키는 여기서 버린다
     directory.record_login(
@@ -414,7 +414,7 @@ def logout(request: Request, actor: StaffActor = Depends(staff_actor)) -> Respon
         actor.sctx.control, actor.config.instance_id, actor.config.litellm_url,
         actor.config.stage2.export_hmac_key, actor.id_hash,
     )
-    target = "/staff/login"
+    target = "/login"
     oidc_client = request.app.state.oidc
     if oidc_client is not None and console_sessions.is_oidc_session(actor.sctx.key_token):
         target = oidc_client.logout_url(request, target) or target
