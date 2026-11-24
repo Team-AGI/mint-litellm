@@ -261,6 +261,7 @@ def create_app(
             target = app.state.oidc.logout_url(request, target) or target
         response = RedirectResponse(target, status_code=303)
         delete_cookie(response, request, COOKIE)
+        delete_cookie(response, request, STAFF_COOKIE)  # 한 번 로그인으로 함께 열린 직원 화면도 닫는다
         delete_cookie(response, request, DEFAULT_PASSWORD)
         return response
 

@@ -20,6 +20,7 @@ from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 from mint_litellm.console import labels, login, pack_view
 from mint_litellm.console.cookies import DEFAULT_PASSWORD, delete_cookie, set_cookie
 from mint_litellm.console.core import (
+    COOKIE,
     STAFF_COOKIE,
     STATUS,
     ConsoleConfig,
@@ -420,6 +421,7 @@ def logout(request: Request, actor: StaffActor = Depends(staff_actor)) -> Respon
         target = oidc_client.logout_url(request, target) or target
     response = RedirectResponse(target, status_code=303)
     delete_cookie(response, request, STAFF_COOKIE)
+    delete_cookie(response, request, COOKIE)  # 한 번 로그인으로 함께 열린 관리자 화면도 닫는다
     delete_cookie(response, request, DEFAULT_PASSWORD)
     return response
 

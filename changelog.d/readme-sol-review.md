@@ -1,2 +1,1 @@
 - 직원 화면 「내 단말」의 한 줄 설치 제목을 「Linux · macOS」에서 「Linux」로 고쳤다. 비 Windows 설치 코드는 Linux 묶음(bubblewrap·systemd)을 받는다.
-- 「보장과 한계」 1절의 장애·기록·자가 점검 서술을 현재 가용성 우선 동작에 맞췄다.
