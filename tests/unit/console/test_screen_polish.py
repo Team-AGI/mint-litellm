@@ -138,8 +138,8 @@ def test_the_ledger_filters_are_plain_controls_in_the_natural_tab_order():
     html = ledger_html()
     assert re.search(r'<input type="date" name="since"', html)
     assert re.search(r'<input type="date" name="until"', html)
-    assert "tabindex" not in html
     form = re.search(r"<form method=\"get\".*?</form>", html, re.S).group(0)
+    assert "tabindex" not in form
     names = re.findall(r"<(?:input|select|button|a)\b[^>]*", form)
     assert [re.search(r'name="(\w+)"', n).group(1) for n in names[:7]] == [
         "range", "since", "until", "kind", "actor", "server_id", "result"]
@@ -198,18 +198,14 @@ def ratio(foreground: str, background: str) -> float:
 
 def test_every_text_color_has_at_least_4_5_contrast_on_every_surface():
     css = (CONSOLE / "static" / "console.css").read_text(encoding="utf-8")
-    dark_at = css.index("prefers-color-scheme: dark")
-    for block in (css[:dark_at], css[dark_at:css.index("* { box-sizing")]):
-        tokens = dict(re.findall(r"--([\w-]+):\s*(#[0-9a-f]{6});", block))
-        if "bg" not in tokens:
-            tokens = {**dict(re.findall(r"--([\w-]+):\s*(#[0-9a-f]{6});", css[:dark_at])), **tokens}
-        surfaces = [tokens[n] for n in ("bg", "bg-subtle", "hover", "accent-soft", "danger-soft",
-                                        "ok-soft")]
-        for name in ("text", "muted", "accent", "ok", "wait", "danger", "off"):
-            for surface in surfaces:
-                assert ratio(tokens[name], surface) >= 4.5, (name, surface)
-        for name in ("accent", "danger"):  # 단추 바탕 위의 글자
-            assert ratio(tokens["on-accent"], tokens[name]) >= 4.5, name
+    tokens = dict(re.findall(r"--([\w-]+):\s*(#[0-9a-f]{6});", css[:css.index("* { box-sizing")]))
+    surfaces = [tokens[n] for n in ("bg", "bg-subtle", "hover", "accent-soft", "danger-soft",
+                                    "ok-soft")]
+    for name in ("text", "muted", "accent", "ok", "wait", "danger", "off"):
+        for surface in surfaces:
+            assert ratio(tokens[name], surface) >= 4.5, (name, surface)
+    for name in ("accent", "danger"):  # 단추 바탕 위의 글자
+        assert ratio(tokens["on-accent"], tokens[name]) >= 4.5, name
 
 
 def test_the_decided_badge_is_readable():
@@ -392,7 +388,7 @@ def test_css_colours_live_in_tokens_only():
     assert re.findall(r"#[0-9a-fA-F]{3,8}\b", outside) == []
     for token in ("--row-h:", "--row-h-compact:", "--pad-card:", "--gap:", "--w-wide:"):
         assert token in css
-    assert "prefers-color-scheme: dark" in css
+    assert "color-scheme: light;" in css and "prefers-color-scheme: dark" not in css
 
 
 def test_chart_kinds_and_shell_macros_exist():
@@ -422,7 +418,7 @@ def test_shell_macros_render():
 def test_navigation_collapses_and_approval_tabs_precede_metrics(world):
     client = world.session_client("admin")
     html = client.get("/approvals").text
-    assert '<details class="mobile-menu">' in html
+    assert 'id="sidebar" class="sidebar"' in html and 'data-sidebar-toggle' in html
     assert html.index('class="tabs"') < html.index("응답 대기 호출")
 
 

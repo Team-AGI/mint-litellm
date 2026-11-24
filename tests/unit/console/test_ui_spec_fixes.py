@@ -90,7 +90,8 @@ def test_server_detail_has_four_tabs_and_old_tab_names_still_open(world, admin):
 
 def test_the_audit_report_is_in_the_sidebar(world, admin):
     page = admin.get("/ledger").text
-    assert 'href="/reports/audit" hx-boost="false" class=' in page
+    link = next(tag for tag in page.split("<a ") if tag.startswith('href="/reports/audit"'))
+    assert 'hx-boost="false"' in link.split(">", 1)[0]
 
 
 def test_the_dormant_tab_can_filter_by_server(world, admin):

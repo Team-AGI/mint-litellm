@@ -9,8 +9,8 @@
 @page { size: A4; margin: 18mm 14mm 16mm; }
 
 @media print {
-  .topbar, .sidebar, .noprint { display: none !important; }
-  body.shell { display: block; background: #fff; color: #000; }
+  .topbar, .sidebar, .sidebar-backdrop, .noprint { display: none !important; }
+  body.shell { display: block; padding-top: 0; background: #fff; color: #000; }
   main, .page { margin: 0; padding: 0; max-width: none; }
   .report .running {
     display: block; position: fixed; top: -12mm; left: 0; right: 0;

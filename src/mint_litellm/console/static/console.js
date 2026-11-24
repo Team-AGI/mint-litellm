@@ -1,4 +1,52 @@
-// 차트(ECharts), 드로어·확인 창, 이름 확인 입력, 시간 범위 자동 조회, 값 복사만 다룬다. 외부 자산과 인라인 스크립트는 쓰지 않는다.
+// 왼쪽 메뉴, 차트, 대화상자와 폼 동작. 외부 자산과 인라인 스크립트는 쓰지 않는다.
+var sidebarCompact = window.matchMedia("(max-width: 1100px)");
+var sidebarMobile = window.matchMedia("(max-width: 600px)");
+var sidebarPreference = false;
+try { sidebarPreference = localStorage.getItem("mint.sidebar.collapsed") === "true"; } catch (_) { /* 저장소가 꺼져도 메뉴는 동작한다. */ }
+function syncSidebar() {
+  document.documentElement.dataset.sidebarCollapsed = String(!sidebarMobile.matches && (sidebarCompact.matches || sidebarPreference));
+}
+syncSidebar();
+function closeSidebar() {
+  if (!document.body.classList.contains("shell")) return;
+  document.body.classList.remove("menu-visible");
+  document.querySelector(".sidebar-backdrop").hidden = true;
+  document.querySelector("main").inert = false;
+  var sidebar = document.getElementById("sidebar");
+  sidebar.removeAttribute("role");
+  sidebar.removeAttribute("aria-modal");
+  updateSidebarButtons();
+}
+function updateSidebarButtons() {
+  var expanded = sidebarMobile.matches ? document.body.classList.contains("menu-visible") : document.documentElement.dataset.sidebarCollapsed !== "true";
+  document.querySelectorAll("[data-sidebar-toggle]").forEach(function (button) {
+    button.setAttribute("aria-expanded", String(expanded));
+    button.setAttribute("aria-label", expanded ? (sidebarMobile.matches ? "메뉴 닫기" : "메뉴 접기") : "메뉴 펼치기");
+  });
+}
+function toggleSidebar() {
+  if (sidebarMobile.matches) {
+    var open = !document.body.classList.contains("menu-visible");
+    closeSidebar();
+    if (open) {
+      document.body.classList.add("menu-visible");
+      document.querySelector(".sidebar-backdrop").hidden = false;
+      document.querySelector("main").inert = true;
+      var sidebar = document.getElementById("sidebar");
+      sidebar.setAttribute("role", "dialog");
+      sidebar.setAttribute("aria-modal", "true");
+      sidebar.querySelector("button").focus();
+    } else { document.querySelector(".menu-open").focus(); }
+  } else {
+    sidebarPreference = document.documentElement.dataset.sidebarCollapsed !== "true";
+    document.documentElement.dataset.sidebarCollapsed = String(sidebarPreference);
+    try { localStorage.setItem("mint.sidebar.collapsed", String(sidebarPreference)); } catch (_) { /* 선택은 현재 화면에서 유지된다. */ }
+  }
+  updateSidebarButtons();
+  window.dispatchEvent(new Event("resize"));
+}
+sidebarCompact.addEventListener("change", function () { syncSidebar(); closeSidebar(); });
+sidebarMobile.addEventListener("change", function () { syncSidebar(); closeSidebar(); });
 // 차트는 data-chart="{...}" 한 속성으로 그리며 kind 가 stacked · donut · bars 중 하나다.
 //   stacked: {kind, labels:[], series:[{name, data:[], decision?}], previous?:[]}
 //   donut:   {kind, items:[{name, value, decision?, href?}]}
@@ -14,7 +62,10 @@ function colorOf(decision, index) {
   return token(DECISION_TOKEN[decision] || PALETTE[index % PALETTE.length]);
 }
 function base() {
-  return { textStyle: { color: token("--muted") }, backgroundColor: "transparent" };
+  return {
+    textStyle: { color: token("--muted"), fontFamily: getComputedStyle(document.body).fontFamily },
+    backgroundColor: "transparent",
+  };
 }
 function axisStyle() {
   return { axisLine: { lineStyle: { color: token("--border") } }, axisLabel: { color: token("--muted") } };
@@ -102,6 +153,7 @@ function drawChart(el) {
 }
 
 function initConsole(root) {
+  closeSidebar();
   root.querySelectorAll("[data-chart],[data-bars]").forEach(drawChart);
   root.querySelectorAll("input[data-confirm]").forEach(function (input) {
     var button = input.form.querySelector("button[data-needs-confirm]");
@@ -127,6 +179,12 @@ function initConsole(root) {
 document.addEventListener("DOMContentLoaded", function () { initConsole(document); });
 document.addEventListener("htmx:afterSettle", function (event) { initConsole(event.target); });
 document.addEventListener("click", function (event) {
+  if (event.target.closest("[data-sidebar-toggle]")) { toggleSidebar(); return; }
+  if (event.target.closest("[data-sidebar-close]")) {
+    closeSidebar();
+    document.querySelector(".menu-open").focus();
+    return;
+  }
   var copy = event.target.closest("[data-copy]");
   if (copy && navigator.clipboard) {
     navigator.clipboard.writeText(copy.getAttribute("data-copy")).then(function () {
@@ -146,6 +204,19 @@ document.addEventListener("click", function (event) {
   }
 });
 document.addEventListener("keydown", function (event) {
+  if (document.body.classList.contains("menu-visible")) {
+    if (event.key === "Escape") {
+      closeSidebar();
+      document.querySelector(".menu-open").focus();
+      return;
+    }
+    if (event.key === "Tab") {
+      var items = document.querySelectorAll("#sidebar button, #sidebar a");
+      var first = items[0], last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    }
+  }
   if (event.key !== "Escape") return;
   var drawer = document.querySelector(".drawer[data-close]");
   if (drawer) window.location.assign(drawer.getAttribute("data-close"));

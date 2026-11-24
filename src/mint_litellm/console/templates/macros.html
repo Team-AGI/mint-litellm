@@ -83,9 +83,32 @@
 {# 명령 복사 상자. 명령은 data-copy 속성, 복사는 console.js. #}
 {% macro copy_cmd(command) %}<div class="cmd"><span class="cmd-text">{{ command }}</span> <button type="button" class="copy" data-copy="{{ command }}">복사</button></div>{% endmacro %}
 
+{% macro nav_icon(name) %}
+{% set shapes = {
+  'menu': 'M4 6h16M4 12h16M4 18h16',
+  'panel': 'M9 3v18M15 9l-3 3 3 3M3 3h18v18H3z',
+  '/': 'M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z',
+  '/setup': 'M12 3l9 9-9 9-9-9zM9 12h6M12 9v6',
+  '/approvals': 'M9 12l2 2 4-4M5 3h14v18H5z',
+  '/alerts': 'M12 3L2 20h20zM12 9v4M12 16v1',
+  '/servers': 'M3 3h18v7H3zM3 14h18v7H3zM7 6h1M7 17h1',
+  '/intakes': 'M5 3h10l4 4v14H5zM14 3v5h5M8 12h8M8 16h5',
+  '/access': 'M12 3l8 3v6c0 5-8 9-8 9s-8-4-8-9V6zM9 12l2 2 4-4',
+  '/endpoints': 'M3 3h18v13H3zM8 21h8M12 16v5',
+  '/ledger': 'M5 3h14v18H5zM8 7h8M8 11h8M8 15h5',
+  '/policy': 'M5 5h14v14H5zM9 2v6M15 16v6M2 15h6M16 9h6',
+  '/reports/audit': 'M5 3h14v18H5zM8 15l3-4 3 2 3-6',
+  '/reports/usage': 'M4 20h16M7 16V9M12 16V4M17 16v-5',
+  '/admin': 'M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8M4 21v-3a5 5 0 0 1 5-5h6a5 5 0 0 1 5 5v3',
+  '/signup-requests': 'M9 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8M2 21v-3a5 5 0 0 1 5-5h4M18 12v8M14 16h8'
+} %}
+{% set aliases = {'/staff': '/servers', '/staff/intakes': '/intakes', '/staff/confirmations': '/approvals', '/staff/usage': '/reports/usage', '/staff/endpoint': '/endpoints'} %}
+<svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{ shapes.get(aliases.get(name, name), shapes['/']) }}"/></svg>
+{% endmacro %}
+
 {% macro nav(groups, path, badges, actor) %}
 {% for group, items in groups %}<div class="group">{% if group %}<div class="group-title">{{ group }}</div>{% endif %}
-  {% for href, text, key in items %}{% if href != '/signup-requests' or actor.role == 'admin' %}<a href="{{ href }}"{% if href.startswith('/reports') %} hx-boost="false"{% endif %} class="{{ 'active' if nav_active(path, href) else '' }}">{{ text }}{% if key and badges and badges.get(key) %} <span class="badge error">{{ badges[key] }}</span>{% endif %}</a>{% endif %}
+  {% for href, text, key in items %}{% if href != '/signup-requests' or actor.role == 'admin' %}<a href="{{ href }}" title="{{ text }}" aria-label="{{ text }}"{% if nav_active(path, href) %} aria-current="page"{% endif %}{% if href.startswith('/reports') %} hx-boost="false"{% endif %} class="{{ 'active' if nav_active(path, href) else '' }}">{{ nav_icon(href) }}<span class="nav-text">{{ text }}</span>{% if key and badges and badges.get(key) %} <span class="badge error">{{ badges[key] }}</span>{% endif %}</a>{% endif %}
 {% endfor %}</div>
 {% endfor %}
 {% endmacro %}
