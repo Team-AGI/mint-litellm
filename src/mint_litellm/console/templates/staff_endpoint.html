@@ -66,6 +66,15 @@
 <ul><li>키를 AI 도구 설정 파일에서 빼십시오.</li><li>운영체제 자격 증명 저장소나 설정 파일 밖의 환경 변수에 두십시오.</li><li>노출된 키는 발급처에서 다시 발급받으십시오.</li></ul>
 </details>
 {% endif %}
+<h2>앱</h2>
+{% if apps %}<table><thead><tr><th>이름</th><th>만든 날</th><th>만료</th><th>상태</th><th></th></tr></thead><tbody>
+{% for a in apps %}<tr>
+<td>{{ a.name }}</td><td class="nowrap">{{ a.created_at | when }}</td><td class="nowrap">{{ a.expires_at | when }}</td>
+<td>{{ m.badge(L.APP, a.state) }}</td>
+<td>{% if a.state == 'active' %}{{ m.confirm_dialog('app-' ~ a.id, '자격 회수', '앱 자격 회수', a.name ~ ' 앱의 키가 지워져 이 앱의 모델·MCP 호출이 바로 멈춥니다. 되돌릴 수 없고 새로 만들어야 합니다.', '/staff/endpoint/apps/' ~ a.id ~ '/revoke', actor, '회수') }}{% endif %}</td>
+</tr>{% endfor %}
+</tbody></table>{% endif %}
+<p class="muted">PC 터미널에서 `mint app new 이름`으로 만듭니다.</p>
 {% if active %}{{ m.confirm_dialog('revoke-endpoint', '연결 해제', '단말 연결을 해제합니다', '이 단말의 키가 지워집니다. 새 설치 명령을 붙여 넣어야 다시 연결됩니다.', '/staff/endpoint/revoke', actor, '연결 해제') }}{% endif %}
 {% else %}<div class="empty"><h3>설치한 단말이 없습니다</h3></div>{% endif %}
 {% endblock %}

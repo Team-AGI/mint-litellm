@@ -37,6 +37,7 @@ from mint_litellm.console.pages.common import see_other, server_names
 from mint_litellm.console.templating import render
 from mint_litellm.control import (
     directory,
+    endpoint_apps,
     endpoint_coverage,
     endpoint_kits,
     kit_codes,
@@ -726,6 +727,7 @@ def endpoint_page(request: Request, actor: StaffActor, error=None, status=200, c
     ctx = {
         **own_endpoint_tools(actor, rows),
         "rows": rows, "active": any(r["state"] != "revoked" for r in rows), "error": error,
+        "apps": endpoint_apps.list_apps(actor.sctx.control, actor.sctx.instance_id, actor.user_id),
         "platform": "windows" if windows else "linux", "commands": commands,
         # 서버 판본보다 뒤처진 단말: 고정 공개 키가 없는 옛 설치는 한 번 다시 설치해야 한다.
         "behind": bool(rows) and rows[0]["state"] in ("managed", "user")
@@ -890,6 +892,29 @@ def endpoint_request(
         lambda **kw: endpoint_page(request, actor, **kw))
 
 
+@router.post("/staff/endpoint/apps/{app_id}/revoke")
+def endpoint_app_revoke(
+    app_id: str, request: Request, actor: StaffActor = Depends(staff_actor)
+):
+    """본인이 만든 앱의 자격을 회수한다."""
+    issuer = actor.config.kit_issuer
+    sctx = actor.sctx
+
+    def action():
+        if issuer is None:
+            raise ControlError("앱 자격을 회수할 수 없습니다.")
+        try:
+            endpoint_apps.revoke_app(
+                sctx.control, issuer, sctx.instance_id, app_id, actor=actor.user_id,
+                user_id=actor.user_id)
+        except LiteLLMError:
+            log.exception("앱 자격 회수 실패")
+            raise ControlError("앱 자격을 회수하지 못했습니다.") from None
+
+    return act(actor, action, "app_revoked", "/staff/endpoint",
+               lambda **kw: endpoint_page(request, actor, **kw))
+
+
 @router.post("/staff/endpoint/revoke")
 def endpoint_revoke(request: Request, actor: StaffActor = Depends(staff_actor)):
     issuer = actor.config.kit_issuer
@@ -899,7 +924,8 @@ def endpoint_revoke(request: Request, actor: StaffActor = Depends(staff_actor)):
         if issuer is None:
             raise ControlError("단말 연결을 해제할 수 없습니다.")
         try:
-            endpoint_kits.revoke_keys(sctx.control, issuer, sctx.instance_id, actor.user_id)
+            endpoint_kits.revoke_keys(
+                sctx.control, issuer, sctx.instance_id, actor.user_id, actor.user_id)
         except LiteLLMError:
             log.exception("단말 설치 묶음 키 해제 실패")
             raise ControlError("단말 연결을 해제하지 못했습니다.") from None

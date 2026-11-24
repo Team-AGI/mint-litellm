@@ -47,6 +47,11 @@ INSTALL = {
     "removed": Status("제거됨", "off"),
     "revoked": Status("연결 해제", "block"),
 }
+APP = {
+    "active": Status("사용 중", "ok"),
+    "expired": Status("만료", "off"),
+    "revoked": Status("회수됨", "block"),
+}
 APPROVAL = {
     "pending": Status("대기", "wait"),
     "active": Status("유효", "ok"),
@@ -602,6 +607,8 @@ EVENT_KIND = {
     "endpoint_offline_call": "장애 중 단말 판단으로 통과",
     "endpoint_paused": "관리 AI 연결 중지",
     "endpoint_resumed": "관리 AI 연결 재개",
+    "endpoint_app_created": "앱 자격 발급",
+    "endpoint_app_revoked": "앱 자격 회수",
     "backup_created": "백업 생성",
     "backup_restored": "백업 복원",
     "config_exported": "설정 내보내기",
@@ -707,6 +714,7 @@ NOTICES = {
     "kit_revoked": "단말 연결을 해제했습니다.",
     "endpoint_paused": "이 단말의 관리 AI 연결을 중지했습니다.",
     "endpoint_resumed": "이 단말의 관리 AI 연결을 재개했습니다.",
+    "app_revoked": "앱 자격을 회수했습니다.",
     "endpoint_reconnect": "연결 복구를 요청했습니다. 단말이 다음에 보고할 때 적용됩니다.",
     "server_ignored": "알림에서 제외했습니다.",
     "server_requested": "도입 신청을 요청했습니다. 단말이 다음에 보고할 때 접수됩니다.",

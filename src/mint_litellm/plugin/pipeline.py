@@ -1373,6 +1373,7 @@ def _decision_snapshot(
         approval_hold_ms=req.hold[1] if req.hold else None,
         policy_degraded=True if run.policy_degraded else None,
         enforcement_unverified=True if run.enforcement_unverified else None,
+        client=req.hook.client,
         snapshot_stale=True if run.snapshot_stale else None,
         cause="control_key_call"
         if conclusion.stop is not None and conclusion.stop.detail == "control_key_call"

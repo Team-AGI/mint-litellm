@@ -1,6 +1,7 @@
 """엔드포인트·운영자·조직 화면."""
 
 from datetime import UTC, datetime, timedelta
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, Request
 
@@ -8,8 +9,15 @@ from mint_litellm.console import api
 from mint_litellm.console.core import Actor, page_actor, require_csrf
 from mint_litellm.console.pages.common import act
 from mint_litellm.console.templating import render
-from mint_litellm.control import endpoint_coverage, endpoint_kits, org_suggest, siem
+from mint_litellm.control import (
+    endpoint_apps,
+    endpoint_coverage,
+    endpoint_kits,
+    org_suggest,
+    siem,
+)
 from mint_litellm.control.errors import AdminCode, AdminError
+from mint_litellm.control.litellm_admin import LiteLLMError
 from mint_litellm.control.operators import SERVICE_ACCOUNTS
 from mint_litellm.control.services import operators as operator_service
 from mint_litellm.control.services import orgs as org_service
@@ -109,6 +117,7 @@ def endpoints_page(request: Request, actor: Actor, error=None, status=200):
     client = next((c for c in ai["clients"] if c["client"] == chosen), None)
     if selected is not None:
         selected["pause_view"] = pause_view(actor, selected)
+        selected["apps"] = endpoint_apps.list_apps(actor.conn, actor.instance, selected["user_id"])
     ctx = {**view, "tab": tab, "state": state if state in STATES else "", "STATES": STATES,
            "VIOLATIONS": VIOLATIONS, "selected": selected, "kind": kind, "ai": ai,
            "client": client, "error": error}
@@ -133,13 +142,17 @@ def _back(client: str) -> str:
     return "/endpoints?tab=ai-tools" + (f"&client={client}" if client else "")
 
 
-def _device_action(request: Request, actor: Actor, alias: str, client: str, work, ok: str):
+def _device_action(
+    request: Request, actor: Actor, alias: str, client: str, work, ok: str, back: str | None = None
+):
     def action():
         if actor.role != "admin":
             raise AdminError(AdminCode.FORBIDDEN, "관리자만 할 수 있습니다.")
         work()
 
-    return act(actor, action, ok, _back(client), lambda **kw: endpoints_page(request, actor, **kw))
+    return act(
+        actor, action, ok, back or _back(client),
+        lambda **kw: endpoints_page(request, actor, **kw))
 
 
 @router.post("/endpoints/{alias}/pause")
@@ -166,6 +179,26 @@ def reconnect_endpoint(
         request, actor, alias, client,
         lambda: endpoint_coverage.request_reconnect(actor.conn, actor.instance, alias),
         "endpoint_reconnect")
+
+
+@router.post("/endpoints/apps/{app_id}/revoke")
+def revoke_app(
+    app_id: str, request: Request, ref: str = Form(""), actor: Actor = Depends(page_actor)
+):
+    """사람이 만든 앱의 자격을 회수한다(관리자만)."""
+
+    def work():
+        issuer = actor.config.kit_issuer
+        if issuer is None:
+            raise AdminError(AdminCode.CONFLICT, "앱 자격을 회수할 수 없습니다.")
+        try:
+            endpoint_apps.revoke_app(
+                actor.conn, issuer, actor.instance, app_id, actor=actor.ctx.operator.name)
+        except LiteLLMError:
+            raise AdminError(AdminCode.CONFLICT, "앱 자격을 회수하지 못했습니다.") from None
+
+    back = "/endpoints?tab=installs" + (f"&open={quote(ref, safe='')}" if ref else "")
+    return _device_action(request, actor, "", "", work, "app_revoked", back)
 
 
 # --- 운영자·조직 -------------------------------------------------------------------------------

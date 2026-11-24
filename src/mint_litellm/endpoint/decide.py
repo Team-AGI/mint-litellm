@@ -36,8 +36,10 @@ from pydantic import (
 )
 
 from mint_litellm.compat.litellm_1_106 import HookData
-from mint_litellm.endpoint import intake_text, kit_sign
+from mint_litellm.endpoint import apps, intake_text, kit_sign
 from mint_litellm.endpoint.routes import (
+    APP_PATH,
+    APPS_PATH,
     DECIDE_PATH,
     INSPECTION_RESULT_PATH,
     INSPECTION_START_PATH,
@@ -66,7 +68,8 @@ log = logging.getLogger("mint_litellm.endpoint")
 MAX_BODY_BYTES = 64 * 1024
 # 경로마다 정상 본문이 이보다 작다(결과 보고는 참조와 결과 종류, 설치 보고는 서버 이름 목록).
 BODY_LIMITS = {DECIDE_PATH: MAX_BODY_BYTES, RESULT_PATH: 4 * 1024, REPORT_PATH: 192 * 1024,
-    OUTCOMES_PATH: 1024, INTAKES_PATH: 256 * 1024}
+    OUTCOMES_PATH: 1024, INTAKES_PATH: 256 * 1024,
+    APPS_PATH: 1024}
 INSPECTION_BODY_BYTES = 256 * 1024
 MAX_INSPECTION_TOOLS = 200
 NOT_READY_CODE = "MINT-ENDPOINT-NOT-READY"
@@ -84,6 +87,8 @@ class DecideBody(BaseModel):
     # 내장 도구(가상 서버 builtin:*)는 실행 계약이 없고, 그 밖의 서버는 반드시 있다.
     contract: ExecContract | None = None
     tool_use_id: str | None = Field(default=None, max_length=128)
+    # 호출 주체 표시(앱이 단말 중개로 부르면 ``app:<이름>``). 옛 단말은 보내지 않는다.
+    client: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9:_.-]+$")
 
     @model_validator(mode="after")
     def _contract_fits_server(self) -> DecideBody:
@@ -476,6 +481,7 @@ def local_request(
             arguments=body.arguments,
             litellm_call_id=body.tool_use_id,
             logging_obj=None,
+            client=body.client,
         )
 
     resolved = (
@@ -859,6 +865,56 @@ def make_router(
             raise HTTPException(status_code=status, detail=_intake_detail(exc)) from exc
         return {"id": str(made)}
 
+    @router.post(APPS_PATH, status_code=201)
+    async def app_new(request: Request, auth: Any = Depends(auth_dependency)) -> dict[str, Any]:
+        """직원이 만든 프로그램에 줄 자격(키)을 발급한다. 키 값은 이 응답에만 있다."""
+        runtime = ready()
+        body = await _body(request, apps.AppBody)
+        who = _install_principal(principal_factory, auth, runtime)
+        try:
+            made = await runtime.database.endpoint_app_create(
+                runtime.config.instance_id, who.key_id, body.name, body.days, apps.issuer())
+        except apps.AppRefused as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+        except Exception as exc:
+            log.exception("endpoint app could not be issued")
+            raise HTTPException(status_code=503, detail="app store is not ready") from exc
+        base, mcp = apps.urls()
+        return {
+            "id": made["id"], "name": made["name"], "key": made["key"],
+            "key_alias": made["key_alias"], "expires_at": _iso(made["expires_at"]),
+            "base_url": base, "mcp_url": mcp, "servers": made["servers"],
+        }
+
+    @router.get(APPS_PATH)
+    async def app_list(auth: Any = Depends(auth_dependency)) -> dict[str, Any]:
+        runtime = ready()
+        who = _install_principal(principal_factory, auth, runtime)
+        try:
+            rows = await runtime.database.endpoint_apps_list(
+                runtime.config.instance_id, who.key_id)
+        except Exception as exc:
+            log.exception("endpoint apps could not be read")
+            raise HTTPException(status_code=503, detail="app store is not ready") from exc
+        return apps.listing(rows)
+
+    @router.delete(APP_PATH)
+    async def app_revoke(app_id: UUID, auth: Any = Depends(auth_dependency)) -> dict[str, Any]:
+        """본인의 앱 자격을 회수한다(이미 회수된 앱도 같은 응답)."""
+        runtime = ready()
+        who = _install_principal(principal_factory, auth, runtime)
+        try:
+            found = await runtime.database.endpoint_app_revoke(
+                runtime.config.instance_id, who.key_id, app_id, apps.issuer())
+        except apps.AppRefused as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+        except Exception as exc:
+            log.exception("endpoint app could not be revoked")
+            raise HTTPException(status_code=503, detail="app store is not ready") from exc
+        if not found:
+            raise HTTPException(status_code=404, detail="no such app")
+        return {"id": str(app_id), "revoked": True}
+
     @router.post(INSPECTION_START_PATH)
     async def inspection_start(
         inspection_id: UUID, auth: Any = Depends(auth_dependency)
@@ -921,6 +977,16 @@ def make_router(
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 PACKS_ROOT_ENV = "MINT_PACKS_DIR"
 DEFAULT_PACKS_ROOT = "/var/lib/mint/packs"
+
+
+def _install_principal(
+    principal_factory: Callable[..., Principal], auth: Any, runtime: Any
+) -> Principal:
+    """설치 키의 주체. 사용자 키가 아니거나 키가 없으면 404."""
+    who = principal_factory(auth, instance_id=runtime.config.instance_id)
+    if who.key_id is None or who.principal_type != "user":
+        raise HTTPException(status_code=404, detail="no such kit key")
+    return who
 
 
 def _iso(value: Any) -> Any:

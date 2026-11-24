@@ -344,7 +344,7 @@ def test_an_approved_script_server_really_starts_and_a_replaced_one_does_not(wor
     assert run_agent(*args).returncode == agent.REFUSED and not marker.exists()
 
 
-def test_the_command_line_hook_blocks_on_bad_input_and_an_unreachable_service(world):
+def test_the_command_line_hook_blocks_bad_input_and_follows_the_outage_contract(world):
     key = world.tmp / "key"
     key.write_text("sk-k")
     base = (
@@ -352,7 +352,11 @@ def test_the_command_line_hook_blocks_on_bad_input_and_an_unreachable_service(wo
         "--state-dir", world.state,
     )  # fmt: skip
     assert run_agent("pre", *base, stdin="not json").returncode == 2
-    assert run_agent("pre", *base, stdin=json.dumps(event())).returncode == 2
+    # 결정 서버에 닿지 못하면 승인 목록의 서버는 통과하고 기록된다(공통 장애 계약).
+    assert run_agent("pre", *base, stdin=json.dumps(event())).returncode == 0
+    assert [line["tool"] for line in offline_lines(world)] == ["search"]
+    unknown = event(tool_name="mcp__other__x", mcp_server={"name": "other"})
+    assert run_agent("pre", *base, stdin=json.dumps(unknown)).returncode == 2
     assert run_agent("pre", *base, stdin=json.dumps(event(tool_name="Read"))).returncode == 0
     # 호출 뒤 훅은 어떤 경우에도 호출을 막지 않는다.
     assert run_agent("post", *base, stdin="not json").returncode == 0
@@ -583,3 +587,22 @@ def test_the_result_hook_returns_the_held_decision_version(world, monkeypatch, t
     wire = Wire({"recorded": True})
     assert report(world, wire) is True
     assert wire.requests[0][2]["decision_version"] == 3
+
+
+def test_after_an_outage_the_next_calls_do_not_wait_for_another_timeout(world):
+    calls = []
+
+    def slow_down(*args):
+        calls.append(1)
+        raise OSError("refused")
+
+    decide(world, slow_down)
+    decide(world, slow_down, tool_use_id="toolu_2")
+    assert len(calls) == 1  # 두 번째 호출은 묻지 않고 장애 계약대로 처리했다
+    assert len(offline_lines(world)) == 2
+    hold = os.path.join(world.state, agent.DOWN_FILE)
+    with open(hold, "w") as handle:
+        handle.write(str(time.time() - 1))  # 유지 시간이 지나면 다시 묻는다
+    wire = Wire()
+    decide(world, wire, tool_use_id="toolu_3")
+    assert len(wire.requests) == 1

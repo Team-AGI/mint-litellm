@@ -23,7 +23,7 @@ from collections.abc import Callable
 from typing import Any
 
 from mint_litellm.control.litellm_admin import LiteLLMAdmin, LiteLLMError, scrub
-from mint_litellm.endpoint.routes import KIT_KEY_ROUTES, MCP_KEY_ROUTES
+from mint_litellm.endpoint.routes import APP_KEY_ROUTES, KIT_KEY_ROUTES, MCP_KEY_ROUTES
 
 # 쓰기 허용 목록: (메서드, 경로 정규식). 서버 식별자 한 마디는 ``/``를 포함하지 않는다.
 _SERVER = r"/v1/mcp/server/[^/]+"
@@ -356,6 +356,14 @@ class LiteLLMSync(LiteLLMAdmin):
 KIT_ALIAS_PREFIX = "mint-kit-"
 # 게이트웨이 MCP 전용 키의 별칭(삭제 허용 접두를 따른다)
 MCP_ALIAS_PREFIX = KIT_ALIAS_PREFIX + "mcp-"
+# 직원이 직접 만든 AI 프로그램(앱) 키의 별칭: 접두 + 이름 + "-" + 16진 여섯 자리
+APP_ALIAS_PREFIX = KIT_ALIAS_PREFIX + "app-"
+APP_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
+_APP_ALIAS = re.compile(re.escape(APP_ALIAS_PREFIX) + r"([a-z0-9][a-z0-9-]{0,39})-[0-9a-f]{6}")
+_APP_KEY_FIELDS = frozenset(
+    {"user_id", "team_id", "key_alias", "allowed_routes", "object_permission", "duration",
+     "metadata"}
+)
 _KIT_KEY_FIELDS = frozenset(
     {"user_id", "team_id", "key_alias", "allowed_routes", "object_permission"}
 )
@@ -367,7 +375,11 @@ def check_kit_write(method: str, path: str, body: Any) -> None:
     생성 본문은 사용자·팀·별칭과 ``allowed_routes``뿐이다. 경로는 훅 경로만이거나, 별칭이
     ``MCP_ALIAS_PREFIX``이면 MCP 경로만이다. 삭제는 설치 묶음 별칭만 대상으로 한다.
     """
-    if (method, path) == ("POST", "/key/generate"):
+    if (method, path) == ("POST", "/key/generate") and isinstance(body, dict) and str(
+        body.get("key_alias")
+    ).startswith(APP_ALIAS_PREFIX):
+        _check_app_key(body)
+    elif (method, path) == ("POST", "/key/generate"):
         if (
             not isinstance(body, dict)
             or not {"user_id", "key_alias", "allowed_routes"} <= set(body) <= _KIT_KEY_FIELDS
@@ -402,6 +414,28 @@ def check_kit_write(method: str, path: str, body: Any) -> None:
         raise WriteRefused(f"허용되지 않은 LiteLLM 쓰기 경로입니다: {method} {path}")
 
 
+def _check_app_key(body: dict[str, Any]) -> None:
+    """앱 키 생성: 모델·MCP 경로, 사용자 권한 전체, 1~90일 기간, ``mint_app`` 이름만 보낸다."""
+    match = _APP_ALIAS.fullmatch(str(body["key_alias"]))
+    permission = body.get("object_permission")
+    duration = str(body.get("duration"))
+    if (
+        match is None
+        or not {"user_id", "key_alias", "allowed_routes", "object_permission", "duration",
+                "metadata"} <= set(body) <= _APP_KEY_FIELDS
+        or not all(isinstance(body[k], str) and body[k] for k in ("user_id", "key_alias")
+                   + (("team_id",) if "team_id" in body else ()))
+        or body["allowed_routes"] != list(APP_KEY_ROUTES)
+        or not isinstance(permission, dict) or set(permission) != _PERMISSION_FIELDS
+        or re.fullmatch(r"[1-9][0-9]?d", duration) is None or int(duration[:-1]) > 90
+        or body["metadata"] != {"mint_app": match[1]}
+    ):
+        raise WriteRefused(
+            "/key/generate 본문은 앱 키의 사용자·팀·별칭, 모델·MCP 경로, 서버 권한, 기간(1~90일), "
+            "앱 이름만 보낼 수 있습니다."
+        )
+
+
 class LiteLLMKitKeys(LiteLLMSync):
     """단말 설치 묶음의 사용자 키 발급 전용 클라이언트. 키 발급 전용 LiteLLM 키로 연다."""
 
@@ -425,6 +459,24 @@ class LiteLLMKitKeys(LiteLLMSync):
             body["team_id"] = team_id
         if permission is not None and alias.startswith(MCP_ALIAS_PREFIX):
             body["object_permission"] = permission
+        reply = self._write("POST", "/key/generate", body)
+        key = reply.get("key") if isinstance(reply, dict) else None
+        if not isinstance(key, str) or not key:
+            raise LiteLLMError("key/generate 응답 형식이 올바르지 않습니다.")
+        return key
+
+    def generate_app_key(
+        self, *, user_id: str, team_id: str | None, alias: str, name: str, days: int,
+        permission: dict,
+    ) -> str:
+        """직원의 앱 한 개에 줄 키를 만든다. 모델 호출과 MCP 경로만 열리고 ``days``일 뒤 만료."""
+        body: dict[str, Any] = {
+            "user_id": user_id, "key_alias": alias, "allowed_routes": list(APP_KEY_ROUTES),
+            "object_permission": permission, "duration": f"{days}d",
+            "metadata": {"mint_app": name},
+        }
+        if team_id:
+            body["team_id"] = team_id
         reply = self._write("POST", "/key/generate", body)
         key = reply.get("key") if isinstance(reply, dict) else None
         if not isinstance(key, str) or not key:

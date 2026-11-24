@@ -1,6 +1,17 @@
 {% extends "base.html" %}{% import "macros.html" as m %}
 {% block title %}엔드포인트 · MINT{% endblock %}
 {% block page_class %}wide{% endblock %}
+{% macro apps_panel(r, apps, with_revoke, action_base, ref='') %}
+<h3>앱</h3>
+{% if apps %}<table><thead><tr><th>이름</th><th>만든 날</th><th>만료</th><th>상태</th>{% if with_revoke %}<th></th>{% endif %}</tr></thead><tbody>
+{% for a in apps %}<tr>
+<td>{{ a.name }}</td><td class="nowrap">{{ a.created_at | when }}</td><td class="nowrap">{{ a.expires_at | when }}</td>
+<td>{{ m.badge(L.APP, a.state) }}</td>
+{% if with_revoke %}<td>{% if a.state == 'active' %}{{ m.confirm_dialog('app-' ~ a.id, '자격 회수', '앱 자격 회수', a.name ~ ' 앱의 키가 지워져 이 앱의 모델·MCP 호출이 바로 멈춥니다. 되돌릴 수 없고 새로 만들어야 합니다.', action_base ~ a.id ~ '/revoke', actor, '회수', ref=ref) }}{% endif %}</td>{% endif %}
+</tr>{% endfor %}
+</tbody></table>
+{% else %}<p class="muted">만든 앱이 없습니다</p>{% endif %}
+{% endmacro %}
 {% macro pause_panel(r, client) %}
 {% set p = r.pause_view %}
 <h3>관리 AI 연결</h3>
@@ -64,6 +75,7 @@
 {% for k in selected.plaintext_keys %}<tr><td>{{ L.pick(L.AI_CLIENT, k.client) }}</td><td>{{ k.entry }}</td><td>{{ L.pick(L.KEY_KIND, k.kind) }}</td><td>{{ L.pick(L.KEY_WHERE, k.where) }}</td></tr>{% endfor %}
 </tbody></table>{% endif %}
 {% if selected.state in ('managed', 'user') and selected.pause_view %}{{ pause_panel(selected, '') }}{% endif %}
+{{ apps_panel(selected, selected.apps, actor.role == 'admin', '/endpoints/apps/', selected.ref) }}
 {% endcall %}{% endif %}
 {% elif tab == 'ai-tools' %}
 <div class="cards">

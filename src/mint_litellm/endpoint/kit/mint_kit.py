@@ -5466,7 +5466,7 @@ def run_inspect(
 
 
 # --- 대화형 명령(screen·add·requests·get) ------------------------------------------------------
-CLI_COMMANDS = ("screen", "add", "requests", "get", "inspect", "relink")
+CLI_COMMANDS = ("screen", "add", "requests", "get", "inspect", "relink", "app")
 
 
 def open_installed(folder: Path):
@@ -5639,6 +5639,192 @@ def run_relink(url: str, out=print) -> int:
         shutil.rmtree(folder, ignore_errors=True)
 
 
+# --- 앱 자격(자체 스크립트) -------------------------------------------------------------------
+# 사람이 쓰는 키와 따로, 스크립트마다 자격을 둔다. 자격의 MCP 권한은 직원의 기존 승인 범위라
+# 새 승인이 없다. 키는 이 PC의 사용자 설정 폴더에만 두고, 스크립트에는 `mint app run`이 실행할 때
+# 환경 변수로만 넘긴다(스크립트·설정 파일에 키를 적지 않게).
+APPS_PATH = "/mint/v1/endpoint/apps"
+APPS_REL = ".config/mint/apps"
+APP_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+APP_DAYS = 30
+
+
+def app_file(home: Path, name: str) -> Path:
+    return home / APPS_REL / f"{name}.json"
+
+
+def read_app(home: Path, name: str) -> dict | None:
+    try:
+        app = json.loads(app_file(home, name).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return app if isinstance(app, dict) and isinstance(app.get("key"), str) else None
+
+
+def app_env(app: dict) -> dict[str, str]:
+    """스크립트에 넘길 환경 변수. OpenAI·Anthropic SDK(DeepSeek 같은 OpenAI 호환 포함)가 읽는다."""
+    base, key = str(app["base_url"]).rstrip("/"), str(app["key"])
+    return {
+        "OPENAI_API_KEY": key, "OPENAI_BASE_URL": base + "/v1",
+        "ANTHROPIC_API_KEY": key, "ANTHROPIC_BASE_URL": base,
+        "MINT_APP": str(app["name"]), "MINT_APP_KEY": key,
+        "MINT_GATEWAY_URL": base, "MINT_MCP_URL": str(app.get("mcp_url") or base + "/mcp"),
+    }  # fmt: skip
+
+
+def app_expired(app: dict, now: float | None = None) -> bool:
+    until = parse_time(app.get("expires_at"))
+    return until is not None and until <= (time.time() if now is None else now)
+
+
+def app_command(command: list[str] | None) -> list[str]:
+    """``mint app run 이름 -- 명령``의 명령 부분(앞의 ``--``는 뺀다)."""
+    command = list(command or [])
+    return command[1:] if command[:1] == ["--"] else command
+
+
+def app_mcp_config(kit: Kit, state: dict, app: dict) -> dict:
+    """스크립트의 MCP 설정: 게이트웨이(원격 승인 서버)와 승인된 로컬 서버(실행기 중재)."""
+    python = state.get("python") or sys.executable.replace("\\", "/")
+    agent = f"{kit.logical_programs}/{AGENT}"
+    contracts = f"{kit.logical_programs}/contracts.json"
+    common = ["--url", kit.config["decide_url"], "--key-file", f"~/{KEY_REL}",
+              "--state-dir", f"~/{STATE_REL}"]  # fmt: skip
+    if kit.config.get("ca_pem"):
+        common += ["--ca-file", f"{kit.logical_programs}/ca.pem"]
+    servers: dict = {
+        "litellm_gateway": {
+            "type": "http", "url": app_env(app)["MINT_MCP_URL"],
+            "headers": {"Authorization": "Bearer ${MINT_APP_KEY}"},
+        },
+    }  # fmt: skip
+    for name in sorted(kit.local_contracts()):
+        servers[name] = {"command": python, "args": [
+            agent, "run", "--contracts", contracts, "--server", name, "--mediate",
+            "--client", f"app-{app['name']}", *common]}  # fmt: skip
+    return {"mcpServers": servers}
+
+
+def app_error(what: str, status: int, doc: object) -> str:
+    """앱 자격 명령의 실패 문구. 서버가 준 한국어 사유가 있으면 그대로 붙인다."""
+    raw = doc.get("detail") if isinstance(doc, dict) else None
+    if status == 0:
+        return NO_GATEWAY
+    if status in (401, 403):
+        return KEY_REJECTED_TEXT
+    reason = raw if isinstance(raw, str) and raw else f"HTTP {status}"
+    return f"앱 자격을 {what} 못했습니다: {reason[:120]}"
+
+
+def run_app(args, kit: Kit, state: dict, gateway: Gateway | None, out=print, call=None) -> int:
+    """``mint app new|list|rm|run|env|mcp``."""
+    action, home = args.app_action, kit.home
+    name = getattr(args, "name", None)
+    if name is not None and not APP_NAME.match(name):
+        out("앱 이름은 영문 소문자·숫자·하이픈 40자 이내로 적으십시오")
+        return 2
+    if action in ("run", "env", "mcp"):
+        return use_app(args, kit, state, out, call)
+    if gateway is None:
+        out("키가 없습니다. 한 줄 설치 명령을 붙여 넣으십시오")
+        return 1
+    if action == "new":
+        return new_app(args, kit, gateway, out)
+    if action == "list":
+        return list_apps(home, gateway, out)
+    if action == "rm":
+        return remove_app(name, home, gateway, out)
+    return 2
+
+
+def use_app(args, kit: Kit, state: dict, out, call) -> int:
+    name = args.name
+    app = read_app(kit.home, name)
+    if app is None:
+        out(f"이 PC에 「{name}」 앱 자격이 없습니다. mint app new {name} 으로 만드십시오")
+        return 1
+    if app_expired(app):
+        out(f"「{name}」 자격이 만료되었습니다. mint app rm {name} 뒤 다시 만드십시오")
+        return 1
+    if args.app_action == "env":
+        powershell = args.shell == "powershell" or (args.shell is None and kit.windows)
+        for key, value in app_env(app).items():
+            out(f"$env:{key} = '{value}'" if powershell else f"export {key}={shlex.quote(value)}")
+        return 0
+    if args.app_action == "mcp":
+        out(json.dumps(app_mcp_config(kit, state or {}, app), indent=2, ensure_ascii=False))
+        return 0
+    command = app_command(args.command)
+    if not command:
+        out(f"실행할 명령을 적으십시오: mint app run {name} -- python 스크립트.py")
+        return 2
+    return (call or subprocess.call)(command, env={**os.environ, **app_env(app)})
+
+
+def new_app(args, kit: Kit, gateway: Gateway, out) -> int:
+    name, home = args.name, kit.home
+    current = read_app(home, name)
+    if current and not app_expired(current):
+        out(f"이 PC에 이미 「{name}」 자격이 있습니다. mint app run {name} -- 명령 으로 쓰십시오")
+        return 1
+    status, doc = gateway.json("POST", APPS_PATH, {"name": name, "days": args.days or APP_DAYS})
+    if status != 201 or not isinstance(doc, dict) or not isinstance(doc.get("key"), str):
+        out(app_error("만들지", status, doc))
+        return 1
+    base = doc.get("base_url") or kit.config["decide_url"]
+    app = {
+        "id": doc.get("id"), "name": name, "key": doc["key"], "key_alias": doc.get("key_alias"),
+        "expires_at": doc.get("expires_at"), "base_url": base,
+        "mcp_url": doc.get("mcp_url") or str(base).rstrip("/") + "/mcp",
+    }  # fmt: skip
+    path = app_file(home, name)
+    write_atomic(path, json.dumps(app, indent=1).encode(), 0o600)
+    keep_private(path, kit.account.name)
+    servers = ", ".join(s for s in doc.get("servers") or [] if isinstance(s, str))
+    out(f"「{name}」 앱 자격을 만들었습니다(만료 {str(doc.get('expires_at') or '')[:10]}).")
+    out(f"원격 MCP: {servers or '승인된 서버 없음'} · 로컬 서버는 실행기를 거칩니다")
+    out(f"실행: mint app run {name} -- python 스크립트.py")
+    out("스크립트는 OPENAI_BASE_URL·OPENAI_API_KEY 같은 환경 변수를 읽습니다(키를 적지 마십시오)")
+    return 0
+
+
+def list_apps(home: Path, gateway: Gateway, out) -> int:
+    status, doc = gateway.json("GET", APPS_PATH)
+    apps = doc.get("apps") if status == 200 and isinstance(doc, dict) else None
+    if not isinstance(apps, list):
+        out(app_error("읽지", status, doc))
+        return 1
+    if not apps:
+        out("앱 자격이 없습니다. mint app new 이름 으로 만드십시오")
+        return 0
+    out(f"{pad('앱', 24)}{pad('만료', 12)}{pad('상태', 10)}이 PC")
+    for item in apps:
+        name = str(item.get("name", ""))
+        text = "회수됨" if item.get("revoked_at") else ("만료" if app_expired(item) else "사용 중")
+        here = "키 있음" if read_app(home, name) else "—"
+        out(f"{pad(clip(name, 23), 24)}{pad(str(item.get('expires_at') or '')[:10], 12)}"
+            f"{pad(text, 10)}{here}")
+    return 0
+
+
+def remove_app(name: str, home: Path, gateway: Gateway, out) -> int:
+    app = read_app(home, name)
+    app_id = app.get("id") if app else None
+    if not app_id:
+        status, doc = gateway.json("GET", APPS_PATH)
+        listed = doc.get("apps") if status == 200 and isinstance(doc, dict) else []
+        app_id = next((a.get("id") for a in listed or []
+                       if a.get("name") == name and not a.get("revoked_at")), None)
+    if app_id:
+        status, doc = gateway.json("DELETE", f"{APPS_PATH}/{app_id}")
+        if status not in (200, 204, 404):
+            out(app_error("회수하지", status, doc) + " · 이 PC의 키는 그대로 두었습니다")
+            return 1
+    app_file(home, name).unlink(missing_ok=True)
+    out(f"「{name}」 앱 자격을 회수하고 이 PC의 키를 지웠습니다")
+    return 0
+
+
 def cli_main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="mint")
     parser.add_argument("--kit", default=str(KIT))
@@ -5663,6 +5849,19 @@ def cli_main(argv: list[str]) -> int:
     add.add_argument("--rw", action="append")
     add.add_argument("--yes", action="store_true")
     add.add_argument("--request-id")
+    app = sub.add_parser("app").add_subparsers(dest="app_action", required=True)
+    new = app.add_parser("new")
+    new.add_argument("name")
+    new.add_argument("--days", type=int, choices=range(1, 91), metavar="1-90")
+    app.add_parser("list")
+    app.add_parser("rm").add_argument("name")
+    run = app.add_parser("run")
+    run.add_argument("name")
+    run.add_argument("command", nargs=argparse.REMAINDER)
+    env = app.add_parser("env")
+    env.add_argument("name")
+    env.add_argument("--shell", choices=["sh", "powershell"])
+    app.add_parser("mcp").add_argument("name")
     args = parser.parse_args(argv)
     if args.command_name == "relink":
         return run_relink(args.url)
@@ -5675,6 +5874,8 @@ def cli_main(argv: list[str]) -> int:
         if gateway is not None and find_inspection(kit.home, args.target) is None and state:
             kit.report(state, "installed")  # 받아 둔 검사 권한이 없으면 한 번 보고해서 받는다
         return run_inspect(kit, gateway, args.target, progress=print)
+    if args.command_name == "app":
+        return run_app(args, kit, state, gateway)
     if args.command_name == "add":
         if gateway is None:
             print("키가 없습니다. 한 줄 설치 명령을 붙여 넣으십시오")

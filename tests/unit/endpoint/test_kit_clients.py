@@ -328,3 +328,23 @@ def test_a_resumed_pc_starts_right_after_pulling_a_report_and_a_paused_one_fails
     with pytest.raises(agent.Paused):
         agent.start_with_permit_retry(start, lambda: calls.append("report"), 8, no_sleep)
     assert calls == ["start", "report", "start"]
+
+
+def test_the_mediated_request_names_the_tool_or_app_and_the_server_accepts_it(tmp_path):
+    from mint_litellm.endpoint.decide import DecideBody
+
+    listing = write(tmp_path / "contracts.json", {"servers": {"srv-1": {
+        "executable": str(write(tmp_path / "bin", {})), "argv": [], "env": {},
+    }}})  # fmt: skip
+    sent = []
+
+    def post(url, headers, body, timeout):
+        sent.append(json.loads(body))
+        return 200, json.dumps({"decision": "allow", "reference": "r1"}).encode()
+
+    mediator = agent.mediator_for("srv-1", contracts=str(listing), state_dir=str(tmp_path / "s"),
+                                  url="https://mint.test", key="k", post=post, client="app-bot")
+    assert mediator.judge("search", {"q": 1}) == "r1"
+    assert sent[0]["client"] == "app-bot"
+    body = {"server": "builtin:claude", "tool": "Bash", "arguments": {}, "client": "app-bot"}
+    assert DecideBody.model_validate(body).client == "app-bot"  # 서버가 받는 값이다

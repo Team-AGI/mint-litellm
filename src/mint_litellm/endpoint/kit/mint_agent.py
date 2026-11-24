@@ -117,6 +117,10 @@ PAUSED_FILE = "paused"  # 보고기가 쓴다: 관리자가 이 PC의 관리 AI 
 OFFLINE_FILE = "offline.jsonl"  # 장애 중 단말 판단으로 통과한 호출(보고기가 보내고 비운다)
 OFFLINE_MAX = 256 * 1024
 CLIENTS_DIR = "clients"  # 실행기를 띄운 AI 도구별 마지막 시작 시각(재시작 필요 표시용)
+DOWN_FILE = "unreachable_until"  # 결정 서버에 방금 닿지 못했다: 이 시각까지는 다시 묻지 않는다
+# 한계: 닿지 못한 뒤 이 시간(초) 동안은 묻지 않고 장애 계약대로 처리한다(호출마다 연결 시간 초과를
+# 기다리지 않게). 그 사이 결정 서버가 돌아와도 새 차단은 이 시간만큼 늦게 반영된다.
+DOWN_HOLD = 10.0
 PAUSED_TEXT = "관리자가 이 PC의 관리 AI 연결을 중지했습니다. 재개되면 바로 다시 호출하십시오."
 
 
@@ -622,6 +626,44 @@ def ask_decision(
     return answer
 
 
+def ask_or_hold(payload: dict[str, Any], *, state_dir: str, **options: Any) -> dict[str, Any]:
+    """``ask_decision``과 같다. 방금 닿지 못했으면 다시 묻지 않고 곧바로 ``Unreachable``이다."""
+    path = os.path.join(os.path.expanduser(state_dir), DOWN_FILE)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            if time.time() < float(handle.read(32)):
+                raise Unreachable("decision service was unreachable moments ago")
+    except (OSError, ValueError):
+        pass
+    try:
+        return ask_decision(payload, **options)
+    except Unreachable:
+        try:
+            os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(str(time.time() + DOWN_HOLD))
+        except OSError:
+            pass
+        raise
+
+
+def outage_target(event: Mapping[str, Any], contracts: str, harness: str) -> dict[str, str]:
+    """훅 입력에서 장애 계약에 쓸 서버·도구 이름. 판정 대상이 아니거나 읽지 못하면 비어 있다."""
+    name = event.get("tool_name")
+    if not isinstance(name, str):
+        return {}
+    if name in BUILTIN_TOOLS:
+        builtin = harness in ("claude", "codex")
+        return {"server": f"builtin:{harness}", "tool": name} if builtin else {}
+    if not name.startswith("mcp__"):
+        return {}
+    try:
+        server, tool = server_and_tool(event, known_servers(contracts))
+    except Refuse:
+        return {}
+    return {"server": server, "tool": tool}
+
+
 def offline_allowed(server: str, contracts: str, state_dir: str) -> bool:
     """결정 서버에 닿지 못할 때 단말이 스스로 통과시켜도 되는 호출인가(공통 장애 계약).
 
@@ -682,8 +724,9 @@ def decide(
     else:
         return  # 판정 대상이 아닌 도구
     try:
-        answer = ask_decision(
-            payload, url=url, key=key, post=post, http_timeout=http_timeout, on_pending=on_pending
+        answer = ask_or_hold(
+            payload, state_dir=state_dir, url=url, key=key, post=post,
+            http_timeout=http_timeout, on_pending=on_pending,
         )
     except Unreachable:
         if not offline_allowed(payload["server"], contracts, state_dir):
@@ -3012,8 +3055,13 @@ def mediator_for(
             "contract": observed_contract(load_contract(contracts, server)),
             "tool_use_id": "mx-" + os.urandom(12).hex(),
         }  # fmt: skip
+        if re.fullmatch(r"[A-Za-z0-9:_.-]{1,64}", client):
+            payload["client"] = client  # 기록에 어느 AI 도구·앱의 호출인지 남긴다
         try:
-            answer = ask_decision(payload, url=url, key=key, post=post, http_timeout=http_timeout)
+            answer = ask_or_hold(
+                payload, state_dir=state_dir, url=url, key=key, post=post,
+                http_timeout=http_timeout,
+            )
         except Unreachable:
             if not offline_allowed(server, contracts, state_dir):
                 if paused(state_dir):
@@ -3417,7 +3465,24 @@ def main(argv: list[str] | None = None) -> None:
 
     blocking = args.command in ("pre", "cursor-pre", "grok-pre")
     notice = "MINT hook timed out" + ("; the call is blocked" if blocking else "")
-    watchdog = threading.Timer(args.deadline, _give_up, [2 if blocking else 0, notice])
+    late: dict[str, str] = {}  # 판정 대상(서버·도구): 시간 상한에 걸리면 장애 계약을 따른다
+
+    def deadline() -> None:
+        """결정 서버가 시간 안에 답하지 않았다. 장애로 보고 승인 서버·내장 도구는 통과시킨다.
+
+        한계: 느리기만 한 결정 서버의 거부도 이때는 통과가 된다(가용성 우선, 기록은 남는다).
+        """
+        server, folder = late.get("server"), late.get("state_dir")
+        contracts = os.path.expanduser(args.contracts)
+        if blocking and server and folder and offline_allowed(server, contracts, folder):
+            record_offline(folder, server, late.get("tool", ""), args.harness)
+            if args.command == "cursor-pre":
+                print('{"permission": "allow"}')
+                sys.stdout.flush()
+            os._exit(0)
+        _give_up(2 if blocking else 0, notice)
+
+    watchdog = threading.Timer(args.deadline, deadline)
     watchdog.daemon = True
     watchdog.start()
     try:
@@ -3429,6 +3494,9 @@ def main(argv: list[str] | None = None) -> None:
         with open(os.path.expanduser(args.key_file), encoding="utf-8") as handle:
             key = handle.read().strip()
         state_dir = os.path.expanduser(args.state_dir)
+        if blocking:
+            late.update(outage_target(event, os.path.expanduser(args.contracts), args.harness))
+            late["state_dir"] = state_dir
 
         sock_path = os.path.join(state_dir, BROKER_SOCKET)
 

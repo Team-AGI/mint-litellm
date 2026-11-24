@@ -34,7 +34,7 @@ from mint_litellm.endpoint.remediation import (
 )
 from mint_litellm.plugin.buffer import ConsumeRequest, ConsumptionLost
 from mint_litellm.types.canonical import sha256
-from mint_litellm.types.events import Event
+from mint_litellm.types.events import Event, EventKind, control_source_key
 from mint_litellm.types.identity import OrgStatus, SubjectType
 from mint_litellm.types.reason_codes import OBSERVATION_CANDIDATES, Reason
 from mint_litellm.types.settings import Mode
@@ -1447,6 +1447,149 @@ class PluginDatabase:
                 return (await cursor.fetchone())[0]
 
         return await self._run(write)  # type: ignore[no-any-return]
+
+    async def endpoint_apps_list(self, instance_id: str, key_token: str) -> list[dict[str, Any]]:
+        """이 설치 키 주인의 앱 목록(최근 순). 키 값은 없다."""
+
+        async def read(conn: Any) -> Any:
+            cursor = await conn.execute(
+                "SELECT a.id, a.name, a.key_alias, a.created_at, a.expires_at, a.revoked_at"
+                " FROM mint.endpoint_installs i JOIN mint.endpoint_apps a"
+                " ON a.instance_id = i.instance_id AND a.user_id = i.user_id"
+                " WHERE i.instance_id = %s AND i.key_token = %s AND i.revoked_at IS NULL"
+                " ORDER BY a.created_at DESC LIMIT 50",
+                (instance_id, key_token),
+            )
+            return await cursor.fetchall()
+
+        keys = ("id", "name", "key_alias", "created_at", "expires_at", "revoked_at")
+        return [dict(zip(keys, row, strict=True)) for row in await self._run(read)]
+
+    async def endpoint_app_create(
+        self, instance_id: str, key_token: str, name: str, days: int, issuer: Any
+    ) -> dict[str, Any]:
+        """앱 키를 만들고 기록한다(같은 사람의 발급은 한 번에 하나). 키 값은 돌려주기만 한다.
+
+        ``issuer``는 ``generate_app_key``·``delete_kit_keys``를 가진 LiteLLM 클라이언트(블로킹이라
+        스레드에서 부른다). 거절은 ``AppRefused``이다.
+        """
+        import secrets
+        from hashlib import sha256 as digest
+
+        from psycopg.rows import dict_row
+
+        from mint_litellm.control import kit_key_sync
+        from mint_litellm.control.litellm_write import APP_ALIAS_PREFIX
+        from mint_litellm.endpoint.apps import ACTOR, MAX_ACTIVE_APPS, AppRefused
+
+        async def write(conn: Any) -> dict[str, Any]:
+            cursor = await conn.execute(
+                "SELECT user_id, team_id FROM mint.endpoint_installs"
+                " WHERE instance_id = %s AND key_token = %s AND revoked_at IS NULL",
+                (instance_id, key_token),
+            )
+            install = await cursor.fetchone()
+            if install is None:
+                raise AppRefused(404, "no such kit key")
+            user_id, team_id = install
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                    (f"endpoint-app:{instance_id}:{user_id}",),
+                )
+                cursor = await conn.execute(
+                    "SELECT name FROM mint.endpoint_apps WHERE instance_id = %s AND user_id = %s"
+                    " AND revoked_at IS NULL AND expires_at > now()",
+                    (instance_id, user_id),
+                )
+                names = [row[0] for row in await cursor.fetchall()]
+                if name in names:
+                    raise AppRefused(409, "같은 이름의 앱이 이미 있습니다.")
+                if len(names) >= MAX_ACTIVE_APPS:
+                    raise AppRefused(409, "앱은 한 사람당 10개까지 만들 수 있습니다.")
+                async with conn.cursor(row_factory=dict_row) as rows:
+                    await rows.execute(
+                        kit_key_sync.APPLICABLE_SQL,
+                        kit_key_sync.applicable_params(instance_id, user_id, team_id, ""),
+                    )
+                    servers, tools = kit_key_sync.fold_permission(await rows.fetchall())
+                alias = f"{APP_ALIAS_PREFIX}{name}-{secrets.token_hex(3)}"
+                key = await asyncio.to_thread(
+                    issuer.generate_app_key, user_id=user_id, team_id=team_id, alias=alias,
+                    name=name, days=days,
+                    permission={"mcp_servers": servers, "mcp_tool_permissions": tools},
+                )
+                try:
+                    cursor = await conn.execute(
+                        "INSERT INTO mint.endpoint_apps (instance_id, user_id, team_id,"
+                        " install_key_token, name, key_alias, key_token, expires_at)"
+                        " VALUES (%s, %s, %s, %s, %s, %s, %s,"
+                        " clock_timestamp() + make_interval(days => %s))"
+                        " RETURNING id, expires_at",
+                        (instance_id, user_id, team_id, key_token, name, alias,
+                         digest(key.encode()).hexdigest(), days),
+                    )
+                    made = await cursor.fetchone()
+                except BaseException:
+                    await asyncio.to_thread(issuer.delete_kit_keys, [alias])
+                    raise
+            return {"id": str(made[0]), "name": name, "key": key, "key_alias": alias,
+                    "expires_at": made[1], "servers": servers, "user_id": user_id}
+
+        made = await self._run(write)
+        await self.insert_event(Event(
+            instance_id=instance_id, inserted_at=datetime.now(UTC),
+            kind=EventKind.ENDPOINT_APP_CREATED,
+            source_key=control_source_key(EventKind.ENDPOINT_APP_CREATED, made["id"], 1),
+            actor=ACTOR,
+            subject={"user_id": made["user_id"], "key_alias": made["key_alias"]},
+            payload={"app": name, "user_id": made["user_id"], "days": days,
+                     "servers": made["servers"]},
+        ))
+        return made  # type: ignore[no-any-return]
+
+    async def endpoint_app_revoke(
+        self, instance_id: str, key_token: str, app_id: UUID, issuer: Any
+    ) -> bool:
+        """설치 키 주인의 앱 하나를 회수한다. 주인의 앱이 아니면 거짓, 이미 회수됐어도 참(멱등)."""
+        from mint_litellm.endpoint.apps import ACTOR
+
+        async def find(conn: Any) -> Any:
+            cursor = await conn.execute(
+                "SELECT a.name, a.key_alias, a.user_id, a.revoked_at IS NOT NULL"
+                " FROM mint.endpoint_installs i JOIN mint.endpoint_apps a"
+                " ON a.instance_id = i.instance_id AND a.user_id = i.user_id"
+                " WHERE i.instance_id = %s AND i.key_token = %s AND i.revoked_at IS NULL"
+                " AND a.id = %s",
+                (instance_id, key_token, app_id),
+            )
+            return await cursor.fetchone()
+
+        row = await self._run(find)
+        if row is None:
+            return False
+        name, alias, user_id, done = row
+        if done:
+            return True
+        await asyncio.to_thread(issuer.delete_kit_keys, [alias])
+
+        async def mark(conn: Any) -> Any:
+            cursor = await conn.execute(
+                "UPDATE mint.endpoint_apps SET revoked_at = clock_timestamp(), revoked_by = %s"
+                " WHERE instance_id = %s AND id = %s AND revoked_at IS NULL",
+                (user_id, instance_id, app_id),
+            )
+            return cursor.rowcount
+
+        if await self._run(mark):
+            await self.insert_event(Event(
+                instance_id=instance_id, inserted_at=datetime.now(UTC),
+                kind=EventKind.ENDPOINT_APP_REVOKED,
+                source_key=control_source_key(EventKind.ENDPOINT_APP_REVOKED, str(app_id), 2),
+                actor=ACTOR, subject={"user_id": user_id, "key_alias": alias},
+                payload={"app": name, "user_id": user_id},
+            ))
+        return True
 
     async def endpoint_inspections(self, instance_id: str, key_token: str) -> list[dict[str, Any]]:
         """이 설치 키에 유효한(발급·소비) 검사용 승인."""

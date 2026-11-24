@@ -108,6 +108,8 @@ class EventKind(StrEnum):
     ENDPOINT_OFFLINE_CALL = "endpoint_offline_call"
     ENDPOINT_PAUSED = "endpoint_paused"
     ENDPOINT_RESUMED = "endpoint_resumed"
+    ENDPOINT_APP_CREATED = "endpoint_app_created"
+    ENDPOINT_APP_REVOKED = "endpoint_app_revoked"
     BACKUP_CREATED = "backup_created"
     BACKUP_RESTORED = "backup_restored"
     CONFIG_EXPORTED = "config_exported"
@@ -221,6 +223,8 @@ CONTROL_ENTITY: dict[EventKind, str] = {
     EventKind.ENDPOINT_OFFLINE_CALL: "endpoint",
     EventKind.ENDPOINT_PAUSED: "endpoint",
     EventKind.ENDPOINT_RESUMED: "endpoint",
+    EventKind.ENDPOINT_APP_CREATED: "endpoint_app",
+    EventKind.ENDPOINT_APP_REVOKED: "endpoint_app",
     EventKind.BACKUP_CREATED: "backup",
     EventKind.BACKUP_RESTORED: "backup",
     EventKind.CONFIG_EXPORTED: "config",

@@ -11,7 +11,7 @@ from typing import Any
 
 import psycopg
 
-from mint_litellm.control import kit_key_sync
+from mint_litellm.control import endpoint_apps, kit_key_sync
 from mint_litellm.control.db.connection import fetchall
 from mint_litellm.control.errors import ControlError
 from mint_litellm.control.litellm_write import (
@@ -139,14 +139,19 @@ def issue_gateway_key(
 
 
 def revoke_keys(
-    conn: psycopg.Connection, issuer: LiteLLMKitKeys, instance_id: str, user_id: str
+    conn: psycopg.Connection, issuer: LiteLLMKitKeys, instance_id: str, user_id: str,
+    actor: str | None = None,
 ) -> int:
-    """사용자의 설치 묶음 키를 모두 지운다(이미 설치된 단말은 더 이상 판정을 받지 못한다)."""
+    """사용자의 설치 묶음 키를 모두 지운다(이미 설치된 단말은 더 이상 판정을 받지 못한다).
+
+    그 사람이 만든 앱의 자격도 함께 회수한다(앱은 사람의 접근 권한을 따른다).
+    """
     aliases = _active_aliases(conn, instance_id, user_id)
     if not aliases:
         raise ControlError("해제할 단말 연결이 없습니다.")
     issuer.delete_kit_keys(aliases)
     _mark_revoked(conn, instance_id, user_id)
+    endpoint_apps.revoke_user_apps(conn, issuer, instance_id, user_id, actor or user_id)
     return len(aliases)
 
 

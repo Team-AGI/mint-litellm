@@ -120,6 +120,8 @@ services:
       MINT_EXPORT_HMAC_KEY_PREVIOUS: ${MINT_EXPORT_HMAC_KEY_PREVIOUS:-}
       MINT_KIT_SIGNING_KEY: ${MINT_KIT_SIGNING_KEY:-}
       MINT_KIT_SIGNING_KEY_PREVIOUS: ${MINT_KIT_SIGNING_KEY_PREVIOUS:-}
+      # 직원 앱 자격 발급(단말의 mint app new)이 쓰는 키. 키 생성·삭제 경로만 열려 있다.
+      MINT_KIT_ISSUER_KEY: ${MINT_KIT_ISSUER_KEY:-}
       MINT_OBSERVE_SECONDS: ${MINT_OBSERVE_SECONDS:-3600}
       # 단말 설치 묶음의 판정·보고 경로. 켜 두어야 콘솔이 발급한 묶음이 동작한다(끄면 콘솔이 발급을 거절한다).
       MINT_ENDPOINT_ROUTES: ${MINT_ENDPOINT_ROUTES:-true}
