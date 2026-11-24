@@ -247,7 +247,7 @@ services:
         condition: service_started
     restart: unless-stopped
 
-  # 신청 소스 검사기(코드 검사 Semgrep·비밀 검사 Gitleaks). 고정 커밋의 소스를 GitHub에서 받아야 해서
+  # 신청 소스 검사기(코드 Semgrep·비밀 Gitleaks·취약점/설정/라이선스 Trivy). 고정 커밋의 소스를 GitHub에서 받아야 해서
   # 검사 컨테이너(inspector)와 달리 바깥 연결이 있다. 신청한 코드를 실행하지는 않는다.
   scanner:
     build:
@@ -266,6 +266,9 @@ services:
     volumes:
       - packs:/packs:ro
       - scan:/scan
+      - scancache:/trivy-cache
+    environment:
+      TRIVY_CACHE_DIR: /trivy-cache
     depends_on:
       worker:
         condition: service_started
@@ -326,3 +329,4 @@ volumes:
   inspect:
   inspectwork:
   scan:
+  scancache:

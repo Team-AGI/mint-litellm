@@ -14,14 +14,14 @@ from mint_litellm.console.core import Actor, page_actor, require_csrf
 from mint_litellm.console.pages import intake_submission
 from mint_litellm.console.pages.common import act, server_display
 from mint_litellm.console.templating import local_time, render
-from mint_litellm.control import intake_checks, usage_reader
+from mint_litellm.control import intake_checks, source_scan, usage_reader
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import call_review as review_service
 from mint_litellm.control.services import contracts as contract_service
 from mint_litellm.control.services import denials as denial_service
 from mint_litellm.control.services import evidence as evidence_service
-from mint_litellm.control.services import exception_holds, local_intakes, reads, staff_intakes
+from mint_litellm.control.services import exception_holds, local_intakes, reads
 from mint_litellm.control.services import intake_inspections as inspection_service
 from mint_litellm.control.services import intakes as intake_service
 from mint_litellm.control.services import relations as relation_service
@@ -537,6 +537,17 @@ INTAKE_TABS = (("overview", "검사 결과"), ("info", "신청 내용"), ("evide
 PACK_TAB = ("pack", "실행 묶음")
 
 
+def shown_result(check: dict) -> str:
+    """화면에 보이는 검사 결과. 코드 검사의 위험 발견은 「검토 필요」다(상태 계산은 원래 값)."""
+    if check_na(check):
+        return "n/a"
+    inputs = check.get("inputs") if isinstance(check.get("inputs"), dict) else None
+    if check.get("check") == "code_scan" and check["result"] == "pass" and (
+            source_scan.review_needed(inputs)):
+        return "review"
+    return check["result"]
+
+
 def check_na(check: dict) -> bool:
     """로컬(stdio·묶음) 신청의 원격 주소 검사: 옛 기록(지원하지 않음 실패)도 해당 없음이다."""
     return check.get("check") == "url_guard" and check.get("reason_code") in (
@@ -548,7 +559,6 @@ def intake_sbom(intake_id: str, actor: Actor = Depends(page_actor)):
     """신청 실행 묶음의 구성요소 목록(CycloneDX)."""
     from fastapi.responses import JSONResponse
 
-    from mint_litellm.control import source_scan
 
     row = fetchone(
         actor.conn,
@@ -794,7 +804,7 @@ def intake_page(
         "server_name": server_name,
         "ctl": tool_controls(actor, intake["server_id"]),
         "server_url": candidate["url"] if candidate else entry.get("url"),
-        "checks": [{**c, "shown": "n/a" if check_na(c) else c["result"]} for c in checks],
+        "checks": [{**c, "shown": shown_result(c)} for c in checks],
         "tools": tools,
         "stale": stale,
         "expires": min(expiries) if expiries else None,
@@ -856,6 +866,8 @@ def intake_new(request: Request, actor: Actor = Depends(page_actor)):
         form["name"] = discovered_name(query.get("server_id", ""))
         form["found"] = " ".join(
             p for p in (query.get("provider", ""), query.get("package", "")) if p)[:256]
+        if query.get("provider") in ("uvx", "npx") and not form["server_url"]:
+            form["server_url"] = form["found"]  # 발견한 패키지를 신청 주소칸에 채운다
     elif not form["server_url"] and query.get("server_id"):
         candidate = intake_service.deployment_candidate(
             actor.conn, actor.instance, query["server_id"])
@@ -887,7 +899,7 @@ def create_intake(
     form = {"server_url": server_url, "purpose": purpose, "owner_user_id": owner_user_id,
             "local": local, "found": found, "name": name}
     target = {}
-    if staff_intakes.repo_parts(server_url.strip()):
+    if local_intakes.is_local(server_url):
         return repo_intake(request, actor, {**form, "url": server_url, "step": step, "name": name,
                                             "commit": commit, "command": command})
 
@@ -910,7 +922,8 @@ def repo_intake(request: Request, actor: Actor, form: dict):
     if form["step"] != "submit":
         try:
             found = local_intakes.resolve(form["url"])
-            form = {**form, **found, "step": "submit", "name": form.get("name") or found["name"]}
+            form = {**form, **found, "step": "submit", "name": form.get("name") or found["name"],
+                    "server_url": found.get("url") or form["server_url"]}
         except ControlError as error:
             return intake_new_page(request, actor, form, error=str(error), status=422)
         return intake_new_page(request, actor, form)

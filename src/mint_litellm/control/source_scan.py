@@ -2,7 +2,8 @@
 
 - SBOM은 서버에서 만든 실행 묶음의 휠 목록(이름·판본·해시)으로 만든다. 실제로 PC에 깔리는 것과 같다.
 - SCA는 그 구성요소를 취약점 조회처(OSV 형식)에 묻는다. 심각(또는 악용 중) 취약점이 있으면 실패다.
-- 코드·비밀 검사는 소스 검사기 컨테이너가 고정 커밋의 소스(또는 서버 패키지 휠)에 돌린다.
+- 코드·비밀·취약점·설정 오류·라이선스 검사는 소스 검사기 컨테이너가 고정 커밋의 소스(또는 서버
+  패키지 휠)에 돌린다. 검사기가 60초 넘게 신호가 없으면 기다리지 않고 바로 응답 없음으로 본다.
 """
 
 import json
@@ -22,6 +23,8 @@ from mint_litellm.control.intake_checks import Outcome
 
 _WHEEL = re.compile(r"(?P<name>[A-Za-z0-9_.]+)-(?P<version>[A-Za-z0-9_.!+]+)-.+\.whl")
 FINDINGS = 20
+ALIVE_SECONDS = 60
+SCAN_WAIT = 600
 
 
 def _norm(name: str) -> str:
@@ -103,10 +106,20 @@ def scan_request(spec: dict | None, pack: tuple[str, dict] | None) -> dict | Non
     return {"kind": "wheel", "pack_sha256": pack[0], "wheel": wheel} if wheel else None
 
 
-def request_scan(request: dict, *, directory=None, timeout: float = 900,
+def scanner_alive(root: Path, now: float | None = None) -> bool:
+    """검사기가 남기는 신호 파일이 60초 안에 갱신됐는가."""
+    try:
+        return (now or time.time()) - (root / ".alive").stat().st_mtime <= ALIVE_SECONDS
+    except OSError:
+        return False
+
+
+def request_scan(request: dict, *, directory=None, timeout: float = SCAN_WAIT,
                  wait: Callable[[], None] | None = None) -> dict:
     """공유 볼륨으로 검사를 맡기고 결과를 기다린다. ``wait``는 기다리는 동안의 취소 확인이다."""
     root = Path(directory or os.environ.get("MINT_SCAN_DIR", "/var/lib/mint/scan"))
+    if not scanner_alive(root):  # 검사기가 안 떠 있으면 작업 실행기를 붙잡지 않는다
+        return {"status": "error", "reason": "SCANNER_UNAVAILABLE"}
     folder = root / str(uuid.uuid4())
     try:
         folder.mkdir(parents=True)
@@ -131,8 +144,25 @@ def request_scan(request: dict, *, directory=None, timeout: float = 900,
     return {"status": "error", "reason": "SCANNER_UNAVAILABLE"}
 
 
+def tree_source(result: dict, request: dict | None) -> dict:
+    """검사한 소스의 출처 기록: 트리 지문·저장소·커밋·라이선스."""
+    request = request or {}
+    licenses = (result.get("licenses") or {}).get("repository") or []
+    out = {"tree_sha256": result.get("tree_sha256"),
+           "repo": request.get("repo"), "commit": request.get("commit"),
+           "license": ", ".join(licenses[:5]) or None}
+    return {k: v for k, v in out.items() if v}
+
+
+def review_needed(inputs: dict | None) -> bool:
+    """코드 높음·비밀 의심·설정 오류 높음 이상이 있으면 승인자가 따로 살펴야 한다."""
+    i = inputs or {}
+    return bool(i.get("code_high") or i.get("secrets") or i.get("misconfig_high")
+                or i.get("misconfig_critical"))
+
+
 def code_outcome(result: dict | None) -> Outcome:
-    method = "scan:semgrep_gitleaks"
+    method = "scan:semgrep_gitleaks_trivy"
     if result is None:
         return Outcome("indeterminate", "SOURCE_UNAVAILABLE", method)
     if result.get("status") != "ok":
@@ -140,13 +170,31 @@ def code_outcome(result: dict | None) -> Outcome:
         return Outcome("indeterminate", reason if isinstance(reason, str) else "SCAN_INCOMPLETE",
                        method)
     code, secrets = result.get("code") or {}, result.get("secrets") or {}
+    vulns, config = result.get("vulns") or {}, result.get("misconfig") or {}
+    licenses = result.get("licenses") or {}
     inputs = {
         "files": result.get("files", 0),
         "code_high": code.get("high", 0), "code_medium": code.get("medium", 0),
         "code_low": code.get("low", 0), "secrets": secrets.get("count", 0),
         "findings": (code.get("findings") or [])[:FINDINGS],
         "secret_findings": (secrets.get("findings") or [])[:FINDINGS],
+        "source": tree_source(result, result.get("request")),
     }
-    # ponytail: 단독형처럼 코드·비밀 발견은 거절하지 않고 승인자에게 보인다. 시험용 가짜 키가
-    # 많은 저장소에서 오탐 거절이 잦아지면 안 되기 때문이다. 규칙을 다듬으면 높음을 실패로 올린다.
+    if result.get("trivy_failed"):
+        inputs["trivy_failed"] = True
+    else:
+        inputs |= {
+            "vuln_critical": vulns.get("critical", 0), "vuln_high": vulns.get("high", 0),
+            "vuln_medium": vulns.get("medium", 0), "vuln_low": vulns.get("low", 0),
+            "misconfig_critical": config.get("critical", 0),
+            "misconfig_high": config.get("high", 0),
+            "misconfig_medium": config.get("medium", 0),
+            "vuln_findings": (vulns.get("findings") or [])[:FINDINGS],
+            "misconfig_findings": (config.get("findings") or [])[:FINDINGS],
+            "license_findings": (licenses.get("findings") or [])[:FINDINGS],
+        }
+    # ponytail: 단독형처럼 코드·비밀 발견은 거절하지 않고 승인자에게 「검토 필요」로 보인다.
+    # 시험용 가짜 키 때문에 오탐 거절이 잦으면 안 되기 때문이다. 심각 취약점만 실패로 둔다.
+    if inputs.get("vuln_critical"):
+        return Outcome("fail", "CRITICAL_VULNERABILITY", method, inputs)
     return Outcome("pass", None, method, inputs)

@@ -1,4 +1,4 @@
-"""저장소 주소 하나로 로컬 MCP를 신청한다.
+"""저장소 주소(또는 패키지 하나)로 로컬 MCP를 신청한다. 패키지 형태는 ``package_refs``.
 
 주소에서 기본 브랜치의 최신 커밋(40자)을 찾아 고정하고, 그 커밋의 ``pyproject.toml``·
 ``package.json``으로 실행 명령을 만든다. 신청은 단말에서 ``mint add``로 올리는 로컬 신청과 같은
@@ -18,14 +18,14 @@ import psycopg
 
 from mint_litellm.control.db.connection import fetchone
 from mint_litellm.control.errors import ControlError, conflict
-from mint_litellm.control.services import staff, staff_intakes
+from mint_litellm.control.services import package_refs, staff, staff_intakes
 from mint_litellm.types.canonical import canonical_text
 from mint_litellm.types.events import EventKind
 from mint_litellm.types.ids import new_uuid7
 
 COMMIT = re.compile(r"[0-9a-f]{40}")
 NPM_PREFIX = {"github.com": "github", "gitlab.com": "gitlab", "bitbucket.org": "bitbucket"}
-API_HOSTS = ("api.github.com", "raw.githubusercontent.com")
+API_HOSTS = ("api.github.com", "raw.githubusercontent.com", "pypi.org", "registry.npmjs.org")
 MANUAL = "커밋과 실행 명령을 직접 입력하십시오."
 
 
@@ -42,6 +42,11 @@ def _fetch(url: str) -> bytes | None:
         if error.code == 404:
             return None
         raise
+
+
+def is_local(text: str) -> bool:
+    """저장소 주소이거나 패키지 형태면 로컬 MCP 신청이다."""
+    return bool(staff_intakes.repo_parts(text.strip()) or package_refs.package_ref(text))
 
 
 def _branch(url: str) -> str | None:
@@ -82,6 +87,12 @@ def _commands(owner: str, repo: str, sha: str, files: dict) -> tuple[str, str]:
 def resolve(url: str, fetch=None) -> dict:
     """주소의 저장소·커밋·실행 명령을 알아낸다. 실패는 ``note``에 사유를 담는다."""
     fetch = fetch or _fetch
+    ref = package_refs.package_ref(url)
+    if ref:
+        found = package_refs.resolve(ref, fetch)
+        if found is None:
+            raise ControlError("패키지를 찾지 못했습니다. 이름과 판본을 확인하십시오.")
+        return found
     clean = repo_url(url)
     owner, repo = staff_intakes.repo_parts(clean)
     out = {"repo": clean, "name": staff_intakes.server_name(clean), "commit": "", "command": "",
@@ -142,13 +153,18 @@ def build_payload(form: dict) -> dict:
     name = (str(form.get("name", "")).strip() or staff_intakes.server_name(url)).replace("-", "_")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_]{0,127}", name):
         raise ControlError("이름은 영문·숫자·밑줄만 사용하며 영문·숫자로 시작해야 합니다.")
-    if not COMMIT.fullmatch(commit):
-        raise ControlError("커밋은 40자리 소문자 16진수여야 합니다.")
     if not command:
         raise ControlError("실행 명령을 입력하십시오.")
+    spec = None
+    if command.startswith("uvx") and "git+" not in command and not staff_intakes.repo_parts(url):
+        spec = package_refs.pypi_spec(command, str(form.get("commit", "")).strip())
+        if spec is None:
+            raise ControlError("실행 명령은 `uvx 패키지==판본` 형태이고 판본이 같아야 합니다.")
+    elif not COMMIT.fullmatch(commit):
+        raise ControlError("커밋은 40자리 소문자 16진수여야 합니다.")
     if not 1 <= len(purpose) <= 256:
         raise ControlError("도입 목적을 256자 이하로 입력하십시오.")
-    return {"server_id": name, "spec": _spec(url, commit, command), "purpose": purpose,
+    return {"server_id": name, "spec": spec or _spec(url, commit, command), "purpose": purpose,
             "data_grade": staff_intakes.DEFAULTS["data_grade"], "resources": [],
             "file_access": [], "allowed_hosts": [], "env_names": []}
 

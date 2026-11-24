@@ -90,3 +90,55 @@ def test_the_payload_pins_the_commit_in_the_spec():
 def test_the_command_must_point_at_the_pinned_commit(changes):
     with pytest.raises(ControlError):
         local_intakes.build_payload(form(**changes))
+
+
+def test_package_forms_are_recognised():
+    ref = local_intakes.package_refs.package_ref
+    assert ref("uvx ghidra-mcp==1.2") == ("pypi", "ghidra-mcp", "1.2", [])
+    assert ref("ghidra-mcp") == ("any", "ghidra-mcp", None, [])
+    assert ref("npx -y @o/server@2.0.1 --flag") == ("npm", "@o/server", "2.0.1", ["--flag"])
+    assert ref("https://github.com/o/r") is None and ref("uvx --from git+https://x") is None
+    assert local_intakes.is_local("https://github.com/o/r") and local_intakes.is_local("pkg")
+    assert not local_intakes.is_local("https://mcp.example.com/mcp")
+
+
+def test_a_pypi_name_without_version_is_pinned_to_the_latest_release():
+    url = "https://pypi.org/pypi/ghidra-mcp/json"
+    got = local_intakes.resolve("uvx ghidra-mcp", fake(
+        {url: json.dumps({"info": {"name": "ghidra-mcp", "version": "1.4.0"}}).encode()}))
+    assert got["command"] == "uvx ghidra-mcp==1.4.0" and got["commit"] == "1.4.0"
+    assert got["kind"] == "pypi" and got["name"] == "ghidra_mcp"
+    payload = local_intakes.build_payload(
+        form(url=got["url"], name=got["name"], commit=got["commit"], command=got["command"]))
+    assert payload["spec"] == {"index": "pypi", "name": "ghidra-mcp", "version": "1.4.0",
+                               "extras": [], "command": "ghidra-mcp", "argv": []}
+
+
+def test_a_pypi_pin_must_match_the_version_field():
+    with pytest.raises(ControlError):
+        local_intakes.build_payload(form(commit="1.0", command="uvx ghidra-mcp==2.0"))
+
+
+def test_an_npm_name_is_pinned_to_the_commit_of_its_release():
+    doc = {"version": "2.0.1", "gitHead": SHA,
+           "repository": {"type": "git", "url": "git+https://github.com/o/srv.git"}}
+    got = local_intakes.resolve("@o/srv", fake(
+        {"https://registry.npmjs.org/@o/srv/latest": json.dumps(doc).encode()}))
+    assert got["kind"] == "npm" and got["commit"] == SHA
+    assert got["url"] == "https://github.com/o/srv"
+    assert got["command"] == f"npx -y github:o/srv#{SHA}"
+    payload = local_intakes.build_payload(
+        form(url=got["url"], name=got["name"], commit=SHA, command=got["command"]))
+    assert payload["spec"]["index"] == "npm" and payload["spec"]["version"] == SHA
+
+
+def test_an_npm_release_without_a_known_source_asks_for_the_repository():
+    doc = {"version": "1.0.0", "repository": {"url": "https://example.org/x.git"}}
+    got = local_intakes.resolve("npx pkg@1.0.0", fake(
+        {"https://registry.npmjs.org/pkg/1.0.0": json.dumps(doc).encode()}))
+    assert got["command"] == "" and "저장소 주소" in got["note"]
+
+
+def test_an_unknown_package_is_an_error():
+    with pytest.raises(ControlError):
+        local_intakes.resolve("uvx nope==1", fake({}))

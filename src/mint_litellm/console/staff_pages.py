@@ -260,8 +260,8 @@ def intake_probe(
                 " AND org_id IS NULL", (actor.sctx.instance_id,)),
             actor.config.control.litellm_control())
     except ControlError as error:
-        if staff_intakes.repo_parts(url.strip()):  # 저장소 주소는 확인 대신 신청 단계로 안내한다
-            return intake_form(request, actor, form, error="저장소 주소는 신청 제출 때 확인합니다.")
+        if local_intakes.is_local(url):  # 저장소·패키지는 확인 대신 신청 단계로 안내한다
+            return intake_form(request, actor, form, error="신청 제출 때 확인합니다.")
         return intake_form(request, actor, form, error=str(error), status=422)
     text = labels.PROBE[found["state"]].format(
         tools=found["tools"], reason=labels.pick(labels.CHECK_REASON, found.get("reason")))
@@ -281,7 +281,7 @@ def intake_submit(
 ):
     form = dict(request_id=request_id, url=url, purpose=purpose)
     ports = actor.config.stage2.intake_allowed_ports
-    if staff_intakes.repo_parts(url.strip()):
+    if local_intakes.is_local(url):
         return repo_intake(request, actor, {**form, "step": step, "name": name,
                                             "commit": commit, "command": command})
     target = {}

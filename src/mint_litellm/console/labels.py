@@ -213,6 +213,7 @@ CHECK_RESULT = {
     "fail": Status("실패", "error"),
     "indeterminate": Status("판별 불가", "wait"),
     "n/a": Status("해당 없음", "off"),
+    "review": Status("검토 필요", "wait"),
 }
 CHECK = {
     "url_guard": "주소 검사",
@@ -808,8 +809,16 @@ def scan_summary(check: dict) -> str:
         return (f"패키지 {i['packages']}개 · 심각 {i.get('critical', 0)} · 높음 {i.get('high', 0)}"
                 f" · 보통 {i.get('medium', 0)} · 낮음 {i.get('low', 0)}")
     if name == "code_scan" and "files" in i:
-        return (f"파일 {i['files']}개 · 코드 높음 {i.get('code_high', 0)}"
+        text = (f"파일 {i['files']}개 · 코드 높음 {i.get('code_high', 0)}"
                 f" · 보통 {i.get('code_medium', 0)} · 비밀 {i.get('secrets', 0)}")
+        if i.get("trivy_failed"):
+            return text + " · 취약점·설정·라이선스 검사 못 함"
+        if "vuln_critical" in i:
+            high = i.get("misconfig_critical", 0) + i.get("misconfig_high", 0)
+            text += (f" · 취약점 심각 {i['vuln_critical']} 높음 {i.get('vuln_high', 0)}"
+                     f" · 설정 오류 높음 {high}"
+                     f" · 라이선스 주의 {len(i.get('license_findings') or [])}")
+        return text
     return ""
 
 

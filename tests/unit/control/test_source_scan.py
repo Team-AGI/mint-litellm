@@ -71,6 +71,8 @@ def test_the_scanner_gets_the_pinned_commit_or_the_servers_own_wheel():
 
 
 def test_the_scan_result_comes_back_through_the_shared_folder(tmp_path: Path):
+    (tmp_path / ".alive").write_text("1")
+
     def scanner():
         for _ in range(200):
             for folder in tmp_path.glob("*"):
@@ -92,7 +94,39 @@ def test_the_scan_result_comes_back_through_the_shared_folder(tmp_path: Path):
     out = source_scan.code_outcome(result)
     assert out.result == "pass" and out.inputs["code_high"] == 1 and out.inputs["secrets"] == 1
     assert out.inputs["secret_findings"][0]["file"] == "b.py"
-    assert list(tmp_path.iterdir()) == []  # 요청 폴더는 지운다
+    assert [p.name for p in tmp_path.iterdir()] == [".alive"]  # 요청 폴더는 지운다
+
+
+def test_a_stale_or_absent_scanner_signal_fails_at_once(tmp_path: Path):
+    gone = {"status": "error", "reason": "SCANNER_UNAVAILABLE"}
+    assert source_scan.request_scan({"kind": "git"}, directory=tmp_path, timeout=30) == gone
+    assert list(tmp_path.iterdir()) == []  # 요청도 남기지 않는다
+    alive = tmp_path / ".alive"
+    alive.write_text("1")
+    assert source_scan.scanner_alive(tmp_path)
+    assert not source_scan.scanner_alive(tmp_path, now=alive.stat().st_mtime + 61)
+    assert source_scan.SCAN_WAIT == 600
+
+
+def test_trivy_findings_and_the_source_record_reach_the_outcome():
+    result = {"status": "ok", "files": 4, "tree_sha256": "a" * 64,
+              "request": {"kind": "git", "repo": "https://github.com/o/r", "commit": "f" * 40},
+              "code": {"high": 0}, "secrets": {"count": 0},
+              "vulns": {"critical": 0, "high": 1, "findings": [
+                  {"id": "CVE-1", "package": "x", "version": "1", "severity": "high"}]},
+              "misconfig": {"high": 1, "findings": [
+                  {"id": "DS002", "severity": "high", "file": "Dockerfile"}]},
+              "licenses": {"repository": ["MIT"], "findings": []}}
+    out = source_scan.code_outcome(result)
+    assert out.result == "pass" and out.inputs["misconfig_high"] == 1
+    assert out.inputs["source"] == {"tree_sha256": "a" * 64, "repo": "https://github.com/o/r",
+                                    "commit": "f" * 40, "license": "MIT"}
+    assert source_scan.review_needed(out.inputs)
+    assert not source_scan.review_needed({"code_high": 0, "secrets": 0, "misconfig_high": 0})
+    failed = source_scan.code_outcome({**result, "vulns": {"critical": 1, "findings": []}})
+    assert failed.result == "fail" and failed.reason == "CRITICAL_VULNERABILITY"
+    skipped = source_scan.code_outcome({**result, "trivy_failed": True})
+    assert skipped.result == "pass" and skipped.inputs["trivy_failed"]
 
 
 def test_a_missing_scanner_is_reported_not_waited_for(tmp_path: Path):
@@ -101,3 +135,17 @@ def test_a_missing_scanner_is_reported_not_waited_for(tmp_path: Path):
     result = source_scan.request_scan({"kind": "git"}, directory=blocked, timeout=5)
     assert result == {"status": "error", "reason": "SCANNER_UNAVAILABLE"}
     assert source_scan.code_outcome(result).result == "indeterminate"
+
+
+def test_a_risky_code_scan_is_shown_as_needing_review_but_stays_a_pass():
+    from mint_litellm.console import labels
+    from mint_litellm.console.pages.servers import shown_result
+
+    risky = {"check": "code_scan", "result": "pass", "inputs": {"secrets": 2}}
+    assert shown_result(risky) == "review" and risky["result"] == "pass"
+    assert shown_result({**risky, "inputs": {"secrets": 0, "code_high": 0}}) == "pass"
+    assert labels.CHECK_RESULT["review"].text == "검토 필요"
+    summary = labels.scan_summary({"check": "code_scan", "inputs": {
+        "files": 3, "vuln_critical": 0, "vuln_high": 2, "misconfig_high": 1,
+        "license_findings": [{}]}})
+    assert "취약점 심각 0 높음 2" in summary and "라이선스 주의 1" in summary
