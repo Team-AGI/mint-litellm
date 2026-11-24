@@ -38,8 +38,8 @@
   <label>역할<select name="role"><option value="approver">{{ L.pick(L.ROLE, 'approver') }}</option><option value="viewer">{{ L.pick(L.ROLE, 'viewer') }}</option><option value="admin">{{ L.pick(L.ROLE, 'admin') }}</option></select></label>
   <button type="submit" class="primary">운영자로 지정</button>
 </form>
-<p class="muted">지정된 사람은 자기 계정으로 로그인하면 이 관리 화면을 씁니다. 승인자는 신청·호출을 승인하고, 조회자는 보기만 합니다.</p>
-{% else %}<p class="muted">지정할 수 있는 사람이 없습니다. 직원이 가입하고 한 번 로그인하면 여기에서 고를 수 있습니다.</p>{% endif %}
+<p class="muted">승인자는 승인, 조회자는 보기만 합니다.</p>
+{% else %}<p class="muted">한 번 로그인한 사람만 고를 수 있습니다.</p>{% endif %}
 {% endif %}
 {% if system_accounts %}<h2>시스템 계정</h2>
 <table><thead><tr><th>이름</th><th>만료</th></tr></thead><tbody>
@@ -75,14 +75,14 @@
 <form method="post" action="/admin/backups" hx-boost="false">{{ m.csrf(actor) }}<button type="submit" class="primary">지금 백업</button></form>
 <a class="button" href="/admin/config/export" hx-boost="false">설정 내보내기(JSON)</a>
 </div>
-<p class="muted">매일 한 번 자동으로 백업하고 최근 7개를 남깁니다.{% if backup_requested and (not backups or backup_requested > backups[0].at) %} 요청한 백업을 준비하고 있습니다({{ backup_requested | when }} 요청).{% endif %}</p>
+<p class="muted">매일 자동 백업, 최근 7개 보관</p>{% if backup_requested and (not backups or backup_requested > backups[0].at) %}<p class="muted">요청한 백업 준비 중({{ backup_requested | when }})</p>{% endif %}
 {% if backups %}
 <table><thead><tr><th>시각</th><th>MINT 데이터</th><th>LiteLLM 데이터</th><th>복원</th></tr></thead><tbody>
 {% for b in backups %}<tr><td class="nowrap">{{ b.at | when }}</td>
 {% for f in ['mint.sql', 'litellm.sql'] %}<td>{% set hit = b.files | selectattr('name', 'equalto', f) | first %}{% if hit %}<a href="/admin/backups/{{ b.name }}/{{ f }}" hx-boost="false" download>내려받기</a> <span class="muted">{{ (hit.size / 1048576) | round(1) }} MB</span>{% else %}—{% endif %}</td>{% endfor %}
 <td>{{ m.copy_cmd('./mint.sh restore backups/' ~ b.name) }}</td></tr>{% endfor %}
 </tbody></table>
-<p class="muted">복원은 서비스를 잠시 멈추고 데이터베이스를 통째로 바꾸므로, 서버의 설치 폴더에서 위 명령으로 합니다.</p>
+<p class="muted">복원은 서비스를 멈추므로 서버에서 실행합니다.</p>
 {% else %}<div class="empty"><h3>아직 백업이 없습니다</h3></div>{% endif %}
 <h2>백업·이전 기록</h2>
 {% if transfers %}
@@ -101,7 +101,7 @@
   <label><input type="checkbox" name="from_start" value="1"> 지금까지의 기록도 보내기</label>
   <button type="submit" class="primary">추가</button>
 </form>
-<p class="muted">syslog·CEF는 토큰이 없습니다. Splunk·Elastic·OTLP의 토큰은 화면에 저장하지 않고, 서버 비밀 설정의 이름(MINT_SIEM_로 시작)이나 비밀 파일 경로만 적습니다.</p>
+<p class="muted">토큰 값은 저장하지 않고 읽을 곳만 적습니다.</p>
 {% if siem %}
 <table><thead><tr><th>이름</th><th>종류</th><th>주소</th><th>상태</th><th>마지막 전달</th><th class="num">밀린 사건</th><th class="num">보낸 사건</th><th>마지막 시험</th><th></th></tr></thead><tbody>
 {% for s in siem %}{% set st = 'error' if s.failing_since else ('ok' if s.last_delivered_at else 'wait') %}<tr><td>{{ s.name }}</td><td>{{ L.pick(L.SIEM_KIND, s.kind) }}</td><td>{{ s.address }}</td>

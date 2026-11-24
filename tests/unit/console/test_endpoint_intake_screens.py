@@ -68,7 +68,7 @@ def test_the_staff_request_fills_the_name_the_transport_the_grade_and_the_exit_t
 
     payload, contract = staff_intakes.validate(
         {"url": "https://mcp.example.com/sse", "purpose": "문서 조회"})
-    assert payload["server_id"] == "example-com" and payload["transport"] == "sse"
+    assert payload["server_id"] == "example_com" and payload["transport"] == "sse"
     assert payload["data_grade"] == "internal"
     assert payload["readiness"]["audit_access_days"] == 90 and payload["data_return_terms"]
     assert '"transport":"sse"' in contract
