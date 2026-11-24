@@ -23,8 +23,26 @@ DEFAULTS = {
 }
 
 
-def server_name(url: str) -> str:
-    """주소에서 서버 식별자: 맨 앞 mcp·www·api 칸을 빼고 점을 하이픈으로."""
+# 소스 저장소를 두는 곳. 이 호스트의 저장소 주소는 MCP 서버 주소가 아니다.
+CODE_HOSTS = ("github.com", "gitlab.com", "bitbucket.org", "codeberg.org")
+
+
+def repo_parts(url: str) -> tuple[str, str] | None:
+    """소스 저장소 주소(``https://github.com/<소유자>/<저장소>``)면 (소유자, 저장소)."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    segs = [s for s in parts.path.split("/") if s]
+    if (parts.hostname or "").lower() not in CODE_HOSTS or len(segs) < 2:
+        return None
+    if len(segs) > 2 and segs[2] not in ("tree", "blob", "-"):
+        return None
+    return segs[0], segs[1].removesuffix(".git")
+
+
+def legacy_name(url: str) -> str:
+    """예전 규칙(호스트 칸을 하이픈으로)의 식별자. 이미 등록된 서버를 같은 주소로 찾을 때만 쓴다."""
     try:
         labels = (urlsplit(url).hostname or "").split(".")
     except ValueError:
@@ -34,10 +52,37 @@ def server_name(url: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "-", "-".join(labels))[:128]
 
 
+def server_name(url: str) -> str:
+    """주소에서 서버 식별자. 저장소 주소면 저장소 이름, 아니면 호스트(맨 앞 mcp·www·api 칸 제외).
+
+    LiteLLM은 서버 이름에 하이픈을 받지 않으므로 영문·숫자·밑줄만 쓴다.
+    """
+    repo = repo_parts(url)
+    if repo:
+        base = repo[1]
+    else:
+        try:
+            labels = (urlsplit(url).hostname or "").split(".")
+        except ValueError:
+            labels = []
+        while len(labels) > 2 and labels[0] in ("mcp", "www", "api"):
+            labels.pop(0)
+        base = "_".join(labels)
+    return re.sub(r"[^A-Za-z0-9_]+", "_", base).strip("_")[:128]
+
+
 def validate(form: dict, allowed_ports: tuple[int, ...] = (443, 8443)) -> tuple[dict, str]:
     form = {**DEFAULTS, **{k: v for k, v in form.items() if str(v).strip()}}
     url = str(form.get("url", "")).strip()
-    sid = str(form.get("server_id", "")).strip() or server_name(url)
+    repo = repo_parts(url)
+    if repo:
+        raise ControlError(
+            "소스 저장소 주소입니다(MCP 서버 주소가 아님). 원격 MCP라면 서버의 MCP 주소"
+            "(예: …/mcp)를 넣고, 직원 PC에서 실행하는 MCP라면 PC에서"
+            f" `mint add {server_name(url)} -- <실행 명령>`으로 신청하십시오."
+        )
+    # LiteLLM은 서버 이름에 하이픈을 받지 않는다.
+    sid = (str(form.get("server_id", "")).strip() or server_name(url)).replace("-", "_")
     transport = form.get("transport") or ("sse" if url.rstrip("/").endswith("/sse") else "http")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", sid):
         raise ControlError("서버 식별자는 영문·숫자로 시작하고 "
@@ -98,6 +143,12 @@ def submit(
     except (ValueError, TypeError):
         raise ControlError("신청 화면을 다시 열어 제출하십시오.") from None
     payload, contract = validate(form, allowed_ports)
+    old = legacy_name(payload["url"])
+    if old != payload["server_id"] and fetchone(
+        sctx.control, "SELECT 1 AS x FROM mint.servers WHERE instance_id = %s AND server_id = %s",
+        (sctx.instance_id, old),
+    ):
+        payload["server_id"] = old  # 예전 이름으로 이미 있는 서버는 그 서버로 잇는다
     staff._active_session(sctx, session_id_hash)
     try:
         with staff._staff_transaction(sctx, session_id_hash) as conn:

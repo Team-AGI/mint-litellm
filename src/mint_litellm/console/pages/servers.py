@@ -11,6 +11,7 @@ from mint_litellm.console.pages import intake_submission
 from mint_litellm.console.pages.common import act, server_display
 from mint_litellm.console.templating import render
 from mint_litellm.control import intake_checks, usage_reader
+from mint_litellm.control.db.connection import fetchone
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import call_review as review_service
 from mint_litellm.control.services import contracts as contract_service
@@ -511,6 +512,32 @@ def minutes_left(inspection: dict, now: datetime) -> str:
     return f"{max(1, int((inspection['expires_at'] - now).total_seconds() // 60))}분"
 
 
+JOB_ERRORS = {
+    "litellm_http_400": "LiteLLM이 MCP 서버 등록을 거절했습니다(주소나 이름 확인)",
+    "litellm_http_401": "LiteLLM 인증에 실패했습니다",
+    "litellm_http_403": "LiteLLM이 요청을 거부했습니다",
+    "litellm_unreachable": "LiteLLM에 연결하지 못했습니다",
+}
+
+
+def intake_job_error(conn, instance: str, intake: dict) -> dict | None:
+    """검사 작업이 실패해 다시 시도 중이거나 멈췄으면 사유와 횟수(「검사 중」에 가려지지 않게)."""
+    if intake["status"] not in ("received", "checking"):
+        return None
+    row = fetchone(
+        conn, "SELECT status, attempts, max_attempts, last_error_code, run_after FROM mint.jobs"
+        " WHERE instance_id = %s AND kind = 'intake_run' AND target_ref = %s"
+        " AND last_error_code IS NOT NULL ORDER BY created_at DESC LIMIT 1",
+        (instance, str(intake["id"])),
+    )
+    if row is None:
+        return None
+    code = row["last_error_code"]
+    return {"text": JOB_ERRORS.get(code, f"검사 작업이 실패했습니다({code})"),
+            "n": row["attempts"], "limit": row["max_attempts"],
+            "stopped": row["status"] == "failed", "next": row["run_after"]}
+
+
 def intake_page(
     request: Request,
     actor: Actor,
@@ -629,6 +656,7 @@ def intake_page(
                                  len(seen)),
         "cause": cause,
         "retry": intake_service.retry_state(actor.conn, actor.instance, intake),
+        "job_error": intake_job_error(actor.conn, actor.instance, intake),
         "decision_form": decision_form or {},
         "hold": hold,
         "provider_blocked": intake_checks.provider_limit_enabled()
