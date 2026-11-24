@@ -1,0 +1,1 @@
+- Windows 단말에도 `mint` 명령이 생긴다. 설치기가 사용자 PATH에 기본으로 있는 WindowsApps 폴더에 `mint.cmd`를 두므로 설치 직후 같은 창에서 `mint`(화면)·`mint add <주소>`·`mint status`를 쓸 수 있고, 제거하면 함께 지워진다.
