@@ -229,15 +229,12 @@ def dashboard(
         "links": [f"/alerts?status=open&severity={k}" for k in order],
     }
     month = usage_reader.build(
-        conn, instance, actor.config.litellm_admin, server_names(actor.config.litellm_admin),
-        "month",
+        conn, instance, server_names(actor.config.litellm_admin), "month",
     )
     ctx = {
         "range": name,
         "ranges": choices("/", {}, "range", RANGES, name),
         "usage_cards": [
-            card("이번 달 비용", month["cost"]["text"], "/reports/usage", None,
-                 "wait" if month["cost"]["state"] == "missing" else None),
             card("이번 달 호출", month["calls"], "/reports/usage"),
             card("이번 달 차단", month["blocked"], "/ledger?result=deny"),
         ],

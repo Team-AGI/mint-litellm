@@ -1,0 +1,1 @@
+- 도입 검사의 제공자 허용 목록 관문을 기본으로 끄고(`MINT_REQUIRE_PROVIDER_ALLOWLIST`로 켬), 기본 송신 허용에 GitHub 다운로드 호스트를 더했습니다.

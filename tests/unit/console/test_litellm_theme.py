@@ -8,12 +8,10 @@ from .test_screen_polish import render
 
 
 def test_login_fields_match_the_supported_account_types():
-    admin = render("login.html")
-    staff = render("staff_login.html")
-    assert '아이디 또는 이메일<input name="username"' in admin
-    assert '이메일<input type="email" name="username"' in staff
-    for name in ("login.html", "staff_login.html"):
-        assert "회사 계정으로 로그인" in render(name, sso=True)
+    page = render("login.html")
+    assert '아이디 또는 이메일<input name="username"' in page
+    assert "가입 요청" in page
+    assert "회사 계정으로 로그인" in render("login.html", sso=True)
 
 
 @pytest.mark.parametrize("name,href", [

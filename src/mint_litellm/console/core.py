@@ -423,7 +423,7 @@ def error_response(error: ControlError, request_id: str) -> JSONResponse:
 
 
 def login_redirect(request: Request) -> Response:
-    target = "/staff/login" if is_staff_path(request) else "/login"
+    target = "/login"
     if request.headers.get("hx-request"):
         return Response(status_code=200, headers={"HX-Redirect": target})
     return RedirectResponse(target, status_code=303)

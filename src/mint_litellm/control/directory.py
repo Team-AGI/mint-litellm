@@ -180,6 +180,7 @@ def sync(conn: psycopg.Connection, instance_id: str, admin: LiteLLMAdmin) -> Syn
     humans = {
         u["user_id"]: u for u in users
         if isinstance(u.get("user_id"), str) and u.get("user_role") in operators.HUMAN_ROLES
+        and u["user_id"] not in operators.SERVICE_ACCOUNTS  # 배포 서비스 계정은 사람이 아니다
     }
     with conn.transaction():
         for user_id, user in humans.items():

@@ -155,13 +155,13 @@ def test_the_admin_cookie_does_not_open_staff_screens(sworld):
     assert admin.get("/staff").status_code == 303
     admin.cookies.set(STAFF_COOKIE, session_id)
     response = admin.get("/staff")
-    assert response.status_code == 303 and response.headers["location"] == "/staff/login"
+    assert response.status_code == 303 and response.headers["location"] == "/login"
 
 
 def test_logout_revokes_the_staff_session_and_records_it(sworld):
     client = logged_in(sworld)
     response = client.post("/staff/logout", data={"csrf": csrf(client)})
-    assert response.status_code == 303 and response.headers["location"] == "/staff/login"
+    assert response.status_code == 303 and response.headers["location"] == "/login"
     assert client.get("/staff").status_code == 303
     ended = sworld.query("SELECT actor FROM mint.events WHERE kind = 'console_session_ended'")
     assert ended == [(STAFFER,)]

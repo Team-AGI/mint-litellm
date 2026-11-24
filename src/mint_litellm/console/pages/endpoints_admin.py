@@ -10,6 +10,7 @@ from mint_litellm.console.pages.common import act
 from mint_litellm.console.templating import render
 from mint_litellm.control import endpoint_kits, org_suggest, siem
 from mint_litellm.control.errors import AdminCode, AdminError
+from mint_litellm.control.operators import SERVICE_ACCOUNTS
 from mint_litellm.control.services import operators as operator_service
 from mint_litellm.control.services import orgs as org_service
 from mint_litellm.control.services import reads
@@ -115,10 +116,13 @@ def admin_tab(tab: str | None, role: str) -> str:
 
 def admin_page(request: Request, actor: Actor, error=None, status=200, tab=None):
     tab = tab or request.query_params.get("tab")
-    operators = [] if actor.role == "viewer" else reads.operators(actor.conn, actor.instance)
+    listed = [] if actor.role == "viewer" else reads.operators(actor.conn, actor.instance)
+    operators = [o for o in listed if o["name"] not in SERVICE_ACCOUNTS]
+    system_accounts = [o for o in listed if o["name"] in SERVICE_ACCOUNTS]
     soon = datetime.now(UTC) + timedelta(days=7)
     ctx = {
         "operators": operators,
+        "system_accounts": system_accounts,
         "expiring": sum(1 for o in operators if o["expires_at"] and o["expires_at"] < soon),
         "orgs": reads.orgs(actor.conn, actor.instance),
         "bindings": reads.bindings(actor.conn, actor.instance),

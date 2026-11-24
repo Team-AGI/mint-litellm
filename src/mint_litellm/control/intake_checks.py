@@ -9,6 +9,7 @@ import binascii
 import hashlib
 import ipaddress
 import json
+import os
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -240,6 +241,9 @@ def url_guard(
     if port not in allowed_ports:
         return _done("url_guard", Outcome("fail", "PORT_NOT_ALLOWED", method, inputs))
     used.extend(str(e["id"]) for e in exempt)
+    if not provider_limit_enabled():  # 저장소·패키지·서버마다 따로 검사하므로 기본은 묻지 않는다
+        inputs["allowlist_ids"] = used
+        return _done("url_guard", Outcome("pass", None, method, inputs))
     provider = [e for e in allowlists if e["kind"] == "provider" and
                 _entry_matches_host(e["value"], host)]
     if not provider:
@@ -248,6 +252,12 @@ def url_guard(
     used.append(str(provider[0]["id"]))
     inputs["allowlist_ids"] = used
     return _done("url_guard", Outcome("pass", None, method, inputs))
+
+
+def provider_limit_enabled() -> bool:
+    """제공자 제한 설정(``MINT_REQUIRE_PROVIDER_ALLOWLIST``). 기본은 끔."""
+    on = os.environ.get("MINT_REQUIRE_PROVIDER_ALLOWLIST", "").strip().lower()
+    return on in ("1", "true", "yes", "on")
 
 
 # --- 2. oauth_issuer_allowlist ----------------------------------------------------------

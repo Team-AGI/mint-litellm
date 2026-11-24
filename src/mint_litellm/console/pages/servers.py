@@ -10,7 +10,7 @@ from mint_litellm.console.core import Actor, page_actor, require_csrf
 from mint_litellm.console.pages import intake_submission
 from mint_litellm.console.pages.common import act, server_display
 from mint_litellm.console.templating import render
-from mint_litellm.control import usage_reader
+from mint_litellm.control import intake_checks, usage_reader
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import call_review as review_service
 from mint_litellm.control.services import contracts as contract_service
@@ -631,7 +631,8 @@ def intake_page(
         "retry": intake_service.retry_state(actor.conn, actor.instance, intake),
         "decision_form": decision_form or {},
         "hold": hold,
-        "provider_blocked": any(c["reason_code"] == "PROVIDER_NOT_ALLOWED" for c in checks),
+        "provider_blocked": intake_checks.provider_limit_enabled()
+        and any(c["reason_code"] == "PROVIDER_NOT_ALLOWED" for c in checks),
         "passed": sum(1 for c in counted if c["result"] == "pass"),
         "failed": sum(1 for c in counted if c["result"] == "fail"),
         "checks_total": len(counted),

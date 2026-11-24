@@ -60,6 +60,19 @@ def test_url_guard(url, transport, allow, result, reason):
     assert (out.result, out.reason) == (result, reason)
 
 
+@pytest.fixture(autouse=True)
+def provider_limit(monkeypatch):
+    """기본은 제공자 제한이 꺼져 있다. 제한을 켠 동작을 보는 시험은 이 설정을 켠다."""
+    monkeypatch.setenv("MINT_REQUIRE_PROVIDER_ALLOWLIST", "true")
+
+
+def test_the_provider_gate_is_off_by_default_and_other_gates_still_apply(monkeypatch):
+    monkeypatch.delenv("MINT_REQUIRE_PROVIDER_ALLOWLIST")
+    assert c.url_guard("https://other.example.com/mcp", "http", []).result == "pass"
+    assert c.url_guard("https://[::1]/mcp", "http", []).reason == "IP_FORBIDDEN"
+    assert c.url_guard("http://other.example.com/mcp", "http", []).reason == "SCHEME_NOT_HTTPS"
+
+
 def ip(*octets):
     """주소 문자열을 소스에 그대로 쓰지 않으려고 조각으로 만든다."""
     return ".".join(str(o) for o in octets)
