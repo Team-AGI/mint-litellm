@@ -566,6 +566,15 @@ def intake_sbom(intake_id: str, actor: Actor = Depends(page_actor)):
     return JSONResponse(doc, headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
+def _person(actor: Actor, user_id: str | None) -> str | None:
+    """사용자 식별자의 사람 이름(이메일·아이디). 명부에 없으면 None."""
+    if not user_id:
+        return None
+    row = fetchone(actor.conn, "SELECT email FROM mint.directory_users WHERE instance_id = %s"
+                   " AND user_id = %s", (actor.instance, user_id))
+    return row and row["email"]
+
+
 def intake_progress(
     intake: dict, lacking: list[str], checks: list[dict] | None = None,
     hold: bool = False, cause: bool = False, seen: int = 0,
@@ -597,7 +606,8 @@ def intake_progress(
     elif st == "decided" and intake.get("decision") in ("approved", "exception"):
         proof = ("off", "증빙 해당 없음")  # 승인된 뒤에는 부족 표시를 남기지 않는다
     else:
-        proof = ("error", f"증빙 {len(lacking)}건 부족") if lacking else ("ok", "증빙 충족")
+        # 승인 단계 증빙은 권고다(승인을 막지 않는다). 빨간 「부족」으로 보이면 검사 실패로 읽힌다.
+        proof = ("wait", f"권장 증빙 {len(lacking)}건") if lacking else ("ok", "증빙 충족")
     if st == "decided":
         decision = ("ok", "결정 완료")
     elif hold:
@@ -801,6 +811,7 @@ def intake_page(
             (key, label, len(lacking) if key == "evidence" else 0) for key, label in intake_tabs
         ],
         "pack": pack,
+        "requester_name": _person(actor, intake.get("requested_by") or intake.get("owner_user_id")),
         "progress": intake_progress(intake, lacking, checks, hold is not None, cause is not None,
                                  len(seen)),
         "cause": cause,

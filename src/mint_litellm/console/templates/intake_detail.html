@@ -29,7 +29,7 @@
 <div class="cards">
   {{ m.kpi('검사 통과', passed ~ ' / ' ~ checks_total, level='danger' if failed else ('wait' if passed != checks_total else none)) }}
   {{ m.kpi('높음 이상 도구', high_risk, note='낮음 ' ~ risk.low ~ ' · 보통 ' ~ risk.medium ~ ' · 높음 ' ~ risk.high ~ ' · 심각 ' ~ risk.critical, level='wait' if high_risk) }}
-  {% if i.decision == 'withdrawn' %}{{ m.kpi('증빙', '승인 심사 종료') }}{% else %}{{ m.kpi('증빙 충족', proof[0] ~ ' / ' ~ proof[1], '?tab=evidence', level='wait' if lacking) }}{% endif %}
+  {% if i.decision == 'withdrawn' %}{{ m.kpi('증빙', '승인 심사 종료') }}{% else %}{{ m.kpi('권장 증빙', proof[0] ~ ' / ' ~ proof[1], '?tab=evidence', level='wait' if lacking) }}{% endif %}
 </div>
 <div class="{{ 'grid' if can(actor, 'intake approve') }}">
 <div>
@@ -102,7 +102,7 @@
   <details{% if error %} open{% endif %}><summary>추가 설정</summary>
   <div class="row">
     <label>대상 구분<select name="scope_type"><option value="user"{% if decision_form.scope_type == "user" %} selected{% endif %}>사용자</option><option value="key"{% if decision_form.scope_type == "key" %} selected{% endif %}>키</option><option value="team"{% if decision_form.scope_type == "team" %} selected{% endif %}>팀</option></select></label>
-    <label>대상 식별자<input name="scope_id" value="{{ decision_form.scope_id if decision_form.scope_id is defined else (i.requested_by or i.owner_user_id or '') }}"></label>
+    <label>대상{% if requester_name %} <small class="muted">{{ requester_name }}</small>{% endif %}<input name="scope_id" value="{{ decision_form.scope_id if decision_form.scope_id is defined else (i.requested_by or i.owner_user_id or '') }}"></label>
     <label>유효 기간(일)<input type="number" name="valid_days" value="{{ decision_form.valid_days if decision_form.valid_days is not none and decision_form.valid_days is defined else '' }}" placeholder="기한 없음" min="1" max="365"></label>
   </div>
   {% if pack and pack.ready %}

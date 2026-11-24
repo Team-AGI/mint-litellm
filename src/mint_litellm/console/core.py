@@ -64,6 +64,7 @@ _OPTION = re.compile(r"--([a-z][a-z-]*)(으로|로|은|는|이|가|을|를|에�
 _SERVER_STATE = re.compile(
     r"서버 (\S+)는 (" + "|".join(SERVER) + r") 상태라 새 수용검증을 시작할 수 없습니다\."
 )
+_STALE = re.compile(r"\S+의 상태 버전이 요청\(\d+\)과 다릅니다\(현재 \d+\)\.[^.]*\.?")
 _ROLE = re.compile(r"(?<![A-Za-z-])(admin|approver|viewer)(?![A-Za-z-])")
 
 
@@ -94,6 +95,9 @@ def screen_message(message: str) -> str:
         "토큰을 「두 번째 승인자 토큰」 칸에 함께 입력하십시오",
     )
     message = message.replace("object_permission.mcp_servers", "MCP 서버 권한")
+    message = _STALE.sub(
+        "화면을 연 뒤 상태가 바뀌었습니다. 최신 내용을 확인하고 다시 누르십시오.", message
+    )
     message = _OPTION.sub(option, message)
     message = _SERVER_STATE.sub(
         lambda m: f"서버 {m.group(1)}는 {SERVER[m.group(2)].text} 상태라 "
