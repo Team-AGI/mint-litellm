@@ -1,4 +1,4 @@
-"""LiteLLM 관리 API 쓰기 클라이언트(권한 동기화 전용).
+"""LiteLLM 관리 API 쓰기 클라이언트.
 
 읽기는 ``LiteLLMAdmin``을 그대로 쓰고, 쓰기는 이 모듈이 허용하는 경로·본문만 보낸다.
 
@@ -8,6 +8,7 @@
 - 차단·해제: ``/key/block``, ``/key/unblock``, ``/team/block``, ``/team/unblock``. 본문은 대상
   식별자 하나뿐이다(사람이 승인한 차단 제안을 옮길 때만 쓴다).
 - 사용자 자격: 폐기하는 서버의 사용자별 API 키·OAuth2 토큰을 ``user_id`` 쿼리로 하나씩 지운다.
+- 직원 가입: 일반 직원 계정과 초대를 만들며 지정된 필드만 보낸다.
 - 서버: 승인·거절·고정·고정 해제 경로만 부른다. 서버 등록·수정·삭제·가져오기는 부르지 않는다.
 - 모든 쓰기 직전에 ``before_write``를 부른다(되돌림 상태·임대 확인 자리, 예외를 내면 쓰지 않는다).
 """
@@ -33,6 +34,8 @@ WRITE_ROUTES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
         ("PUT", r"/v1/mcp/server"),  # 본문은 allow_all_keys 끄기와 호출 한도뿐이다(check_write)
         ("POST", r"/key/update"),
         ("POST", r"/team/update"),
+        ("POST", r"/user/new"),
+        ("POST", r"/invitation/new"),
         ("POST", r"/(?:key|team)/(?:block|unblock)"),  # 본문은 대상 식별자 하나(check_write)
         ("PUT", _SERVER + r"/approve"),
         ("PUT", _SERVER + r"/reject"),
@@ -79,6 +82,22 @@ def check_write(method: str, path: str, body: Any) -> None:
     """보내기 전에 경로와 본문이 허용 범위인지 확인한다. 아니면 ``WriteRefused``."""
     if not any(m == method and pattern.fullmatch(path) for m, pattern in WRITE_ROUTES):
         raise WriteRefused(f"허용되지 않은 LiteLLM 쓰기 경로입니다: {method} {path}")
+    if path == "/user/new":
+        if (not isinstance(body, dict)
+                or set(body) != {"user_email", "user_alias", "user_role", "auto_create_key",
+                                 "send_invite_email"}
+                or not all(isinstance(body[k], str) and body[k].strip()
+                           for k in ("user_email", "user_alias"))
+                or body["user_role"] != "internal_user_viewer"
+                or body["auto_create_key"] is not False
+                or body["send_invite_email"] is not False):
+            raise WriteRefused("직원 계정 생성에 필요한 항목만 보낼 수 있습니다.")
+        return
+    if path == "/invitation/new":
+        if (not isinstance(body, dict) or set(body) != {"user_id"}
+                or not isinstance(body["user_id"], str) or not body["user_id"].strip()):
+            raise WriteRefused("초대에는 사용자 식별자만 보낼 수 있습니다.")
+        return
     if path == "/v1/mcp/server" and method == "POST":
         fields = {"server_id", "server_name", "url", "transport", "auth_type",
                   "allow_all_keys", "rpm", "max_concurrent_requests", "timeout", "mcp_info"}

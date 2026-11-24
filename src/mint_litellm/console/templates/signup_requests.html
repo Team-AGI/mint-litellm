@@ -1,0 +1,15 @@
+{% extends "base.html" %}{% import "macros.html" as m %}
+{% block title %}가입 요청 · MINT{% endblock %}
+{% block body %}<h1>가입 요청</h1>
+<table><thead><tr><th>이메일</th><th>이름</th><th>요청 시각</th><th>상태와 처리</th></tr></thead><tbody>
+{% for row in rows %}<tr><td>{{ row.email }}</td><td>{{ row.display_name }}</td><td>{{ row.requested_at | when }}</td><td>
+{% if row.status == 'pending' and not row.decided_at %}
+<form method="post" action="/signup-requests/{{ row.id }}/approve">{{ m.csrf(actor) }}<button type="submit">승인</button></form>
+<form method="post" action="/signup-requests/{{ row.id }}/reject">{{ m.csrf(actor) }}<label>거절 사유 (선택)<input name="reason" maxlength="1000"></label><button type="submit">거절</button></form>
+{% elif row.status == 'pending' %}계정 만들기 대기{% if row.error_text %} · {{ row.error_text }} 다시 시도합니다.{% endif %}
+{% elif row.status == 'failed' %}계정 만들기 실패 · {{ row.error_text }}
+{% elif row.status == 'rejected' %}거절됨{% if row.reason %} · {{ row.reason }}{% endif %}
+{% elif row.url %}승인됨 <a href="{{ row.url }}">초대 링크</a> <button type="button" data-copy="{{ row.url }}">복사</button>
+{% else %}승인됨 · 초대 주소 설정을 확인하십시오.{% endif %}
+</td></tr>{% else %}<tr><td colspan="4">가입 요청이 없습니다.</td></tr>{% endfor %}
+</tbody></table>{% endblock %}

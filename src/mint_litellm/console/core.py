@@ -205,7 +205,9 @@ class ConsoleConfig:
         oidc_config = OidcConfig.from_env(env)
         key_login = (env.get("MINT_CONSOLE_KEY_LOGIN") or "").strip().lower() in (
             "on", "1", "true", "yes")
-        ui_url = (env.get("MINT_LITELLM_UI_URL") or "").strip().rstrip("/") or None
+        ui_url = ((env.get("MINT_LITELLM_UI_URL") or "").strip()
+                  or (env.get("PROXY_BASE_URL") or "").strip())
+        ui_url = ui_url.rstrip("/") or None
         if ui_url and not ui_url.startswith(("https://", "http://")):
             raise ControlError("MINT_LITELLM_UI_URL은 http(s) 주소여야 합니다.")
         return cls(

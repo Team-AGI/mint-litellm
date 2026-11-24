@@ -201,9 +201,13 @@ ensure_control_key() {
 
 # mint.sh가 만든 제어 키(비밀 폴더 파일)의 허용 경로를 판본마다 다시 맞춘다. 실패해도 기동은 계속한다.
 refresh_control_routes() {
-    local file="$1"
-    [ -s "$file" ] || return 0
-    env "LITELLM_MASTER_KEY=$(env_value LITELLM_MASTER_KEY)" "EXISTING_KEY=$(head -n 1 "$file")" \
+    local file="$1" key
+    key="$(env_value MINT_LITELLM_KEY)"
+    if [ -z "$key" ] && [ -s "$file" ]; then
+        key="$(head -n 1 "$file")"
+    fi
+    [ -n "$key" ] || return 0
+    env "LITELLM_MASTER_KEY=$(env_value LITELLM_MASTER_KEY)" "EXISTING_KEY=$key" \
         "${COMPOSE[@]}" run --rm --no-deps -T -e LITELLM_MASTER_KEY -e EXISTING_KEY \
         -e KEY_KIND=control-refresh --entrypoint python control -c "$KEY_ISSUER_SCRIPT" \
         < /dev/null >/dev/null 2>&1 \
@@ -705,6 +709,9 @@ upgrade_litellm() { "${COMPOSE[@]}" up -d litellm; }
 upgrade_rest() {
     ensure_kit_issuer_key
     ensure_control_key
+    if [ -n "$(env_value MINT_LITELLM_KEY)" ]; then
+        refresh_control_routes "$(env_value MINT_SECRETS_DIR)/control.key"
+    fi
     "${COMPOSE[@]}" --profile worker up -d worker inspector
     "${COMPOSE[@]}" --profile console up -d console
     "${COMPOSE[@]}" up -d backup

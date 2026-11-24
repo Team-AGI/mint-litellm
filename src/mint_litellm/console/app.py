@@ -19,6 +19,7 @@ from mint_litellm.console import (
     oidc,
     pages,
     password_login,
+    signup,
     sso_pages,
     staff_pages,
     ui_launch,
@@ -179,6 +180,8 @@ def create_app(
     app.include_router(pages.router)
     app.include_router(chat.router)
     app.include_router(staff_pages.public)
+    app.include_router(signup.public)
+    app.include_router(signup.admin)
     app.include_router(sso_pages.router)
     app.include_router(ui_launch.router)
     app.include_router(ui_launch.internal)

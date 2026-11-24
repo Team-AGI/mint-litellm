@@ -100,6 +100,8 @@ def test_control_plane_routes():
         "/key/unblock",
         "/team/block",
         "/team/unblock",
+        "/user/new",
+        "/invitation/new",
     )
 
 

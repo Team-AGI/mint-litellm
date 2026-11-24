@@ -25,6 +25,7 @@ def _permission(servers=None, tools=None) -> dict:
 class FakeLiteLLM:
     def __init__(self) -> None:
         self.keys: dict[str, dict] = {}
+        self.users: dict[str, dict] = {}
         self.teams: dict[str, dict] = {}
         self.servers: dict[str, dict] = {}
         self.requests: list[tuple[str, str, object]] = []
@@ -116,6 +117,14 @@ class FakeLiteLLM:
         if method == "GET" and path == "/key/info":
             key = self.keys.get(params.get("key", "")) or self.ghosts.get(params.get("key", ""))
             return (200, {"key": key["key"], "info": copy.deepcopy(key)}) if key else (404, {})
+        if method == "GET" and path == "/user/list":
+            return 200, {"users": list(self.users.values()), "total_pages": 1}
+        if method == "POST" and path == "/user/new":
+            uid = f"user-{len(self.users) + 1}"
+            self.users[uid] = {"user_id": uid, **body}
+            return 200, copy.deepcopy(self.users[uid])
+        if method == "POST" and path == "/invitation/new":
+            return 200, {"id": f"invite-{body['user_id']}"}
         if method == "GET" and path == "/key/list":
             return 200, {"keys": [copy.deepcopy(k) for k in self.keys.values()
                                   if params.get("key_hash") in (None, k["key"])],

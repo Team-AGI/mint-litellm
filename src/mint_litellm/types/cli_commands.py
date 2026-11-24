@@ -1,7 +1,7 @@
 """운영자 CLI의 명령 표와 제어 평면의 LiteLLM 접근 범위.
 
-모든 명령은 운영자 토큰으로 인증되며 행위자는 토큰에 결속된 운영자 이름이다. 제어 평면은
-LiteLLM에 쓰지 않는다. 확인에 필요한 값은 관리 API로 읽는다.
+모든 명령은 운영자 토큰으로 인증되며 행위자는 토큰에 결속된 운영자 이름이다. 확인에 필요한 값은
+관리 API로 읽고, 필요한 쓰기는 제한된 관리 API 경로를 사용한다.
 """
 
 from enum import StrEnum
@@ -36,6 +36,8 @@ CONTROL_PLANE_ALLOWED_ROUTES: tuple[str, ...] = (
     "/key/unblock",
     "/team/block",
     "/team/unblock",
+    "/user/new",
+    "/invitation/new",
 )
 
 # 관리 API 응답에서 수신 즉시 버리고 저장·기록·표시하지 않는 자격 열.

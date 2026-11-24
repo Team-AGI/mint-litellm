@@ -19,6 +19,28 @@ from mint_litellm.endpoint.routes import KIT_KEY_ROUTES
 
 SRV = "srv-1"
 FULL = {"mcp_servers": [SRV], "mcp_tool_permissions": {SRV: ["a"]}}
+SIGNUP_USER = {
+    "user_email": "staff@example.test", "user_alias": "직원",
+    "user_role": "internal_user_viewer", "auto_create_key": False,
+    "send_invite_email": False,
+}
+
+
+def test_signup_write_payloads_are_restricted():
+    check_write("POST", "/user/new", SIGNUP_USER)
+    check_write("POST", "/invitation/new", {"user_id": "u1"})
+    for body in (
+        {**SIGNUP_USER, "user_role": "proxy_admin"},
+        {**SIGNUP_USER, "user_id": "chosen"},
+        {**SIGNUP_USER, "auto_create_key": True},
+        {**SIGNUP_USER, "send_invite_email": True},
+        {key: value for key, value in SIGNUP_USER.items() if key != "user_alias"},
+    ):
+        with pytest.raises(WriteRefused):
+            check_write("POST", "/user/new", body)
+    for body in ({}, {"user_id": ""}, {"user_id": "u1", "role": "admin"}):
+        with pytest.raises(WriteRefused):
+            check_write("POST", "/invitation/new", body)
 
 
 @pytest.fixture

@@ -335,6 +335,18 @@ def test_a_key_in_the_env_file_wins_over_the_stored_control_key(tmp_path):
     assert not names & {"MINT_SLACK_SIGNING_SECRET", "MINT_LITELLM_KEY", "MINT_STAFF_DB_PASSWORD"}
 
 
+def test_upgrade_refreshes_the_explicit_control_key(tmp_path):
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    (secrets / "kit_issuer.key").write_text("sk-kit\n", encoding="utf-8")
+    env = f"POSTGRES_PASSWORD=x\nMINT_SECRETS_DIR={secrets}\nMINT_LITELLM_KEY=sk-from-env\n"
+    result, _, _ = run(tmp_path, env, "upgrade", docker_tail=CONTROL_DOCKER)
+    assert result.returncode == 0, result.stderr
+    log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+    assert "KEY_KIND=control-refresh" in log and "-e EXISTING_KEY" in log
+    assert "sk-from-env" not in log.replace("worker-sees:sk-from-env", "")
+
+
 def test_compose_hands_the_service_keys_to_the_console_and_worker_through_the_env_file():
     text = (SCRIPT.parent / "compose.yaml").read_text(encoding="utf-8")
     for name, following in (("worker", "console"), ("console", None)):

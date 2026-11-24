@@ -13,6 +13,7 @@ from jinja2 import pass_context
 
 from mint_litellm.console import labels, setup_state
 from mint_litellm.console.core import DEFAULT_TIME_ZONE, can, can_attach
+from mint_litellm.control.db.connection import fetchone
 from mint_litellm.control.services import reads
 from mint_litellm.plugin.policy.sensitive_scan import mask_text
 from mint_litellm.types.contracts import ACTION_DENIAL_PREFIX
@@ -29,7 +30,7 @@ MENU = (
     ("단말", (("/endpoints", "엔드포인트", "endpoints"),)),
     ("감사", (("/ledger", "호출 기록", None), ("/policy", "정책", None),
             ("/reports/audit", "감사 보고서", None), ("/reports/usage", "사용량", None))),
-    ("관리", (("/admin", "운영자·조직", None),)),
+    ("관리", (("/admin", "운영자·조직", None), ("/signup-requests", "가입 요청", "signup"))),
 )
 STAFF_MENU = (
     (None, (
@@ -183,6 +184,12 @@ def render(
             "endpoints": _endpoint_problems(actor),
             "setup": setup_state.pending(setup_state.steps(actor)),
         }
+        if actor.role == "admin":
+            count = fetchone(actor.conn, "SELECT count(*) AS n FROM mint.signup_requests"
+                             " WHERE instance_id = %s AND status = 'pending'"
+                             " AND decided_at IS NULL",
+                             (actor.instance,))
+            base["badges"]["signup"] = count["n"]
     return templates.TemplateResponse(
         request, name, {**base, **(context or {})}, status_code=status
     )
