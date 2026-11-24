@@ -153,6 +153,33 @@ def test_the_test_send_is_admin_only_and_needs_an_address(world, admin):
     assert form_post(world, approver, "/setup/webhook-test").status_code == 403
 
 
+def test_an_admin_saves_the_alert_address_on_screen_and_the_worker_reads_it(
+    world, admin, monkeypatch
+):
+    from mint_litellm.control import webhook_store
+
+    monkeypatch.setenv("MINT_EXPORT_HMAC_KEY", "k" * 32)
+    assert 'action="/setup/webhook"' in admin.get("/setup").text
+    bad = form_post(world, admin, "/setup/webhook", url="http://hooks.example.com/x", fmt="slack")
+    assert bad.status_code == 400
+    ok = form_post(world, admin, "/setup/webhook", url=HOOK, fmt="slack")
+    assert ok.status_code == 303 and "webhook_saved" in ok.headers["location"]
+    stored = world.query("SELECT sealed FROM mint.webhook_settings")[0][0]
+    assert HOOK.encode() not in bytes(stored)
+    import psycopg
+    from psycopg.rows import dict_row
+
+    with psycopg.connect(world.admin_url, row_factory=dict_row) as conn:
+        settings = webhook_store.effective(world.config.stage2, conn, INSTANCE)
+    assert settings.webhook_urls == (HOOK,) and settings.webhook_format(HOOK) == "slack"
+    html = admin.get("/setup").text
+    assert "알림 주소 미설정" not in html and "/setup/webhook-test" in html
+    assert form_post(world, admin, "/setup/webhook", url="").status_code == 303
+    assert world.query("SELECT count(*) FROM mint.webhook_settings")[0][0] == 0
+    approver = world.session_client("approver")
+    assert form_post(world, approver, "/setup/webhook", url=HOOK).status_code == 403
+
+
 @pytest.mark.parametrize("role", ["admin", "approver", "viewer"])
 def test_every_role_can_open_the_checklist_and_the_menu_lists_it(world, role):
     client = world.session_client(role)

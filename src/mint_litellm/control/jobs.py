@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 import psycopg
 from psycopg.errors import UniqueViolation
 
-from mint_litellm.control import alerts, links, seal, webhook
+from mint_litellm.control import alerts, links, seal, webhook, webhook_store
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.services import expiry
 from mint_litellm.types.ids import new_uuid7
@@ -206,7 +206,7 @@ def _alert_deliver(job: JobContext) -> None:
     )
     if row is None or row["status"] != "pending":
         return
-    settings = job.settings
+    settings = webhook_store.effective(job.settings, job.conn, job.instance_id)
     url = next((u for u in settings.webhook_urls if alerts.channel_for(u) == row["channel"]), None)
     sent, attempts = False, 0
     if url is not None:

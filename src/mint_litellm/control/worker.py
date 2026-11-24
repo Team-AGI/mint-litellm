@@ -27,6 +27,7 @@ from mint_litellm.control import (
     jobs,
     ledger,
     signup,
+    webhook_store,
 )
 from mint_litellm.control.config import ControlConfig
 from mint_litellm.control.db.connection import connect, fetchone
@@ -157,8 +158,9 @@ class Worker:
         self.verdict = self._judge()
         jobs.register_due_schedules(self.conn, self.instance_id)
         jobs.reclaim_expired(self.conn, self.instance_id, self.settings)
-        if self.settings.webhook_urls:
-            alerts.enqueue_deliveries(self.conn, self.instance_id, self.settings.webhook_urls)
+        urls = webhook_store.effective(self.settings, self.conn, self.instance_id).webhook_urls
+        if urls:
+            alerts.enqueue_deliveries(self.conn, self.instance_id, urls)
         job = jobs.lease(
             self.conn, self.instance_id, self.owner, self.lease_seconds, sorted(jobs.HANDLERS)
         )
