@@ -126,9 +126,85 @@ def test_transfer_tab_lists_commands_and_recent_backups_for_admins_only(world, a
         " VALUES (gen_random_uuid(), %s, 'backup_created', 'backup:t1:1:backup_created',"
         " 'admin', '{\"file\": \"b1.mbk\", \"mode\": \"json\", \"encrypted\": false}')", INSTANCE)
     html = admin.get("/admin?tab=transfer").text
-    assert "mint-litellm backup create" in html and "b1.mbk" in html and "백업 생성" in html
+    assert "지금 백업" in html and "b1.mbk" in html and "백업 생성" in html
+    assert "mint-litellm backup" not in html
     viewer = world.session_client("viewer")
-    assert "mint-litellm backup" not in viewer.get("/admin?tab=transfer").text
+    assert "지금 백업" not in viewer.get("/admin?tab=transfer").text
+
+
+def test_backups_are_listed_downloaded_and_requested_from_the_screen(
+    world, admin, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("MINT_BACKUP_DIR", str(tmp_path))
+    folder = tmp_path / "20261124T010203Z"
+    folder.mkdir()
+    (folder / "mint.sql").write_text("-- dump", encoding="utf-8")
+    (tmp_path / "not-a-backup").mkdir()
+    html = admin.get("/admin?tab=transfer").text
+    assert "/admin/backups/20261124T010203Z/mint.sql" in html and "not-a-backup" not in html
+    assert "./mint.sh restore backups/20261124T010203Z" in html
+    got = admin.get("/admin/backups/20261124T010203Z/mint.sql")
+    assert got.status_code == 200 and got.text == "-- dump"
+    assert admin.get("/admin/backups/20261124T010203Z/litellm.sql").status_code == 404
+    assert admin.get("/admin/backups/..%2F..%2Fetc/mint.sql").status_code == 404
+    viewer = world.session_client("viewer")
+    assert viewer.get("/admin/backups/20261124T010203Z/mint.sql").status_code == 403
+    assert form_post(world, viewer, "/admin/backups").status_code == 403
+    assert form_post(world, admin, "/admin/backups").status_code == 303
+    sql = "SELECT count(*) FROM mint.setup_marks WHERE mark = 'backup_requested'"
+    assert world.query(sql)[0][0] == 1
+    assert "요청한 백업을 준비하고 있습니다" in admin.get("/admin?tab=transfer").text
+
+
+def test_the_config_is_exported_as_a_download(world, admin):
+    got = admin.get("/admin/config/export")
+    assert got.status_code == 200 and "attachment" in got.headers["content-disposition"]
+    assert "refill" in got.json()
+    assert world.query("SELECT count(*) FROM mint.events WHERE kind = 'config_exported'")[0][0] == 1
+    assert world.session_client("viewer").get("/admin/config/export").status_code == 403
+
+
+def test_siem_targets_are_added_and_removed_from_the_screen(world, admin):
+    ok = form_post(world, admin, "/admin/siem", name="soc", kind="elastic",
+                   endpoint="https://siem.test:9200", index="mint", token="MINT_SIEM_ES")
+    assert ok.status_code == 303
+    row = world.query("SELECT kind, secret_ref, options->>'index' FROM mint.siem_targets"
+                      " WHERE name = 'soc'")
+    assert row == [("elastic", "env:MINT_SIEM_ES", "mint")]
+    bad = form_post(world, admin, "/admin/siem", name="s2", kind="hec",
+                    endpoint="https://siem.test:8088", token="HOME")
+    assert bad.status_code == 400 and "MINT_SIEM_" in bad.text
+    assert form_post(world, admin, "/admin/siem/soc/remove", confirm_name="x").status_code == 400
+    assert form_post(world, admin, "/admin/siem/soc/remove", confirm_name="soc").status_code == 303
+    assert world.query("SELECT count(*) FROM mint.siem_targets WHERE name = 'soc'")[0][0] == 0
+    kinds = world.query(
+        "SELECT kind FROM mint.events WHERE kind LIKE 'siem_target%' ORDER BY inserted_at"
+    )
+    assert kinds == [("siem_target_added",), ("siem_target_removed",)]
+    viewer = world.session_client("viewer")
+    assert form_post(world, viewer, "/admin/siem", name="v", kind="syslog",
+                     endpoint="tls://s.test:6514").status_code == 403
+
+
+def test_an_admin_names_a_signed_in_person_as_an_approver(world, admin):
+    from types import SimpleNamespace
+
+    users = {"u-appr": {"user_role": "internal_user"}}
+    object.__setattr__(world.config, "litellm_admin", SimpleNamespace(get_user=users.get))
+    world.query("INSERT INTO mint.directory_users (instance_id, user_id, email, litellm_role)"
+                " VALUES (%s, 'u-appr', 'appr@acme.test', 'internal_user')", INSTANCE)
+    html = admin.get("/admin?tab=operators").text
+    assert "운영자 지정" in html and "appr@acme.test" in html
+    got = form_post(world, admin, "/admin/operators", user_id="u-appr", role="approver")
+    assert got.status_code == 303, got.text
+    row = world.query("SELECT role FROM mint.operators WHERE user_id = 'u-appr'")
+    assert row == [("approver",)]
+    assert "appr@acme.test</option>" not in admin.get("/admin?tab=operators").text
+    assert form_post(world, admin, "/admin/operators", user_id="nobody",
+                     role="approver").status_code == 404
+    viewer = world.session_client("viewer")
+    assert form_post(world, viewer, "/admin/operators", user_id="u-appr",
+                     role="admin").status_code == 403
 
 
 def test_siem_tab_shows_status_and_requests_a_test_for_admins_only(world, admin):
