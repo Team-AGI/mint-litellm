@@ -53,7 +53,7 @@ sidebarMobile.addEventListener("change", function () { syncSidebar(); closeSideb
 //   bars:    {kind, labels:[], values:[], horizontal?:bool, links?:[]}
 // 결정 값(allow·approve·block·observe)은 결정색 토큰으로, 조각을 누르면 links/href 로 이동한다.
 var DECISION_TOKEN = { allow: "--ok", approve: "--wait", block: "--danger", observe: "--off" };
-var PALETTE = ["--accent", "--ok", "--wait", "--danger", "--off", "--c6", "--c7", "--c8"];
+var PALETTE = ["--chart-1", "--chart-2", "--chart-3", "--chart-4", "--chart-5", "--chart-6"];
 
 function token(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -106,6 +106,21 @@ var CHARTS = {
       }],
     });
   },
+  lines: function (d) {
+    return Object.assign(base(), {
+      tooltip: { trigger: "axis", valueFormatter: function (v) { return v == null ? "—" : v + " " + (d.unit || ""); } },
+      legend: { top: 0, textStyle: { color: token("--muted") } },
+      grid: { left: 48, right: 16, top: 40, bottom: 32 },
+      xAxis: Object.assign({ type: "category", data: d.labels }, axisStyle()),
+      yAxis: Object.assign({ type: "value", name: d.unit || "" }, axisStyle()),
+      series: d.series.map(function (s, i) {
+        return {
+          name: s.name, type: "line", data: s.data, connectNulls: true, symbol: "circle", symbolSize: 5,
+          lineStyle: { color: token(PALETTE[i]) }, itemStyle: { color: token(PALETTE[i]) },
+        };
+      }),
+    });
+  },
   bars: function (d) {
     var cat = Object.assign({ type: "category", data: d.labels }, axisStyle());
     var val = Object.assign({ type: "value", minInterval: 1 }, axisStyle());
@@ -115,7 +130,7 @@ var CHARTS = {
       xAxis: d.horizontal ? val : cat,
       yAxis: d.horizontal ? Object.assign(cat, { inverse: true }) : val,
       series: [{
-        name: "건수", type: "bar", data: d.values, itemStyle: { color: token("--accent") },
+        name: "건수", type: "bar", data: d.values, itemStyle: { color: token("--chart-1") },
       }],
     });
   },

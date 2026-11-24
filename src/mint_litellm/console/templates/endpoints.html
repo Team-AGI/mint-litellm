@@ -39,7 +39,7 @@
   <dt>도구 판본</dt><dd>{{ selected.claude_version | blank }}</dd>
   <dt>자동 갱신</dt><dd>{% if selected.update_error %}실패 · {{ L.UPDATE_ERROR.get(selected.update_error, '알 수 없는 사유') }}{% else %}—{% endif %}</dd>
   <dt>MCP 서버</dt><dd>{{ (selected.mcp_servers or []) | join }}</dd>
-  <dt>서버 격리</dt><dd>{% for p in selected.processes or [] %}{{ p.server }} {{ L.SANDBOX.get(p.sandbox, '확인 안 됨') }}{% if p.egress_unfiltered %} · 호스트 제한 미집행{% endif %}{% if p.egress_refused %} · 허용 밖 접속 {{ p.egress_refused }}건 거절{% endif %}{% if not loop.last %}<br>{% endif %}{% else %}—{% endfor %}</dd>
+  <dt>MCP 서버 격리</dt><dd>{% for p in selected.processes or [] %}{{ p.server }} {{ L.SANDBOX.get(p.sandbox, '확인 안 됨') }}{% if p.egress_unfiltered %} · 호스트 제한 미집행{% endif %}{% if p.egress_refused %} · 허용 밖 접속 {{ p.egress_refused }}건 거절{% endif %}{% if not loop.last %}<br>{% endif %}{% else %}—{% endfor %}</dd>
   <dt>실행기 밖 실행</dt><dd>{% for o in selected.outside_processes or [] %}{{ o.package }} ({{ L.pick(L.PACKAGE_ECOSYSTEM, o.ecosystem) }}) {{ o.count }}개{% if not loop.last %}<br>{% endif %}{% else %}—{% endfor %}</dd>
   <dt>발급</dt><dd>{{ selected.issued_at | when }}</dd>
   <dt>마지막 보고</dt><dd>{{ selected.reported_at | when }}</dd>
@@ -47,7 +47,7 @@
 {% endcall %}{% endif %}
 {% else %}
 {% if mcp %}
-<table><thead><tr><th>사용자</th><th>설치 상태</th><th>서버 이름</th><th>도구</th><th>방식</th><th>실행 파일·호스트</th><th>마지막 확인</th><th class="num">단말</th><th></th></tr></thead><tbody>
+<table><thead><tr><th>사용자</th><th>설치 상태</th><th>MCP 서버 이름</th><th>도구</th><th>방식</th><th>실행 파일·호스트</th><th>마지막 확인</th><th class="num">단말</th><th></th></tr></thead><tbody>
 {% for r in mcp %}<tr>
 <td>{{ r.user_id }}</td>
 <td>{{ m.badge(L.INSTALL, r.state) }}</td>
@@ -57,7 +57,7 @@
 <td>{{ r.target }}{% if r.package %} {{ r.package }}{% endif %}</td>
 <td class="nowrap">{{ r.last_seen | when }}</td>
 <td class="num">{{ r.endpoints }}대</td>
-<td>{% if can(actor, 'intake create') %}<a class="button" href="/intakes/new?{{ {'server_id': r.name, 'provider': r.target, 'owner_user_id': r.user_id, 'purpose': L.pick(L.KIT_HARNESS, r.harness) ~ ' 설정에서 발견한 ' ~ r.name ~ ' 서버를 관리 대상으로 등록'} | urlencode }}">도입 신청</a>{% endif %}</td>
+<td>{% if can(actor, 'intake create') %}<a class="button" href="/intakes/new?{{ {'server_id': r.name, 'provider': r.target, 'owner_user_id': r.user_id, 'purpose': L.pick(L.KIT_HARNESS, r.harness) ~ ' 설정에서 발견한 ' ~ r.name ~ ' MCP 서버를 관리 대상으로 등록'} | urlencode }}">도입 신청</a>{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
 {% else %}{{ m.empty('보고된 관리 대상 밖의 MCP 서버가 없습니다', '/endpoints?tab=installs', '단말 현황 보기') }}{% endif %}

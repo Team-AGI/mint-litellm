@@ -127,7 +127,7 @@ def test_each_section_counts_only_the_period(seeded):
     assert a["결정까지 걸린 중앙값"] != "—"
     assert section(data, "승인")["tables"][0]["rows"] == [["범위 밖", 1]]
     c = values(data, "변경")
-    assert (c["서버 등록"], c["계약 승인"]) == (1, 1)
+    assert (c["MCP 서버 등록"], c["계약 승인"]) == (1, 1)
     al = values(data, "경보")
     # 80일 전에 열린 경보는 기간 밖이지만 아직 열려 있으므로 현재 열림에는 센다
     assert (al["기간 중 발생"], al["기간 중 해결"], al["지금 열려 있음"]) == (2, 1, 2)

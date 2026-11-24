@@ -94,23 +94,26 @@ def _servers(actor: Actor) -> dict:
     total = _count(actor, "SELECT count(*) AS n FROM mint.servers WHERE instance_id = %s")
     if approved:
         return _item(
-            "servers", "MCP 서버 승인", DONE, f"승인된 서버 {approved}개", "/servers", "서버"
+            "servers", "MCP 서버 신청·승인", DONE, f"승인된 MCP 서버 {approved}개",
+            "/servers", "MCP 서버",
         )
     if total:
         return _item(
             "servers",
-            "MCP 서버 승인",
+            "MCP 서버 신청·승인",
             CHECK,
-            "승인된 서버가 없습니다.",
+            "승인된 MCP 서버가 없습니다.",
             "/approvals?tab=servers",
             "승인 센터",
         )
     if not can(actor, "intake create"):
         return _item(
-            "servers", "MCP 서버 승인", OPEN, "등록된 서버가 없습니다.", "/intakes", "도입 신청"
+            "servers", "MCP 서버 신청·승인", OPEN, "등록된 MCP 서버가 없습니다.",
+            "/intakes", "도입 신청",
         )
     return _item(
-        "servers", "MCP 서버 승인", OPEN, "등록된 서버가 없습니다.", "/intakes/new", "신청 시작"
+        "servers", "MCP 서버 신청·승인", OPEN, "등록된 MCP 서버가 없습니다.",
+        "/intakes/new", "신청 시작",
     )
 
 
@@ -152,7 +155,7 @@ def _approval_flow(actor: Actor) -> dict:
         extra = {}
     if solo and not approvers and not urls:
         line = "기본 관리자가 직접 결정할 수 있습니다."
-    return _item("approval", "승인 알림", status, line, optional=solo, **extra)
+    return _item("approval", "알림·승인자", status, line, optional=solo, **extra)
 
 
 def _endpoints(actor: Actor) -> dict:
@@ -169,7 +172,7 @@ def _endpoints(actor: Actor) -> dict:
     if fresh:
         return _item(
             "endpoint",
-            "엔드포인트 설치",
+            "직원 PC 연결",
             DONE,
             f"최근 24시간 보고 {fresh}대",
             "/endpoints",
@@ -179,7 +182,7 @@ def _endpoints(actor: Actor) -> dict:
     if total:
         return _item(
             "endpoint",
-            "엔드포인트 설치",
+            "직원 PC 연결",
             CHECK,
             "최근 24시간 보고가 없습니다.",
             "/endpoints",
@@ -188,7 +191,7 @@ def _endpoints(actor: Actor) -> dict:
         )
     return _item(
         "endpoint",
-        "엔드포인트 설치",
+        "직원 PC 연결",
         OPEN,
         "설치된 엔드포인트가 없습니다.",
         "/staff/endpoint",
@@ -226,14 +229,60 @@ def _optional(actor: Actor) -> list[dict]:
     ]
 
 
-def steps(actor: Actor) -> list[dict]:
+def _password(default_in_use: bool) -> dict:
+    if default_in_use:
+        return _item(
+            "password", "기본 비밀번호 바꾸기", OPEN,
+            "처음 로그인한 비밀번호를 그대로 쓰고 있습니다.",
+            "/account/password", "비밀번호 바꾸기",
+        )
+    return _item(
+        "password", "기본 비밀번호 바꾸기", DONE, "기본 비밀번호를 바꿨습니다.",
+        "/account/password", "비밀번호",
+    )
+
+
+def _accounts(actor: Actor) -> dict:
+    approved = _count(
+        actor,
+        "SELECT count(*) AS n FROM mint.signup_requests WHERE instance_id = %s"
+        " AND status = 'approved'",
+    )
+    waiting = _count(
+        actor,
+        "SELECT count(*) AS n FROM mint.signup_requests WHERE instance_id = %s"
+        " AND status = 'pending'",
+    )
+    people = _count(
+        actor,
+        "SELECT count(DISTINCT user_id) AS n FROM mint.endpoint_installs WHERE instance_id = %s",
+    )
+    if approved or people:
+        return _item(
+            "accounts", "사람 계정 등록", DONE, f"등록된 계정 {max(approved, people)}명",
+            "/signup-requests", "가입 요청",
+        )
+    if waiting:
+        return _item(
+            "accounts", "사람 계정 등록", CHECK, f"승인을 기다리는 가입 요청 {waiting}건",
+            "/signup-requests", "가입 요청",
+        )
+    return _item(
+        "accounts", "사람 계정 등록", OPEN, "가입 요청을 승인하거나 LiteLLM에서 초대합니다.",
+        "/signup-requests", "가입 요청",
+    )
+
+
+def steps(actor: Actor, default_password: bool = False) -> list[dict]:
     workers = control_status.enforcement_states(actor.ctx)
     return [
+        _password(default_password),
+        _accounts(actor),
+        _endpoints(actor),
+        _servers(actor),
         _gateway(workers),
         _policy(actor, workers),
-        _servers(actor),
         _approval_flow(actor),
-        _endpoints(actor),
         *_optional(actor),
     ]
 

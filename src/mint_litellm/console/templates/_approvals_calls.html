@@ -2,7 +2,7 @@
 {% call m.filter_bar('/approvals?tab=calls', stats.range, range_options) %}<input type="hidden" name="tab" value="calls"><label>처리 기한<select name="sla" data-autosubmit>{% for n in sla_options %}<option value="{{ n }}"{% if n == sla %} selected{% endif %}>{{ n }}분</option>{% endfor %}</select></label>{% endcall %}
 <div class="stats-line"><span>들어온 요청 {{ '{:,}'.format(stats.opened) }}</span><span>사람이 승인 {{ '{:,}'.format(stats.approved_by_person) }}</span><span>규칙이 자동 승인 {{ '{:,}'.format(stats.approved_by_rule) }}</span><span>대기 중 승인되어 완료 {{ '{:,}'.format(stats.held_completed) }}</span><span>거부 {{ '{:,}'.format(stats.denied) }}</span><span>미사용 만료 {{ '{:,}'.format(stats.expired_unused) }}</span><span>결정 중앙값 {{ stats.median_seconds | span }}</span><span>결정 상위 10% {{ stats.p90_seconds | span }}</span><span>기간 승인으로 통과 {{ ((stats.period_share * 100) | round | int ~ '%') if stats.period_share is not none else '—' }}</span></div>
 {% if stats.opened %}<div class="chart" data-bars="{{ stats.series | to_json }}"></div>
-<table><thead><tr><th>서버</th><th>도구</th><th class="num">요청</th></tr></thead><tbody>
+<table><thead><tr><th>MCP 서버</th><th>도구</th><th class="num">요청</th></tr></thead><tbody>
 {% for t in stats.top %}<tr><td>{{ t.server_id }}</td><td>{{ t.tool }}</td><td class="num">{{ '{:,}'.format(t.n) }}</td></tr>{% endfor %}
 </tbody></table>{% endif %}
 {% set sg = stats.suggestion %}{% if sg and actor.role == 'admin' %}
@@ -37,7 +37,7 @@
 {% set c = selected %}
 {% call m.drawer('호출 승인', '/approvals?tab=calls&range=' ~ stats.range, true) %}
 <dl class="detail">
-  <dt>서버</dt><dd><a href="/servers/{{ c.server_id | urlencode }}">{{ c.server_id }}</a></dd>
+  <dt>MCP 서버</dt><dd><a href="/servers/{{ c.server_id | urlencode }}">{{ c.server_id }}</a></dd>
   <dt>도구</dt><dd>{{ c.tool }}</dd>
   <dt>행위</dt><dd>{{ L.pick(L.ACTION, c.action_type) }}</dd>
   <dt>조직</dt><dd>{{ c.org_id }}</dd>

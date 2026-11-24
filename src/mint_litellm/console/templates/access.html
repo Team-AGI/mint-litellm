@@ -14,7 +14,7 @@
 {% if tab == 'approvals' %}
 {% if focus %}<p><a class="button" href="/access?tab=approvals">전체 보기</a></p>{% endif %}
 {% if rows %}
-<table class="clickable"><thead><tr><th>서버</th><th>대상</th><th>도구</th><th>유효 기간</th><th>승인자</th><th>재확인</th><th></th></tr></thead><tbody>
+<table class="clickable"><thead><tr><th>MCP 서버</th><th>대상</th><th>도구</th><th>유효 기간</th><th>승인자</th><th>재확인</th><th></th></tr></thead><tbody>
 {% for a in rows %}<tr{% if focus == a.id | string %} class="selected"{% endif %}>
 <td><a href="/servers/{{ a.server_id | urlencode }}">{{ a.server_id }}</a></td>
 <td>{{ L.pick(L.SCOPE, a.scope_type) }} {{ m.ident(a.scope_id) }}{% if a.target_missing %} {{ m.status_badge(L.Status("대상 없음", "error")) }}{% endif %}</td><td>{{ a.tools | tool_names }}</td>
@@ -27,7 +27,7 @@
   <form method="post" action="/approvals/{{ a.id }}/revoke" hx-boost="false">
     {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ a.state_version }}">
     <h3 id="revoke-{{ a.id }}-title">승인 철회</h3>
-    <div class="effect">차단되는 대상: {{ L.pick(L.SCOPE, a.scope_type) }} {{ m.ident(a.scope_id) }}의 도구 {{ a.tools | length }}개, 서버 1개</div>
+    <div class="effect">차단되는 대상: {{ L.pick(L.SCOPE, a.scope_type) }} {{ m.ident(a.scope_id) }}의 도구 {{ a.tools | length }}개, MCP 서버 1개</div>
     <label>사유(선택)<input name="reason" maxlength="500"></label>
     <div class="actions"><button type="button" data-dialog-close>취소</button>
       <button type="submit" name="deny" value="0" class="danger">철회</button>
@@ -41,11 +41,11 @@
 {% else %}{{ m.empty('유효한 승인이 없습니다', '/approvals?tab=servers', '승인 센터 보기') }}{% endif %}
 
 {% elif tab == 'dormant' %}
-{% if servers | length > 1 or server %}<form method="get" action="/access" class="filterbar"><input type="hidden" name="tab" value="dormant"><label>서버<select name="server" data-autosubmit><option value="">전체</option>{% for s in servers %}<option value="{{ s }}"{% if s == server %} selected{% endif %}>{{ s }}</option>{% endfor %}{% if server and server not in servers %}<option value="{{ server }}" selected>{{ server }}</option>{% endif %}</select></label></form>{% endif %}
+{% if servers | length > 1 or server %}<form method="get" action="/access" class="filterbar"><input type="hidden" name="tab" value="dormant"><label>MCP 서버<select name="server" data-autosubmit><option value="">전체</option>{% for s in servers %}<option value="{{ s }}"{% if s == server %} selected{% endif %}>{{ s }}</option>{% endfor %}{% if server and server not in servers %}<option value="{{ server }}" selected>{{ server }}</option>{% endif %}</select></label></form>{% endif %}
 {% if rows %}
 <form method="post" id="dormant">
 {{ m.csrf(actor) }}
-<table><thead><tr><th></th><th>서버</th><th>대상</th><th>도구</th><th>구분</th><th>유효 기간</th><th>승인자</th></tr></thead><tbody>
+<table><thead><tr><th></th><th>MCP 서버</th><th>대상</th><th>도구</th><th>구분</th><th>유효 기간</th><th>승인자</th></tr></thead><tbody>
 {% for a in rows %}<tr>
 <td>{% if actor.role == 'admin' %}<input type="checkbox" name="ids" value="{{ a.id }}:{{ a.state_version }}" aria-label="선택">{% endif %}</td>
 <td><a href="/servers/{{ a.server_id | urlencode }}">{{ a.server_id }}</a></td>
@@ -64,7 +64,7 @@
 {% elif tab == 'denials' %}
 {% if can(actor, 'deny') %}<p class="actions"><a class="button primary" href="/access?tab=denials&amp;new=1">거부 등록</a></p>{% endif %}
 {% if denials %}
-<table><thead><tr><th>대상</th><th>서버</th><th>도구</th><th>사유</th><th>등록자</th><th>상태</th><th></th></tr></thead><tbody>
+<table><thead><tr><th>대상</th><th>MCP 서버</th><th>도구</th><th>사유</th><th>등록자</th><th>상태</th><th></th></tr></thead><tbody>
 {% for d in denials %}<tr>
 <td>{{ L.pick(L.SCOPE, d.scope_type) }} {{ m.ident(d.scope_id) }}</td><td>{{ d.server_id | blank }}</td><td>{{ d.tools | tool_names }}</td>
 <td>{{ d.reason }}</td><td>{{ d.created_by | who }}</td>
@@ -77,10 +77,10 @@
 {% call m.drawer('거부 등록', '/access?tab=denials', true) %}
 <form method="post" action="/denials" class="form">
   {{ m.csrf(actor) }}
-  <label>대상 구분<select name="scope_type"><option value="key">키</option><option value="user">사용자</option><option value="team">팀</option><option value="server">서버</option></select></label>
+  <label>대상 구분<select name="scope_type"><option value="key">키</option><option value="user">사용자</option><option value="team">팀</option><option value="server">MCP 서버</option></select></label>
   <label>대상 식별자<input name="scope_id" required></label>
-  <label>서버<input name="server_id"></label>
-  <label>도구(비우면 서버 전체)<input name="tools"></label>
+  <label>MCP 서버<input name="server_id"></label>
+  <label>도구(비우면 MCP 서버 전체)<input name="tools"></label>
   <label>사유(선택)<input name="reason" maxlength="500"></label>
   <div class="actions"><a class="button" href="/access?tab=denials">취소</a><button type="submit" class="danger">거부 등록</button></div>
 </form>

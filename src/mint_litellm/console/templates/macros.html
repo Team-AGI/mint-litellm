@@ -15,6 +15,13 @@
 </{{ 'a' if href else 'div' }}>
 {% endmacro %}
 
+{# 숫자만 있는 카드 대신 쓰는 한 줄 요약 띠. 항목은 dashboard의 card() 값이다. #}
+{% macro strip(items) %}
+<div class="strip">
+{% for c in items %}<{{ 'a' if c.href else 'div' }} class="stat{{ ' ' ~ c.level if c.level }}"{% if c.href %} href="{{ c.href }}"{% endif %}{% if c.note %} title="{{ c.note }}"{% endif %}><span class="label">{{ c.label }}</span><span class="value">{{ c.value }}</span></{{ 'a' if c.href else 'div' }}>{% endfor %}
+</div>
+{% endmacro %}
+
 {% macro spark(values, width=80, height=20) %}
 {% set top = values | max if values else 0 %}{% set n = values | length %}
 {% if n > 1 and top > 0 %}<svg class="spark" viewBox="0 0 {{ width }} {{ height }}" width="{{ width }}" height="{{ height }}" role="img" aria-label="추세"><polyline fill="none" stroke="currentColor" stroke-width="1.5" points="{% for v in values %}{{ (loop.index0 * width / (n - 1)) | round(1) }},{{ (height - 2 - v * (height - 4) / top) | round(1) }} {% endfor %}"/></svg>{% endif %}
