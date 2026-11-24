@@ -347,7 +347,7 @@ def test_workers_from_before_a_restart_are_not_counted_as_running():
 
 def test_the_block_rate_is_a_dash_without_any_calls(world, admin):
     html = admin.get("/").text
-    card = re.search(r'차단률</div>\s*<div class="value">([^<]*)<', html)
+    card = re.search(r'차단률</span><span class="value">([^<]*)<', html)
     assert card and card.group(1) == "—"
 
 

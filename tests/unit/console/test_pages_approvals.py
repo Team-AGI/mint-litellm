@@ -38,7 +38,7 @@ def test_revoke_and_revoke_with_denial_are_separate_buttons(world, admin):
     html = admin.get("/access?tab=approvals").text
     assert re.search(r'name="deny" value="0"[^>]*>철회<', html)
     assert re.search(r'name="deny" value="1"[^>]*>철회 \+ 거부<', html)
-    assert "차단되는 대상: 사용자 human-5의 도구 2개, 서버 1개" in html
+    assert "차단되는 대상: 사용자 human-5의 도구 2개, MCP 서버 1개" in html
 
 
 def test_revoke_plus_deny_records_both(world, admin):

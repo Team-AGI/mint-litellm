@@ -288,7 +288,7 @@ def test_a_staff_member_without_an_organization_sees_an_empty_screen(sworld):
     sworld.stub.own("sk-loner", "human-7")
     sworld.stub.control("sk-loner", "human-7")
     page = logged_in(sworld, "sk-loner").get("/staff")
-    assert page.status_code == 200 and "쓸 수 있는 서버가 없습니다" in page.text
+    assert page.status_code == 200 and "쓸 수 있는 MCP 서버가 없습니다" in page.text
     assert "srv-ok" not in page.text
 
 
@@ -568,12 +568,12 @@ def test_a_denied_tool_or_server_is_not_listed_as_usable(sworld):
                  " 'srv-ok', '시험', 'admin')",
                  INSTANCE)
     page = logged_in(sworld).get("/staff")
-    assert "쓸 수 있는 서버가 없습니다" in page.text
+    assert "쓸 수 있는 MCP 서버가 없습니다" in page.text
 
 
 def test_a_server_without_any_approval_for_the_user_is_not_listed(sworld):
     page = logged_in(sworld).get("/staff")
-    assert "쓸 수 있는 서버가 없습니다" in page.text
+    assert "쓸 수 있는 MCP 서버가 없습니다" in page.text
     assert "srv-ok" not in logged_in(sworld).get("/staff").text
 
 
@@ -959,7 +959,7 @@ def test_the_my_servers_screen_shows_consent_state_and_opens_the_consent_form(sw
 
 def test_staff_empty_state_suggests_contact_and_request_history(sworld):
     html = logged_in(sworld).get("/staff").text
-    assert 'href="/staff/intakes/new"' in html and "쓸 수 있는 서버가 없습니다" in html
+    assert 'href="/staff/intakes/new"' in html and "쓸 수 있는 MCP 서버가 없습니다" in html
     assert 'id="sidebar" class="sidebar"' in html and 'data-sidebar-toggle' in html
     assert 'href="/staff/confirmations"' in html
 
