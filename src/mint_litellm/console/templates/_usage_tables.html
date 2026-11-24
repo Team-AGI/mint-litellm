@@ -2,8 +2,8 @@
 <div class="cards">
   {{ m.kpi('호출', report.calls) }}
   {{ m.kpi('차단', report.blocked, level='danger' if report.blocked) }}
-  {{ m.kpi('MINT 판정 지연(중앙값)', (report.latency.p50 ~ ' ms') if report.latency.count else '기록 없음') }}
-  {{ m.kpi('MINT 판정 지연(95번째)', (report.latency.p95 ~ ' ms') if report.latency.count else '기록 없음') }}
+  {% if not scoped %}{{ m.kpi('MINT 판정 지연(중앙값)', (report.latency.p50 ~ ' ms') if report.latency.count else '기록 없음') }}
+  {{ m.kpi('MINT 판정 지연(95번째)', (report.latency.p95 ~ ' ms') if report.latency.count else '기록 없음') }}{% endif %}
 </div>
 {{ a.panel('서버별 호출', bars, report.bars['values'] | length) }}
 {% macro table(title, rows, first=false) %}

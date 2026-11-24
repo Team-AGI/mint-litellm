@@ -1,10 +1,16 @@
 {% extends "staff_base.html" %}{% import "macros.html" as m %}
 {% block title %}내 MCP 서버 · MINT{% endblock %}
 {% block body %}
+{% macro stop_use(r, id, trigger_class=none) %}
+{% if r.stopped %}{% call m.confirm_dialog('resume-' ~ id, '다시 사용하기', '이 MCP 서버를 다시 사용합니다', '내가 걸어 둔 사용 중단이 풀리고 승인된 범위에서 다시 호출할 수 있습니다.', '/staff/servers/resume', actor, '다시 사용', danger=false, trigger_class=trigger_class) %}<input type="hidden" name="target" value="{{ r.ref }}">{% endcall %}
+{% elif r.can_consent and not r.preparing %}{% call m.confirm_dialog('stop-' ~ id, '사용 그만두기', '이 MCP 서버 사용을 그만둡니다', '내 사용 권한만 해제됩니다. 서버 승인은 그대로 있고 다른 사람은 계속 쓸 수 있습니다. 되돌리려면 이 목록에서 「다시 사용하기」를 누르십시오.', '/staff/servers/stop', actor, '사용 그만두기', trigger_class=trigger_class) %}<input type="hidden" name="target" value="{{ r.ref }}">
+{% if r.local %}<div class="muted">내 PC에 설치된 로컬 MCP 항목은 다음 동기화 때 빠집니다. 그 전에도 호출은 막힙니다.</div>{% endif %}
+{% endcall %}{% endif %}
+{% endmacro %}
 <h1>내 MCP 서버</h1>
 <div class="actions"><a class="button primary" href="/staff/intakes/new">MCP 서버 신청</a></div>
 <div class="cards">
-  {{ m.kpi('승인됨', rows | length) }}
+  {{ m.kpi('승인됨', rows | rejectattr('stopped') | rejectattr('preparing') | list | length) }}
   {{ m.kpi('도구 발견', rows | selectattr('seen') | list | length) }}
   {{ m.kpi('동의 필요', need, level='wait' if need) }}
   {{ m.kpi('만료 임박(7일)', expiring, level='wait' if expiring) }}
@@ -25,15 +31,19 @@
 {% for r in catalog %}<article class="catalog-card">
 <h2><a href="/staff?open={{ r.ref | urlencode }}">{{ r.server_name }}</a></h2>
 <div class="muted">{{ r.org_name }}</div>
-<div>{{ m.badge(L.CONSENT_STATE, r.state) }}</div>
-<div>{{ ('도구 발견 ' ~ (r.seen | when)) if r.seen else ('시작 실패' if r.start_failed else '승인됨') }}</div>
+<div>{% if r.stopped %}<span class="badge off">사용 그만둠</span>{% elif r.preparing %}<span class="badge wait">준비 중</span>{% else %}{{ m.badge(L.CONSENT_STATE, r.state) }}{% endif %}</div>
+<div>{% if r.preparing %}승인됐고 도구를 확인하는 중입니다{% else %}{{ ('도구 발견 ' ~ (r.seen | when)) if r.seen else ('시작 실패' if r.start_failed else '승인됨') }}{% endif %}</div>
 <dl class="detail"><dt>도구</dt><dd>{{ (r.tools | join) or '—' }}</dd><dt>승인 만료</dt><dd>{{ r.valid_until | when if r.valid_until else '기한 없음' }}</dd></dl>
-<div class="actions"><a class="button" href="/staff?open={{ r.ref | urlencode }}">{{ '동의 확인' if r.state == 'none' else 'MCP 서버 보기' }}</a></div>
+<div class="actions"><a class="button" href="/staff?open={{ r.ref | urlencode }}">{{ '동의 확인' if r.state == 'none' and not r.stopped and not r.preparing else 'MCP 서버 보기' }}</a>
+{% if r.preparing and r.progress %}<a class="button" href="{{ r.progress }}">진행 상황 보기</a>{% endif %}
+{{ stop_use(r, loop.index, '') }}</div>
 </article>{% endfor %}</div>
 {% elif search %}{{ m.empty('조건에 맞는 MCP 서버가 없습니다', '/staff', '검색 지우기') }}
 {% else %}{% if pending_calls %}<p>처리 대기 중인 호출 요청이 {{ pending_calls }}건 있습니다. <a href="/staff/confirmations?tab=mine">요청 상태 확인</a></p>{% endif %}{{ m.empty('쓸 수 있는 MCP 서버가 없습니다', '/staff/intakes/new', 'MCP 서버 신청') }}{% endif %}
 {% endif %}
 {% if selected %}{% call m.drawer(selected.server_name, '/staff', has_input=selected.can_consent) %}
+{% if selected.stopped %}<div class="muted">내가 사용을 그만둔 MCP 서버입니다. 서버 승인은 그대로이고 다른 사람에게는 영향이 없습니다.</div>
+{% elif selected.preparing %}<div class="muted">승인됐고 도구를 확인하는 중입니다. 도구가 확인되면 여기서 바로 쓸 수 있습니다.{% if selected.progress %} <a href="{{ selected.progress }}">진행 상황 보기</a>{% endif %}</div>{% endif %}
 <dl class="detail">
   <dt>조직</dt><dd>{{ selected.org_name }}</dd>
   <dt>전송</dt><dd>{{ L.pick(L.TRANSPORT, selected.transport) if selected.transport else '—' }}</dd>
@@ -42,6 +52,7 @@
   <dt>도구</dt><dd>{{ (selected.tools | join) or '—' }}</dd>
   <dt>승인 만료</dt><dd>{{ selected.valid_until | when if selected.valid_until else '—' }}</dd>
 </dl>
+<div class="actions">{{ stop_use(selected, 'open') }}</div>
 {% if selected.consents %}
 <h3>동의 내역</h3>
 <table><thead><tr><th>목적</th><th>범위</th><th>유효 기간</th><th>상태</th><th></th></tr></thead><tbody>
@@ -52,7 +63,7 @@
 </tr>{% endfor %}
 </tbody></table>
 {% endif %}
-{% if selected.can_consent %}
+{% if selected.can_consent and not selected.stopped %}
 <h3>동의 등록</h3>
 <form method="post" action="/staff/consents" class="form">
   {{ m.csrf(actor) }}<input type="hidden" name="text_version" value="{{ text_version }}"><input type="hidden" name="target" value="{{ selected.ref }}">

@@ -584,6 +584,7 @@ EVENT_KIND = {
     "policy_shadow_set": "정책 시험 적용 시작",
     "policy_shadow_cleared": "정책 시험 적용 취소",
     "endpoint_remediated": "단말 항목 자동 제거",
+    "endpoint_revoked": "단말 연결 해제",
     "backup_created": "백업 생성",
     "backup_restored": "백업 복원",
     "config_exported": "설정 내보내기",
@@ -691,6 +692,9 @@ NOTICES = {
     "consent_given": "동의를 등록했습니다.",
     "consent_withdrawn": "동의를 철회했습니다.",
     "kit_revoked": "단말 연결을 해제했습니다.",
+    "server_stopped": "사용을 그만뒀습니다. 다시 쓰려면 「다시 사용하기」를 누르십시오.",
+    "server_resumed": "이 MCP 서버를 다시 사용할 수 있습니다.",
+    "endpoint_revoked": "단말 연결을 해제했습니다.",
     "alert_acknowledged": "경보를 확인 처리했습니다.",
 }
 

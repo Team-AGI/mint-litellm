@@ -991,3 +991,75 @@ def test_my_usage_page_shows_only_my_own_calls(sworld):
     )
     page = logged_in(sworld).get("/staff/usage").text
     assert "내 사용량" in page and "hidden-server" not in page and "someone-else" not in page
+
+
+# --- 사용 그만두기 · 준비 중 ----------------------------------------------------------------
+
+
+def post_to(client, action, target):
+    return client.post(f"/staff/servers/{action}", data={"csrf": csrf(client), "target": target})
+
+
+def denials_of(world, user=STAFFER):
+    return world.query("SELECT server_id, created_by, lifted_at, tools FROM mint.denials"
+                       " WHERE scope_type = 'user' AND scope_id = %s", user)
+
+
+def test_a_staff_member_stops_using_a_server_and_takes_it_back(sworld):
+    add_approval(sworld, "user", STAFFER, tools=("echo",))
+    client = logged_in(sworld)
+    page = client.get("/staff").text
+    assert "사용 그만두기" in page and "/staff/servers/resume" not in page
+    response = post_to(client, "stop", "acme|srv-ok")
+    assert response.status_code == 303 and "ok=server_stopped" in response.headers["location"]
+    ((server, by, lifted, tools),) = denials_of(sworld)
+    assert (server, by, lifted, tools) == ("srv-ok", STAFFER, None, None)
+    assert sworld.query("SELECT count(*) FROM mint.approvals WHERE status = 'active'")[0][0] == 1
+    assert sworld.query("SELECT kind, actor FROM mint.events WHERE kind = 'denial_created'") == [
+        ("denial_created", STAFFER)]
+    stopped = client.get("/staff").text
+    assert "사용 그만둠" in stopped and "/staff/servers/resume" in stopped
+    # 두 번 눌러도 거부는 하나뿐이다.
+    post_to(client, "stop", "acme|srv-ok")
+    assert len(denials_of(sworld)) == 1
+    back = post_to(client, "resume", "acme|srv-ok")
+    assert "ok=server_resumed" in back.headers["location"]
+    assert denials_of(sworld)[0][2] is not None
+    assert "사용 그만둠" not in client.get("/staff").text
+
+
+def test_stopping_use_does_not_touch_other_people_or_admin_denials(sworld):
+    add_approval(sworld, "org", "acme", tools=("echo",))
+    sworld.query(
+        "INSERT INTO mint.denials (id, instance_id, org_id, scope_type, scope_id, server_id,"
+        " reason, created_by) VALUES (gen_random_uuid(), %s, 'acme', 'user', %s, 'srv-ok',"
+        " '관리자 차단', 'root')", INSTANCE, OTHER)
+    mine = logged_in(sworld)
+    post_to(mine, "stop", "acme|srv-ok")
+    assert len(denials_of(sworld)) == 1 and len(denials_of(sworld, OTHER)) == 1
+    other = logged_in(sworld, OTHER_KEY)
+    assert "echo" not in other.get("/staff").text  # 다른 사람의 관리자 차단은 그대로
+    post_to(other, "resume", "acme|srv-ok")
+    assert denials_of(sworld, OTHER)[0][2] is None  # 관리자가 건 거부는 본인이 풀 수 없다
+
+
+def test_stopping_use_is_refused_for_a_server_outside_the_organization(sworld):
+    client = logged_in(sworld)
+    response = post_to(client, "stop", "acme|nothing")
+    assert response.status_code == 403 and denials_of(sworld) == []
+
+
+def test_an_approved_server_without_tools_is_preparing_only_for_its_requester(sworld):
+    import json
+
+    readiness = json.dumps({"credential_notice": True, "revocation_record": True,
+                            "audit_access_days": 30})
+    sworld.query(
+        "INSERT INTO mint.intakes (id, instance_id, org_id, server_id, source, purpose,"
+        " data_grade, allowed_resources, provider, owner_user_id, readiness, data_return_terms,"
+        " requested_by) VALUES (gen_random_uuid(), %s, 'acme', 'srv-ok', 'staff', '시험',"
+        " 'internal', %s, 'p', %s, %s, '반환', %s)",
+        INSTANCE, json.dumps(["docs"]), STAFFER, readiness, STAFFER)
+    page = logged_in(sworld).get("/staff")
+    assert "준비 중" in page.text and "진행 상황 보기" in page.text
+    assert "준비 중" not in logged_in(sworld, OTHER_KEY).get("/staff").text

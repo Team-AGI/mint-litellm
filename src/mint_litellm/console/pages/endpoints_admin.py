@@ -1,5 +1,6 @@
 """엔드포인트·운영자·조직 화면."""
 
+import logging
 import os
 import re
 from datetime import UTC, datetime, timedelta
@@ -14,14 +15,17 @@ from mint_litellm.console.pages.common import act
 from mint_litellm.console.templating import render
 from mint_litellm.control import config_transfer, directory, endpoint_kits, org_suggest, siem
 from mint_litellm.control.db.connection import fetchall, fetchone
-from mint_litellm.control.errors import AdminCode, AdminError
+from mint_litellm.control.errors import AdminCode, AdminError, ControlError
+from mint_litellm.control.litellm_admin import LiteLLMError
 from mint_litellm.control.operators import SERVICE_ACCOUNTS
 from mint_litellm.control.services import operators as operator_service
 from mint_litellm.control.services import orgs as org_service
 from mint_litellm.control.services import reads
+from mint_litellm.control.services.base import transact
 from mint_litellm.types.cli_commands import OperatorRole
 from mint_litellm.types.events import EventKind
 
+log = logging.getLogger(__name__)
 router = APIRouter(dependencies=[Depends(require_csrf)])
 
 
@@ -83,6 +87,10 @@ def endpoint_view(rows: list[dict], mcp: list[dict], now: datetime) -> dict:
 
 @router.get("/endpoints")
 def endpoints(request: Request, actor: Actor = Depends(page_actor)):
+    return endpoints_page(request, actor)
+
+
+def endpoints_page(request: Request, actor: Actor, error=None, status=200):
     view = endpoint_view(
         endpoint_kits.installs(actor.conn, actor.instance),
         endpoint_kits.local_mcp_inventory(actor.conn, actor.instance),
@@ -103,8 +111,37 @@ def endpoints(request: Request, actor: Actor = Depends(page_actor)):
     opened = request.query_params.get("open")
     selected = next((r for r in view["rows"] if r["ref"] == opened), None) if opened else None
     ctx = {**view, "tab": tab, "state": state if state in STATES else "", "STATES": STATES,
-           "VIOLATIONS": VIOLATIONS, "selected": selected, "kind": kind}
-    return render(request, "endpoints.html", ctx, actor=actor)
+           "VIOLATIONS": VIOLATIONS, "selected": selected, "kind": kind,
+           "error": error}
+    return render(request, "endpoints.html", ctx, actor=actor, status=status)
+
+
+@router.post("/endpoints/revoke")
+def revoke_endpoint(
+    request: Request, user_id: str = Form(...), reason: str = Form(""),
+    actor: Actor = Depends(page_actor),
+):
+    """사용자의 단말 연결을 해제한다(분실·퇴사). 직원 본인의 해제와 같은 키 폐기를 쓴다."""
+    issuer = actor.config.kit_issuer
+
+    def action():
+        if actor.role != "admin":
+            raise AdminError(AdminCode.FORBIDDEN, "관리자만 단말 연결을 해제할 수 있습니다.")
+        if issuer is None:
+            raise ControlError("단말 연결을 해제할 수 없습니다.")
+        with transact(actor.ctx):
+            try:
+                count = endpoint_kits.revoke_keys(actor.conn, issuer, actor.instance, user_id)
+            except LiteLLMError:
+                log.exception("단말 설치 묶음 키 해제 실패")
+                raise ControlError("단말 연결을 해제하지 못했습니다.") from None
+            actor.ctx.emit(
+                EventKind.ENDPOINT_REVOKED, user_id, int(datetime.now(UTC).timestamp()),
+                {"user_id": user_id, "installs": count, "reason": reason.strip()[:500]},
+            )
+
+    return act(actor, action, "endpoint_revoked", "/endpoints?tab=installs",
+               lambda **kw: endpoints_page(request, actor, **kw))
 
 
 # --- 운영자·조직 -------------------------------------------------------------------------------

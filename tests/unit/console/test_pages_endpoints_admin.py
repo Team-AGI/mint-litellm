@@ -224,3 +224,45 @@ def test_siem_tab_shows_status_and_requests_a_test_for_admins_only(world, admin)
     assert form_post(world, admin, "/admin/siem/main/test").status_code == 303
     sql = "SELECT test_requested_at IS NOT NULL FROM mint.siem_targets WHERE name = 'main'"
     assert world.query(sql)[0][0] is True
+
+
+class Issuer:
+    def __init__(self):
+        self.deleted = []
+
+    def delete_kit_keys(self, aliases):
+        self.deleted.append(list(aliases))
+
+
+def test_an_admin_disconnects_an_endpoint_and_the_event_is_recorded(world, fleet):
+    import dataclasses
+
+    issuer = Issuer()
+    world.app.state.config = dataclasses.replace(world.config, kit_issuer=issuer)
+    html = fleet.get("/endpoints?tab=installs").text
+    link = re.search(r'href="(/endpoints\?tab=installs&open=[^"]*ok-1[^"]*)"', html)
+    drawer = fleet.get(link[1]).text
+    assert "연결 해제" in drawer and 'name="user_id" value="ok-1"' in drawer
+    assert "해제 사유(선택)" in drawer
+    response = form_post(world, fleet, "/endpoints/revoke", user_id="ok-1", reason="분실")
+    assert response.status_code == 303 and "ok=endpoint_revoked" in response.headers["location"]
+    assert issuer.deleted == [["kit-ok-1"]]
+    assert world.query("SELECT revoked_at IS NOT NULL FROM mint.endpoint_installs"
+                       " WHERE user_id = 'ok-1'") == [(True,)]
+    ((actor, payload),) = world.query(
+        "SELECT actor, payload FROM mint.events WHERE kind = 'endpoint_revoked'")
+    assert actor == "admin" and payload["user_id"] == "ok-1" and payload["reason"] == "분실"
+    # 이미 해제된 사용자는 같은 화면에 오류를 보인다.
+    again = form_post(world, fleet, "/endpoints/revoke", user_id="ok-1")
+    assert again.status_code == 400 and "해제할 단말 연결이 없습니다" in again.text
+
+
+def test_only_an_admin_disconnects_an_endpoint(world, fleet):
+    import dataclasses
+
+    issuer = Issuer()
+    world.app.state.config = dataclasses.replace(world.config, kit_issuer=issuer)
+    viewer = world.session_client("viewer")
+    assert form_post(world, viewer, "/endpoints/revoke", user_id="ok-1").status_code == 403
+    assert issuer.deleted == []
+    assert "/endpoints/revoke" not in viewer.get("/endpoints?tab=installs&open=x").text
