@@ -1,0 +1,1 @@
+- 새 설치에서 기본 관리자 root가 만들어지지 않던 문제를 고쳤다. 첫 운영자 생성(bootstrap)이 배포가 먼저 만드는 서비스 계정(`mint-control`·`mint-kit-issuer`)을 운영자로 세어 거절했다.

@@ -20,6 +20,8 @@ from mint_litellm.types.cli_commands import APPROVER_UP, OperatorRole
 from mint_litellm.types.events import EventKind
 
 TOKEN_PREFIX = "mint_"
+# 배포(mint.sh up)가 만드는 서비스 계정. 사람 운영자 수에 세지 않는다.
+SERVICE_ACCOUNTS = ("mint-control", "mint-kit-issuer")
 # 사람 사용자로 인정하는 LiteLLM 역할. 최종 사용자(customer)와 서비스 계정은 제외한다.
 HUMAN_ROLES = frozenset(
     {"proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "org_admin"}
@@ -138,10 +140,12 @@ def bootstrap(
     user_id: str,
     emitted: list | None = None,
 ) -> str:
-    """운영자가 하나도 없을 때만 토큰 없이 첫 admin을 만든다."""
+    """사람 운영자가 없을 때만 토큰 없이 첫 admin을 만든다(배포 서비스 계정은 세지 않는다)."""
     conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"mint-bootstrap:{instance_id}",))
     existing = fetchone(
-        conn, "SELECT count(*) AS n FROM mint.operators WHERE instance_id = %s", (instance_id,)
+        conn,
+        "SELECT count(*) AS n FROM mint.operators WHERE instance_id = %s AND name <> ALL(%s)",
+        (instance_id, list(SERVICE_ACCOUNTS)),
     )
     if existing["n"]:
         raise ControlError("운영자가 이미 있어 bootstrap을 실행할 수 없습니다.")

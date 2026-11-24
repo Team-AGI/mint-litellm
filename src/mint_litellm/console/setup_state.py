@@ -7,6 +7,7 @@ from mint_litellm.console.core import Actor, can
 from mint_litellm.console.labels import Status
 from mint_litellm.control import status as control_status
 from mint_litellm.control.db.connection import fetchone
+from mint_litellm.control.operators import SERVICE_ACCOUNTS
 
 DONE = Status("완료", "ok")
 OPEN = Status("미완료", "wait")
@@ -16,10 +17,6 @@ INSTALL_COMMANDS = (
     ("리눅스", "tar -xzf mint-kit.tar.gz && ./install.sh"),
     ("윈도우", "install.cmd"),
 )
-
-
-# 배포가 만드는 서비스 계정. 사람 운영자 수에 세지 않는다.
-SERVICE_ACCOUNTS = ["mint-control", "mint-kit-issuer"]
 
 
 def _count(actor: Actor, sql: str, *args) -> int:
@@ -124,7 +121,7 @@ def _approval_flow(actor: Actor) -> dict:
         " AND role IN ('admin', 'approver') AND name <> 'root'"
         " AND name <> ALL(%s) AND coalesce(user_id, '') <> ALL(%s)"
         " AND (expires_at IS NULL OR expires_at > now())",
-        SERVICE_ACCOUNTS, SERVICE_ACCOUNTS,
+        list(SERVICE_ACCOUNTS), list(SERVICE_ACCOUNTS),
     ) == 0
     approvers = _count(
         actor,

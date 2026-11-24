@@ -33,6 +33,15 @@ def test_bootstrap_only_works_on_an_empty_table_and_records_the_actor(conn, lite
         operators.bootstrap(conn, INSTANCE, litellm, "boss2", "human-1")
 
 
+def test_bootstrap_ignores_the_deploy_service_accounts(conn, litellm):
+    # 새 설치는 root보다 서비스 계정(제어 평면·키트 발급)을 먼저 만든다.
+    for name in operators.SERVICE_ACCOUNTS:
+        operators._insert(conn, INSTANCE, "deploy", name, OperatorRole.ADMIN, name, None, None)
+    assert operators.bootstrap(conn, INSTANCE, litellm, "root", "human-1")
+    with pytest.raises(ControlError, match="이미 있어"):
+        operators.bootstrap(conn, INSTANCE, litellm, "boss2", "human-1")
+
+
 def test_bootstrap_on_another_instance_is_independent(conn, litellm):
     operators.bootstrap(conn, INSTANCE, litellm, "boss", "human-1")
     operators.bootstrap(conn, "inst2", litellm, "boss", "human-1")
