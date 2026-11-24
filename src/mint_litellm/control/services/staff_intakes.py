@@ -193,3 +193,26 @@ def observed(sctx: staff.StaffContext) -> dict:
                     " WHERE t.instance_id=%s AND i.user_id=%s AND i.revoked_at IS NULL"
                     " GROUP BY t.server_id", (sctx.instance_id, sctx.user_id))
     return {r["server_id"]: r["at"] for r in rows}
+
+
+def probe(url: str, ports: tuple[int, ...], allowlists: list[dict], client) -> dict:
+    """제출 전 「주소 확인」: 신청과 같은 주소 검사를 통과한 주소에만 도구 목록을 짧게 요청한다.
+
+    형식 오류는 ``ControlError``. 주소 검사에 걸리면 state blocked(``reason`` 코드)이고, 그 밖의
+    결과도 제출을 막지 않고 알리기만 한다: ok(도구 수 ``tools``)·auth·fail·unknown.
+    """
+    from mint_litellm.control import intake_checks as checks
+
+    payload, _ = validate({"url": url, "purpose": "주소 확인"}, ports)
+    guard = checks.url_guard(payload["url"], payload["transport"], allowlists, ports)
+    if guard.result != "pass":
+        return {"state": "blocked", "tools": 0, "reason": guard.reason}
+    try:
+        out = checks.definitions(
+            client, {"url": payload["url"], "transport": payload["transport"], "auth_type": "none"})
+    except ControlError:
+        return {"state": "unknown", "tools": 0}
+    if out.result == "pass":
+        return {"state": "ok", "tools": out.inputs.get("tools", 0)}
+    state = {"CREDENTIALS_REQUIRED": "auth", "COLLECTION_FAILED": "fail"}.get(out.reason, "unknown")
+    return {"state": state, "tools": 0}
