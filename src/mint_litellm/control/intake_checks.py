@@ -22,7 +22,7 @@ from mint_litellm.control.db.connection import fetchone
 from mint_litellm.control.litellm_admin import LiteLLMError
 from mint_litellm.control.litellm_control import ResponseTooLarge, ResponseTooSlow
 from mint_litellm.control.packs import PackError
-from mint_litellm.types.exec_contract import ExecContract, FileAccess, PackRef
+from mint_litellm.types.exec_contract import ExecContract, FileAccess, NpmRef, PackRef
 
 CHECKS = (
     "url_guard",
@@ -560,6 +560,8 @@ def supply_chain(image_digest: str | None, source_commit: str | None) -> Outcome
 _PACK_NAME = re.compile(r"^[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*$")
 _PACK_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.!+_-]*$")
 _COMMAND = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_NPM_NAME = re.compile(r"^(?:@[a-z0-9][a-z0-9._-]{0,100}/)?[a-z0-9][a-z0-9._-]{0,100}$")
+_INTEGRITY = re.compile(r"^sha512-[A-Za-z0-9+/]{86}==$")
 MAX_ARGV = 32
 MAX_ARG_CHARS = 1024
 
@@ -572,8 +574,13 @@ def exec_shape(spec: Any) -> Outcome:
     name, version, command = spec.get("name"), spec.get("version"), spec.get("command")
     argv, extras = spec.get("argv", []), spec.get("extras", [])
     inputs = {"argv": len(argv) if isinstance(argv, list) else None}
-    if not (isinstance(name, str) and len(name) <= 128 and _PACK_NAME.fullmatch(name)):
+    npm = spec.get("index") == "npm"
+    if not (isinstance(name, str) and len(name) <= 128
+            and (_NPM_NAME if npm else _PACK_NAME).fullmatch(name)):
         return Outcome("fail", "NAME_INVALID", method, inputs)
+    if npm and not (isinstance(spec.get("integrity"), str)
+                    and _INTEGRITY.fullmatch(spec["integrity"])):
+        return Outcome("fail", "VERSION_INVALID", method, inputs)
     if not (isinstance(version, str) and len(version) <= 64 and _PACK_VERSION.fullmatch(version)):
         return Outcome("fail", "VERSION_INVALID", method, inputs)
     if not (isinstance(command, str) and len(command) <= 64 and _COMMAND.fullmatch(command)):
@@ -645,6 +652,28 @@ def inspection_outcome(result: dict) -> Outcome:
     digest = sha256_hex(jcs(sorted(sha256_hex(jcs(d)) for d in defs)))
     return Outcome("pass", None, method, {"tools": len(defs), "bytes": len(jcs(tools))},
                    "inspector:tools_list", digest, {"definitions": defs})
+
+
+def npm_exec_contract(spec: dict, legacy_network: bool = False) -> dict:
+    """npm 출처의 실행 계약(판 3): ``npx -y 이름@판본``과 레지스트리 무결성 해시. 묶음은 없다."""
+    network = spec.get("network")
+    if legacy_network and network == "none":
+        network = None
+    try:
+        return ExecContract(
+            schema_version=3,
+            executable="npx",
+            npm=NpmRef(name=spec["name"], version=spec["version"], integrity=spec["integrity"],
+                       bin=spec["command"]),
+            argv=("-y", f"{spec['name']}@{spec['version']}", *spec.get("argv", [])),
+            env=dict(spec.get("env") or {}),
+            file_access=tuple(FileAccess(path=f["path"], mode=f.get("mode", "ro"))
+                              for f in spec.get("file_access") or []),
+            network=network,
+            allowed_hosts=tuple(spec.get("allowed_hosts") or []),
+        ).document()
+    except (ValueError, KeyError, TypeError):
+        raise PackError("EXEC_CONTRACT_INVALID") from None
 
 
 def local_exec_contract(spec: dict, digest: str, manifest: dict, executable: str,

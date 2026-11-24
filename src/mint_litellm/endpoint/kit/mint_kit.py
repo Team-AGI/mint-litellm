@@ -4361,13 +4361,61 @@ def repo_command(url: str, fetch=None) -> list[str]:
     raise AddError("실행 명령을 찾지 못했습니다. " + HAND_ADD)
 
 
-def parse_command(tokens: list[str], home: Path) -> dict:
-    """``uvx``·``pipx run``·``python -m`` 명령을 신청 명세로 바꾼다. 실행하지 않는다."""
+NPM_REF = re.compile(
+    r"^((?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*)(?:@([A-Za-z0-9][A-Za-z0-9._+-]{0,63}))?$")
+NPM_INTEGRITY = re.compile(r"^sha512-[A-Za-z0-9+/]{86}==$")
+BIN_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def npm_command_spec(rest: list[str], fetch=None) -> dict:
+    """``npx -y 이름[@판본] [인자]``를 레지스트리의 정확한 판본과 dist.integrity로 고정한 명세로."""
+    rest = list(rest)
+    while rest and rest[0] in ("-y", "--yes"):
+        rest.pop(0)
+    if not rest or rest[0].startswith("-"):
+        raise AddError("패키지 이름이 없거나 지원하지 않는 옵션입니다: npx -y 패키지@판본")
+    found = NPM_REF.match(rest[0])
+    if not found:
+        raise AddError("npm 패키지는 `이름` 또는 `이름@판본` 형태로 적으십시오")
+    name, argv = found.group(1), rest[1:]
+    if len(argv) > MAX_ARGV or any(len(a) > 4096 or chr(0) in a for a in argv):
+        raise AddError("인자가 너무 많거나 깁니다")
+
+    def get(address: str):
+        request = urllib.request.Request(address, headers={"User-Agent": "mint-kit"})
+        with urllib.request.urlopen(request, timeout=8) as response:  # noqa: S310
+            return response.read(1_000_000)
+
+    try:
+        doc = json.loads((fetch or get)(
+            f"https://registry.npmjs.org/{urllib.parse.quote(name, safe='@/')}/"
+            f"{urllib.parse.quote(found.group(2) or 'latest')}"))
+        version, integrity = doc["version"], doc["dist"]["integrity"]
+    except urllib.error.HTTPError as exc:
+        raise AddError("npm 레지스트리에 그 패키지·판본이 없습니다" if exc.code == 404
+                       else "npm 레지스트리가 응답하지 않습니다") from None
+    except (OSError, ValueError, KeyError, TypeError):
+        raise AddError("npm 레지스트리에서 판본과 무결성 해시를 가져오지 못했습니다") from None
+    if not (isinstance(version, str) and isinstance(integrity, str)
+            and NPM_INTEGRITY.match(integrity)):
+        raise AddError("npm 레지스트리에 무결성 해시(sha512)가 없습니다")
+    short, bins = name.rsplit("/", 1)[-1], doc.get("bin")
+    keys = [k for k in bins if isinstance(k, str)] if isinstance(bins, dict) else []
+    command = short if short in keys or not keys else keys[0]
+    return {"index": "npm", "name": name, "version": version, "integrity": integrity,
+            "extras": [], "command": command if BIN_NAME.match(command) else short,
+            "argv": argv}  # fmt: skip
+
+
+def parse_command(tokens: list[str], home: Path, fetch=None) -> dict:
+    """``uvx``·``pipx run``·``npx``·``python -m`` 명령을 신청 명세로 바꾼다. 실행하지 않는다."""
     if not tokens:
         raise AddError("실행할 명령을 적으십시오")
     exe = re.sub(r"\.(exe|cmd|bat)$", "", tokens[0].replace("\\", "/").rsplit("/", 1)[-1].lower())
     rest = list(tokens[1:])
     origin_flag = ""
+    if exe == "npx":
+        return npm_command_spec(rest, fetch)
     if exe == "uvx" or (exe == "uv" and rest[:2] == ["tool", "run"]):
         rest = rest[2:] if exe == "uv" else rest
         origin_flag = "--from"
@@ -4657,6 +4705,7 @@ def run_add(
             return 2
         package = spec["name"] + (f"[{','.join(spec['extras'])}]" if spec["extras"] else "")
         package = (f"{spec['git']}@{spec['version'][:12]}" if spec["index"] == "git"
+                   else f"{package}@{spec['version']}" if spec["index"] == "npm"
                    else f"{package}=={spec['version']}")
         rows = [
             ("이름", server_id), ("패키지", package),

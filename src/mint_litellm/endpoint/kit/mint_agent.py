@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import hashlib
 import http.client
 import ipaddress
@@ -183,7 +184,9 @@ def observed_contract(approved: Mapping[str, Any], fd: int | None = None) -> dic
     try:
         contract = {k: v for k, v in approved.items() if k != "identity_kind"}
         # 2판 묶음은 시작 검증에서 확인하는 pack 해시로 식별한다.
-        if approved.get("pack") is None or approved.get("executable_sha256") is not None:
+        # npm 계약(3판)은 레지스트리 무결성 해시로 식별한다(시작 검증이 tarball을 확인한다).
+        if approved.get("npm") is None and (
+                approved.get("pack") is None or approved.get("executable_sha256") is not None):
             contract["executable_sha256"] = (
                 sha256_file(approved["executable"]) if fd is None else sha256_fd(fd)
             )
@@ -1138,6 +1141,83 @@ def verify_pack(
         **approved, "executable": runtime,
         "argv": ["-I", "-B", "-c", code, *(approved.get("argv") or [])], "_pack_dir": folder,
     }
+
+
+# --- npm 레지스트리 서버(3판 계약) ----------------------------------------------------------
+# 승인된 ``이름@판본``의 tarball을 레지스트리에서 받아 dist.integrity(sha512)와 같을 때만 쓴다.
+# 시작 때마다 받아 둔 파일을 다시 해시해 확인하고 ``npx -y --package=<tarball> <bin>``으로 시작한다.
+# 한계: 의존 패키지는 npm이 잠금 파일 없이 풀므로 무결성 해시로 고정되지 않는다.
+NPM_REGISTRY = "https://registry.npmjs.org"
+NPM_DIR = "npm"
+NPM_NAME = re.compile(r"^(@[a-z0-9][a-z0-9._-]{0,100}/)?[a-z0-9][a-z0-9._-]{0,100}$")
+NPM_VERSION = re.compile(
+    r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$")
+NPM_INTEGRITY = re.compile(r"^sha512-[A-Za-z0-9+/]{86}==$")
+NPM_BIN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$")
+NPM_MAX_BYTES = 100 * 1024 * 1024
+
+
+def npm_integrity(data: bytes) -> str:
+    return "sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode()
+
+
+def npm_download(name: str, version: str) -> bytes:
+    url = f"{NPM_REGISTRY}/{name}/-/{name.rsplit('/', 1)[-1]}-{version}.tgz"
+    try:
+        with urllib.request.urlopen(url, timeout=60) as response:  # noqa: S310 (고정 호스트)
+            data = response.read(NPM_MAX_BYTES + 1)
+    except (OSError, ValueError) as exc:
+        raise Refuse(f"npm package cannot be downloaded ({type(exc).__name__})") from exc
+    if len(data) > NPM_MAX_BYTES:
+        raise Refuse("npm package is too large")
+    return data
+
+
+def verify_npm(
+    approved: Mapping[str, Any],
+    *,
+    folder: str,
+    download: Callable[[str, str], bytes] = npm_download,
+    which: Callable[[str], str | None] = shutil.which,
+) -> dict[str, Any]:
+    """npm 계약을 시작 직전에 검증해 실제로 띄울 계약(받아 둔 tarball로 ``npx -y``)을 돌려준다."""
+    ref = approved["npm"]
+    name, version, integrity, bin_name = (
+        ref.get(k) if isinstance(ref, Mapping) else None
+        for k in ("name", "version", "integrity", "bin"))
+    if not (isinstance(name, str) and NPM_NAME.match(name) and isinstance(version, str)
+            and NPM_VERSION.match(version) and isinstance(integrity, str)
+            and NPM_INTEGRITY.match(integrity) and isinstance(bin_name, str)
+            and NPM_BIN.match(bin_name)):
+        raise Refuse("npm contract is malformed")
+    argv = [str(a) for a in approved.get("argv") or []]
+    if argv[:2] != ["-y", f"{name}@{version}"]:
+        raise Refuse("npm contract does not run the approved package")
+    runtime = which("npx")
+    if not runtime:
+        raise Refuse("npx is not installed on this machine")
+    directory = os.path.join(folder, hashlib.sha256(integrity.encode()).hexdigest()[:16])
+    path = os.path.join(directory, "package.tgz")
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read(NPM_MAX_BYTES + 1)
+    except OSError:
+        data = b""
+    if npm_integrity(data) != integrity:  # 받아 둔 것이 없거나 바뀌었으면 다시 받는다
+        data = download(name, version)
+        if npm_integrity(data) != integrity:
+            raise Refuse("npm package differs from the approved integrity")
+        try:
+            os.makedirs(directory, exist_ok=True)
+            temporary = path + ".tmp"
+            with open(temporary, "wb") as handle:
+                handle.write(data)
+            os.replace(temporary, path)
+            os.chmod(path, 0o444)
+        except OSError as exc:
+            raise Refuse(f"npm package cannot be stored ({type(exc).__name__})") from exc
+    launch = ["-y", f"--package={path}", bin_name, *argv[2:]]
+    return {**approved, "executable": runtime, "argv": launch, "_pack_dir": directory}
 
 
 # --- 서버 격리(Linux bubblewrap) ------------------------------------------------------------
@@ -3195,6 +3275,8 @@ def run_server(
             permits_path=os.path.join(os.path.dirname(os.path.abspath(contracts)), PERMITS_FILE),
             managed=bool(sandbox and sandbox.managed),
         )  # fmt: skip
+    elif approved.get("npm") is not None:
+        approved = verify_npm(approved, folder=os.path.join(state_dir or KIT_DIR, NPM_DIR))
     executable = approved["executable"]
     try:
         fd = os.open(executable, os.O_RDONLY | getattr(os, "O_BINARY", 0))

@@ -141,12 +141,13 @@ def _spec(url: str, commit: str, command: str) -> dict:
     if tokens[:1] == ["npx"] and prefix:
         rest = tokens[2:] if tokens[1:2] == ["-y"] else tokens[1:]
         if rest[:1] == [f"{prefix}:{owner}/{repo}#{commit}"]:
-            return {**spec, "index": "npm", "command": repo, "argv": rest[1:]}
+            # 레지스트리 출처가 아니라 커밋 출처이다(npm 출처는 이름@판본과 무결성 해시로 받는다).
+            return {**spec, "index": "git", "command": repo, "argv": rest[1:]}
     example = f"uvx --from git+{base}@{commit} 실행이름"
     raise ControlError(f"실행 명령은 이 커밋을 가리키는 `{example}` 형태여야 합니다.")
 
 
-def build_payload(form: dict) -> dict:
+def build_payload(form: dict, fetch=None) -> dict:
     url, purpose = str(form.get("url", "")).strip(), str(form.get("purpose", "")).strip()
     commit, command = str(form.get("commit", "")).strip().lower(), str(
         form.get("command", "")).strip()
@@ -160,6 +161,14 @@ def build_payload(form: dict) -> dict:
         spec = package_refs.pypi_spec(command, str(form.get("commit", "")).strip())
         if spec is None:
             raise ControlError("실행 명령은 `uvx 패키지==판본` 형태이고 판본이 같아야 합니다.")
+    elif command.startswith("npx") and not staff_intakes.repo_parts(url):
+        try:
+            spec = package_refs.npm_spec(command, str(form.get("commit", "")).strip(),
+                                         fetch or _fetch)
+        except (OSError, ValueError):
+            raise ControlError("패키지 저장소에 연결하지 못했습니다. 다시 시도하십시오.") from None
+        if spec is None:
+            raise ControlError("실행 명령은 `npx -y 패키지@판본` 형태이고 판본이 같아야 합니다.")
     elif not COMMIT.fullmatch(commit):
         raise ControlError("커밋은 40자리 소문자 16진수여야 합니다.")
     if not 1 <= len(purpose) <= 256:

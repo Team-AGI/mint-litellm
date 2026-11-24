@@ -3,9 +3,11 @@
 요청: /scan/<id>/request.json
   {"kind": "git", "repo": "https://github.com/조직/저장소", "commit": "<40자>"}
   {"kind": "wheel", "pack_sha256": "<묶음 해시>", "wheel": "<묶음 안 휠 파일 이름>"}
+  {"kind": "npm", "name": "@범위/이름", "version": "1.2.3", "integrity": "sha512-..."}
 결과: 같은 폴더의 result.json. 비밀 값과 코드 줄은 담지 않는다(규칙·파일·줄 번호만).
 """
 
+import base64
 import hashlib
 import io
 import json
@@ -31,6 +33,9 @@ ALIVE = REQUESTS / ".alive"
 LEVELS = ("critical", "high", "medium", "low", "unknown")
 _SHA = re.compile(r"[0-9a-f]{40}")
 _REPO = re.compile(r"https://github\.com/([A-Za-z0-9._-]{1,100})/([A-Za-z0-9._-]{1,100})")
+_NPM_NAME = re.compile(r"(@[a-z0-9][a-z0-9._-]{0,100}/)?[a-z0-9][a-z0-9._-]{0,100}")
+_NPM_VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?")
+_INTEGRITY = re.compile(r"sha512-[A-Za-z0-9+/]{86}==")
 SEVERITY = {"ERROR": "high", "WARNING": "medium", "INFO": "low"}
 
 
@@ -55,6 +60,11 @@ def _from_git(request: dict, target: Path) -> None:
         data = response.read(MAX_SOURCE + 1)
     if len(data) > MAX_SOURCE:
         raise ScanError("SOURCE_TOO_LARGE")
+    _unpack(data, target)
+
+
+def _unpack(data: bytes, target: Path) -> None:
+    """tar.gz를 풀고 첫 폴더(저장소-커밋·package)는 벗긴다. 링크·장치·윗폴더 탈출은 풀지 않는다."""
     total = 0
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
         members = archive.getmembers()
@@ -63,7 +73,7 @@ def _from_git(request: dict, target: Path) -> None:
         for member in members:
             path = _safe(member.name)
             if path is None or not member.isfile() or len(path.parts) < 2:
-                continue  # 링크·장치·윗폴더 탈출은 풀지 않는다. 첫 폴더(저장소-커밋)는 벗긴다
+                continue
             total += member.size
             if total > MAX_SOURCE:
                 raise ScanError("SOURCE_TOO_LARGE")
@@ -71,6 +81,23 @@ def _from_git(request: dict, target: Path) -> None:
             dest.parent.mkdir(parents=True, exist_ok=True)
             with archive.extractfile(member) as source, dest.open("xb") as output:
                 shutil.copyfileobj(source, output)
+
+
+def _from_npm(request: dict, target: Path) -> None:
+    """레지스트리의 tarball을 받아 신청에 고정된 무결성 해시와 같을 때만 푼다."""
+    name, version = str(request.get("name", "")), str(request.get("version", ""))
+    integrity = str(request.get("integrity", ""))
+    if not (_NPM_NAME.fullmatch(name) and _NPM_VERSION.fullmatch(version)
+            and _INTEGRITY.fullmatch(integrity)):
+        raise ScanError("SOURCE_UNSUPPORTED")
+    url = f"https://registry.npmjs.org/{name}/-/{name.rsplit('/', 1)[-1]}-{version}.tgz"
+    with urllib.request.urlopen(url, timeout=60) as response:  # noqa: S310 (고정 호스트)
+        data = response.read(MAX_SOURCE + 1)
+    if len(data) > MAX_SOURCE:
+        raise ScanError("SOURCE_TOO_LARGE")
+    if "sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode() != integrity:
+        raise ScanError("INTEGRITY_MISMATCH")
+    _unpack(data, target)
 
 
 def _from_wheel(request: dict, target: Path) -> None:
@@ -220,6 +247,8 @@ def handle(request: dict) -> dict:
         try:
             if request.get("kind") == "git":
                 _from_git(request, root)
+            elif request.get("kind") == "npm":
+                _from_npm(request, target=root)
             elif request.get("kind") == "wheel":
                 _from_wheel(request, root)
             else:

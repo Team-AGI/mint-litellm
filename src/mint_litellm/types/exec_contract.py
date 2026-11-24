@@ -15,6 +15,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    ValidationInfo,
     field_validator,
     model_serializer,
     model_validator,
@@ -25,6 +26,9 @@ from mint_litellm.types.decision import ResolvedServer
 
 SCHEMA_VERSION = 1
 _SHA256 = r"^[0-9a-f]{64}$"
+_SEMVER = (r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
+           r"(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$")
+NPX = "npx"  # 3판 실행 파일: 단말이 PATH에서 찾는다
 _DRIVE = re.compile(r"^[A-Za-z]:\\")  # Windows 절대 경로(드라이브 글자로 시작)
 
 
@@ -86,19 +90,32 @@ class PackRef(BaseModel):
     entry: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_]*$", max_length=256)
 
 
+class NpmRef(BaseModel):
+    """npm 레지스트리 패키지의 정확한 판본·dist.integrity(sha512)·bin 이름. 이 값이 정체성이다."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = Field(pattern=r"^(@[a-z0-9][a-z0-9._-]{0,100}/)?[a-z0-9][a-z0-9._-]{0,100}$")
+    version: str = Field(pattern=_SEMVER, max_length=64)
+    integrity: str = Field(pattern=r"^sha512-[A-Za-z0-9+/]{86}==$")
+    bin: str = Field(pattern=r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$")  # 실행할 bin 이름
+
+
 class ExecContract(BaseModel):
     """승인 대상 로컬 서버의 실행 계약. 판본이 바뀌면 필드를 더하고 ``schema_version``을 올린다."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     # 1판: 실행 파일 해시로 식별. 2판: ``pack``의 묶음 해시로 식별(``executable``은 런타임 경로).
-    schema_version: Literal[1, 2] = SCHEMA_VERSION
+    # 3판: npm 레지스트리의 이름@판본과 무결성 해시로 식별(``executable``은 ``npx``, 경로가 아니다).
+    schema_version: Literal[1, 2, 3] = SCHEMA_VERSION
     executable: str = Field(min_length=1, max_length=1024)
     argv: tuple[str, ...] = Field(default=(), max_length=64)
     # 비어 있으면 작업 디렉터리를 비교하지 않는다(하네스가 세션 디렉터리에서 서버를 띄운다).
     cwd: str | None = Field(default=None, min_length=1, max_length=1024)
     executable_sha256: str | None = Field(default=None, pattern=_SHA256)
     pack: PackRef | None = None
+    npm: NpmRef | None = None
     script_sha256: str | None = Field(default=None, pattern=_SHA256)
     env: dict[str, str] = Field(default_factory=dict, max_length=64)
     secret_refs: dict[str, str] = Field(default_factory=dict, max_length=64)
@@ -113,7 +130,10 @@ class ExecContract(BaseModel):
 
     @field_validator("executable", "cwd")
     @classmethod
-    def _absolute_normal_path(cls, value: str | None) -> str | None:
+    def _absolute_normal_path(cls, value: str | None, info: ValidationInfo) -> str | None:
+        if value == NPX and info.field_name == "executable" and info.data.get(
+                "schema_version") == 3:
+            return value
         return value if value is None else _check_path(value)
 
     @field_validator("file_access")
@@ -139,7 +159,13 @@ class ExecContract(BaseModel):
     def _pack_matches_version(self) -> "ExecContract":
         if (self.pack is not None) != (self.schema_version == 2):
             raise ValueError("pack is required with schema_version 2 and only then")
-        if self.pack is None and self.executable_sha256 is None:
+        if (self.npm is not None) != (self.schema_version == 3):
+            raise ValueError("npm is required with schema_version 3 and only then")
+        if self.npm is not None:
+            pinned = ("-y", f"{self.npm.name}@{self.npm.version}")
+            if self.executable != NPX or self.argv[:2] != pinned:
+                raise ValueError("an npm contract runs `npx -y name@version` exactly")
+        elif self.pack is None and self.executable_sha256 is None:
             raise ValueError("executable_sha256 is required without pack")
         return self
 
@@ -154,6 +180,8 @@ class ExecContract(BaseModel):
         data = handler(self)
         if data.get("pack") is None:
             data.pop("pack", None)
+        if data.get("npm") is None:
+            data.pop("npm", None)
         if data.get("executable_sha256") is None:
             data.pop("executable_sha256", None)
         if not data.get("file_access"):

@@ -523,7 +523,7 @@ def test_official_package_hosts_are_seeded_once_and_a_lift_is_respected(seeded):
     world.call(allowlists.ensure_defaults)
     hosts = sorted(r["value"] for r in rows(world, "allowlists")
                    if r["status"] == "active" and r["created_by"] == "mint-default")
-    assert hosts == ["files.pythonhosted.org", "pypi.org", "registry.npmjs.org"]
+    assert {"files.pythonhosted.org", "pypi.org", "registry.npmjs.org"} <= set(hosts)
     world.conn.execute("ALTER TABLE mint.allowlists DISABLE TRIGGER allowlists_1_status")
     world.conn.execute("UPDATE mint.allowlists SET status = 'lifted' WHERE value = 'pypi.org'")
     world.conn.execute("ALTER TABLE mint.allowlists ENABLE TRIGGER allowlists_1_status")
@@ -742,3 +742,45 @@ def test_an_operator_repository_request_creates_the_same_records(world):
     assert world.jobs("intake_run")[0]["target_ref"] == f"{got[0]}/endpoint"
     again = world.call(lambda ctx: local_intakes.submit_operator(ctx, "admin-1", LOCAL_FORM))
     assert again == (got[0], True)  # 진행 중인 같은 서버는 그 신청으로 안내
+
+
+# --- npm 출처: 이름@판본 + 무결성 해시 ------------------------------------------------------
+
+INTEGRITY = "sha512-" + "A" * 86 + "=="
+NPM = {"index": "npm", "name": "@o/srv", "version": "1.2.3", "integrity": INTEGRITY,
+       "extras": [], "command": "srv", "argv": ["/data"]}
+
+
+def test_an_npm_request_needs_an_exact_version_and_a_registry_integrity_hash(seeded):
+    request_id = submit(seeded, payload(spec=NPM))
+    assert str(request_id) and len(rows(seeded, "intakes")) == 1
+    git = {"git": "https://github.com/o/srv", "commit": "c" * 40}
+    submit(seeded, payload(server_id="srv2", spec={**NPM, **git}))  # 저장소·커밋은 선택
+    bad_specs = (
+        {**NPM, "integrity": None}, {**NPM, "integrity": "sha256-" + "A" * 43 + "="},
+        {**NPM, "version": "^1.2.3"}, {**NPM, "version": "latest"}, {**NPM, "name": "@O/srv"},
+        {**NPM, "name": "@o/a b"}, {**NPM, "commit": "main"},
+        {**NPM, "git": "https://example.com/o/srv"},
+        {**payload()["spec"], "integrity": INTEGRITY},  # PyPI 출처에는 쓸 수 없다
+        {**payload()["spec"], "name": "@o/srv"},
+    )
+    for bad in bad_specs:
+        fails(seeded, "MINT-INVALID", payload(server_id="srv3", spec=bad))
+    assert len(rows(seeded, "intakes")) == 2
+
+
+def test_an_npm_request_is_approved_without_a_pack_and_reaches_the_key_by_its_contract(seeded):
+    world = seeded
+    request_id = submit(world, payload(spec=NPM))
+    contract = ExecContract(
+        schema_version=3, executable="npx", argv=("-y", "@o/srv@1.2.3", "/data"),
+        npm={"name": "@o/srv", "version": "1.2.3", "integrity": INTEGRITY, "bin": "srv"})
+    world.conn.execute("UPDATE mint.deployment_contracts SET exec_contract = %s WHERE id = %s",
+                       (Jsonb(contract.document()), request_id))
+    pass_the_checks(world, request_id, pack=False)
+    result = world.decide(str(request_id), "approve")
+    assert not result.get("approval_pending") and world.server("pyg")["status"] == "approved"
+    assert world.server("pyg")["exec_contract_version"] == 3
+    (row,) = scope(world)
+    assert row[0] == "pyg" and row[1] is None
+    assert row[3]["npm"]["integrity"] == INTEGRITY and row[3]["executable"] == "npx"

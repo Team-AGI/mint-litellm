@@ -149,3 +149,71 @@ def test_a_risky_code_scan_is_shown_as_needing_review_but_stays_a_pass():
         "files": 3, "vuln_critical": 0, "vuln_high": 2, "misconfig_high": 1,
         "license_findings": [{}]}})
     assert "취약점 심각 0 높음 2" in summary and "라이선스 주의 1" in summary
+
+
+NPM_SPEC = {"index": "npm", "name": "@o/srv", "version": "1.0.0", "command": "srv",
+            "integrity": "sha512-" + "A" * 86 + "=="}
+
+
+def _registry(root: dict, versions: dict[str, list[str]], integrity: str | None = None):
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/@o/srv/1.0.0":
+            return httpx.Response(200, json={
+                "dist": {"integrity": integrity or NPM_SPEC["integrity"]}, "dependencies": root})
+        name = path.lstrip("/")
+        if name in versions:
+            return httpx.Response(200, json={"versions": {
+                v: {"dist": {"integrity": "sha512-x"}} for v in versions[name]}})
+        return httpx.Response(404)
+    return lambda: httpx.Client(transport=httpx.MockTransport(handler),
+                                base_url="https://registry.test")
+
+
+def test_a_range_resolves_to_the_newest_release_it_allows():
+    pick = source_scan.newest_in
+    seen = ["1.0.0", "1.2.3", "1.9.0", "2.0.0", "2.1.0-beta.1", "0.3.4", "0.3.9", "0.4.0"]
+    assert pick("^1.2.0", seen) == "1.9.0" and pick("~1.2.0", seen) == "1.2.3"
+    assert pick("^0.3.4", seen) == "0.3.9" and pick(">=1 <2", seen) == "1.9.0"
+    assert pick("1.x", seen) == "1.9.0" and pick("*", seen) == "2.0.0"
+    assert pick("1.0.0 - 1.5.0", seen) == "1.2.3" and pick("^0.4.0 || ^2.0.0", seen) == "2.0.0"
+    assert pick("2.1.0-beta.1", seen) is None and pick("github:o/r", seen) is None
+
+
+def test_an_npm_inventory_lists_the_package_and_its_resolved_dependencies():
+    client = _registry({"zod": "^3.0.0", "gone": "^1.0.0"},
+                       {"zod": ["3.1.0", "3.9.1", "4.0.0"], "gone": ["0.1.0"]})
+    inventory = source_scan.npm_inventory(NPM_SPEC, client)
+    assert [(c["name"], c["version"]) for c in inventory["components"]] == [
+        ("@o/srv", "1.0.0"), ("zod", "3.9.1")]
+    assert inventory["unresolved"] == 1
+    outcome = source_scan.sbom_outcome(None, inventory)
+    assert outcome.result == "pass" and outcome.inputs["components"] == 2
+
+
+def test_a_registry_hash_that_differs_from_the_pin_fails_and_an_outage_is_indeterminate():
+    changed = source_scan.npm_inventory(NPM_SPEC, _registry({}, {}, "sha512-" + "B" * 86 + "=="))
+    assert changed == {"error": "INTEGRITY_MISMATCH"}
+    assert source_scan.sbom_outcome(None, changed).result == "fail"
+    assert source_scan.dependency_outcome(None, "https://osv.test", npm=changed).result == "fail"
+    down = source_scan.npm_inventory(NPM_SPEC, lambda: httpx.Client(
+        transport=httpx.MockTransport(lambda r: httpx.Response(503))))
+    assert source_scan.sbom_outcome(None, down).reason == "REGISTRY_UNREACHABLE"
+
+
+def test_npm_dependencies_are_asked_of_the_vulnerability_feed_as_npm_packages():
+    inventory = {"components": [{"name": "@o/srv", "version": "1.0.0", "integrity": None},
+                                {"name": "zod", "version": "3.9.1", "integrity": None}],
+                 "unresolved": 0}
+    feed = _feed({"zod": [{"id": "GHSA-1", "database_specific": {"severity": "CRITICAL"}}]})
+    outcome = source_scan.dependency_outcome(None, "https://osv.test", feed, npm=inventory)
+    assert outcome.result == "fail" and outcome.reason == "CRITICAL_VULNERABILITY"
+    assert outcome.inputs["packages"] == 2 and outcome.inputs["findings"][0]["package"] == "zod"
+
+
+def test_an_npm_source_is_scanned_from_its_commit_or_else_its_tarball():
+    assert source_scan.scan_request(NPM_SPEC, None) == {
+        "kind": "npm", "name": "@o/srv", "version": "1.0.0", "integrity": NPM_SPEC["integrity"]}
+    with_git = {**NPM_SPEC, "git": "https://github.com/o/srv", "commit": "c" * 40}
+    assert source_scan.scan_request(with_git, None) == {
+        "kind": "git", "repo": "https://github.com/o/srv", "commit": "c" * 40}

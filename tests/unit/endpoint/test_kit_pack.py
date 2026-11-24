@@ -364,7 +364,6 @@ def test_a_missing_version_is_found_on_the_machine_or_asked_for(tmp_path, monkey
 @pytest.mark.parametrize(
     "tokens",
     [
-        ("npx", "-y", "x"),
         ("docker", "run", "x"),
         ("uvx", "--with", "y", "x==1"),
         ("uvx",),
@@ -854,3 +853,78 @@ def test_the_decision_version_is_kept_and_sent_back_in_the_report(tmp_path, fold
     assert kit.stored_versions() == {"s": 4}
     assert kit.apply_versions(state, [item], {"s"}) is True  # 빠진 서버는 지운다
     assert kit.stored_versions() == {}
+
+
+# --- npm 신청과 시작 -------------------------------------------------------------------------
+
+NPM_INTEGRITY = "sha512-" + "A" * 86 + "=="
+
+
+def npm_registry(doc):
+    return lambda url: json.dumps(doc).encode()
+
+
+def test_npx_commands_become_npm_specs_pinned_by_version_and_integrity():
+    doc = {"version": "1.2.3", "dist": {"integrity": NPM_INTEGRITY}, "bin": {"srv-bin": "x.js"}}
+    spec = kit_module.parse_command(
+        ["npx", "-y", "@o/srv@1.2.3", "/data"], Path("/nonexistent-home"), npm_registry(doc))
+    assert spec == {"index": "npm", "name": "@o/srv", "version": "1.2.3",
+                    "integrity": NPM_INTEGRITY, "extras": [], "command": "srv-bin",
+                    "argv": ["/data"]}  # fmt: skip
+    for bad in (["npx", "-y", "--registry=x", "srv"], ["npx", "-y"], ["npx", "../x"]):
+        with pytest.raises(kit_module.AddError):
+            kit_module.parse_command(bad, Path("/x"), npm_registry(doc))
+    with pytest.raises(kit_module.AddError):  # 무결성 해시가 없는 판본은 신청하지 않는다
+        kit_module.parse_command(["npx", "srv"], Path("/x"), npm_registry({"version": "1.0.0"}))
+
+
+def npm_contract(**ref):
+    package = {"name": "@o/srv", "version": "1.2.3", "bin": "srv-bin", **ref}
+    return {"executable": "npx", "argv": ["-y", "@o/srv@1.2.3", "/data"],
+            "npm": {"integrity": agent.npm_integrity(b"tarball"), **package}}
+
+
+def test_an_npm_server_starts_from_the_downloaded_tarball_only_when_its_hash_matches(tmp_path):
+    got = agent.verify_npm(npm_contract(), folder=str(tmp_path), which=lambda n: "/usr/bin/npx",
+                           download=lambda name, version: b"tarball")
+    tgz = os.path.join(got["_pack_dir"], "package.tgz")
+    assert got["executable"] == "/usr/bin/npx"
+    assert got["argv"] == ["-y", f"--package={tgz}", "srv-bin", "/data"]
+    assert os.path.dirname(tgz) == got["_pack_dir"]
+    again = agent.verify_npm(npm_contract(), folder=str(tmp_path), which=lambda n: "/x/npx",
+                             download=lambda *a: pytest.fail("cached"))
+    assert again["argv"] == got["argv"]
+    os.chmod(tgz, 0o644)  # 받아 둔 파일이 바뀌면 다시 받는다
+    with open(tgz, "wb") as handle:
+        handle.write(b"tampered")
+    replaced = agent.verify_npm(npm_contract(), folder=str(tmp_path), which=lambda n: "n",
+                                download=lambda *a: b"tarball")
+    assert replaced["_pack_dir"] == got["_pack_dir"]
+    with open(tgz, "rb") as handle:
+        assert handle.read() == b"tarball"
+
+
+def test_an_npm_tarball_that_differs_from_the_approved_hash_is_refused(tmp_path):
+    with pytest.raises(agent.Refuse, match="integrity"):
+        agent.verify_npm(npm_contract(integrity="sha512-" + "B" * 86 + "=="),
+                         folder=str(tmp_path), which=lambda n: "npx",
+                         download=lambda *a: b"tarball")
+
+
+def test_a_malformed_npm_contract_or_a_missing_npx_is_refused(tmp_path):
+    for bad in ({"bin": "../x"}, {"version": "^1.2.3"}, {"name": "A b"}):
+        with pytest.raises(agent.Refuse):
+            agent.verify_npm(npm_contract(**bad), folder=str(tmp_path), which=lambda n: "npx",
+                             download=lambda *a: b"tarball")
+    with pytest.raises(agent.Refuse, match="npx"):
+        agent.verify_npm(npm_contract(), folder=str(tmp_path), which=lambda n: None,
+                         download=lambda *a: b"tarball")
+    other = {**npm_contract(), "argv": ["-y", "@o/srv@9.9.9"]}
+    with pytest.raises(agent.Refuse):
+        agent.verify_npm(other, folder=str(tmp_path), which=lambda n: "npx",
+                         download=lambda *a: b"tarball")
+
+
+def test_an_npm_contract_is_observed_without_an_executable_hash():
+    seen = agent.observed_contract(npm_contract())
+    assert "executable_sha256" not in seen and seen["npm"]["bin"] == "srv-bin"
