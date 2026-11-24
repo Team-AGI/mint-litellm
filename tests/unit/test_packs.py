@@ -159,3 +159,53 @@ def test_pip_runs_from_the_bundled_wheel_when_the_image_has_no_pip(tmp_path, mon
     assert packs._pip()[1:] == ["-m", "pip"]  # 파일이 없으면 설치된 pip
     wheel.write_bytes(b"zip")
     assert packs._pip()[1:] == [str(wheel) + "/pip"]
+
+
+class GitPackTests(unittest.TestCase):
+    """저장소 커밋 출처: 커밋에서 wheel을 만들고 의존 라이브러리는 PyPI에서 받는다."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.allow = [{"kind": "egress_target", "value": h}
+                      for h in ("pypi.org", "files.pythonhosted.org")]
+        self.spec = {"index": "git", "name": "example", "version": "a" * 40, "extras": [],
+                     "git": "https://github.com/org/example", "command": "example", "argv": []}
+        self.allow += [{"kind": "egress_target", "value": h}
+                       for h in ("github.com", "codeload.github.com")]
+        self.urls = []
+
+    def wheel(self, directory):
+        with zipfile.ZipFile(directory / "example-1.0-py3-none-any.whl", "w") as z:
+            z.writestr("example-1.0.dist-info/entry_points.txt",
+                       "[console_scripts]\nexample = pkg:main\n")
+
+    def pack(self, **kwargs):
+        def build(url, directory):
+            self.urls.append(url)
+            self.wheel(directory)
+
+        return packs.build_pack(
+            self.spec, self.allow, packs_dir=self.temp.name, build=build,
+            download=lambda *a: None, metadata=lambda *a: self.fail("PyPI 해시 조회 없음"))
+
+    def test_the_commit_wheel_becomes_a_pack_without_a_pypi_digest(self):
+        digest, manifest = self.pack()
+        self.assertEqual(self.urls, [f"https://github.com/org/example/archive/{'a' * 40}.zip"])
+        self.assertEqual(manifest["package"]["index"], "git")
+        self.assertEqual(manifest["package"]["version"], "a" * 40)
+        self.assertEqual(manifest["entry"], "pkg:main")
+        self.assertEqual([f["name"] for f in manifest["files"]], ["example-1.0-py3-none-any.whl"])
+        self.assertEqual(sorted(p.name for p in Path(self.temp.name).iterdir()), [digest])
+
+    def test_an_unpinned_or_foreign_source_is_not_built(self):
+        for change in ({"version": "main"}, {"git": "https://gitlab.com/org/example"}):
+            self.spec = {**self.spec, **change}
+            with self.assertRaisesRegex(packs.PackError, "PACK_INDEX_NOT_ALLOWED"):
+                self.pack()
+        self.assertEqual(self.urls, [])
+
+    def test_github_hosts_must_be_allowed(self):
+        self.allow = self.allow[:2]
+        with self.assertRaisesRegex(packs.PackError, "PACK_INDEX_NOT_ALLOWED"):
+            self.pack()

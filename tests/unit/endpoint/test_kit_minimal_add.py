@@ -155,3 +155,56 @@ def test_a_prepared_pack_is_not_usable_until_the_runner_has_started_it(tmp_path)
     (base / "called" / "s").write_text("")
     assert kit_module.server_evidence(home, "s") == [True, True, True]
     assert kit_module.server_evidence(home, "other") == [True, False, False]
+
+
+SHA = "e" * 40
+
+
+def repo_fetch(files):
+    def fetch(url):
+        return files[url]
+    return fetch
+
+
+def test_a_repository_address_becomes_a_commit_pinned_local_request(tmp_path, monkeypatch):
+    api = "https://api.github.com/repos/o/ghidra-mcp"
+    raw = f"https://raw.githubusercontent.com/o/ghidra-mcp/{SHA}/"
+    files = {api: b'{"default_branch": "main"}', f"{api}/commits/main": json.dumps(
+        {"sha": SHA}).encode(), raw + "pyproject.toml": b'[project.scripts]\ngm = "g:main"\n'}
+    real = kit_module.repo_command
+    monkeypatch.setattr(kit_module, "repo_command", lambda url: real(url, repo_fetch(files)))
+    code, sent, _ = add(tmp_path, name="https://github.com/o/ghidra-mcp", command=[],
+                        request_id=RID)
+    assert code == 0 and len(sent) == 1
+    body = sent[0]
+    assert body["server_id"] == "ghidra_mcp"
+    assert body["spec"] == {"index": "git", "git": "https://github.com/o/ghidra-mcp",
+                            "name": "ghidra-mcp", "version": SHA, "extras": [],
+                            "command": "gm", "argv": []}
+    assert isinstance(IntakeRequest.model_validate({**body, "request_id": RID}).root, IntakeBody)
+
+
+def test_a_repository_without_a_script_is_refused_in_words(tmp_path, monkeypatch):
+    def fetch(url):
+        if url.endswith("pyproject.toml") or url.endswith("package.json"):
+            raise kit_module.urllib.error.HTTPError(url, 404, "nf", {}, None)
+        return b'{"default_branch": "main", "sha": "' + SHA.encode() + b'"}'
+
+    real = kit_module.repo_command
+    monkeypatch.setattr(kit_module, "repo_command", lambda url: real(url, fetch))
+    code, sent, lines = add(tmp_path, name="https://github.com/o/r", command=[])
+    assert code == 2 and sent == [] and "실행 명령을 찾지 못했습니다" in lines[-1]
+
+
+def test_a_pinned_git_command_is_accepted_and_an_unpinned_one_is_not(tmp_path):
+    code, sent, _ = add(tmp_path, name="gm", command=[
+        "uvx", "--from", f"git+https://github.com/o/ghidra-mcp@{SHA}", "gm", "--x"])
+    assert code == 0 and sent[0]["spec"]["argv"] == ["--x"]
+    code, sent, _ = add(tmp_path, name="gm", command=[
+        "uvx", "--from", "git+https://github.com/o/ghidra-mcp@main", "gm"])
+    assert code == 2 and sent == []
+    spec = {"index": "git", "name": "x", "version": "main", "command": "x",
+            "git": "https://github.com/o/x"}
+    with pytest.raises(ValueError):
+        IntakeRequest.model_validate({"request_id": RID, "server_id": "x", "spec": spec,
+                                      "purpose": "p", "data_grade": "internal"})

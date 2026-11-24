@@ -17,10 +17,11 @@ from mint_litellm.control.services import call_review as review_service
 from mint_litellm.control.services import contracts as contract_service
 from mint_litellm.control.services import denials as denial_service
 from mint_litellm.control.services import evidence as evidence_service
-from mint_litellm.control.services import exception_holds, reads
+from mint_litellm.control.services import exception_holds, local_intakes, reads, staff_intakes
 from mint_litellm.control.services import intake_inspections as inspection_service
 from mint_litellm.control.services import intakes as intake_service
 from mint_litellm.control.services import servers as server_service
+from mint_litellm.control.services.base import require_role
 from mint_litellm.types.contracts import ACTION_DENIAL_PREFIX, DENIABLE_ACTIONS
 
 router = APIRouter(dependencies=[Depends(require_csrf)])
@@ -700,13 +701,45 @@ def create_intake(
     request: Request,
     server_url: str = Form(""),
     purpose: str = Form(...),
+    step: str = Form(""),
+    name: str = Form(""),
+    commit: str = Form(""),
+    command: str = Form(""),
     actor: Actor = Depends(page_actor),
 ):
     form = {"server_url": server_url, "purpose": purpose}
     target = {}
+    if staff_intakes.repo_parts(server_url.strip()):
+        return repo_intake(request, actor, {**form, "url": server_url, "step": step, "name": name,
+                                            "commit": commit, "command": command})
 
     def action():
         target["id"], target["existing"] = intake_submission.submit(actor, server_url, purpose)
+
+    response = act(actor, action, "intake_created", "/intakes",
+                   lambda **kw: intake_new_page(request, actor, form, **kw))
+    if response.status_code == 303:
+        notice = "intake_existing" if target["existing"] else "intake_created"
+        response.headers["location"] = f"/intakes/{target['id']}?ok={notice}"
+    return response
+
+
+def repo_intake(request: Request, actor: Actor, form: dict):
+    """소스 저장소 주소: 확인 단계는 미리보기를 보이고, 제출 단계는 로컬 신청을 만든다."""
+    if form["step"] != "submit":
+        try:
+            form = {**form, **local_intakes.resolve(form["url"]), "step": "submit"}
+        except ControlError as error:
+            return intake_new_page(request, actor, form, error=str(error), status=422)
+        return intake_new_page(request, actor, form)
+    target = {}
+
+    def action():
+        require_role(actor.ctx, "intake create")
+        user = actor.ctx.operator.user_id
+        if not user:
+            raise ControlError("로그인한 사용자를 확인할 수 없습니다.")
+        target["id"], target["existing"] = local_intakes.submit_operator(actor.ctx, user, form)
 
     response = act(actor, action, "intake_created", "/intakes",
                    lambda **kw: intake_new_page(request, actor, form, **kw))

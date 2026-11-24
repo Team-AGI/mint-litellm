@@ -29,9 +29,10 @@ INSERTABLE = {
                 "allowed_resources", "provider", "owner_user_id", "readiness", "data_return_terms",
                 "requested_by", "staff_request_sha256", "staff_registry_required"},
     "deployment_contracts": {"id", "instance_id", "server_id", "canonical_text", "sha256", "url",
-                             "url_sha256", "transport", "auth_type", "proposed_by"},
+                             "url_sha256", "transport", "auth_type", "proposed_by", "identity_kind",
+                             "pack_spec"},
     "servers": {"id", "instance_id", "server_id", "status", "url_sha256", "transport", "auth_type",
-                "registered_by"},
+                "registered_by", "identity_kind"},
     "jobs": {"id", "instance_id", "kind", "target_ref", "idempotency_key"},
     "console_sessions": {"id_hash", "instance_id", "subject", "user_id", "key_token", "role",
                          "idle_expiry", "absolute_expiry", "team_ids"},
@@ -265,6 +266,7 @@ def test_the_staff_login_can_execute_only_the_public_staff_functions(world):
                 "staff_revoke_consent", "staff_start_session", "staff_touch_session",
                 "staff_end_session", "staff_list_confirmations", "staff_list_consents",
                 "staff_list_events", "staff_submit_intake", "staff_withdraw_intake",
+                    "staff_submit_local_intake",
                 "staff_signup_submit", "staff_signup_status", "staff_signup_request"}
     with psycopg.connect(world[0]) as conn:
         rows = conn.execute(

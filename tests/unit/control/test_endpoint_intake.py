@@ -662,3 +662,83 @@ def test_a_repack_swaps_the_approved_contract_for_one_with_the_new_pack(seeded):
     assert now["exec_contract"]["pack"]["sha256"] == new
     assert world.server("pyg")["exec_contract_sha256"] == now["exec_contract_sha256"]
     assert world.intake(request_id)["decision"] == "approved"
+
+
+# --- 저장소 주소로 화면에서 만드는 로컬 신청 -------------------------------------------------
+
+SHA = "d" * 40
+LOCAL_FORM = {
+    "url": "https://github.com/o/ghidra-mcp", "purpose": "분석 보조", "commit": SHA,
+    "command": f"uvx --from git+https://github.com/o/ghidra-mcp@{SHA} ghidra-mcp",
+}
+
+
+def staff_local(world, form=None, user=USER, request_id=None):
+    from mint_litellm.control.services import local_intakes
+
+    with as_login(world.url, "mint_staff") as sc, as_login(world.url, "mint_control") as control:
+        sctx = staff.StaffContext(sc, control, INSTANCE, user)
+        session = uuid.uuid4().hex * 2
+        now = datetime.now(UTC)
+        staff.start_session(sctx, session, "ab" * 32,
+                            now + timedelta(minutes=30), now + timedelta(hours=1))
+        return local_intakes.submit_staff(
+            sctx, session, str(request_id or uuid.uuid4()), {**LOCAL_FORM, **(form or {})})
+
+
+def test_a_staff_repository_request_is_a_local_request_without_a_key(world):
+    request_id = uuid.uuid4()
+    assert staff_local(world, request_id=request_id) == str(request_id)
+    assert staff_local(world, request_id=request_id) == str(request_id)  # 재전송은 같은 신청
+    row = world.intake(request_id)
+    assert (row["source"], row["requested_by"], row["server_id"], row["endpoint_key_token"],
+            row["provider"]) == ("endpoint", USER, "ghidra_mcp", None, "git")
+    server = world.server("ghidra_mcp")
+    assert (server["identity_kind"], server["status"]) == ("stdio", "pending")
+    spec = fetchone(world.conn, "SELECT * FROM mint.deployment_contracts")["pack_spec"]
+    assert (spec["index"], spec["version"], spec["command"]) == ("git", SHA, "ghidra-mcp")
+    assert world.jobs("intake_run")[0]["target_ref"] == f"{request_id}/endpoint"
+    assert world.events("intake_received")[0]["payload"]["source"] == "endpoint"
+
+
+def test_a_staff_repository_request_is_guarded_like_an_endpoint_request(world):
+    first = staff_local(world)
+    with pytest.raises(ControlError, match="이미 진행 중"):
+        staff_local(world)  # 같은 서버가 검사 중
+    with pytest.raises(ControlError):
+        staff_local(world, {"purpose": "다른 목적"}, request_id=first)  # 같은 식별자, 다른 본문
+    for n in ("a", "b"):
+        staff_local(world, {"url": f"https://github.com/o/{n}", "command": (
+            f"uvx --from git+https://github.com/o/{n}@{SHA} {n}")})
+    with pytest.raises(ControlError, match="3건"):
+        staff_local(world, {"url": "https://github.com/o/c", "command": (
+            f"uvx --from git+https://github.com/o/c@{SHA} c")})
+
+
+def test_a_staff_repository_request_follows_the_normal_approval_and_withdrawal(world):
+    request_id = uuid.uuid4()
+    staff_local(world, request_id=request_id)
+    pass_the_checks(world, request_id)
+    assert world.decide(str(request_id), "approve")["decision"] == "approved"
+    assert world.server("ghidra_mcp")["status"] == "approved"
+    other = uuid.uuid4()
+    staff_local(world, {"url": "https://github.com/o/two", "command": (
+        f"uvx --from git+https://github.com/o/two@{SHA} two")}, request_id=other)
+    with as_login(world.url, "mint_staff") as sc, as_login(world.url, "mint_control") as control:
+        sctx = staff.StaffContext(sc, control, INSTANCE, USER)
+        assert {str(r["id"]) for r in staff_intakes.listing(sctx)} == {str(request_id), str(other)}
+
+
+def test_an_operator_repository_request_creates_the_same_records(world):
+    from mint_litellm.control.services import local_intakes
+
+    got = world.call(lambda ctx: local_intakes.submit_operator(ctx, "admin-1", LOCAL_FORM))
+    assert got[1] is False
+    row = world.intake(got[0])
+    assert (row["source"], row["requested_by"], row["endpoint_key_token"]) == (
+        "endpoint", "admin-1", None)
+    assert fetchone(world.conn, "SELECT * FROM mint.deployment_contracts")[
+        "pack_spec"]["version"] == SHA
+    assert world.jobs("intake_run")[0]["target_ref"] == f"{got[0]}/endpoint"
+    again = world.call(lambda ctx: local_intakes.submit_operator(ctx, "admin-1", LOCAL_FORM))
+    assert again == (got[0], True)  # 진행 중인 같은 서버는 그 신청으로 안내
