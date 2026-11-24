@@ -1,0 +1,1 @@
+- 클린 설치 뒤 `./mint.sh backup`·`upgrade`가 백업 단계에서 멈추던 문제를 고쳤다. 예약 백업 컨테이너가 `deploy/backups`를 root 소유로 먼저 만들었다. 이제 `up`이 폴더를 미리 만들고, 이미 root 소유면 `backup`이 운영자 계정으로 돌려놓는다.
