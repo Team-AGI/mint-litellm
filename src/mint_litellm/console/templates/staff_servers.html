@@ -90,7 +90,7 @@
   <p>{{ text }}</p>
   <div class="actions"><button type="submit" class="primary">동의</button></div>
 </form>
-<form method="post" action="/staff/servers/stop" class="inline">{{ m.csrf(actor) }}<input type="hidden" name="target" value="{{ selected.ref }}"><button type="submit">동의하지 않음</button></form>
+{% call m.confirm_dialog('consent-decline', '동의하지 않음', '동의하지 않고 사용 그만두기', '이 서버를 쓰지 않습니다. 「다시 사용하기」로 되돌릴 수 있습니다.', '/staff/servers/stop', actor, '사용 그만두기', danger=false) %}<input type="hidden" name="target" value="{{ selected.ref }}">{% endcall %}
 {% endif %}
 {% endcall %}{% endif %}
 {% endblock %}
