@@ -15,6 +15,7 @@ import logging
 import os
 import posixpath
 import re
+import secrets
 import socket
 import ssl
 import time
@@ -465,9 +466,45 @@ def check_secret_ref(ref: str | None) -> None:
     )
 
 
-def read_secret(ref: str | None, environ: dict[str, str] | None = None) -> str | None:
+_SEALED_LABEL = b"mint-siem-token\0"
+
+
+def seal_secret(instance: str, name: str, token: str) -> bytes:
+    """화면에서 입력한 토큰을 봉인한다(서명 키에서 나눈 키, 대상별 결속)."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    from mint_litellm.control import webhook_store
+
+    nonce = secrets.token_bytes(12)
+    aad = f"{instance}|{name}".encode()
+    return nonce + AESGCM(webhook_store.derive_key(_SEALED_LABEL)).encrypt(
+        nonce, token.encode(), aad)
+
+
+def _open_secret(target: dict) -> str:
+    from cryptography.exceptions import InvalidTag
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    from mint_litellm.control import webhook_store
+
+    sealed = bytes(target.get("sealed_secret") or b"")
+    try:
+        key = webhook_store.derive_key(_SEALED_LABEL)
+        aad = f"{target['instance_id']}|{target['name']}".encode()
+        return AESGCM(key).decrypt(sealed[:12], sealed[12:], aad).decode()
+    except (InvalidTag, ControlError, ValueError):
+        raise SendError(SECRET_MISSING) from None
+
+
+def read_secret(
+    ref: str | None, environ: dict[str, str] | None = None, target: dict | None = None
+) -> str | None:
     if not ref:
         return None
+    if ref == "sealed:":
+        if target is None:
+            raise SendError(SECRET_MISSING)
+        return _open_secret(target)
     try:
         check_secret_ref(ref)
     except ControlError:
@@ -585,7 +622,8 @@ def deliver(target: dict, recs: list[dict], environ: dict[str, str] | None = Non
         if target["kind"] in ("syslog", "cef"):
             _send_syslog(target, recs, host)
         else:
-            _send_http(target, recs, host, read_secret(target["secret_ref"], environ))
+            _send_http(
+                target, recs, host, read_secret(target["secret_ref"], environ, target))
     except SendError:
         raise
     except Exception as error:
@@ -742,15 +780,24 @@ def add(
     options: dict,
     from_start: bool,
     created_by: str,
+    token: str | None = None,
 ) -> None:
-    if kind in ("syslog", "cef") and secret_ref:
+    """``token``(화면에서 입력한 값)은 봉인해 저장하고 읽을 곳은 ``sealed:``가 된다."""
+    if kind in ("syslog", "cef") and (secret_ref or token):
         raise ControlError("syslog·CEF 대상에는 토큰을 쓰지 않습니다.")
-    check_secret_ref(secret_ref)
+    sealed = None
+    if token:
+        if secret_ref:
+            raise ControlError("토큰 값과 토큰 위치 중 하나만 적으십시오.")
+        sealed, secret_ref = seal_secret(instance, name, token), "sealed:"
+    else:
+        check_secret_ref(secret_ref)
     endpoint = normalize_endpoint(kind, endpoint)
     try:
         conn.execute(
             "INSERT INTO mint.siem_targets (instance_id, name, kind, endpoint, secret_ref,"
-            " options, cursor_seq, created_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            " options, cursor_seq, created_by, sealed_secret)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 instance,
                 name,
@@ -760,6 +807,7 @@ def add(
                 json.dumps(options),
                 0 if from_start else head_seq(conn, instance),
                 created_by,
+                sealed,
             ),
         )
     except psycopg.errors.UniqueViolation:
@@ -782,6 +830,7 @@ def listing(conn: psycopg.Connection, instance: str) -> list[dict]:
         row["backlog"] = max(head - row["cursor_seq"], 0)
         row["address"] = display_endpoint(row["endpoint"])
         row["secret_source"] = (row["secret_ref"] or "").partition(":")[0] or None
+        row.pop("sealed_secret", None)  # 봉인 값은 화면·내보내기로 내보내지 않는다
     return rows
 
 

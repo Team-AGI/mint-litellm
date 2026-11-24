@@ -218,6 +218,7 @@ def server_page(
         "provisional": row["contract_status"] != "managed",
         "ctl": tool_controls(actor, server_id),
         "impact": relation_impacts(actor, row["relations"]) if tab == "usage" else {},
+        "proof": relation_proofs(actor, row["relations"]) if tab == "usage" else {},
         "c": contract_context(request, actor, server_id) if tab == "contract" else None,
         "pack": pack_view.view(
             pack_view.read(actor.conn, actor.instance, server_id, approved=True), "decided"
@@ -226,6 +227,17 @@ def server_page(
         else None,
     }
     return render(request, "server_detail.html", ctx, actor=actor, status=status)
+
+
+def relation_proofs(actor: Actor, relations: list[dict]) -> dict[str, str]:
+    """종료 중인 이용 관계마다 자료 삭제·반환 증빙의 현재 상태."""
+    return {
+        str(r["id"]): next(
+            e["state"] for e in evidence_service.show(actor.ctx, "relation", str(r["id"]))
+            if e["key"] == "deletion_proof"
+        )
+        for r in relations if r["status"] == "terminating"
+    }
 
 
 def relation_impacts(actor: Actor, relations: list[dict]) -> dict[str, dict]:
@@ -462,6 +474,23 @@ def terminate_relation(
     actor: Actor = Depends(page_actor),
 ):
     return relation_action(server_id, relation_id, request, actor, "terminate", state_version)
+
+
+@router.post("/servers/{server_id}/relations/{relation_id}/evidence")
+def attach_relation_evidence(
+    server_id: str, relation_id: str, request: Request, summary: str = Form(...),
+    ref: str = Form(""), actor: Actor = Depends(page_actor),
+):
+    def action():
+        found = reads.relation(actor.conn, actor.instance, relation_id)
+        if found is None or found["server_id"] != server_id:
+            raise AdminError(AdminCode.NOT_FOUND, "이용 관계를 찾을 수 없습니다.")
+        evidence_form(actor, relation_id, "deletion_proof", summary, ref, None, "")()
+
+    return act(
+        actor, action, "evidence_attached", f"/servers/{server_id}?tab=usage",
+        lambda **kw: server_page(request, actor, server_id, tab="usage", **kw),
+    )
 
 
 @router.post("/servers/{server_id}/relations/{relation_id}/finish")

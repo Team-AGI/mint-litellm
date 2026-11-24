@@ -242,7 +242,7 @@ def test_an_admin_disconnects_an_endpoint_and_the_event_is_recorded(world, fleet
     html = fleet.get("/endpoints?tab=installs").text
     link = re.search(r'href="(/endpoints\?tab=installs&open=[^"]*ok-1[^"]*)"', html)
     drawer = fleet.get(link[1]).text
-    assert "연결 해제" in drawer and 'name="user_id" value="ok-1"' in drawer
+    assert "모두 해제" in drawer and 'name="user_id" value="ok-1"' in drawer
     assert "해제 사유(선택)" in drawer
     response = form_post(world, fleet, "/endpoints/revoke", user_id="ok-1", reason="분실")
     assert response.status_code == 303 and "ok=endpoint_revoked" in response.headers["location"]
@@ -257,6 +257,30 @@ def test_an_admin_disconnects_an_endpoint_and_the_event_is_recorded(world, fleet
     assert again.status_code == 400 and "해제할 단말 연결이 없습니다" in again.text
 
 
+def test_an_admin_disconnects_one_pc_only(world, fleet):
+    import dataclasses
+
+    issuer = Issuer()
+    world.app.state.config = dataclasses.replace(world.config, kit_issuer=issuer)
+    for name, token in (("on-two", "kit-ok-2"), ("on-one", "kit-ok-1")):
+        world.query(
+            "INSERT INTO mint.endpoint_apps (instance_id, user_id, install_key_token, name,"
+            " key_alias, key_token, expires_at) VALUES (%s, 'ok-2', %s, %s, %s, 'h',"
+            " now() + interval '1 day')", INSTANCE, token, name, f"mint-kit-app-{name}-aa11bb")
+    html = fleet.get("/endpoints?tab=installs").text
+    link = re.search(r'href="(/endpoints\?tab=installs&open=[^"]*ok-2[^"]*)"', html)
+    drawer = fleet.get(link[1]).text
+    assert "이 PC의 연결을 해제합니다" in drawer and "/endpoints/kit-ok-2/revoke" in drawer
+    assert "이 사람의 PC를 모두 해제합니다" in drawer
+    response = form_post(world, fleet, "/endpoints/kit-ok-2/revoke", reason="분실")
+    assert response.status_code == 303 and "ok=endpoint_revoked" in response.headers["location"]
+    assert issuer.deleted == [["kit-ok-2"], ["mint-kit-app-on-two-aa11bb"]]
+    assert world.query("SELECT name FROM mint.endpoint_apps WHERE revoked_at IS NULL") == [
+        ("on-one",)]
+    assert world.query("SELECT user_id FROM mint.endpoint_installs WHERE revoked_at IS NULL"
+                       " AND user_id IN ('ok-1', 'ok-2')") == [("ok-1",)]
+
+
 def test_only_an_admin_disconnects_an_endpoint(world, fleet):
     import dataclasses
 
@@ -266,3 +290,20 @@ def test_only_an_admin_disconnects_an_endpoint(world, fleet):
     assert form_post(world, viewer, "/endpoints/revoke", user_id="ok-1").status_code == 403
     assert issuer.deleted == []
     assert "/endpoints/revoke" not in viewer.get("/endpoints?tab=installs&open=x").text
+
+
+def test_a_siem_token_can_be_typed_on_the_screen_and_is_never_shown_again(
+    world, admin, monkeypatch
+):
+    monkeypatch.setenv("MINT_EXPORT_HMAC_KEY", "k" * 43)
+    html = admin.get("/admin?tab=siem").text
+    assert 'name="secret"' in html and 'type="password"' in html and "암호화해 저장" in html
+    got = form_post(world, admin, "/admin/siem", name="main", kind="hec",
+                    endpoint="https://s.test:8088", secret="tok-xyz")
+    assert got.status_code == 303, got.text
+    assert world.query("SELECT secret_ref, sealed_secret IS NOT NULL FROM mint.siem_targets"
+                       ) == [("sealed:", True)]
+    assert "tok-xyz" not in admin.get("/admin?tab=siem").text
+    both = form_post(world, admin, "/admin/siem", name="b", kind="hec",
+                     endpoint="https://s.test:8088", secret="x", token="MINT_SIEM_A")
+    assert both.status_code == 400

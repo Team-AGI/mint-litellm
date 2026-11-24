@@ -12,7 +12,7 @@ from typing import Any
 import psycopg
 
 from mint_litellm.control import endpoint_apps, kit_key_sync
-from mint_litellm.control.db.connection import fetchall
+from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import ControlError
 from mint_litellm.control.litellm_write import (
     KIT_ALIAS_PREFIX,
@@ -153,6 +153,32 @@ def revoke_keys(
     _mark_revoked(conn, instance_id, user_id)
     endpoint_apps.revoke_user_apps(conn, issuer, instance_id, user_id, actor or user_id)
     return len(aliases)
+
+
+def revoke_install(
+    conn: psycopg.Connection, issuer: LiteLLMKitKeys, instance_id: str, key_alias: str,
+    actor: str,
+) -> str:
+    """단말(설치) 하나의 키만 지운다. 같은 사람의 다른 단말은 그대로다. 사용자 식별자를 돌려준다.
+
+    그 단말에 묶인 앱의 자격도 함께 회수한다.
+    """
+    row = fetchone(
+        conn,
+        "SELECT user_id, key_token, key_alias, mcp_key_alias FROM mint.endpoint_installs"
+        " WHERE instance_id = %s AND key_alias = %s AND revoked_at IS NULL",
+        (instance_id, key_alias),
+    )
+    if row is None:
+        raise ControlError("해제할 단말 연결이 없습니다.")
+    issuer.delete_kit_keys([a for a in (row["key_alias"], row["mcp_key_alias"]) if a])
+    conn.execute(
+        "UPDATE mint.endpoint_installs SET revoked_at = clock_timestamp()"
+        " WHERE instance_id = %s AND key_alias = %s AND revoked_at IS NULL",
+        (instance_id, key_alias),
+    )
+    endpoint_apps.revoke_install_apps(conn, issuer, instance_id, row["key_token"], actor)
+    return row["user_id"]
 
 
 def local_mcp_inventory(conn: psycopg.Connection, instance_id: str) -> list[dict[str, Any]]:

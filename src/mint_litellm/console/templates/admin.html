@@ -97,11 +97,12 @@
   <label>종류<select name="kind">{% for k in siem_kinds %}<option value="{{ k }}">{{ L.pick(L.SIEM_KIND, k) }}</option>{% endfor %}</select></label>
   <label>받는 주소<input name="endpoint" required placeholder="https://siem.example:9200 또는 tls://siem.example:6514"></label>
   <label>색인<input name="index" placeholder="Splunk·Elastic만"></label>
-  <label>토큰 위치<input name="token" placeholder="MINT_SIEM_TOKEN 또는 /run/secrets/siem" pattern="(MINT_SIEM_[A-Z0-9_]+|/run/secrets/.+)?"></label>
+  <label>토큰 값<input type="password" name="secret" autocomplete="new-password" maxlength="2000"></label>
+  <label>또는 토큰 위치<input name="token" placeholder="MINT_SIEM_TOKEN 또는 /run/secrets/siem" pattern="(MINT_SIEM_[A-Z0-9_]+|/run/secrets/.+)?"></label>
   <label><input type="checkbox" name="from_start" value="1"> 지금까지의 기록도 보내기</label>
   <button type="submit" class="primary">추가</button>
 </form>
-<p class="muted">토큰 값은 저장하지 않고 읽을 곳만 적습니다.</p>
+<p class="muted">토큰 값은 암호화해 저장합니다.</p>
 {% if siem %}
 <table><thead><tr><th>이름</th><th>종류</th><th>주소</th><th>상태</th><th>마지막 전달</th><th class="num">밀린 사건</th><th class="num">보낸 사건</th><th>마지막 시험</th><th></th></tr></thead><tbody>
 {% for s in siem %}{% set st = 'error' if s.failing_since else ('ok' if s.last_delivered_at else 'wait') %}<tr><td>{{ s.name }}</td><td>{{ L.pick(L.SIEM_KIND, s.kind) }}</td><td>{{ s.address }}</td>

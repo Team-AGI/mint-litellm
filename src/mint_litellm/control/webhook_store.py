@@ -19,12 +19,16 @@ from mint_litellm.control.stage2_config import Stage2Settings, _webhook_formats,
 _LABEL = b"mint-webhook-urls\0"
 
 
-def _key() -> bytes:
-    # ponytail: 내보내기 서명 키에서 용도를 나눠 만든다. 키를 바꾸면 주소를 다시 저장한다.
+def derive_key(label: bytes) -> bytes:
+    # ponytail: 내보내기 서명 키에서 용도를 나눠 만든다. 키를 바꾸면 값을 다시 저장한다.
     secret = os.environ.get("MINT_EXPORT_HMAC_KEY", "")
     if not secret:
-        raise ControlError("서버 서명 키가 없어 알림 주소를 저장할 수 없습니다.")
-    return hashlib.sha256(_LABEL + secret.encode()).digest()
+        raise ControlError("서버 서명 키가 없어 값을 저장할 수 없습니다.")
+    return hashlib.sha256(label + secret.encode()).digest()
+
+
+def _key() -> bytes:
+    return derive_key(_LABEL)
 
 
 def save(conn: psycopg.Connection, instance: str, url: str, fmt: str, by: str) -> None:

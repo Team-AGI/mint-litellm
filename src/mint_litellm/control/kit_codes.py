@@ -71,6 +71,23 @@ try {{
 """
 
 
+def refusal(name: str, message: str, status: int = 200):
+    """설치 스크립트를 못 줄 때의 응답.
+
+    스크립트면 사람이 읽을 한 줄을 출력하고 멈추는 본문을 돌려준다(``curl -f``가 오류 본문을
+    숨기기 때문). 묶음 파일이면 상태 코드와 문구를 그대로 낸다.
+    """
+    from fastapi.responses import PlainTextResponse
+
+    safe = " ".join(message.replace("'", "").replace('"', "").replace("`", "").split())
+    held = {"Cache-Control": "no-store"}
+    if name == "install.sh":
+        return PlainTextResponse(f"echo '{safe}' >&2\nexit 1\n", headers=held)
+    if name == "install.ps1":
+        return PlainTextResponse(f"Write-Host '{safe}'\n", headers=held)
+    return PlainTextResponse(f"{safe}\n", status_code=status)
+
+
 def script(name: str, kit: bytes) -> str:
     """``name``에 맞는 설치 스크립트(묶음을 base64로 담는다). ``kit.tar.gz``는 묶음 그대로."""
     payload = base64.b64encode(kit).decode()

@@ -36,6 +36,7 @@ from mint_litellm.console.oidc import login_context
 from mint_litellm.console.pages.common import see_other, server_names
 from mint_litellm.console.templating import render
 from mint_litellm.control import (
+    alerts,
     directory,
     endpoint_apps,
     endpoint_coverage,
@@ -58,6 +59,7 @@ from mint_litellm.control.services import (
 from mint_litellm.control.services import intakes as intakes_service
 from mint_litellm.endpoint.kit_build import HARNESSES, build_kit, kit_version
 from mint_litellm.plugin.snapshot import WINDOW_MAX_USES
+from mint_litellm.types.events import AlertKind
 from mint_litellm.types.ids import new_uuid7
 
 router = APIRouter(dependencies=[Depends(require_csrf)])
@@ -611,6 +613,7 @@ def servers_page(request: Request, actor: StaffActor, error=None, status=200, fo
     available = staff.list_available(actor.sctx)
     can_consent = {(t["org_id"], t["server_id"]) for t in available}
     blocked = staff.blocked_servers(actor.sctx)
+    lapsed = staff.lapsed_servers(actor.sctx)
     progress = {}  # 내 신청의 진행 화면. 최근 신청부터 보므로 서버마다 가장 최근 것이 남는다
     for intake in reversed(staff_intakes.listing(actor.sctx)):
         if intake["decision"] not in ("withdrawn", "rejected"):
@@ -619,8 +622,10 @@ def servers_page(request: Request, actor: StaffActor, error=None, status=200, fo
     for r in available:
         sid = r["server_id"]
         stopped = blocked.get(sid) is True  # 내가 그만둔 서버(관리자가 막은 서버는 보이지 않는다)
-        # 내가 신청해 승인됐지만 도구가 아직 없다(남이 신청한 서버는 승인 전까지 숨긴다)
-        preparing = not r["tools"] and sid not in blocked and sid in progress
+        # 내가 신청해 승인됐지만 도구가 아직 없다(남이 신청한 서버는 승인 전까지 숨긴다).
+        # 승인이 만료·철회돼 없어진 서버는 준비 중이 아니다.
+        preparing = (not r["tools"] and sid not in blocked and sid in progress
+                     and sid not in lapsed)
         if r["tools"] or stopped or preparing:
             rows.append({**r, "stopped": stopped, "preparing": preparing})
     shown = {(r["org_id"], r["server_id"]) for r in rows}
@@ -916,6 +921,24 @@ class KitRefused(Exception):
         self.status = status
 
 
+NOT_READY = "관리자가 준비 중입니다. 준비가 끝나면 다시 시도할 수 있습니다."
+
+
+def note_kit_gap(control: psycopg.Connection, config: ConsoleConfig) -> str:
+    """빠진 설정이 있으면 관리자 경보를 남기고(없으면 닫고) 그 내용을 돌려준다."""
+    gap = config.kit_gap
+    with control.transaction():
+        if gap:
+            alerts.raise_alert(
+                control, config.instance_id, kind=AlertKind.ENDPOINT_KIT_NOT_READY.value,
+                severity="medium", dedup_key=AlertKind.ENDPOINT_KIT_NOT_READY.value,
+                subject={"missing": gap},
+            )
+        else:
+            alerts.resolve(control, config.instance_id, AlertKind.ENDPOINT_KIT_NOT_READY.value)
+    return gap
+
+
 def issue_kit(
     config: ConsoleConfig, control: psycopg.Connection, user_id: str, team_id: str | None,
     platform: str, harness: str,
@@ -923,22 +946,8 @@ def issue_kit(
     """본인 키를 새로 발급해 담은 설치 묶음을 만든다(이전 묶음의 키는 지워진다)."""
     if platform not in labels.KIT_PLATFORM or harness not in labels.KIT_HARNESS:
         raise KitRefused("설치 묶음의 종류가 올바르지 않습니다.", 400)
-    if config.kit_issuer is None:
-        raise KitRefused(
-            "단말 설치 묶음 발급 키가 설정되지 않아 발급할 수 없습니다. 운영자가 ./mint.sh up(또는 "
-            "upgrade)을 다시 실행하면 키를 만들어 넣습니다(MINT_KIT_ISSUER_KEY).", 503,
-        )
-    if not config.endpoint_url:
-        # 비어 있으면 묶음에 컨테이너 안 주소가 적혀 단말에서 판정을 부를 수 없다.
-        raise KitRefused(
-            "단말이 부를 판정 주소가 정해지지 않아 설치 묶음을 발급할 수 없습니다. 운영자가 "
-            "MINT_ENDPOINT_PUBLIC_URL(단말에서 닿는 LiteLLM 주소)을 정한 뒤 다시 시도하세요.", 503,
-        )
-    if not config.endpoint_routes:
-        raise KitRefused(
-            "단말 경로가 꺼져 있어 설치 묶음을 발급할 수 없습니다. 운영자가 "
-            "MINT_ENDPOINT_ROUTES=true로 켠 뒤 다시 시도하세요.", 503,
-        )
+    if config.kit_gap:
+        raise KitRefused(NOT_READY, 503)
     # 승인된 로컬 서버가 없어도 게이트웨이 항목과 키만으로 의미가 있어 묶음을 낸다.
     # 묶음에는 이 직원에게 승인된 로컬 서버만 넣는다(다른 직원의 서버 계약이 새지 않게).
     mine = kit_key_sync.local_servers_for(control, config.instance_id, user_id, team_id)
@@ -991,6 +1000,8 @@ def endpoint_kit(
 def endpoint_code(request: Request, actor: StaffActor = Depends(staff_actor)):
     """한 줄 설치 명령을 만든다. 코드는 한 번만 쓰이고 곧 만료된다."""
     sctx = actor.sctx
+    if note_kit_gap(sctx.control, actor.config):
+        return endpoint_page(request, actor, NOT_READY, 503)
     team_id = sctx.team_ids[0] if sctx.team_ids else None
     code = kit_codes.create(sctx.control, actor.config.instance_id, actor.user_id, team_id)
     base = f"{str(request.base_url).rstrip('/')}/kit/{code}"
@@ -1006,16 +1017,25 @@ def kit_redeem(
 ) -> Response:
     """한 줄 설치 명령이 부르는 주소. 코드를 한 번 쓰고 키를 새로 발급해 설치 스크립트를 준다."""
     config = config_of(request)
-    who = kit_codes.redeem(control, config.instance_id, code) if name in kit_codes.NAMES else None
-    if who is None:
+    if name not in kit_codes.NAMES:
         return PlainTextResponse("코드가 없거나 이미 쓰였거나 만료되었습니다.\n", status_code=404)
+    # 스크립트를 받는 쪽(curl -f)은 오류 본문을 숨기므로, 실패는 사람이 읽을 한 줄을 출력하는
+    # 스크립트 본문(200)으로 돌려준다.
+    if config.kit_gap:  # 코드를 쓰기 전에 거절해 한 번 쓰는 코드가 소진되지 않게 한다
+        note_kit_gap(control, config)
+        return kit_codes.refusal(name, NOT_READY)
+    who = kit_codes.redeem(control, config.instance_id, code)
+    if who is None:
+        return kit_codes.refusal(
+            name, "설치 코드가 없거나 이미 쓰였거나 만료되었습니다. 내 단말에서 새로 만드십시오.",
+            404)
     try:
         kit = issue_kit(
             config, control, who["user_id"], who["team_id"],
             "windows" if name in ("install.ps1", "kit.zip") else "linux", "all",
         )
     except KitRefused as refused:
-        return PlainTextResponse(f"{refused}\n", status_code=refused.status)
+        return kit_codes.refusal(name, str(refused), refused.status)
     return PlainTextResponse(
         kit_codes.script(name, kit), headers={"Cache-Control": "no-store"})
 

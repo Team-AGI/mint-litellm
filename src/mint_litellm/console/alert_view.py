@@ -126,6 +126,7 @@ SUMMARY = {
     "intake_pending": "서버 {server_id}의 도입 신청이 검토를 기다립니다.",
     "endpoint_silent": "단말 {key_alias}의 보고가 끊겼습니다.",
     "endpoint_key_expiring": "단말 {key_alias}의 키가 곧 만료됩니다.",
+    "endpoint_kit_not_ready": "직원이 설치 명령을 만들 수 없습니다. 빠진 설정: {missing}",
     "endpoint_update_failed": "단말 {key_alias}의 자동 갱신이 실패했습니다.",
     "endpoint_stale_server": "단말 {key_alias}에 폐기된 서버 {server_id}가 남아 있습니다.",
     "endpoint_unmanaged": "단말 {key_alias}에 관리되지 않는 설치가 있습니다.",
