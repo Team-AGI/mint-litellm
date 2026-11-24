@@ -2,13 +2,6 @@
 {% block title %}시작하기 · MINT{% endblock %}
 {% block body %}
 <h1>시작하기</h1>
-<ol>
-<li>root / rootroot로 로그인 <a class="button" href="/account/password">비밀번호 바꾸기</a>{% if litellm_open %} <a class="button" href="/litellm/open" hx-boost="false">LiteLLM 콘솔</a>{% endif %}</li>
-<li>허용 목록에 제공자 추가 <a class="button" href="/access?tab=allowlists&amp;new=1">허용 추가</a></li>
-<li>서버 신청 <a class="button" href="/intakes/new">신청 등록</a></li>
-<li>검사 결과 확인 <a class="button" href="/intakes">신청 확인</a></li>
-<li>승인 <a class="button" href="/intakes">신청 결정</a></li>
-</ol>
 <div class="cards">
   {{ m.kpi('남은 필수 항목', pending, none, none, 'wait' if pending else none) }}
   </div>

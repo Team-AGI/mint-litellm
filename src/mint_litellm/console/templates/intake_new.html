@@ -6,7 +6,7 @@
 {% if can(actor, 'intake create') %}
 <form method="post" action="/intakes" class="form cols">
   {{ m.csrf(actor) }}
-  <label class="full">서버 주소<input type="url" name="server_url" value="{{ f.server_url }}" maxlength="2048" required></label>
+  <label class="full">MCP 서버 주소<input type="url" name="server_url" value="{{ f.server_url }}" maxlength="2048" required></label>
   <label class="full">목적<textarea name="purpose" maxlength="256" required>{{ f.purpose }}</textarea></label>
   <div class="actions full">
     <button class="primary" type="submit">신청 등록</button>

@@ -16,7 +16,7 @@
 {% if sources | length > 1 or source %}<nav class="tabs" aria-label="출처"><a href="/intakes{{ '?status=' ~ wanted if wanted }}"{% if not source %} class="active" aria-current="page"{% endif %}>전체 출처</a>{% for key, label, n in sources %}<a href="/intakes?source={{ key }}{{ '&status=' ~ wanted if wanted }}"{% if key == source %} class="active" aria-current="page"{% endif %}>{{ label }} <span class="count">{{ n }}</span></a>{% endfor %}</nav>{% endif %}
 {% if wanted %}<nav class="tabs" aria-label="필터"><a href="/intakes">전체 <span class="count">{{ total }}</span></a><a class="active" href="/intakes?status={{ wanted }}" aria-current="page">{{ '정체' if wanted == 'stalled' else L.pick(L.INTAKE_STAGE, wanted) }} <span class="count">{{ rows | length }}</span></a></nav>{% endif %}
 {% if rows %}
-<table class="clickable"><thead><tr><th>서버</th><th>출처</th><th>진행</th><th>결정</th><th>신청자</th><th>접수 시각</th><th>경과</th></tr></thead><tbody>
+<table class="clickable"><thead><tr><th>MCP 서버</th><th>출처</th><th>진행</th><th>결정</th><th>신청자</th><th>접수 시각</th><th>경과</th></tr></thead><tbody>
 {% for r in rows %}<tr>
 <td><a href="/intakes/{{ r.id }}">{{ r.server_name }}</a>{% if r.server_url %}<br>{{ r.server_url }}{% endif %}<br><span class="muted">{{ m.ident(r.server_id) }}</span> <button type="button" class="copy" data-copy="{{ r.server_id }}">복사</button></td>
 <td>{{ m.source_badge(r.source) }}</td>

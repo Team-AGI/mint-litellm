@@ -278,7 +278,7 @@ def test_the_server_screen_lists_servers_with_the_tools_approved_for_this_user(s
     add_approval(sworld, "org", "acme", tools=("ping",))
     page = logged_in(sworld).get("/staff")
     assert page.status_code == 200
-    assert "내 서버" in page.text and "srv-ok" in page.text
+    assert "내 MCP 서버" in page.text and "srv-ok" in page.text
     assert "echo, ping" in page.text and "secret_tool" not in page.text
     assert "srv-wait" not in page.text
     assert 'class="catalog-card"' in page.text and "서버 보기" in page.text
@@ -934,7 +934,7 @@ def test_the_menu_has_three_staff_screens_and_a_badge_for_requests_to_confirm(sw
     add_confirmation(sworld)
     page = logged_in(sworld).get("/staff/confirmations").text
     assert page.count('class="active"') >= 1 and 'href="/staff/confirmations"' in page
-    assert "내 서버" in page and "내 단말" in page and "내 요청" in page
+    assert "내 MCP 서버" in page and "내 단말" in page and "내 요청" in page
     assert '내 요청</span> <span class="badge error">1</span>' in page
     assert 'aria-current="page"' in page and "본인 확인 대기" in page and "내 승인 요청" in page
 

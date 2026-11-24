@@ -64,7 +64,8 @@ def test_a_fresh_install_shows_what_is_missing(world, admin):
     html = admin.get("/setup").text
     assert state(html, "gateway") == "미완료" and "복제본 보고가 아직 없습니다" in html
     assert state(html, "policy") == "미완료"
-    assert state(html, "servers") == "완료"
+    assert state(html, "servers") == "완료" and state(html, "password") == "완료"
+    assert state(html, "accounts") == "미완료"
     assert state(html, "approval") == "확인 필요" and "알림 주소 미설정" in html
     endpoint = row_of(html, "endpoint")
     assert "미완료" in endpoint and 'data-copy="tar -xzf mint-kit.tar.gz' in endpoint
@@ -161,11 +162,19 @@ def test_every_role_can_open_the_checklist_and_the_menu_lists_it(world, role):
     assert client.get("/").text.count('href="/setup"') == 1
 
 
-def test_setup_shows_ordered_introduction_and_password_change_link(world, admin, monkeypatch):
-    monkeypatch.setenv("MINT_LITELLM_UI_URL", "https://gateway.example.test/ui")
+def test_setup_links_the_password_change_and_the_alert_request(world, admin):
+    from mint_litellm.console import setup_state
+
+    item = setup_state._password(True)
+    assert item["href"] == "/account/password" and item["status"] is setup_state.OPEN
+    assert setup_state._password(False)["status"] is setup_state.DONE
     html = admin.get("/setup").text
-    labels = ["root / rootroot로 로그인", "허용 목록에 제공자 추가", "서버 신청",
-              "검사 결과 확인", "신청 결정"]
-    assert [html.index(label) for label in labels] == sorted(html.index(label) for label in labels)
-    assert 'href="/account/password"' in html
     assert "운영자에게 알림 주소 설정 요청" in html
+
+
+def test_setup_steps_follow_the_onboarding_order(world, admin):
+    html = admin.get("/setup").text
+    keys = ["password", "accounts", "endpoint", "servers"]
+    at = [html.index(f'id="step-{k}"') for k in keys]
+    assert at == sorted(at)
+    assert "허용 목록에 제공자 추가" not in html and "/access?tab=allowlists" not in html

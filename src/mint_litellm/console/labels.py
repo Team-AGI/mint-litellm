@@ -325,7 +325,7 @@ AXIS_VERDICT = {"widened": "확대", "narrowed": "축소", "unchanged": "변화 
 
 ROLE = {"admin": "관리자", "approver": "승인자", "viewer": "조회자", "staff": "직원"}
 MODE = {"enforce": "집행", "observe": "관측"}
-SCOPE = {"key": "키", "user": "사용자", "team": "팀", "org": "조직", "server": "서버"}
+SCOPE = {"key": "키", "user": "사용자", "team": "팀", "org": "조직", "server": "MCP 서버"}
 APPROVAL_CLASS = {"standard": "일반", "exception": "예외"}
 PRINCIPAL = {"user": "사용자", "team_key": "팀 키", "service_account": "서비스 계정"}
 KIT_PLATFORM = {"linux": "Linux", "windows": "Windows"}
@@ -519,12 +519,12 @@ EVENT_KIND = {
     "server_identity_mismatch_observed": "서버 신원 불일치 관측",
     "buffer_overflow": "버퍼 초과",
     "buffer_replayed": "버퍼 재전송",
-    "server_registered": "서버 등록",
-    "server_approved": "서버 승인",
-    "server_suspended": "서버 중지",
-    "server_resumed": "서버 재개",
-    "server_terminating": "서버 폐기",
-    "server_terminated": "서버 폐기 완료",
+    "server_registered": "MCP 서버 등록",
+    "server_approved": "MCP 서버 승인",
+    "server_suspended": "MCP 서버 중지",
+    "server_resumed": "MCP 서버 재개",
+    "server_terminating": "MCP 서버 폐기",
+    "server_terminated": "MCP 서버 폐기 완료",
     "relation_created": "이용 관계 생성",
     "relation_terminating": "이용 관계 종료",
     "relation_terminated": "이용 관계 종료 완료",

@@ -4,27 +4,23 @@
 {% block body %}
 <h1>대시보드</h1>
 <div class="filterbar">{{ a.choices('시간 범위', ranges) }}<a class="button" href="/?range={{ range }}">새로고침</a><a class="button" href="/reports/audit" hx-boost="false">감사 보고서</a></div>
-<div class="cards">
-{% for c in cards %}{{ m.kpi(c.label, c.value, c.href, c.note, c.level, c.trend) }}{% endfor %}
-</div>
-<div class="cards">
-{% for c in usage_cards %}{{ m.kpi(c.label, c.value, c.href, c.note, c.level, c.trend) }}{% endfor %}
-</div>
+{{ m.strip(cards) }}
 <div class="grid">
 {{ a.panel('결정 추이', trend, trend.labels | length and trend_has_data) }}
 {{ a.panel('차단 사유', reasons, reasons['items'] | length) }}
 </div>
 <div class="grid">
-{{ a.panel('호출이 많은 서버', servers, servers.labels | length) }}
+{{ a.panel('호출이 많은 MCP 서버', servers, servers.labels | length) }}
 {{ a.panel('열린 경보', alert_bars, alert_total) }}
 </div>
 <div class="grid">
 <section id="approvals">
-  <h2>승인</h2>
-  <div class="cards">
-  {% for c in approval_cards %}{{ m.kpi(c.label, c.value, c.href, c.note, c.level, c.trend) }}{% endfor %}
-  </div>
+  <h2>승인 처리 추이</h2>
+  {{ m.strip(approval_cards) }}
+  {% if approval_has_data %}<div class="chart" data-height="200" data-chart="{{ approval_trend | to_json }}"></div>{% else %}<div class="empty slim">이 기간에 기록이 없습니다</div>{% endif %}
 </section>
+{{ a.panel('MINT 판정 지연 추이', latency_trend, latency_has_data) }}
+</div>
 <section>
   <h2>상태</h2>
   <table><tbody>
@@ -32,5 +28,4 @@
   </tbody></table>
   {% if not dots %}{{ m.empty('보고된 상태가 없습니다', '/ledger', '호출 기록 보기') }}{% endif %}
 </section>
-</div>
 {% endblock %}

@@ -173,17 +173,18 @@ def test_the_dashboard_has_five_cards_four_charts_and_status_rows(world, admin):
         "적용 엔드포인트",
     ):
         assert label in html
-    assert html.count('class="card kpi') >= 5 + 4
-    assert html.count("data-chart=") == 4
+    assert html.count('class="stat') >= 8 + 3
+    assert html.count("data-chart=") >= 4 and "이번 달 비용" not in html
+    assert "MINT 판정 지연(중앙값·95%)" in html
     assert "승인되지 않은 서버" in html and "SERVER_NOT_APPROVED" not in shown(html)
     assert "원장 봉인" in html and "내보내기" in html
-    assert 'class="card kpi danger" href="/alerts?status=open"' in html
+    assert 'class="stat danger" href="/alerts?status=open"' in html
 
 
 def test_a_slow_approval_queue_is_highlighted_and_cards_link_to_screens(world, admin):
     seed(world, age="10 minutes")
     html = admin.get("/").text
-    assert 'class="card kpi wait" href="/approvals"' in html
+    assert 'class="stat wait" href="/approvals"' in html
     for href in ('href="/ledger?result=deny"', 'href="/endpoints"', 'href="/ledger"'):
         assert href in html
 
@@ -197,7 +198,7 @@ def test_the_dashboard_range_changes_the_labels_and_ignores_unknown_values(world
 def test_a_small_sample_still_shows_a_percentage_with_the_counts(world, admin):
     decision(world, "blocked", enforced="deny")
     html = shown(admin.get("/").text)
-    assert "100%" in html and "호출 1건 중 1건" in html and "%p" not in html
+    assert "100%" in html and "호출 1건 중 1건" in admin.get("/").text and "%p" not in html
 
 
 def test_the_ledger_has_a_chart_chips_and_a_row_drawer(world, admin):

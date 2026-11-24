@@ -26,7 +26,7 @@ templates = Jinja2Templates(directory=HERE / "templates")
 MENU = (
     (None, (("/", "대시보드", None), ("/setup", "시작하기", "setup"))),
     ("처리할 일", (("/approvals", "승인 센터", "approvals"), ("/alerts", "경보", "alerts"))),
-    ("서버", (("/servers", "서버", "servers"), ("/intakes", "도입 신청", "intakes"),
+    ("MCP 서버", (("/servers", "MCP 서버", "servers"), ("/intakes", "도입 신청", "intakes"),
             ("/access", "접근 통제", None))),
     ("단말", (("/endpoints", "엔드포인트", "endpoints"),)),
     ("감사", (("/ledger", "호출 기록", None), ("/policy", "정책", None),
@@ -35,7 +35,7 @@ MENU = (
 )
 STAFF_MENU = (
     (None, (
-        ("/staff", "내 서버", None),
+        ("/staff", "내 MCP 서버", None),
         ("/staff/intakes", "MCP 서버 도입 신청", None),
         ("/staff/confirmations", "내 요청", "staff_requests"),
         ("/staff/usage", "내 사용량", None),
@@ -184,7 +184,7 @@ def render(
             "alerts": reads.urgent_alert_count(actor.conn, actor.instance),
             **reads.menu_counts(actor.conn, actor.instance),
             "endpoints": _endpoint_problems(actor),
-            "setup": setup_state.pending(setup_state.steps(actor)),
+            "setup": setup_state.pending(setup_state.steps(actor, base["default_password"])),
         }
         if actor.role == "admin":
             count = fetchone(actor.conn, "SELECT count(*) AS n FROM mint.signup_requests"

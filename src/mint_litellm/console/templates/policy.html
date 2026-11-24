@@ -19,7 +19,7 @@
   <form method="post" action="/policy/shadow/cancel">{{ m.csrf(actor) }}<button type="submit">취소</button></form>
 {% endif %}</div>
 {% if shadow.flips %}
-<table class="compact"><thead><tr><th>서버 · 도구</th><th>변경</th><th>사유</th><th class="num">호출 수</th><th>기록</th></tr></thead><tbody>
+<table class="compact"><thead><tr><th>MCP 서버 · 도구</th><th>변경</th><th>사유</th><th class="num">호출 수</th><th>기록</th></tr></thead><tbody>
 {% for f in shadow.flips %}<tr>
 <td>{{ f.server_id }} · {{ f.tool }}</td><td>{{ L.pick(L.POLICY_RESULT, f.active_result) }} → {{ L.pick(L.POLICY_RESULT, f.shadow_result) }}</td><td>{{ f.shadow_reason | blank }}</td><td class="num">{{ f.calls }}</td>
 <td>{% for i in f.samples %}<a href="/ledger?invocation={{ i | urlencode }}&amp;since={{ shadow_day }}">기록 {{ loop.index }}</a>{{ ' ' if not loop.last }}{% endfor %}</td>

@@ -91,6 +91,49 @@ def decision_series(
     }
 
 
+def latency_series(
+    conn: psycopg.Connection, instance: str, hours: int, time_zone: str = "UTC"
+) -> dict[str, Any]:
+    """MINT 판정 지연(밀리초). 칸마다 중앙값·95%와, 기간 전체의 중앙값·95%·건수."""
+    unit, steps, fmt = unit_of(hours)
+    anchor = "(now() - make_interval(hours => %s))"
+    us = "(payload->>'decision_us')::bigint"
+    rows = fetchall(
+        conn,
+        "SELECT to_char(g, %s) AS label,"
+        " percentile_cont(0.5) WITHIN GROUP (ORDER BY e.us) AS p50,"
+        " percentile_cont(0.95) WITHIN GROUP (ORDER BY e.us) AS p95 FROM generate_series("
+        f" date_trunc('{unit}', now() AT TIME ZONE %s::text) - (%s - 1) * interval '1 {unit}',"
+        f" date_trunc('{unit}', now() AT TIME ZONE %s::text), interval '1 {unit}') g"
+        f" LEFT JOIN (SELECT date_trunc('{unit}', inserted_at AT TIME ZONE %s::text) AS b,"
+        f" {us} AS us FROM mint.events WHERE instance_id = %s AND kind = 'decision_evaluated'"
+        " AND payload->>'decision_us' IS NOT NULL"
+        f" AND inserted_at >= {anchor}) e ON e.b = g GROUP BY g ORDER BY g",
+        (fmt, time_zone, steps, time_zone, time_zone, instance, hours),
+    )
+    total = fetchone(
+        conn,
+        "SELECT count(*) AS n, percentile_cont(0.5) WITHIN GROUP (ORDER BY us) AS p50,"
+        " percentile_cont(0.95) WITHIN GROUP (ORDER BY us) AS p95 FROM ("
+        f" SELECT {us} AS us FROM mint.events WHERE instance_id = %s"
+        " AND kind = 'decision_evaluated' AND payload->>'decision_us' IS NOT NULL"
+        f" AND inserted_at >= {anchor}) t",
+        (instance, hours),
+    )
+
+    def ms(value):
+        return None if value is None else round(float(value) / 1000, 1)
+
+    return {
+        "labels": [r["label"] for r in rows],
+        "p50": [ms(r["p50"]) for r in rows],
+        "p95": [ms(r["p95"]) for r in rows],
+        "count": total["n"],
+        "median": ms(total["p50"]),
+        "tail": ms(total["p95"]),
+    }
+
+
 def block_reasons(
     conn: psycopg.Connection, instance: str, hours: int, limit: int = 30, **filters: Any
 ) -> list[dict[str, Any]]:

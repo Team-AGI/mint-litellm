@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
 
 from mint_litellm.console import password_login, setup_state
-from mint_litellm.console.cookies import DEFAULT_PASSWORD, delete_cookie
+from mint_litellm.console.cookies import DEFAULT_PASSWORD, delete_cookie, read_cookie
 from mint_litellm.console.core import Actor, page_actor, require_csrf
 from mint_litellm.console.templating import render
 from mint_litellm.control import webhook
@@ -42,7 +42,7 @@ def send_test(config) -> bool:
 
 
 def setup_page(request: Request, actor: Actor, error=None, status=200):
-    items = setup_state.steps(actor)
+    items = setup_state.steps(actor, read_cookie(request, DEFAULT_PASSWORD) is not None)
     ctx = {
         "items": items,
         "pending": setup_state.pending(items),

@@ -17,7 +17,7 @@
   <label>끝<input type="date" name="until" value="{{ q.until }}" min="2000-01-01"></label>
   <label>종류<select name="kind"><option value="">전체</option>{% for k in filters.kinds %}<option value="{{ k }}"{% if q.kind == k %} selected{% endif %}>{{ L.pick(L.EVENT_KIND, k) }}</option>{% endfor %}</select></label>
   <label>주체<select name="actor"><option value="">전체</option>{% for a in filters.actors %}<option value="{{ a }}"{% if q.actor == a %} selected{% endif %}>{{ a | who }}</option>{% endfor %}</select></label>
-  <label>서버<select name="server_id"><option value="">전체</option>{% for s in servers %}<option value="{{ s }}"{% if q.server_id == s %} selected{% endif %}>{{ s }}</option>{% endfor %}</select></label>
+  <label>MCP 서버<select name="server_id"><option value="">전체</option>{% for s in servers %}<option value="{{ s }}"{% if q.server_id == s %} selected{% endif %}>{{ s }}</option>{% endfor %}</select></label>
   <input type="hidden" name="result" value="{{ q.result }}">
   <details><summary>고급 필터</summary>
     <label>판정 참조<input type="text" name="ref" value="{{ q.ref }}" autocomplete="off" spellcheck="false"></label>
@@ -28,7 +28,7 @@
   <a class="button" href="/api/v1/ledger/export?format=json&amp;{{ export_qs }}" hx-boost="false">JSON 내보내기</a>
 </form>
 {% if rows %}
-<table class="clickable compact"><thead><tr><th>시각</th><th>종류</th><th>주체</th><th>서버</th><th>결과</th><th>내용</th><th>조치</th></tr></thead><tbody>
+<table class="clickable compact"><thead><tr><th>시각</th><th>종류</th><th>주체</th><th>MCP 서버</th><th>결과</th><th>내용</th><th>조치</th></tr></thead><tbody>
 {% for e in rows %}<tr>
 <td class="nowrap"><a href="/ledger?{{ qs ~ '&' if qs }}open={{ e.event_id }}">{{ e.inserted_at | when }}</a></td><td class="nowrap">{{ L.pick(L.EVENT_KIND, e.kind) }}{% if e.kind in ('alert_opened', 'alert_resolved') and (e.get('payload') or {}).get('kind') in L.ALERT_KIND %} · {{ L.ALERT_KIND[e.payload.kind] }}{% endif %}</td><td>{{ e.actor | who }}</td>
 <td>{{ e.server_id | blank }}</td><td>{{ L.pick(L.OUTCOME, e.outcome) if e.outcome else L.pick(L.RESULT, e.result) }}</td>
@@ -47,7 +47,7 @@
   <dt>시각</dt><dd>{{ ev.inserted_at | when }}</dd>
   <dt>종류</dt><dd>{{ L.pick(L.EVENT_KIND, ev.kind) }}</dd>
   <dt>주체</dt><dd>{{ ev.actor | who }}</dd>
-  <dt>서버</dt><dd>{{ ev.server_id | blank }}</dd>
+  <dt>MCP 서버</dt><dd>{{ ev.server_id | blank }}</dd>
   {% if ev.tool %}<dt>도구</dt><dd>{{ ev.tool }}</dd>{% endif %}
   {% if ev.kind == 'decision_evaluated' %}
   <dt>결과</dt><dd>{{ L.pick(L.OUTCOME_BUCKET, ev.bucket) }}{% if ev.outcome and L.pick(L.OUTCOME, ev.outcome) != L.pick(L.OUTCOME_BUCKET, ev.bucket) %} · {{ L.pick(L.OUTCOME, ev.outcome) }}{% endif %}</dd>
