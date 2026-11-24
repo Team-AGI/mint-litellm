@@ -306,7 +306,12 @@ def test_a_managed_windows_install_uses_program_files_and_powershell_hooks(
     assert sorted(block["mcp_servers"]) == ["srv-1", "srv-2"] and "hooks" not in block
     assert not (root / "C/ProgramData/OpenAI/Codex/managed_config.toml").exists()
     assert state["files"]["C:/Program Files/MintEndpoint/mint_agent.py"]
+    # `mint`·`mint add`는 사용자 PATH에 기본으로 있는 WindowsApps의 mint.cmd로 부른다.
+    shim = tmp_path / "home/AppData/Local/Microsoft/WindowsApps/mint.cmd"
+    text = shim.read_bytes().decode()
+    assert '-I -B "C:/Program Files/MintEndpoint/mint_kit.py" %*\r\n' in text and "screen" in text
     kit.uninstall()
+    assert not shim.exists()
     assert not (tmp_path / "home/.codex/config.toml").exists()
     assert not (root / "C/Program Files/MintEndpoint").exists()
     assert not (root / "C/ProgramData/OpenAI").exists()

@@ -74,6 +74,7 @@ REPORT_PATH = "/mint/v1/endpoint/report"
 BEGIN = "# >>> mint >>>"
 END = "# <<< mint <<<"
 NL = chr(10)
+CRLF = chr(13) + NL
 REPORT_TIMEOUT = 5
 # 주기 보고: 간격(시), 시작 지연의 상한(초), 서버 실행기가 시작할 때 보고를 건너뛰는 최소 간격(초)
 REPORT_INTERVAL_HOURS = 6
@@ -1903,8 +1904,17 @@ class Kit:
             self.schedule_timer(state, command)
 
     def install_shim(self, state: dict, python: str) -> None:
-        """``mint status``·``mint check``를 부를 수 있는 짧은 명령(Windows는 설치 파일을 쓴다)."""
+        """``mint``·``mint add``·``mint status``를 부를 수 있는 짧은 명령."""
+        tool = f"{self.logical_programs}/mint_kit.py"
         if self.windows:
+            # 사용자 PATH에 기본으로 있는 WindowsApps 폴더에 둔다(PATH 수정·새 창이 필요 없다).
+            path = self.home / "AppData/Local/Microsoft/WindowsApps" / (SHIM + ".cmd")
+            text = (
+                f'@echo off{CRLF}'
+                f'if "%~1"=="" ("{python}" -I -B "{tool}" screen & exit /b){CRLF}'
+                f'"{python}" -I -B "{tool}" %*{CRLF}'
+            )
+            self.write_tracked(state, path, str(path), text.encode(), 0o755)
             return
         if self.managed:
             logical = f"{BIN_DIR}/{SHIM}"
@@ -1912,7 +1922,6 @@ class Kit:
         else:
             path = self.home / ".local/bin" / SHIM
             logical = str(path)
-        tool = f"{self.logical_programs}/mint_kit.py"
         text = (
             f"#!/bin/sh{NL}[ $# -gt 0 ] || {{{NL}"
             f"  [ -t 0 ] && [ -t 1 ] && set -- screen || set -- status{NL}}}{NL}"
