@@ -93,10 +93,13 @@ def test_signup_flow(world):
             "send_invite_email": False,
         }
         assert fake.writes("/invitation/new")[-1][2] == {"user_id": "user-1"}
-        assert "비밀번호 정하기" in client.get(path).text
+        page = client.get(path).text
+        # 직원은 MINT 화면에서 바로 비밀번호를 정한다. LiteLLM 초대 주소는 관리자 화면에만 있다.
+        assert "비밀번호 정하기" in page and 'name="password"' in page
         expected = "https://gateway.example.test/ui/onboarding?invitation_id=invite-user-1"
-        assert expected in client.get(path).text
-        assert "복사" in admin.get("/signup-requests").text
+        assert expected not in page
+        listing = admin.get("/signup-requests").text
+        assert "복사" in listing and expected in listing
         assert "이미 가입되었거나 요청 중입니다" in submit(client, "person@example.test").text
 
         # 명부 동기화 전이어도 LiteLLM에 같은 이메일이 있으면 기존 사람을 재사용한다.
@@ -192,3 +195,28 @@ def test_signup_flow(world):
         if response.status_code == 429:
             break
     assert response.status_code == 429
+
+
+def test_claim_invitation_sets_the_password_through_litellm_without_storing_it(monkeypatch):
+    import base64
+    import json
+
+    from mint_litellm.console import signup
+
+    inner = base64.urlsafe_b64encode(json.dumps({"user_id": "u1", "key": "onboard"}).encode())
+    calls = []
+
+    def fake(base, method, path, body=None, bearer=None):
+        calls.append((method, path, body, bearer))
+        if path.startswith("/onboarding/get_token"):
+            return 200, {"token": "h." + inner.decode().rstrip("=") + ".s"}
+        return 200, {}
+
+    monkeypatch.setattr(signup, "_litellm", fake)
+    assert signup.claim_invitation("http://litellm:4000", "inv-1", "longpassword12") is None
+    assert calls[1] == ("POST", "/onboarding/claim_token",
+                        {"invitation_link": "inv-1", "user_id": "u1", "password": "longpassword12"},
+                        "onboard")
+    monkeypatch.setattr(signup, "_litellm", lambda *a, **k: (
+        401, {"detail": {"error": "Invitation link has already been used."}}))
+    assert "이미 비밀번호를 정했습니다" in signup.claim_invitation("x", "inv-1", "longpassword12")
