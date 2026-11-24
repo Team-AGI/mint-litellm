@@ -92,6 +92,8 @@ def test_control_plane_routes():
         "/team/list",
         "/user/list",
         "/guardrails/list",
+        "/team/daily/activity",
+        "/user/daily/activity",
         "/key/update",
         "/team/update",
         "/key/block",
@@ -254,5 +256,6 @@ def test_restore_is_described_only_as_a_scope_of_a_later_release():
         if "restore --attest" in line:
             assert "현재 판본에는 복원 명령이 없고" in line
     assert not any("restore" in command.name for command in COMMANDS)
+    # mint.sh restore는 예약 백업(DB 덤프)을 되돌리는 배포 명령이라 증빙 복원(--attest)과 다르다.
     script = Path(__file__).resolve().parents[2] / "deploy" / "mint.sh"
-    assert "restore" not in script.read_text(encoding="utf-8")
+    assert "restore --attest" not in script.read_text(encoding="utf-8")
