@@ -1,7 +1,7 @@
 {% extends "base.html" %}{% import "macros.html" as m %}
 {% block title %}가입 요청 · MINT{% endblock %}
 {% block body %}<h1>가입 요청</h1>
-<table><thead><tr><th>이메일</th><th>이름</th><th>요청 시각</th><th>상태와 처리</th></tr></thead><tbody>
+<table><thead><tr><th>아이디</th><th>이름</th><th>요청 시각</th><th>상태와 처리</th></tr></thead><tbody>
 {% for row in rows %}<tr><td>{{ row.email }}</td><td>{{ row.display_name }}</td><td>{{ row.requested_at | when }}</td><td>
 {% if row.status == 'pending' and not row.decided_at %}
 <form method="post" action="/signup-requests/{{ row.id }}/approve">{{ m.csrf(actor) }}<button type="submit">승인</button></form>

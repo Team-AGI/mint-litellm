@@ -29,7 +29,7 @@ public = APIRouter()
 admin = APIRouter(dependencies=[Depends(require_csrf)])
 COOKIE = "mint_signup_csrf"
 DUPLICATE = "이미 가입되었거나 요청 중입니다. 로그인하거나 관리자에게 문의하십시오."
-DONE = "가입 요청을 보냈습니다. 관리자가 승인하면 이 이메일과 비밀번호로 로그인할 수 있습니다."
+DONE = "가입 요청을 보냈습니다. 관리자가 승인하면 이 아이디와 비밀번호로 로그인할 수 있습니다."
 
 
 def form(request, error=None, status=200, done=False):
@@ -57,9 +57,11 @@ def signup_submit(request: Request, email: str = Form(""), name: str = Form(""),
     if too_many_attempts(request):
         return form(request, "요청이 너무 많습니다. 잠시 뒤 다시 시도하십시오.", 429)
     email, name = email.strip().lower(), name.strip()
-    if (len(email) > 320 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email)
+    # 아이디는 이메일이 아니어도 된다(메일 인증을 하지 않는다). 로그인할 때 그대로 쓴다.
+    if (not re.fullmatch(r"[a-z0-9][a-z0-9._@+-]{2,63}", email)
             or not name or len(name) > 200):
-        return form(request, "이메일과 이름을 확인하십시오.", 400)
+        return form(request, "아이디(영문 소문자·숫자로 시작, 3~64자)와 이름을 확인하십시오.",
+                    400)
     if not 8 <= len(password) <= 256 or password != confirm:
         return form(request, "비밀번호는 8자 이상이고 두 칸이 같아야 합니다.", 400)
     instance, request_id = config_of(request).instance_id, new_uuid7()
@@ -94,7 +96,7 @@ def requests_page(request: Request, actor: Actor = Depends(page_actor)):
             "litellm_unavailable": "게이트웨이 연결이 설정되지 않았습니다.",
             "litellm_http_401": "게이트웨이 인증에 실패했습니다.",
             "litellm_http_403": "게이트웨이가 요청을 거부했습니다.",
-            "duplicate_user": "같은 이메일의 계정이 여러 개입니다.",
+            "duplicate_user": "같은 아이디의 계정이 여러 개입니다.",
             "missing_user_id": "생성된 계정을 확인하지 못했습니다.",
             "missing_invitation_id": "초대 정보를 확인하지 못했습니다.",
             "password_policy": "비밀번호가 게이트웨이 규칙에 맞지 않습니다.",

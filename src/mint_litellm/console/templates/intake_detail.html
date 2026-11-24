@@ -4,7 +4,7 @@
 {% block body %}
 <h1>{{ server_name }} {{ m.badge(L.DECISION, i.decision) if i.decision == 'withdrawn' else m.badge(L.INTAKE, i.status) }}</h1>
 {% set withdrawal_source_owner = i.requested_by == actor.ctx.operator.user_id and i.source in ('operator', 'staff', 'endpoint') %}
-{% if withdrawal_source_owner and i.status in ('received','passed','indeterminate') %}
+{% if withdrawal_source_owner and i.status in ('received','checking','passed','indeterminate') %}
 <details><summary>신청 철회</summary>
 <p>승인 전 신청을 철회합니다. 검사 이력은 남습니다.</p>
 <form method="post" action="/intakes/{{ i.id }}/withdraw" class="form">
@@ -15,7 +15,6 @@
 </form></details>
 {% endif %}
 {% if i.decision == 'withdrawn' %}<div class="effect">철회된 신청입니다. 사유: {{ i.decision_reason }} · 승인이나 사용 권한은 부여되지 않았습니다.</div>{% endif %}
-{% if withdrawal_source_owner and i.status == 'checking' %}<p>검사 진행 중에는 철회할 수 없습니다. 검사가 끝난 뒤 새로고침하십시오.</p>{% endif %}
 {% if server_url %}<p>{{ server_url }}</p>{% endif %}<p>MCP 서버 식별자 {{ m.ident(i.server_id) }} <button type="button" class="copy" data-copy="{{ i.server_id }}">복사</button></p>
 {% if cause %}<div class="banner error" role="alert">원인: {{ cause }}</div>{% endif %}
 <ol class="steps" aria-label="진행 단계">{% for level, text in progress %}<li class="{{ level }}"><span class="icon" aria-hidden="true">{{ ICONS[level] }}</span>{{ text }}</li>{% endfor %}</ol>

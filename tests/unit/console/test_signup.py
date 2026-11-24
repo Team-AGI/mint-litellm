@@ -57,7 +57,10 @@ def test_signup_flow(world, monkeypatch):
     assert "두 칸이 같아야" in submit(client, "person@example.test", confirm="other-pass-123").text
     assert "8자 이상" in submit(client, "person@example.test", password="short").text
     page = submit(client, "person@example.test").text
-    assert "관리자가 승인하면 이 이메일과 비밀번호로 로그인할 수 있습니다" in page
+    # 아이디는 이메일이 아니어도 된다(메일 인증을 하지 않는다).
+    assert "관리자가 승인하면" in submit(client, "hong.gildong").text
+    assert "아이디(영문 소문자" in submit(client, "x").text
+    assert "관리자가 승인하면 이 아이디와 비밀번호로 로그인할 수 있습니다" in page
     sealed, token = world.query(
         "SELECT password_sealed, status_token_hash FROM mint.signup_requests")[0]
     assert token is None and PASSWORD.encode() not in bytes(sealed)
