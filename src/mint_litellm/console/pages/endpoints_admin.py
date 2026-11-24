@@ -212,6 +212,35 @@ def revoke_app(
     return _device_action(request, actor, "", "", work, "app_revoked", back)
 
 
+@router.post("/endpoints/{key_alias}/revoke")
+def revoke_device(
+    key_alias: str, request: Request, reason: str = Form(""), actor: Actor = Depends(page_actor)
+):
+    """PC 한 대의 연결만 해제한다(분실). 같은 사람의 다른 PC는 그대로다."""
+    issuer = actor.config.kit_issuer
+
+    def action():
+        if actor.role != "admin":
+            raise AdminError(AdminCode.FORBIDDEN, "관리자만 단말 연결을 해제할 수 있습니다.")
+        if issuer is None:
+            raise ControlError("단말 연결을 해제할 수 없습니다.")
+        with transact(actor.ctx):
+            try:
+                user_id = endpoint_kits.revoke_install(
+                    actor.conn, issuer, actor.instance, key_alias, actor.ctx.operator.name)
+            except LiteLLMError:
+                log.exception("단말 설치 묶음 키 해제 실패")
+                raise ControlError("단말 연결을 해제하지 못했습니다.") from None
+            actor.ctx.emit(
+                EventKind.ENDPOINT_REVOKED, user_id, int(datetime.now(UTC).timestamp()),
+                {"user_id": user_id, "installs": 1, "key_alias": key_alias,
+                 "reason": reason.strip()[:500]},
+            )
+
+    return act(actor, action, "endpoint_revoked", "/endpoints?tab=installs",
+               lambda **kw: endpoints_page(request, actor, **kw))
+
+
 @router.post("/endpoints/revoke")
 def revoke_endpoint(
     request: Request, user_id: str = Form(...), reason: str = Form(""),
@@ -404,11 +433,12 @@ def siem_add(
     kind: str = Form(...),
     endpoint: str = Form(...),
     token: str = Form(""),
+    secret: str = Form(""),
     index: str = Form(""),
     from_start: str = Form(""),
     actor: Actor = Depends(page_actor),
 ):
-    """전달 대상 추가. 토큰 값은 저장하지 않고 읽을 곳(환경 변수 이름이나 비밀 파일)만 적는다."""
+    """전달 대상 추가. 토큰은 값을 적어 봉인해 두거나 읽을 곳(환경 변수·파일)을 적는다."""
 
     def action():
         _admin_only(actor)
@@ -416,15 +446,16 @@ def siem_add(
             raise ValueError(kind)
         target, where = name.strip(), token.strip()
         ref = (f"file:{where}" if where.startswith("/") else f"env:{where}") if where else None
+        source = "sealed" if secret.strip() else ref.partition(":")[0] if ref else None
         siem.add(
             actor.conn, actor.instance, name=target, kind=kind, endpoint=endpoint.strip(),
             secret_ref=ref, options={"index": index.strip()} if index.strip() else {},
             from_start=bool(from_start), created_by=actor.ctx.operator.name,
+            token=secret.strip() or None,
         )
         actor.ctx.emit(
             EventKind.SIEM_TARGET_ADDED, f"{target}-{_stamp()}", 1,
-            {"name": target, "kind": kind,
-             "secret_source": ref.partition(":")[0] if ref else None},
+            {"name": target, "kind": kind, "secret_source": source},
         )
 
     return act(actor, action, "siem_added", "/admin?tab=siem", tabbed(request, actor, "siem"))

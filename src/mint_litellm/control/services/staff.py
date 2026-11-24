@@ -327,6 +327,23 @@ def blocked_servers(sctx: StaffContext) -> dict[str, bool]:
     return {r["server_id"]: r["mine"] for r in rows}
 
 
+def lapsed_servers(sctx: StaffContext) -> set[str]:
+    """내 범위의 승인이 있었지만 지금은 유효한 것이 하나도 없는(만료·철회) 서버."""
+    rows = fetchall(
+        sctx.control,
+        "SELECT a.server_id FROM mint.approvals a WHERE a.instance_id = %(iid)s"
+        " AND ((a.scope_type = 'user' AND a.scope_id = %(user)s)"
+        "   OR (a.scope_type = 'team' AND a.scope_id = ANY(%(teams)s))"
+        "   OR (a.scope_type = 'org' AND a.scope_id = ANY(%(orgs)s))"
+        "   OR (a.scope_type = 'key' AND a.scope_id = %(key)s))"
+        " GROUP BY a.server_id"
+        " HAVING NOT bool_or(a.status = 'active' AND a.valid_until > now())",
+        {"user": sctx.user_id, "iid": sctx.instance_id, "teams": list(sctx.team_ids),
+         "orgs": sorted(_member_orgs(sctx, sctx.team_ids)), "key": sctx.key_token},
+    )
+    return {r["server_id"] for r in rows}
+
+
 # ---------------------------------------------------------------------------
 # 본인 범위 조회
 # ---------------------------------------------------------------------------

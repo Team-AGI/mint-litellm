@@ -742,10 +742,13 @@ def test_a_one_line_command_is_redeemed_once_and_swaps_the_key(kits):
         config = json.loads(bundle.extractfile("mint-kit/kit.json").read())
     assert config["key"].startswith("sk-kit-") and config["harnesses"] == [
         "claude", "codex", "cursor", "grok"]
-    assert anonymous.get(path).status_code == 404  # 한 번만 쓴다
-    assert anonymous.get("/kit/nope/install.sh").status_code == 404
+    # 한 번만 쓴다. 스크립트 요청의 실패는 curl이 숨기지 않게 읽을 수 있는 한 줄로 돌려준다.
+    again = anonymous.get(path)
+    assert again.status_code == 200 and again.text.startswith("echo ")
+    assert "설치 코드가 없거나" in anonymous.get("/kit/nope/install.sh").text
+    assert anonymous.get("/kit/nope/kit.tar.gz").status_code == 404
     kits.query("UPDATE mint.kit_codes SET used_at = NULL, expires_at = now() - interval '1s'")
-    assert anonymous.get(path).status_code == 404  # 만료
+    assert "설치 코드가 없거나" in anonymous.get(path).text  # 만료
 
 
 def test_the_staff_header_shows_the_email_not_the_user_id(kits):
@@ -790,8 +793,8 @@ def test_only_the_owner_sees_the_rows_and_revoking_disconnects_the_devices(kits)
 def test_without_key_issuance_or_approved_servers_there_is_no_kit(sworld):
     client = logged_in(sworld)
     refused = download(client)
-    assert refused.status_code == 503 and "발급할 수 없습니다" in refused.text
-    assert "MINT_KIT_ISSUER_KEY" in refused.text  # 운영자가 할 일을 알린다
+    assert refused.status_code == 503 and "관리자가 준비 중입니다" in refused.text
+    assert "MINT_" not in refused.text  # 직원에게 설정 이름을 보이지 않는다
     assert sworld.query("SELECT count(*) FROM mint.endpoint_installs") == [(0,)]
     import dataclasses
 
@@ -799,7 +802,7 @@ def test_without_key_issuance_or_approved_servers_there_is_no_kit(sworld):
         sworld.config, kit_issuer=KitIssuer(), endpoint_routes=True
     )
     unreachable = download(client)  # 단말이 부를 주소가 없으면 묶음을 내주지 않는다
-    assert unreachable.status_code == 503 and "MINT_ENDPOINT_PUBLIC_URL" in unreachable.text
+    assert unreachable.status_code == 503 and "관리자가 준비 중입니다" in unreachable.text
     sworld.app.state.config = dataclasses.replace(
         sworld.app.state.config, endpoint_url="https://mint.test"
     )
@@ -807,12 +810,12 @@ def test_without_key_issuance_or_approved_servers_there_is_no_kit(sworld):
     assert empty.status_code == 200 and empty.headers["content-type"] == "application/gzip"
 
 
-def test_a_kit_is_refused_with_a_clear_message_while_the_endpoint_routes_are_off(kits):
+def test_a_kit_is_refused_politely_while_the_endpoint_routes_are_off(kits):
     import dataclasses
 
     kits.app.state.config = dataclasses.replace(kits.app.state.config, endpoint_routes=False)
     refused = download(logged_in(kits))
-    assert refused.status_code == 503 and "MINT_ENDPOINT_ROUTES" in refused.text
+    assert refused.status_code == 503 and "관리자가 준비 중입니다" in refused.text
     assert kits.issuer.made == []
 
 
@@ -1063,3 +1066,36 @@ def test_an_approved_server_without_tools_is_preparing_only_for_its_requester(sw
     page = logged_in(sworld).get("/staff")
     assert "준비 중" in page.text and "진행 상황 보기" in page.text
     assert "준비 중" not in logged_in(sworld, OTHER_KEY).get("/staff").text
+    # 승인이 있었다가 철회되면 준비 중 카드는 남지 않는다.
+    add_approval(sworld, "user", STAFFER)
+    sworld.query("UPDATE mint.approvals SET status = 'revoked', revoked_at = now()")
+    assert "준비 중" not in logged_in(sworld).get("/staff").text
+
+
+def test_a_missing_kit_setting_makes_no_code_and_tells_staff_and_admin_apart(kits):
+    import dataclasses
+
+    client = logged_in(kits)
+    kits.app.state.config = dataclasses.replace(kits.app.state.config, endpoint_url=None)
+    page = client.post("/staff/endpoint/code", data={"csrf": csrf(client)})
+    assert page.status_code == 503 and "관리자가 준비 중입니다" in page.text
+    assert "MINT_" not in page.text and "curl -fsSL" not in page.text
+    assert kits.query("SELECT count(*) FROM mint.kit_codes")[0][0] == 0
+    ((kind, subject),) = kits.query(
+        "SELECT kind, subject FROM mint.alerts WHERE status <> 'resolved'")
+    assert kind == "endpoint_kit_not_ready" and "MINT_ENDPOINT_PUBLIC_URL" in subject["missing"]
+    # 코드가 이미 있어도 설정이 빠졌으면 코드를 쓰지 않고 읽을 수 있는 한 줄을 돌려준다.
+    from mint_litellm.control import kit_codes
+
+    with psycopg.connect(kits.admin_url, autocommit=True) as admin:
+        code = kit_codes.create(admin, INSTANCE, STAFFER, None)
+    anonymous = kits.client.__class__(kits.app, base_url="https://testserver")
+    got = anonymous.get(f"/kit/{code}/install.sh")
+    assert got.status_code == 200 and got.text.startswith("echo ") and "exit 1" in got.text
+    assert "관리자가 준비 중입니다" in got.text and "MINT_" not in got.text
+    assert "Write-Host" in anonymous.get(f"/kit/{code}/install.ps1").text
+    assert kits.query("SELECT used_at IS NULL FROM mint.kit_codes") == [(True,)]
+    kits.app.state.config = dataclasses.replace(
+        kits.app.state.config, endpoint_url="https://mint.test")
+    assert anonymous.get(f"/kit/{code}/install.sh").status_code == 200
+    assert kits.query("SELECT used_at IS NOT NULL FROM mint.kit_codes") == [(True,)]

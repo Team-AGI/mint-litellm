@@ -1,5 +1,6 @@
 """시작하기 점검표: 항목별 상태 계산, 알림 시험 전송, 역할별 접근."""
 
+import dataclasses
 import json
 import re
 import uuid
@@ -67,10 +68,16 @@ def test_a_fresh_install_shows_what_is_missing(world, admin):
     assert state(html, "servers") == "완료" and state(html, "password") == "완료"
     assert state(html, "accounts") == "미완료"
     assert state(html, "approval") == "확인 필요" and "알림 주소 미설정" in html
-    endpoint = row_of(html, "endpoint")
-    assert "미완료" in endpoint and 'href="/staff/endpoint"' in endpoint
     assert state(html, "rule") == state(html, "report") == "미완료"
-    assert state(html, "endpoint") == "미완료"
+    # 설치 명령에 필요한 서버 설정이 빠졌으면 관리자에게 정확한 원인을 보인다.
+    endpoint = row_of(html, "endpoint")
+    assert state(html, "endpoint") == "확인 필요"
+    assert "MINT_KIT_ISSUER_KEY" in endpoint and "MINT_ENDPOINT_PUBLIC_URL" in endpoint
+    world.app.state.config = dataclasses.replace(
+        world.config, kit_issuer=object(), endpoint_url="https://mint.test", endpoint_routes=True)
+    html = admin.get("/setup").text
+    endpoint = row_of(html, "endpoint")
+    assert state(html, "endpoint") == "미완료" and 'href="/staff/endpoint"' in endpoint
 
 
 def test_the_gateway_item_follows_the_reported_grade(world, admin):

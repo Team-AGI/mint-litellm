@@ -230,6 +230,18 @@ class ConsoleConfig:
         )
 
     @property
+    def kit_gap(self) -> str:
+        """설치 묶음 발급에 필요한데 빠진 설정(관리자용 이름). 갖췄으면 빈 문자열."""
+        missing = []
+        if self.kit_issuer is None:
+            missing.append("MINT_KIT_ISSUER_KEY(설치 묶음 발급 키)")
+        if not self.endpoint_url:  # 비어 있으면 묶음에 컨테이너 안 주소가 적힌다
+            missing.append("MINT_ENDPOINT_PUBLIC_URL(단말에서 닿는 LiteLLM 주소)")
+        if not self.endpoint_routes:
+            missing.append("MINT_ENDPOINT_ROUTES(단말 경로 켜기)")
+        return ", ".join(missing)
+
+    @property
     def zone(self) -> ZoneInfo:
         return ZoneInfo(self.time_zone)
 

@@ -65,6 +65,15 @@ def test_ending_a_relation_shows_the_impact_then_terminates_and_finishes(world, 
     finish = form_post(world, admin, f"/servers/srv-ok/relations/{rid}/finish",
                        state_version=relation(world)[1])
     assert finish.status_code == 409 and "증빙" in finish.text
+    assert "삭제·반환 증빙 붙이기" in admin.get("/servers/srv-ok?tab=usage").text
+    assert form_post(world, admin, f"/servers/srv-ok/relations/{rid}/evidence",
+                     summary="자료를 모두 삭제함").status_code == 303
+    assert "삭제·반환 증빙 붙이기" not in admin.get("/servers/srv-ok?tab=usage").text
+    finish = form_post(world, admin, f"/servers/srv-ok/relations/{rid}/finish",
+                       state_version=relation(world)[1])
+    assert finish.status_code == 303
+    assert world.query("SELECT status FROM mint.usage_relations WHERE id = %s", rid) == [
+        ("terminated",)]
     other = f"/servers/nope/relations/{rid}/terminate"
     assert form_post(world, admin, other, state_version=version).status_code == 404
 

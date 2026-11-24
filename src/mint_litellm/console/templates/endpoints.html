@@ -77,7 +77,9 @@
 {% if selected.state in ('managed', 'user') and selected.pause_view %}{{ pause_panel(selected, '') }}{% endif %}
 {{ apps_panel(selected, selected.apps, actor.role == 'admin', '/endpoints/apps/', selected.ref) }}
 {% if actor.role == 'admin' and selected.group %}
-<div class="actions">{% call m.confirm_dialog('revoke-endpoint', '연결 해제', '단말 연결을 해제합니다', selected.user_id ~ ' 사용자의 설치 묶음 키와 앱 자격이 지워지고, 이 사용자의 단말은 더 이상 판정을 받지 못합니다. 새 설치 명령으로 다시 설치해야 연결됩니다.', '/endpoints/revoke', actor, '연결 해제') %}
+<div class="actions">{% if selected.state != 'revoked' %}{% call m.confirm_dialog('revoke-device', '연결 해제', '이 PC의 연결을 해제합니다', '이 PC의 설치 묶음 키와 이 PC에 묶인 앱 자격이 지워지고 이 PC는 더 이상 판정을 받지 못합니다. ' ~ selected.user_id ~ ' 사용자의 다른 PC는 그대로입니다. 새 설치 명령으로 다시 설치해야 연결됩니다.', '/endpoints/' ~ selected.key_alias ~ '/revoke', actor, '연결 해제') %}
+<label>해제 사유(선택)<input name="reason" maxlength="500" autocomplete="off"></label>
+{% endcall %}{% endif %}{% call m.confirm_dialog('revoke-endpoint', '이 사람의 PC 모두 해제', '이 사람의 PC를 모두 해제합니다', selected.user_id ~ ' 사용자의 모든 PC 설치 묶음 키와 앱 자격이 지워지고, 이 사용자의 PC는 더 이상 판정을 받지 못합니다. 새 설치 명령으로 다시 설치해야 연결됩니다.', '/endpoints/revoke', actor, '모두 해제') %}
 <input type="hidden" name="user_id" value="{{ selected.user_id }}">
 <label>해제 사유(선택)<input name="reason" maxlength="500" autocomplete="off"></label>
 {% endcall %}</div>

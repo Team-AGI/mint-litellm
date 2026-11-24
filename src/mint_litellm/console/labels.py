@@ -519,6 +519,7 @@ ALERT_KIND = {
     "endpoint_egress_refused": "허용 호스트 밖 접속 거절",
     "endpoint_silent": "단말 보고 끊김",
     "endpoint_key_expiring": "단말 키 만료 임박",
+    "endpoint_kit_not_ready": "단말 설치 묶음 발급 준비 미흡",
     "endpoint_update_failed": "단말 자동 갱신 실패",
     "package_unpinned": "버전 미고정 패키지",
     "package_vulnerable": "패키지 취약점",

@@ -165,6 +165,12 @@ def _endpoints(actor: Actor) -> dict:
         "SELECT count(*) AS n FROM mint.endpoint_installs WHERE instance_id = %s"
         f" AND {live} AND reported_at > now() - interval '24 hours'",
     )
+    gap = actor.config.kit_gap
+    if gap and not fresh:
+        return _item(
+            "endpoint", "직원 PC 연결", CHECK,
+            f"직원이 설치 명령을 만들 수 없습니다. 서버 설정이 빠졌습니다: {gap}",
+        )
     if fresh:
         return _item(
             "endpoint",

@@ -76,6 +76,22 @@ def revoke_user_apps(
     return len(rows)
 
 
+def revoke_install_apps(
+    conn: psycopg.Connection, issuer: LiteLLMKitKeys, instance_id: str, install_key_token: str,
+    actor: str,
+) -> int:
+    """이 설치(단말)에 묶인 앱만 회수한다. 회수한 수를 돌려준다."""
+    rows = fetchall(
+        conn,
+        "SELECT id, user_id, name, key_alias, revoked_at FROM mint.endpoint_apps"
+        " WHERE instance_id = %s AND install_key_token = %s AND revoked_at IS NULL",
+        (instance_id, install_key_token),
+    )
+    if rows:
+        _revoke(conn, issuer, instance_id, rows, actor)
+    return len(rows)
+
+
 def _revoke(
     conn: psycopg.Connection, issuer: LiteLLMKitKeys, instance_id: str, rows: list[dict],
     actor: str,

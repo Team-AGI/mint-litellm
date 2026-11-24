@@ -494,3 +494,18 @@ def test_a_token_is_read_only_from_siem_variables_or_the_secrets_folder(admin):
             siem.read_secret(ref, {"MINT_DATABASE_URL": "postgresql://secret"})
     siem.check_secret_ref("env:MINT_SIEM_HEC_TOKEN")
     siem.check_secret_ref("file:/run/secrets/hec_token")
+
+
+def test_a_token_typed_on_screen_is_sealed_and_read_back_by_the_runner(admin, monkeypatch):
+    monkeypatch.setenv("MINT_EXPORT_HMAC_KEY", "k" * 43)
+    kw = {"kind": "hec", "endpoint": "https://s.test:8088", "options": {}, "from_start": True,
+          "created_by": "root"}
+    siem.add(admin, INSTANCE, name="t1", secret_ref=None, token="tok-123", **kw)
+    row = fetchone(admin, "SELECT * FROM mint.siem_targets WHERE name = 't1'")
+    assert row["secret_ref"] == "sealed:" and b"tok-123" not in bytes(row["sealed_secret"])
+    assert siem.read_secret(row["secret_ref"], {}, row) == "tok-123"
+    assert "sealed_secret" not in siem.listing(admin, INSTANCE)[0]
+    with pytest.raises(siem.SendError):  # 다른 대상 이름으로는 열리지 않는다
+        siem.read_secret("sealed:", {}, {**row, "name": "other"})
+    with pytest.raises(ControlError):
+        siem.add(admin, INSTANCE, name="t2", secret_ref="env:MINT_SIEM_A", token="t", **kw)
