@@ -260,6 +260,9 @@ class ToolListItem(BaseModel):
 
 
 _NAME = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+_PACKAGE_NAME = r"^(@[a-z0-9][a-z0-9._-]{0,100}/)?[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+_INTEGRITY = r"^sha512-[A-Za-z0-9+/]{86}==$"
+_SEMVER = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?"
 MAX_OBSERVED_TOOLS = 200
 
 
@@ -273,8 +276,11 @@ class IntakeSpec(BaseModel):
         default=None,
         pattern=r"^https://(github\.com|gitlab\.com|bitbucket\.org|codeberg\.org)"
                 r"/[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}$")
-    name: str = Field(pattern=_NAME)
+    name: str = Field(pattern=_PACKAGE_NAME)
     version: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._+!-]{0,63}$")
+    # npm 출처: 레지스트리 무결성 해시(필수)와 소스 커밋(선택, 소스 검사에 쓴다).
+    integrity: str | None = Field(default=None, pattern=_INTEGRITY)
+    commit: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
     extras: list[Annotated[str, Field(pattern=r"^[A-Za-z0-9._-]{1,64}$")]] = Field(
         default_factory=list, max_length=16
     )
@@ -283,6 +289,12 @@ class IntakeSpec(BaseModel):
 
     @model_validator(mode="after")
     def _source_is_pinned(self) -> IntakeSpec:
+        if self.index == "npm":
+            if not self.integrity or not re.fullmatch(_SEMVER, self.version):
+                raise ValueError("an npm source needs an exact version and its sha512 integrity")
+            return self
+        if self.integrity or self.commit or self.name.startswith("@"):
+            raise ValueError("integrity and commit are for npm sources only")
         if (self.index == "pypi") != (self.git is None) or (
                 self.index != "pypi" and not re.fullmatch(r"[0-9a-f]{40}", self.version)):
             raise ValueError("a repository source needs its address and a 40-character commit")

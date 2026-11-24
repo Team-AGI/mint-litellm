@@ -1208,8 +1208,8 @@ def _approve(
 
 def _pack_ready(ctx: Context, server_id: str) -> bool:
     deployment = deployment_candidate(ctx.conn, ctx.instance_id, server_id)
-    return bool(deployment and deployment["pack_sha256"]
-                and isinstance(deployment["exec_contract"], dict))
+    return bool(deployment and isinstance(deployment["exec_contract"], dict)
+                and (deployment["pack_sha256"] or deployment["exec_contract"].get("npm")))
 
 
 def _defer_approval(
@@ -1292,8 +1292,8 @@ def _approve_local(
     """
     server_id = row["server_id"]
     deployment = deployment_candidate(ctx.conn, ctx.instance_id, server_id)
-    if (deployment is None or not deployment["pack_sha256"]
-            or not isinstance(deployment["exec_contract"], dict)):
+    if (deployment is None or not isinstance(deployment["exec_contract"], dict)
+            or not (deployment["pack_sha256"] or deployment["exec_contract"].get("npm"))):
         raise ControlError("실행 묶음을 준비하는 중입니다.")
     try:
         contract = _narrowed(ExecContract.model_validate(
@@ -1301,7 +1301,10 @@ def _approve_local(
             narrow_network, narrow_file_access)
     except ValueError:
         raise ControlError("실행 계약이 올바르지 않아 묶음을 다시 만듭니다.") from None
-    if contract.pack is None or contract.pack.sha256 != deployment["pack_sha256"]:
+    if contract.npm is not None:
+        if deployment["pack_sha256"] or contract.executable != "npx":
+            raise ControlError("실행 계약이 npm 패키지와 맞지 않습니다.")
+    elif contract.pack is None or contract.pack.sha256 != deployment["pack_sha256"]:
         raise ControlError("실행 계약이 묶음과 맞지 않아 묶음을 다시 만듭니다.")
 
     tools = fetchall(

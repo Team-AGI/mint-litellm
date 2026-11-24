@@ -489,3 +489,25 @@ def test_url_guard_refuses_a_query_or_fragment(url):
     out = c.url_guard(url, "http", [PROVIDER])
     assert (out.result, out.reason) == ("fail", "URL_QUERY")
     assert "abc" not in json.dumps(out.inputs)
+
+
+NPM_PIN = {"index": "npm", "name": "@o/srv", "version": "1.2.3", "extras": [], "command": "srv",
+           "integrity": "sha512-" + "A" * 86 + "==", "argv": ["/data"]}
+
+
+def test_an_npm_spec_may_be_scoped_but_needs_its_integrity_hash():
+    assert c.exec_shape(NPM_PIN).result == "pass"
+    assert c.exec_shape({**NPM_PIN, "integrity": None}).result == "fail"
+    assert c.exec_shape({**NPM_PIN, "name": "@O/srv"}).reason == "NAME_INVALID"
+    assert c.exec_shape({**NPM_PIN, "index": "pypi"}).reason == "NAME_INVALID"
+
+
+def test_an_npm_spec_becomes_a_pack_less_contract_with_the_pinned_package():
+    doc = c.npm_exec_contract(
+        {**NPM_PIN, "network": "hosts", "allowed_hosts": ["registry.npmjs.org"],
+         "file_access": [{"path": "/data", "mode": "ro"}]})
+    assert doc["schema_version"] == 3 and doc["executable"] == "npx" and "pack" not in doc
+    assert doc["argv"] == ["-y", "@o/srv@1.2.3", "/data"]
+    assert doc["npm"] == {"name": "@o/srv", "version": "1.2.3", "bin": "srv",
+                          "integrity": NPM_PIN["integrity"]}
+    assert doc["network"] == "hosts" and doc["file_access"] == [{"path": "/data", "mode": "ro"}]

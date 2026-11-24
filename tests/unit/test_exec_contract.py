@@ -187,3 +187,32 @@ def test_a_pack_contract_is_closed_and_tied_to_version_two(bad):
 def test_the_first_version_still_needs_the_executable_hash():
     with pytest.raises(ValidationError):
         ExecContract(executable="/usr/bin/node")
+
+
+NPM_INTEGRITY = "sha512-" + "A" * 86 + "=="
+
+
+def npm_contract(**override):
+    args = {"schema_version": 3, "executable": "npx", "argv": ["-y", "@o/srv@1.2.3", "/data"],
+            "npm": {"name": "@o/srv", "version": "1.2.3", "integrity": NPM_INTEGRITY,
+                    "bin": "srv"}}
+    return ExecContract(**(args | override))
+
+
+def test_an_npm_contract_runs_the_exact_pinned_package_without_a_path_or_file_hash():
+    base = npm_contract()
+    assert base.document()["npm"]["integrity"] == NPM_INTEGRITY and base.resolved("s").server_id
+    for change in (
+        {"npm": {**base.npm.model_dump(), "integrity": "sha512-" + "B" * 86 + "=="}},
+        {"npm": {**base.npm.model_dump(), "bin": "other"}},
+    ):
+        assert npm_contract(**change).sha256() != base.sha256()
+    bad = ({"argv": ["-y", "@o/srv@1.2.4"]}, {"argv": ["@o/srv@1.2.3"]},
+           {"executable": "/usr/bin/npx"}, {"npm": None}, {"schema_version": 1},
+           {"npm": {"name": "@o/srv", "version": "^1.2.3", "integrity": NPM_INTEGRITY,
+                    "bin": "srv"}})
+    for change in bad:
+        with pytest.raises(ValidationError):
+            npm_contract(**change)
+    with pytest.raises(ValidationError):  # npx는 3판에서만 경로 없이 받는다
+        contract(executable="npx")

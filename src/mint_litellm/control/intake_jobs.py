@@ -360,6 +360,20 @@ def _record_pack(job: JobContext, ctx: Context, contract: dict, spec: dict,
         inspections.invalidate_changed(ctx.conn, job.instance_id, contract["id"])
 
 
+def _record_npm(job: JobContext, ctx: Context, contract: dict, spec: dict) -> dict:
+    """npm 출처는 묶음이 없다. 같은 배포 계약 행에 실행 계약(판 3)만 적는다. 다시 써도 같다."""
+    legacy = fetchone(job.conn, "SELECT network_legacy FROM mint.intakes WHERE id = %s",
+                      (contract["id"],))
+    document = checks.npm_exec_contract(spec, bool(legacy and legacy["network_legacy"]))
+    with transact(ctx):
+        ctx.conn.execute(
+            "UPDATE mint.deployment_contracts SET exec_contract = %s::jsonb"
+            " WHERE instance_id = %s AND id = %s", (json.dumps(document), job.instance_id,
+                                                    contract["id"]))
+        inspections.invalidate_changed(ctx.conn, job.instance_id, contract["id"])
+    return document
+
+
 def _run_local_checks(job: JobContext, ctx: Context, row: dict, attempt: int) -> None:
     """단말 출처 신청의 검사. 이름·인자 수 위반만 거절이고 나머지 실패는 판별 불가이다."""
     server_id = row["server_id"]
@@ -372,6 +386,8 @@ def _run_local_checks(job: JobContext, ctx: Context, row: dict, attempt: int) ->
     pack: tuple[str, dict] | None = None
     defs: list[dict] | None = None
     pending: list[tuple[str, Any]] = []
+    npm = bool(spec and spec.get("index") == "npm")
+    inventory: dict | None = None
 
     def flush() -> None:
         bound = intakes.contract_binding(job.conn, job.instance_id, server_id)
@@ -383,7 +399,8 @@ def _run_local_checks(job: JobContext, ctx: Context, row: dict, attempt: int) ->
         job.checkpoint()
         done = intakes.existing_check(job.conn, job.instance_id, row["id"], name, attempt)
         if done is not None:  # 재시도: 이 시도에서 이미 기록한 검사는 건너뛴다
-            if name == "pack_build" and done["result"] == "pass" and contract:
+            if name == "pack_build" and done["result"] == "pass" and contract and (
+                    contract["pack_sha256"]):
                 pack = (contract["pack_sha256"], contract["pack_manifest"])
             if name == "inspection" and done["result"] == "pass":
                 defs = _stored_definitions(job, server_id)
@@ -392,6 +409,14 @@ def _run_local_checks(job: JobContext, ctx: Context, row: dict, attempt: int) ->
             continue
         if name == "exec_shape":
             out = checks.exec_shape(spec)
+        elif name == "pack_build" and npm:
+            try:
+                _record_npm(job, ctx, contract, spec)
+                out = checks.Outcome("pass", None, "pack:npm_registry", {
+                    "name": spec["name"], "version": spec["version"],
+                    "integrity": spec["integrity"]})
+            except packs.PackError as error:
+                out = checks.pack_build_failed(error.code)
         elif name == "pack_build":
             try:
                 pack = packs.build_pack(spec, allowlists, python=PACK_PYTHON)
@@ -415,14 +440,18 @@ def _run_local_checks(job: JobContext, ctx: Context, row: dict, attempt: int) ->
             if out.extra.get("graded"):
                 intakes.store_grades(ctx, server_id, out.extra["graded"])
         elif name == "sbom":
-            out = source_scan.sbom_outcome(pack and pack[1])
+            if npm:
+                inventory = source_scan.npm_inventory(spec)
+            out = source_scan.sbom_outcome(pack and pack[1], inventory)
         elif name == "code_scan":
             request = source_scan.scan_request(spec, pack)
             out = source_scan.code_outcome(
                 source_scan.request_scan(request, wait=job.checkpoint) if request else None)
         elif name == "dependency_vulns":
             feed = getattr(job.settings, "vuln_feed_url", None) or "https://api.osv.dev"
-            out = source_scan.dependency_outcome(pack and pack[1], feed)
+            if npm and inventory is None:
+                inventory = source_scan.npm_inventory(spec)
+            out = source_scan.dependency_outcome(pack and pack[1], feed, npm=inventory)
         else:
             out = checks.termination_readiness(row["readiness"])
         pending.append((name, out))

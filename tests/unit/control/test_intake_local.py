@@ -57,6 +57,11 @@ class Fake:
             store_grades=lambda ctx, sid, graded: self.graded.append(graded),
         )
         monkeypatch.setattr(intake_jobs, "intakes", fake_intakes)
+        monkeypatch.setattr(intake_jobs, "fetchone", lambda *a, **k: None)
+        monkeypatch.setattr(intake_jobs.source_scan, "request_scan",
+                            lambda *a, **k: {"status": "ok", "files": 1})
+        monkeypatch.setattr(intake_jobs.source_scan, "dependency_outcome",
+                            lambda *a, **k: checks.Outcome("pass", None, "sca:osv"))
         monkeypatch.setattr(intake_jobs, "_allowlists", lambda *_: [])
         monkeypatch.setattr(intake_jobs.allowlist_domain, "ensure_defaults", lambda ctx: None)
         stored = [checks.tool_definition(TOOL)]
@@ -110,7 +115,7 @@ def test_pack_failure_is_indeterminate_not_a_rejection(monkeypatch):
     assert result["pack_build"] == ("indeterminate", "PACK_SDIST_ONLY")
     assert result["inspection"] == ("indeterminate", "PACK_UNAVAILABLE")
     assert "fail" not in {r for r, _ in result.values()}
-    assert len(result) == 6 and not fake.stored and not fake.updates
+    assert len(result) == len(checks.LOCAL_CHECKS) and not fake.stored and not fake.updates
 
 
 def test_incomplete_inspection_stores_no_candidates(monkeypatch):
@@ -120,7 +125,7 @@ def test_incomplete_inspection_stores_no_candidates(monkeypatch):
     result = {name: (r, why) for name, r, why in fake.run()}
     assert result["inspection"] == ("indeterminate", "TIMEOUT")
     assert result["description_scan"][0] == "indeterminate"
-    assert len(result) == 6 and not fake.stored
+    assert len(result) == len(checks.LOCAL_CHECKS) and not fake.stored
 
 
 def test_a_failed_inspection_records_the_stage_exit_code_and_stderr_tail(monkeypatch):
@@ -183,3 +188,35 @@ def test_endpoint_intake_uses_local_checks_and_concludes(monkeypatch):
                           litellm=None)
     intake_jobs.intake_run(job)
     assert calls == ["local", ("conclude", False)]
+
+
+NPM_SPEC = {"index": "npm", "name": "@o/srv", "version": "1.2.3", "extras": [], "command": "srv",
+            "integrity": "sha512-" + "A" * 86 + "==", "argv": ["/data"],
+            "file_access": [{"path": "/data", "mode": "ro"}]}
+
+
+def test_an_npm_request_gets_a_pack_less_contract_and_registry_based_supply_chain_checks(
+        monkeypatch):
+    fake = Fake(NPM_SPEC)
+    fake.contract["pack_sha256"] = fake.contract["pack_manifest"] = None
+    fake.install(monkeypatch, build=lambda *a, **k: pytest.fail("npm has no pack"))
+    inventory = {"components": [{"name": "@o/srv", "version": "1.2.3", "integrity": None}],
+                 "unresolved": 0}
+    asked = []
+    monkeypatch.setattr(intake_jobs.source_scan, "npm_inventory", lambda spec: inventory)
+    monkeypatch.setattr(intake_jobs.source_scan, "request_scan",
+                        lambda request, wait=None: asked.append(request) or {
+                            "status": "error", "reason": "SCANNER_UNAVAILABLE"})
+    monkeypatch.setattr(
+        intake_jobs.source_scan, "dependency_outcome",
+        lambda manifest, feed, client=None, npm=None: asked.append(npm) or checks.Outcome(
+            "pass", None, "sca:osv"))
+    result = {name: (r, why) for name, r, why in fake.run()}
+    assert result["exec_shape"] == ("pass", None) and result["pack_build"] == ("pass", None)
+    assert result["inspection"] == ("indeterminate", "PACK_UNAVAILABLE")
+    assert result["sbom"] == ("pass", None) and result["dependency_vulns"] == ("pass", None)
+    assert asked[0]["kind"] == "npm" and asked[0]["integrity"] == NPM_SPEC["integrity"]
+    assert asked[1] is inventory
+    contract = json.loads(fake.updates[0][0])
+    assert contract["schema_version"] == 3 and contract["npm"]["bin"] == "srv"
+    assert contract["argv"] == ["-y", "@o/srv@1.2.3", "/data"] and "pack" not in contract

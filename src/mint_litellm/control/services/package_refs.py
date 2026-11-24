@@ -1,7 +1,8 @@
 """패키지 형태의 로컬 신청: ``uvx 패키지==판본``·PyPI 이름·``npx 패키지@판본``·npm 이름.
 
-레지스트리에서 판본을 조회해 고정한다. PyPI는 판본으로, npm은 그 판본의 소스 커밋으로
-고정해 접수한다(신청 명세는 ``mint add``와 같은 모양이다). 네트워크는 ``fetch``로 바꾼다.
+레지스트리에서 판본을 조회해 고정한다. PyPI·npm 모두 판본으로 고정하고, npm은 레지스트리 무결성
+해시(sha512)도 함께 고정해 접수한다(신청 명세는 ``mint add``와 같은 모양이다).
+네트워크는 ``fetch``로 바꾼다.
 """
 
 import json
@@ -11,6 +12,7 @@ import urllib.error
 import urllib.parse
 
 COMMIT = re.compile(r"[0-9a-f]{40}")
+INTEGRITY = re.compile(r"sha512-[A-Za-z0-9+/]{86}==")
 MANUAL = "커밋과 실행 명령을 직접 입력하십시오."
 _NPM_NAME = r"(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*"
 _PYPI_NAME = r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
@@ -96,22 +98,59 @@ def _npm_source(doc: dict, fetch) -> tuple[str, str, str] | None:
     return (owner, repo, sha) if COMMIT.fullmatch(sha) else None
 
 
-def _npm(name: str, version: str | None, argv: list[str], fetch) -> dict | None:
+def _npm_bin(doc: dict, name: str) -> str:
+    """실행할 bin 이름(패키지 이름과 같은 것, 없으면 첫 번째, 없으면 이름 끝부분)."""
+    short = name.rsplit("/", 1)[-1]
+    bins = doc.get("bin")
+    keys = [k for k in bins if isinstance(k, str)] if isinstance(bins, dict) else []
+    pick = short if short in keys or not keys else keys[0]
+    return pick if re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,127}", pick) else short
+
+
+def npm_pin(name: str, version: str | None, argv: list[str], fetch) -> dict | None:
+    """npm 레지스트리의 그 판본을 신청 명세로: 이름·정확한 판본·dist.integrity(sha512).
+
+    소스 커밋을 찾으면 ``git``·``commit``도 남겨 소스 검사에 쓴다(없어도 신청은 된다).
+    판본이 없으면 None, 무결성 해시가 없거나 모양이 다르면 ValueError.
+    """
     doc = _json(fetch, f"https://registry.npmjs.org/{urllib.parse.quote(name, safe='@/')}/"
                 f"{urllib.parse.quote(version or 'latest')}")
-    if not doc or not doc.get("version"):
+    if not doc or not isinstance(doc.get("version"), str):
         return None
+    integrity = (doc.get("dist") or {}).get("integrity")
+    if not isinstance(integrity, str) or not INTEGRITY.fullmatch(integrity):
+        raise ValueError("integrity")
+    spec = {"index": "npm", "name": name, "version": doc["version"], "integrity": integrity,
+            "extras": [], "command": _npm_bin(doc, name), "argv": list(argv)}
+    try:
+        source = _npm_source(doc, fetch)
+    except (OSError, ValueError, KeyError, TypeError):
+        source = None  # 소스 커밋은 선택이다
+    if source:
+        spec |= {"git": f"https://github.com/{source[0]}/{source[1]}", "commit": source[2]}
+    return spec
+
+
+def npm_spec(command: str, version: str, fetch) -> dict | None:
+    """``npx [-y] 이름@판본 [인자]``를 신청 명세로. 판본이 ``version``과 달라도 None."""
+    ref = package_ref(command)
+    if not ref or ref[0] != "npm" or not command.lstrip().startswith("npx") or ref[2] != version:
+        return None
+    return npm_pin(ref[1], version, ref[3], fetch)
+
+
+def _npm(name: str, version: str | None, argv: list[str], fetch) -> dict | None:
     out = {"repo": f"npm · {name}", "url": "", "name": slug(name), "commit": "", "command": "",
            "kind": "npm", "note": ""}
-    source = _npm_source(doc, fetch)
-    if source is None:
-        out["note"] = f"{name} {doc['version']}의 커밋을 못 찾았습니다. 저장소 주소로 신청하십시오."
-        return out
-    owner, repo, sha = source
-    base = f"https://github.com/{owner}/{repo}"
-    command = " ".join(["npx", "-y", f"github:{owner}/{repo}#{sha}", *map(shlex.quote, argv)])
-    return out | {"repo": base, "url": base, "commit": sha, "command": command,
-                  "note": f"{name} {doc['version']}의 소스 커밋으로 고정합니다."}
+    try:
+        spec = npm_pin(name, version, argv, fetch)
+    except ValueError:
+        return out | {"note": f"{name}의 무결성 해시를 레지스트리에서 찾지 못했습니다."}
+    if spec is None:
+        return None
+    command = " ".join(["npx", "-y", f"{name}@{spec['version']}", *map(shlex.quote, argv)])
+    note = "판본과 레지스트리 무결성 해시로 고정합니다."
+    return out | {"url": command, "commit": spec["version"], "command": command, "note": note}
 
 
 def resolve(ref: tuple, fetch) -> dict | None:

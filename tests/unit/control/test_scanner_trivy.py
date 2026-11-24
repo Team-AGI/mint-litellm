@@ -57,3 +57,48 @@ def test_the_tree_fingerprint_follows_paths_and_contents(tmp_path: Path):
     assert first == scan.tree_sha256(tmp_path) and len(first) == 64
     (tmp_path / "d" / "b.txt").write_text("3")
     assert scan.tree_sha256(tmp_path) != first
+
+
+def _tarball(files: dict[str, bytes]) -> bytes:
+    import io
+    import tarfile
+
+    out = io.BytesIO()
+    with tarfile.open(fileobj=out, mode="w:gz") as archive:
+        for name, data in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
+    return out.getvalue()
+
+
+def test_an_npm_tarball_is_unpacked_only_when_its_hash_is_the_pinned_one(tmp_path, monkeypatch):
+    import base64
+    import hashlib
+    import urllib.request
+
+    data = _tarball({"package/index.js": b"x", "../evil": b"y", "package/lib/a.js": b"z"})
+    pinned = "sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode()
+
+    class Reply:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self, n):
+            return data
+
+    seen = []
+    monkeypatch.setattr(urllib.request, "urlopen",
+                        lambda url, timeout: seen.append(url) or Reply())
+    request = {"kind": "npm", "name": "@o/srv", "version": "1.0.0", "integrity": pinned}
+    scan._from_npm(request, tmp_path)
+    assert seen == ["https://registry.npmjs.org/@o/srv/-/srv-1.0.0.tgz"]
+    files = sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file())
+    assert files == ["index.js", "lib/a.js"]
+    with pytest.raises(scan.ScanError, match="INTEGRITY_MISMATCH"):
+        scan._from_npm({**request, "integrity": "sha512-" + "A" * 86 + "=="}, tmp_path / "x")
+    with pytest.raises(scan.ScanError, match="SOURCE_UNSUPPORTED"):
+        scan._from_npm({**request, "name": "../x"}, tmp_path / "y")

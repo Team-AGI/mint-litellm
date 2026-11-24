@@ -78,7 +78,7 @@ def test_the_payload_pins_the_commit_in_the_spec():
         "index": "git", "git": "https://github.com/o/ghidra-mcp", "name": "ghidra-mcp",
         "version": SHA, "extras": [], "command": "ghidra-mcp", "argv": ["--x", "1"]}
     node = local_intakes.build_payload(form(command=f"npx -y github:o/ghidra-mcp#{SHA}"))
-    assert node["spec"]["index"] == "npm" and node["spec"]["version"] == SHA
+    assert node["spec"]["index"] == "git" and node["spec"]["version"] == SHA
 
 
 @pytest.mark.parametrize("changes", [
@@ -119,24 +119,52 @@ def test_a_pypi_pin_must_match_the_version_field():
         local_intakes.build_payload(form(commit="1.0", command="uvx ghidra-mcp==2.0"))
 
 
-def test_an_npm_name_is_pinned_to_the_commit_of_its_release():
-    doc = {"version": "2.0.1", "gitHead": SHA,
-           "repository": {"type": "git", "url": "git+https://github.com/o/srv.git"}}
-    got = local_intakes.resolve("@o/srv", fake(
-        {"https://registry.npmjs.org/@o/srv/latest": json.dumps(doc).encode()}))
-    assert got["kind"] == "npm" and got["commit"] == SHA
-    assert got["url"] == "https://github.com/o/srv"
-    assert got["command"] == f"npx -y github:o/srv#{SHA}"
+INTEGRITY = "sha512-" + "A" * 86 + "=="
+SCOPED = {"version": "2.0.1", "gitHead": SHA, "bin": {"srv": "x.js"},
+          "dist": {"integrity": INTEGRITY},
+          "repository": {"type": "git", "url": "git+https://github.com/o/srv.git"}}
+REGISTRY = "https://registry.npmjs.org/@o/srv/"
+
+
+def test_an_npm_name_is_pinned_to_its_version_and_integrity():
+    got = local_intakes.resolve("npx -y @o/srv", fake(
+        {REGISTRY + "latest": json.dumps(SCOPED).encode()}))
+    assert got["kind"] == "npm" and got["commit"] == "2.0.1"
+    assert got["command"] == "npx -y @o/srv@2.0.1" and got["url"] == got["command"]
     payload = local_intakes.build_payload(
-        form(url=got["url"], name=got["name"], commit=SHA, command=got["command"]))
-    assert payload["spec"]["index"] == "npm" and payload["spec"]["version"] == SHA
+        form(url=got["url"], name=got["name"], commit=got["commit"], command=got["command"]),
+        fake({REGISTRY + "2.0.1": json.dumps(SCOPED).encode()}))
+    assert payload["spec"] == {
+        "index": "npm", "name": "@o/srv", "version": "2.0.1", "integrity": INTEGRITY,
+        "extras": [], "command": "srv", "argv": [], "git": "https://github.com/o/srv",
+        "commit": SHA}
 
 
-def test_an_npm_release_without_a_known_source_asks_for_the_repository():
-    doc = {"version": "1.0.0", "repository": {"url": "https://example.org/x.git"}}
+def test_an_npm_release_without_a_known_source_is_still_pinned():
+    doc = {"version": "1.0.0", "dist": {"integrity": INTEGRITY},
+           "repository": {"url": "https://github.com/o/mono.git", "directory": "pkg"}}
+    registry = {"https://registry.npmjs.org/pkg/1.0.0": json.dumps(doc).encode()}
+    got = local_intakes.resolve("npx pkg@1.0.0 /data", fake(registry))
+    assert got["command"] == "npx -y pkg@1.0.0 /data"
+    spec = local_intakes.build_payload(
+        form(url=got["url"], name=got["name"], commit="1.0.0", command=got["command"]),
+        fake(registry))["spec"]
+    assert spec["integrity"] == INTEGRITY and spec["argv"] == ["/data"]
+    assert "git" not in spec and "commit" not in spec
+
+
+def test_an_npm_release_without_integrity_is_not_accepted():
+    doc = {"version": "1.0.0", "dist": {}}
     got = local_intakes.resolve("npx pkg@1.0.0", fake(
         {"https://registry.npmjs.org/pkg/1.0.0": json.dumps(doc).encode()}))
-    assert got["command"] == "" and "저장소 주소" in got["note"]
+    assert got["command"] == "" and "무결성" in got["note"]
+
+
+def test_an_npm_pin_must_match_the_version_field():
+    with pytest.raises(ControlError):
+        local_intakes.build_payload(
+            form(url="npx -y @o/srv@2.0.1", commit="9.9.9", command="npx -y @o/srv@2.0.1"),
+            fake({}))
 
 
 def test_an_unknown_package_is_an_error():

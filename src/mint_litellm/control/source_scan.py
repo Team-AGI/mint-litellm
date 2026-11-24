@@ -1,6 +1,8 @@
 """로컬 신청의 공급망 검사: 구성요소 목록(SBOM)·의존성 취약점(SCA)·코드·비밀 검사(SAST).
 
 - SBOM은 서버에서 만든 실행 묶음의 휠 목록(이름·판본·해시)으로 만든다. 실제로 PC에 깔리는 것과 같다.
+- npm 출처는 묶음이 없다. 레지스트리의 그 판본(과 의존성 1단계)이 구성요소이고, 레지스트리의
+  무결성 해시가 신청에 고정된 값과 같아야 한다.
 - SCA는 그 구성요소를 취약점 조회처(OSV 형식)에 묻는다. 심각(또는 악용 중) 취약점이 있으면 실패다.
 - 코드·비밀·취약점·설정 오류·라이선스 검사는 소스 검사기 컨테이너가 고정 커밋의 소스(또는 서버
   패키지 휠)에 돌린다. 검사기가 60초 넘게 신호가 없으면 기다리지 않고 바로 응답 없음으로 본다.
@@ -42,6 +44,100 @@ def components(manifest: dict | None) -> list[dict]:
     return out
 
 
+NPM_REGISTRY = "https://registry.npmjs.org"
+MAX_NPM_DEPS = 60
+_VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+
+
+def _bounds(rule: str) -> tuple[tuple, tuple | None] | None:
+    """비교자 하나(``^1.2``·``~1``·``>=1.2.3``·``1.x`` 등)의 [아래, 위) 구간. 모르는 형태는 None."""
+    match = re.fullmatch(r"(\^|~|>=|<=|>|<|=|)\s*v?([0-9xX*]+(?:\.[0-9xX*]+){0,2})", rule)
+    if not match:
+        return None
+    parts = [None if p in ("x", "X", "*") else int(p) for p in match[2].split(".")]
+    given = [p for p in parts if p is not None]
+    if len(given) != next((i for i, p in enumerate(parts) if p is None), len(parts)):
+        return None
+    low = tuple([*given, 0, 0, 0][:3])
+    n = len(given)
+    next_up = None if n == 0 else (low[0], low[1], low[2] + 1) if n == 3 else (
+        (low[0], low[1] + 1, 0) if n == 2 else (low[0] + 1, 0, 0))
+    op = match[1]
+    if op == "^":
+        high = (low[0] + 1, 0, 0) if low[0] or n == 1 else (
+            (0, low[1] + 1, 0) if low[1] or n == 2 else (0, 0, low[2] + 1))
+        return low, high
+    if op == "~":
+        return low, ((low[0], low[1] + 1, 0) if n >= 2 else (low[0] + 1, 0, 0))
+    if op == ">=":
+        return low, None
+    if op == ">":
+        return (next_up or (0, 0, 0)), None
+    if op == "<":
+        return (0, 0, 0), low
+    if op == "<=":
+        return (0, 0, 0), next_up
+    return low, next_up
+
+
+def newest_in(rng: str, versions: list[str]) -> str | None:
+    """npm 범위(``||``·공백 이음·``A - B``·^·~·x)에 맞는 가장 높은 정식 판본. 못 풀면 None."""
+    text = re.sub(r"(\S+)\s+-\s+(\S+)", r">=\1 <=\2", rng.strip())
+    text = re.sub(r"(>=|<=|>|<|=|\^|~)\s+", r"\1", text)
+    clauses = []
+    for clause in (text or "*").split("||"):
+        cuts = [_bounds(r) for r in clause.split()] or [((0, 0, 0), None)]
+        if None in cuts:
+            return None
+        clauses.append(cuts)
+    best = None
+    for version in versions:
+        found = _VERSION.fullmatch(version)  # 시험판은 범위에 들지 않는다
+        if not found:
+            continue
+        number = tuple(map(int, found.groups()))
+        if any(all(lo <= number and (hi is None or number < hi) for lo, hi in cuts)
+               for cuts in clauses) and (best is None or number > best[0]):
+            best = (number, version)
+    return best and best[1]
+
+
+def npm_inventory(spec: dict, client: Callable[[], Any] | None = None) -> dict:
+    """npm 신청의 구성요소: 그 판본과 의존성(1단계)이 레지스트리에서 풀리는 판본.
+
+    ``{"components": [...], "unresolved": n}`` 또는 ``{"error": 사유}``. 레지스트리의 무결성
+    해시가 신청에 고정된 값과 다르면 ``INTEGRITY_MISMATCH``이다.
+    """
+    name, version = spec["name"], spec["version"]
+    try:
+        with (client or (lambda: httpx.Client(timeout=20)))() as http:
+            doc = http.get(f"{NPM_REGISTRY}/{name}/{version}").raise_for_status().json()
+            if (doc.get("dist") or {}).get("integrity") != spec.get("integrity"):
+                return {"error": "INTEGRITY_MISMATCH"}
+            found = [{"name": name, "version": version, "integrity": spec["integrity"]}]
+            wanted = sorted((doc.get("dependencies") or {}).items())
+            unresolved = max(len(wanted) - MAX_NPM_DEPS, 0)
+            for dep, rng in wanted[:MAX_NPM_DEPS]:
+                listing = http.get(f"{NPM_REGISTRY}/{dep}", headers={
+                    "Accept": "application/vnd.npm.install-v1+json"}).raise_for_status().json()
+                picked = newest_in(str(rng), list(listing.get("versions") or {}))
+                if picked is None:
+                    unresolved += 1
+                    continue
+                dist = listing["versions"][picked].get("dist") or {}
+                found.append({"name": dep, "version": picked, "integrity": dist.get("integrity")})
+    except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
+        return {"error": "REGISTRY_UNREACHABLE"}
+    return {"components": found, "unresolved": unresolved}
+
+
+def _npm_failure(inventory: dict, method: str) -> Outcome | None:
+    code = inventory.get("error")
+    if code == "INTEGRITY_MISMATCH":
+        return Outcome("fail", code, method)
+    return Outcome("indeterminate", code, method) if code else None
+
+
 def sbom(manifest: dict | None, server_id: str, version: str | None) -> dict:
     """CycloneDX 1.5 문서(구성요소는 PyPI purl·SHA-256)."""
     return {
@@ -58,7 +154,12 @@ def sbom(manifest: dict | None, server_id: str, version: str | None) -> dict:
     }
 
 
-def sbom_outcome(manifest: dict | None) -> Outcome:
+def sbom_outcome(manifest: dict | None, npm: dict | None = None) -> Outcome:
+    if npm is not None:
+        method = "sbom:npm_registry"
+        return _npm_failure(npm, method) or Outcome("pass", None, method, {
+            "components": len(npm["components"]), "unresolved": npm["unresolved"],
+            "format": "CycloneDX 1.5"})
     method = "sbom:pack_manifest"
     found = components(manifest)
     if not found:
@@ -67,12 +168,18 @@ def sbom_outcome(manifest: dict | None) -> Outcome:
 
 
 def dependency_outcome(manifest: dict | None, feed: str,
-                       client: Callable[[], Any] | None = None) -> Outcome:
+                       client: Callable[[], Any] | None = None, npm: dict | None = None) -> Outcome:
     method = "sca:osv"
-    found = components(manifest)
-    if not found:
-        return Outcome("indeterminate", "PACK_UNAVAILABLE", method)
-    keys = [("pypi", c["name"], c["version"]) for c in found]
+    if npm is not None:
+        failed = _npm_failure(npm, method)
+        if failed:
+            return failed
+        keys = [("npm", c["name"], c["version"]) for c in npm["components"]]
+    else:
+        found = components(manifest)
+        if not found:
+            return Outcome("indeterminate", "PACK_UNAVAILABLE", method)
+        keys = [("pypi", c["name"], c["version"]) for c in found]
     try:
         with (client or (lambda: httpx.Client(timeout=20)))() as http:
             hits = vuln.fetch(http, feed, keys, {})
@@ -89,15 +196,22 @@ def dependency_outcome(manifest: dict | None, feed: str,
                              "severity": info["severity"]})
     findings.sort(key=lambda f: -vuln.RANK.get(f["severity"], 0))
     inputs = {"packages": len(keys), **counts, "findings": findings[:FINDINGS]}
+    if npm is not None:
+        inputs["unresolved"] = npm["unresolved"]
     if critical:
         return Outcome("fail", "CRITICAL_VULNERABILITY", method, inputs)
     return Outcome("pass", None, method, inputs)
 
 
 def scan_request(spec: dict | None, pack: tuple[str, dict] | None) -> dict | None:
-    """검사기에 보낼 소스: 저장소 출처면 고정 커밋, PyPI 출처면 묶음 안의 서버 패키지 휠."""
+    """검사기에 보낼 소스: git·npm 출처는 고정 커밋(npm은 없으면 tarball), PyPI 출처는 휠."""
     spec = spec or {}
-    if spec.get("index") in ("git", "npm") and spec.get("git"):
+    if spec.get("index") == "npm":
+        if spec.get("git") and spec.get("commit"):
+            return {"kind": "git", "repo": spec["git"], "commit": spec["commit"]}
+        return {"kind": "npm", "name": spec.get("name"), "version": spec.get("version"),
+                "integrity": spec.get("integrity")}
+    if spec.get("index") == "git" and spec.get("git"):
         return {"kind": "git", "repo": spec["git"], "commit": spec.get("version")}
     if pack is None:
         return None
