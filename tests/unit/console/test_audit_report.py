@@ -145,7 +145,7 @@ def test_the_policy_section_lists_only_partial_and_conditional_rules_without_dev
 def test_a_custom_period_includes_both_end_dates(seeded):
     old = days_back(60)
     data = report(seeded, query=f"?from={old}&to={old}")
-    assert values(data, "변경")["서버 등록"] == 1
+    assert values(data, "변경")["MCP 서버 등록"] == 1
     assert values(data, "호출 판정")["판정"] == 0
     assert data["meta"]["from"] == data["meta"]["to"] == old
 
