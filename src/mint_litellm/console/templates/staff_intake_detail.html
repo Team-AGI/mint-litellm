@@ -17,6 +17,7 @@
 <dt>목적</dt><dd>{{ i.purpose }}</dd>
 <dt>자료 등급</dt><dd>{{ L.pick(L.DATA_GRADE, i.data_grade) }}</dd>
 <dt>취급 자원</dt><dd>{{ i.allowed_resources | join or '—' }}</dd>
+{% if job_error %}<dt>검사 오류</dt><dd class="error">{{ job_error.text }} · {{ job_error.n }}/{{ job_error.limit }}회 시도{% if job_error.stopped %} · 재시도를 멈췄습니다{% endif %}</dd>{% endif %}
 {% if retry %}<dt>자동 재시도</dt><dd>마지막 {{ retry.last | when }} · 다음 {{ (retry.next | when) if retry.next else '없음' }} · {{ retry.n }}/{{ retry.limit }}회</dd>{% endif %}
 <dt>접수 시각</dt><dd>{{ i.created_at | when }}</dd>
 <dt>결정</dt><dd>{{ L.pick(L.DECISION, i.decision) if i.decision else '—' }}</dd>

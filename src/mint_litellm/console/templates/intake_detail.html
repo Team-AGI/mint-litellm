@@ -24,6 +24,7 @@
 {% if provider_blocked %}<div class="banner error">제공자가 허용되지 않았습니다. <a href="/access?tab=allowlists">제공자 허용</a> 후 {% if i.status == "indeterminate" %}재검사하세요.{% else %}<a href="/intakes/new?server_id={{ i.server_id | urlencode }}">다시 신청</a>하세요.{% endif %}</div>{% endif %}
 {% if inspect.open %}<div class="effect">단말 검사 대기 · 남은 시간 {{ inspect.left }}</div>
 {% endif %}
+{% if job_error %}<div class="banner error" role="alert">검사를 진행하지 못했습니다: {{ job_error.text }} · {{ job_error.n }}/{{ job_error.limit }}회 시도{% if job_error.stopped %} · 재시도를 멈췄습니다{% else %} · 다음 시도 {{ job_error.next | when }}{% endif %}</div>{% endif %}
 {% if retry %}<div class="effect">자동 재시도: 마지막 {{ retry.last | when }} · 다음 {{ (retry.next | when) if retry.next else '없음' }} · {{ retry.n }}/{{ retry.limit }}회</div>{% endif %}
 {% if next_step %}<div class="effect">다음 행동: {% if next_step == '증빙 첨부' %}<a href="?tab=evidence">{{ next_step }}</a>{% else %}{{ next_step }}{% endif %}</div>{% endif %}
 <div class="cards">

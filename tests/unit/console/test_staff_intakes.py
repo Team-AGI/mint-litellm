@@ -32,12 +32,12 @@ def test_staff_form_and_submission_reach_the_admin_intake_queue(sworld):
     assert sworld.query("SELECT kind,target_ref,status FROM mint.jobs") == [
         ("intake_run", values["request_id"] + "/staff", "pending")]
     assert sworld.query(
-        "SELECT status FROM mint.servers WHERE server_id='new-docs-example-com'") == [("pending",)]
+        "SELECT status FROM mint.servers WHERE server_id='new_docs_example_com'") == [("pending",)]
     assert sworld.query("SELECT count(*) FROM mint.approvals") == [(0,)]
     assert client.get(response.headers["location"]).status_code == 200
-    assert "new-docs" in client.get("/staff/intakes").text
+    assert "new_docs" in client.get("/staff/intakes").text
     admin = sworld.session_client("admin")
-    assert "new-docs" in admin.get("/intakes").text
+    assert "new_docs" in admin.get("/intakes").text
     assert "직원 신청" in admin.get("/intakes").text
 
 

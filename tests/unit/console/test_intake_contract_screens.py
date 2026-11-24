@@ -648,7 +648,7 @@ def test_intake_ignores_a_posted_identifier_and_uses_the_address(world, monkeypa
         },
     )
     assert response.status_code == 303, response.text
-    assert world.query("SELECT server_id FROM mint.intakes") == [("wrong-example",)]
+    assert world.query("SELECT server_id FROM mint.intakes") == [("wrong_example",)]
 
 
 # --- 2인 예외 승인: 화면에서 두 번째 승인자 확인 ----------------------------------------------

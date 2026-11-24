@@ -27,7 +27,7 @@ def test_a_remote_address_alone_becomes_a_remote_request_the_server_model_accept
         tmp_path, name="https://mcp.notes.example.com/mcp", command=[], request_id=RID)
     assert code == 0 and len(sent) == 1
     body = sent[0]
-    assert body == {"request_id": RID, "server_id": "notes-example-com", "transport": "http",
+    assert body == {"request_id": RID, "server_id": "notes_example_com", "transport": "http",
                     "url": "https://mcp.notes.example.com/mcp", "purpose": "p"}  # fmt: skip
     parsed = IntakeRequest.model_validate(body).root
     assert isinstance(parsed, RemoteIntakeBody)

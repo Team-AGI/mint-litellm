@@ -254,6 +254,12 @@ def intake_submit(
     return response
 
 
+def _intake_job_error(actor: StaffActor, row: dict):
+    from mint_litellm.console.pages.servers import intake_job_error  # 순환 참조를 피한다
+
+    return intake_job_error(actor.sctx.control, actor.sctx.instance_id, row)
+
+
 @router.get("/staff/intakes/{intake_id}")
 def intake_detail(intake_id: str, request: Request, actor: StaffActor = Depends(staff_actor)):
     row = staff_intakes.detail(actor.sctx, intake_id)
@@ -281,6 +287,7 @@ def intake_detail(intake_id: str, request: Request, actor: StaffActor = Depends(
     return staff_render(request, "staff_intake_detail.html",
                         {"i": row, "decision_reason": reason, "source": source,
                          "stages": stages, "delivery": delivery,
+                         "job_error": _intake_job_error(actor, row),
                          "retry": intakes_service.retry_state(
                              actor.sctx.control, actor.sctx.instance_id,
                              {**row, "source": source})}, actor)
