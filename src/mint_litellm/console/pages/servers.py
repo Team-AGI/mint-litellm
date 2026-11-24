@@ -1,17 +1,21 @@
 """MCP 서버·신청·계약 화면."""
 
+import csv
+import io
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Form, Request
+from fastapi.responses import Response
 
 from mint_litellm.console import api, compare, labels, pack_view
 from mint_litellm.console.core import Actor, page_actor, require_csrf
 from mint_litellm.console.pages import intake_submission
 from mint_litellm.console.pages.common import act, server_display
-from mint_litellm.console.templating import render
+from mint_litellm.console.templating import local_time, render
 from mint_litellm.control import intake_checks, usage_reader
-from mint_litellm.control.db.connection import fetchone
+from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.services import call_review as review_service
 from mint_litellm.control.services import contracts as contract_service
@@ -20,6 +24,7 @@ from mint_litellm.control.services import evidence as evidence_service
 from mint_litellm.control.services import exception_holds, local_intakes, reads, staff_intakes
 from mint_litellm.control.services import intake_inspections as inspection_service
 from mint_litellm.control.services import intakes as intake_service
+from mint_litellm.control.services import relations as relation_service
 from mint_litellm.control.services import servers as server_service
 from mint_litellm.control.services.base import require_role
 from mint_litellm.types.contracts import ACTION_DENIAL_PREFIX, DENIABLE_ACTIONS
@@ -106,6 +111,55 @@ def servers(request: Request, actor: Actor = Depends(page_actor)):
     return render(request, "servers.html", ctx, actor=actor)
 
 
+REGISTRY_HEADER = ("MCP 서버", "제공자", "승인 상태", "승인 범위", "만료", "신청자")
+
+
+@router.get("/servers/export")
+def export_registry(actor: Actor = Depends(page_actor)):
+    """MCP 서버 등록부(서버별 승인 내역)를 CSV로 내려받는다."""
+    rows = reads.servers(actor.conn, actor.instance)
+    server_display(actor, rows)
+    intake = {
+        r["server_id"]: r
+        for r in fetchall(
+            actor.conn,
+            "SELECT DISTINCT ON (server_id) server_id, provider,"
+            " coalesce(owner_user_id, requested_by) AS requester FROM mint.intakes"
+            " WHERE instance_id = %s ORDER BY server_id, created_at DESC",
+            (actor.instance,),
+        )
+    }
+    approved: dict[str, list[dict]] = {}
+    for a in fetchall(
+        actor.conn,
+        "SELECT server_id, scope_type, scope_id, tools, valid_until, status FROM mint.approvals"
+        " WHERE instance_id = %s AND status IN ('pending', 'active')"
+        " ORDER BY server_id, valid_until DESC, id",
+        (actor.instance,),
+    ):
+        approved.setdefault(a["server_id"], []).append(a)
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(REGISTRY_HEADER)
+    for s in rows:
+        info = intake.get(s["server_id"]) or {}
+        base = (s["server_name"] or s["server_id"], info.get("provider") or "")
+        who = info.get("requester") or s["registered_by"] or ""
+        for a in approved.get(s["server_id"]) or [None]:
+            if a is None:
+                state, scope, until = labels.pick(labels.SERVER, s["status"]), "", ""
+            else:
+                state = labels.pick(labels.APPROVAL, a["status"])
+                scope = f"{labels.pick(labels.SCOPE, a['scope_type'])} {a['scope_id']}"
+                until = "" if a["valid_until"].year >= 2999 else local_time(a["valid_until"])
+            writer.writerow([api.safe_cell(c) for c in (*base, state, scope, until, who)])
+    return Response(
+        "﻿" + out.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="mcp-registry.csv"'},
+    )
+
+
 # --- 서버 상세 ---------------------------------------------------------------------------------
 
 SERVER_TABS = (
@@ -163,6 +217,7 @@ def server_page(
         "active_approvals": sum(1 for a in row["approvals"] if a["status"] == "active"),
         "provisional": row["contract_status"] != "managed",
         "ctl": tool_controls(actor, server_id),
+        "impact": relation_impacts(actor, row["relations"]) if tab == "usage" else {},
         "c": contract_context(request, actor, server_id) if tab == "contract" else None,
         "pack": pack_view.view(
             pack_view.read(actor.conn, actor.instance, server_id, approved=True), "decided"
@@ -171,6 +226,40 @@ def server_page(
         else None,
     }
     return render(request, "server_detail.html", ctx, actor=actor, status=status)
+
+
+def relation_impacts(actor: Actor, relations: list[dict]) -> dict[str, dict]:
+    """이용 종료 전에 보이는 영향: 거둘 승인 수, 쓰던 사용자 수, 그 사용자들의 연결된 PC 수."""
+    found = {}
+    for r in relations:
+        if r["status"] != "active":
+            continue
+        rows = fetchall(
+            actor.conn,
+            "SELECT scope_type, scope_id FROM mint.approvals WHERE instance_id = %s"
+            " AND relation_id = %s AND status = 'active'",
+            (actor.instance, str(r["id"])),
+        )
+        users = {a["scope_id"] for a in rows if a["scope_type"] == "user"}
+        teams = [a["scope_id"] for a in rows if a["scope_type"] == "team"]
+        if teams:
+            users |= {
+                p["user_id"]
+                for p in fetchall(
+                    actor.conn,
+                    "SELECT user_id FROM mint.directory_users WHERE instance_id = %s"
+                    " AND gone_at IS NULL AND team_ids ?| %s",
+                    (actor.instance, teams),
+                )
+            }
+        pcs = fetchone(
+            actor.conn,
+            "SELECT count(*) AS n FROM mint.endpoint_installs WHERE instance_id = %s"
+            " AND revoked_at IS NULL AND user_id = ANY(%s)",
+            (actor.instance, sorted(users)),
+        )["n"] if users else 0
+        found[str(r["id"])] = {"approvals": len(rows), "users": len(users), "pcs": pcs}
+    return found
 
 
 def tool_controls(actor: Actor, server_id: str) -> dict:
@@ -346,6 +435,41 @@ def resume_server(
         back_to(server_id, next),
         lambda **kw: server_page(request, actor, server_id, **kw),
     )
+
+
+def relation_action(server_id: str, relation_id: str, request: Request, actor: Actor, step: str,
+                    state_version: int):
+    def action():
+        if actor.role != "admin":
+            raise AdminError(AdminCode.FORBIDDEN, "관리자만 이용을 종료할 수 있습니다.")
+        found = reads.relation(actor.conn, actor.instance, relation_id)
+        if found is None or found["server_id"] != server_id:
+            raise AdminError(AdminCode.NOT_FOUND, "이용 관계를 찾을 수 없습니다.")
+        (relation_service.terminate if step == "terminate" else relation_service.finish)(
+            actor.ctx, relation_id, expected_version=state_version
+        )
+
+    return act(
+        actor, action, "relation_terminating" if step == "terminate" else "relation_finished",
+        f"/servers/{server_id}?tab=usage",
+        lambda **kw: server_page(request, actor, server_id, tab="usage", **kw),
+    )
+
+
+@router.post("/servers/{server_id}/relations/{relation_id}/terminate")
+def terminate_relation(
+    server_id: str, relation_id: str, request: Request, state_version: int = Form(...),
+    actor: Actor = Depends(page_actor),
+):
+    return relation_action(server_id, relation_id, request, actor, "terminate", state_version)
+
+
+@router.post("/servers/{server_id}/relations/{relation_id}/finish")
+def finish_relation(
+    server_id: str, relation_id: str, request: Request, state_version: int = Form(...),
+    actor: Actor = Depends(page_actor),
+):
+    return relation_action(server_id, relation_id, request, actor, "finish", state_version)
 
 
 # --- 신청·수용검증 ----------------------------------------------------------------------------
@@ -701,12 +825,27 @@ def intake_new_page(request: Request, actor: Actor, form: dict, error=None, stat
                   actor=actor, status=status)
 
 
+KEEP = ("owner_user_id", "local", "found")
+
+
+def discovered_name(value: str) -> str:
+    """단말에서 발견한 이름을 신청 이름 규칙(영문·숫자·밑줄)에 맞춘다."""
+    name = re.sub(r"[^A-Za-z0-9_]", "_", value).strip("_")[:128]
+    return name if name[:1].isalnum() else ""
+
+
 @router.get("/intakes/new")
 def intake_new(request: Request, actor: Actor = Depends(page_actor)):
     query = request.query_params
     form = {"server_url": query.get("server_url", "")[:2048],
-            "purpose": query.get("purpose", "")[:256]}
-    if not form["server_url"] and query.get("server_id"):
+            "purpose": query.get("purpose", "")[:256],
+            "owner_user_id": query.get("owner_user_id", "")[:256]}
+    if query.get("kind") == "stdio":
+        form["local"] = "1"
+        form["name"] = discovered_name(query.get("server_id", ""))
+        form["found"] = " ".join(
+            p for p in (query.get("provider", ""), query.get("package", "")) if p)[:256]
+    elif not form["server_url"] and query.get("server_id"):
         candidate = intake_service.deployment_candidate(
             actor.conn, actor.instance, query["server_id"])
         if candidate:
@@ -729,16 +868,23 @@ def create_intake(
     name: str = Form(""),
     commit: str = Form(""),
     command: str = Form(""),
+    owner_user_id: str = Form(""),
+    local: str = Form(""),
+    found: str = Form(""),
     actor: Actor = Depends(page_actor),
 ):
-    form = {"server_url": server_url, "purpose": purpose}
+    form = {"server_url": server_url, "purpose": purpose, "owner_user_id": owner_user_id,
+            "local": local, "found": found, "name": name}
     target = {}
     if staff_intakes.repo_parts(server_url.strip()):
         return repo_intake(request, actor, {**form, "url": server_url, "step": step, "name": name,
                                             "commit": commit, "command": command})
 
     def action():
-        target["id"], target["existing"] = intake_submission.submit(actor, server_url, purpose)
+        if local:
+            raise ControlError("로컬 실행 MCP는 소스 저장소 주소로 신청합니다.")
+        target["id"], target["existing"] = intake_submission.submit(
+            actor, server_url, purpose, owner_user_id.strip() or None)
 
     response = act(actor, action, "intake_created", "/intakes",
                    lambda **kw: intake_new_page(request, actor, form, **kw))
@@ -752,7 +898,8 @@ def repo_intake(request: Request, actor: Actor, form: dict):
     """소스 저장소 주소: 확인 단계는 미리보기를 보이고, 제출 단계는 로컬 신청을 만든다."""
     if form["step"] != "submit":
         try:
-            form = {**form, **local_intakes.resolve(form["url"]), "step": "submit"}
+            found = local_intakes.resolve(form["url"])
+            form = {**form, **found, "step": "submit", "name": form.get("name") or found["name"]}
         except ControlError as error:
             return intake_new_page(request, actor, form, error=str(error), status=422)
         return intake_new_page(request, actor, form)
@@ -763,7 +910,9 @@ def repo_intake(request: Request, actor: Actor, form: dict):
         user = actor.ctx.operator.user_id
         if not user:
             raise ControlError("로그인한 사용자를 확인할 수 없습니다.")
-        target["id"], target["existing"] = local_intakes.submit_operator(actor.ctx, user, form)
+        owner = intake_submission.known_owner(actor, (form.get("owner_user_id") or "").strip())
+        target["id"], target["existing"] = local_intakes.submit_operator(
+            actor.ctx, user, form, owner=owner)
 
     response = act(actor, action, "intake_created", "/intakes",
                    lambda **kw: intake_new_page(request, actor, form, **kw))

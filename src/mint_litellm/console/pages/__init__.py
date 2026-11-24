@@ -14,6 +14,7 @@ from mint_litellm.console.pages import (
     approvals,
     dashboard,
     endpoints_admin,
+    people,
     reports,
     servers,
     setup,
@@ -81,5 +82,5 @@ def open_link(token: str, actor: Actor = Depends(page_actor)):
     return RedirectResponse(target, status_code=303)
 
 
-for module in (dashboard, approvals, servers, endpoints_admin, reports, setup):
+for module in (dashboard, approvals, servers, endpoints_admin, people, reports, setup):
     router.include_router(module.router)

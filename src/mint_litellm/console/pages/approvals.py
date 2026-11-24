@@ -320,6 +320,10 @@ def access_page(request: Request, actor: Actor, error=None, status=200, tab=None
             actor.conn, actor.instance, status="active", page=page_number(request), only_id=focus
         )
         ctx["rows"] = _with_missing(actor, _with_recert(actor, rows))
+    elif tab == "denials" and ctx["new"]:
+        from mint_litellm.console.pages.people import directory_people
+
+        ctx["people"] = directory_people(actor)
     elif tab == "dormant":
         server = query.get("server")
         ctx["server"] = server or ""

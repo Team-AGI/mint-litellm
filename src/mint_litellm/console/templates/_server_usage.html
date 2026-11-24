@@ -3,8 +3,11 @@
 {% if s.relations %}
 <table><thead><tr><th>조직</th><th>팀</th><th>목적</th><th>상태</th><th></th></tr></thead><tbody>
 {% for r in s.relations %}<tr><td>{{ r.org_name }}</td><td>{{ r.team_id | blank }}</td><td>{{ r.purpose }}</td><td>{{ m.badge(L.RELATION, r.status) }}</td>
-<td>{% if r.status == 'active' and s.status in ('approved', 'awaiting_approval') and can(actor, 'approve') %}<a class="button" href="/approvals/review/{{ r.id }}">사후 제한</a>{% endif %}</td></tr>{% endfor %}
+<td><div class="row-actions">{% if r.status == 'active' and s.status in ('approved', 'awaiting_approval') and can(actor, 'approve') %}<a class="button" href="/approvals/review/{{ r.id }}">사후 제한</a>{% endif %}
+{% if actor.role == 'admin' and r.status == 'active' %}{% set n = impact.get(r.id | string) or {} %}{% call m.confirm_dialog('end-' ~ loop.index, '이용 종료', '이용 종료', '승인 ' ~ n.approvals ~ '건이 철회되고, 사용자 ' ~ n.users ~ '명(PC ' ~ n.pcs ~ '대)이 이 MCP 서버를 쓸 수 없게 됩니다. 되돌릴 수 없습니다.', '/servers/' ~ (s.server_id | urlencode) ~ '/relations/' ~ r.id ~ '/terminate', actor, '이용 종료') %}<input type="hidden" name="state_version" value="{{ r.state_version }}">{% endcall %}
+{% elif actor.role == 'admin' and r.status == 'terminating' %}<form method="post" action="/servers/{{ s.server_id | urlencode }}/relations/{{ r.id }}/finish" class="inline" hx-boost="false">{{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ r.state_version }}"><button type="submit">종료 완료</button></form>{% endif %}</div></td></tr>{% endfor %}
 </tbody></table>
+{% if actor.role == 'admin' and s.relations | selectattr('status', 'equalto', 'terminating') | list %}<p class="muted">삭제·반환 증빙을 붙인 뒤 종료를 완료합니다.</p>{% endif %}
 {% else %}<p class="muted">이용 관계 없음</p>{% endif %}
 <h2>승인</h2>
 {% if s.approvals %}

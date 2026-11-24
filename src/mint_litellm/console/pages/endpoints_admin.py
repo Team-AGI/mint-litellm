@@ -370,6 +370,21 @@ def _people(actor: Actor) -> list[dict]:
     )
 
 
+def designate_operator(actor: Actor, user_id: str, role: str) -> None:
+    """명부의 사람을 운영자로 지정한다(운영자 화면과 사람 화면이 함께 쓴다)."""
+    _admin_only(actor)
+    user = fetchone(
+        actor.conn,
+        "SELECT email FROM mint.directory_users WHERE instance_id = %s AND user_id = %s"
+        " AND gone_at IS NULL",
+        (actor.instance, user_id),
+    )
+    if user is None:
+        raise AdminError(AdminCode.NOT_FOUND, "사람 목록에 없는 사용자입니다.")
+    name = directory._operator_name(actor.conn, actor.instance, user_id, user["email"])
+    operator_service.add(actor.ctx, actor.litellm(), name, OperatorRole(role), user_id, None)
+
+
 @router.post("/admin/operators")
 def add_operator(
     request: Request,
@@ -378,22 +393,8 @@ def add_operator(
     actor: Actor = Depends(page_actor),
 ):
     """명부의 사람을 운영자로 지정한다. 지정된 사람은 자기 LiteLLM 계정으로 /login에 들어온다."""
-
-    def action():
-        _admin_only(actor)
-        user = fetchone(
-            actor.conn,
-            "SELECT email FROM mint.directory_users WHERE instance_id = %s AND user_id = %s"
-            " AND gone_at IS NULL",
-            (actor.instance, user_id),
-        )
-        if user is None:
-            raise AdminError(AdminCode.NOT_FOUND, "사람 목록에 없는 사용자입니다.")
-        name = directory._operator_name(actor.conn, actor.instance, user_id, user["email"])
-        operator_service.add(actor.ctx, actor.litellm(), name, OperatorRole(role), user_id, None)
-
-    return act(actor, action, "operator_added", "/admin?tab=operators",
-               tabbed(request, actor, "operators"))
+    return act(actor, lambda: designate_operator(actor, user_id, role), "operator_added",
+               "/admin?tab=operators", tabbed(request, actor, "operators"))
 
 
 @router.post("/admin/siem")

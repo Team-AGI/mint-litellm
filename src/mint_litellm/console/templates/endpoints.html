@@ -123,7 +123,7 @@
 <td>{{ r.target }}{% if r.package %} {{ r.package }}{% endif %}</td>
 <td class="nowrap">{{ r.last_seen | when }}</td>
 <td class="num">{{ r.endpoints }}대</td>
-<td>{% if can(actor, 'intake create') %}<a class="button" href="/intakes/new?{{ {'server_id': r.name, 'provider': r.target, 'owner_user_id': r.user_id, 'purpose': L.pick(L.KIT_HARNESS, r.harness) ~ ' 설정에서 발견한 ' ~ r.name ~ ' MCP 서버를 관리 대상으로 등록'} | urlencode }}">도입 신청</a>{% endif %}</td>
+<td>{% if can(actor, 'intake create') %}<a class="button" href="/intakes/new?{{ {'server_id': r.name, 'provider': r.target, 'package': r.package or '', 'kind': r.kind, 'owner_user_id': r.user_id, 'purpose': L.pick(L.KIT_HARNESS, r.harness) ~ ' 설정에서 발견한 ' ~ r.name ~ ' MCP 서버를 관리 대상으로 등록'} | urlencode }}">도입 신청</a>{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
 {% else %}{{ m.empty('보고된 관리 대상 밖의 MCP 서버가 없습니다', '/endpoints?tab=installs', '단말 현황 보기') }}{% endif %}

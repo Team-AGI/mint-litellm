@@ -12,8 +12,24 @@ from mint_litellm.types.events import EventKind
 from mint_litellm.types.ids import new_uuid7
 
 
-def submit(actor: Actor, address: str, purpose: str) -> tuple[str, bool]:
+def known_owner(actor: Actor, owner: str | None) -> str | None:
+    """담당 사용자로 넘어온 값이 사람 목록에 있는지 확인한다(없으면 오류)."""
+    if not owner:
+        return None
+    if fetchone(
+        actor.conn,
+        "SELECT 1 AS x FROM mint.directory_users WHERE instance_id = %s AND user_id = %s"
+        " AND gone_at IS NULL", (actor.instance, owner),
+    ) is None:
+        raise ControlError("담당 사용자가 사람 목록에 없습니다.")
+    return owner
+
+
+def submit(
+    actor: Actor, address: str, purpose: str, owner: str | None = None
+) -> tuple[str, bool]:
     require_role(actor.ctx, "intake create")
+    owner = known_owner(actor, owner)
     if not address.strip():
         raise ControlError("서버 주소를 입력하세요.")
     payload, _ = staff_intakes.validate(
@@ -24,7 +40,7 @@ def submit(actor: Actor, address: str, purpose: str) -> tuple[str, bool]:
     entry = next((e for e in entries if e.get("url") == payload["url"]), None)
     sid = (entry.get("server_id") or entry.get("id")) if entry else payload["server_id"]
     ctx = actor.ctx
-    user = ctx.operator.user_id
+    user = owner or ctx.operator.user_id
     if not user:
         raise ControlError("로그인한 사용자를 확인할 수 없습니다.")
     with transact(ctx):

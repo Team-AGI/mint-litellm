@@ -175,8 +175,12 @@ def submit_staff(sctx: staff.StaffContext, session_id_hash: str, request_id: str
         raise ControlError("신청 내용을 확인하십시오.") from None
 
 
-def submit_operator(ctx, user: str, form: dict) -> tuple[str, bool]:
-    """관리자 화면의 신청. 같은 서버가 진행 중이면 그 신청을 돌려준다(두 번째 값 True)."""
+def submit_operator(ctx, user: str, form: dict, owner: str | None = None) -> tuple[str, bool]:
+    """관리자 화면의 신청. 같은 서버가 진행 중이면 그 신청을 돌려준다(두 번째 값 True).
+
+    ``owner``(담당 사용자)가 있으면 신청자로 그 사람을 적는다. 확인은 부르는 쪽이 한다.
+    """
+    user = owner or user
     from mint_litellm.control.services import intakes
     from mint_litellm.control.services.base import transact
 

@@ -3,6 +3,7 @@
 {% block page_class %}wide{% endblock %}
 {% block body %}
 <h1>MCP 서버</h1>
+{% if total %}<p class="actions"><a class="button" href="/servers/export" hx-boost="false">등록부 내보내기</a></p>{% endif %}
 {% if total %}
 <div class="grid">
   <div class="chart" data-chart="{{ dict(donut, kind='donut') | to_json }}"></div>
