@@ -52,9 +52,9 @@ def cost_cell(value: float | None, listed: bool) -> dict:
     return {"state": "ok", "text": f"${value:,.2f}", "value": value}
 
 
-def total_cost(value: float | None) -> dict:
-    """합계 칸. 0이면 모델 지출이 없는 환경(도구 호출만)이라 사람이 읽을 말로 보인다."""
-    if value == 0:
+def total_cost(value: float | None, model_calls: int | None = None) -> dict:
+    """합계 칸. 모델 요청 없이 0이면(도구 호출만) 「해당 없음」, 모델을 썼는데 0이면 $0.00이다."""
+    if value == 0 and not model_calls:
         return {"state": "none", "text": "해당 없음(모델 지출 없음)", "value": 0.0}
     return cost_cell(value, True)
 
@@ -103,8 +103,9 @@ def _total(days: list[dict]) -> tuple[float, int]:
 
 
 def read_spend(admin, start: datetime, end: datetime, users: list[str], user: str | None):
-    """(팀별, 서버별, 사람별) 지출. 못 읽은 부분은 None이다. 직원이면 본인 호출만 읽는다."""
-    teams = servers = people = None
+    """(팀별, 서버별, 사람별, 모델 요청 수) 지출. 못 읽은 부분은 None이다. 직원이면 본인 호출만
+    읽는다."""
+    teams = servers = people = models = None
     errors = (ControlError, ValueError, TypeError, AttributeError)
     try:
         if user is None:
@@ -113,6 +114,7 @@ def read_spend(admin, start: datetime, end: datetime, users: list[str], user: st
         else:
             days = _daily(admin, "/user/daily/activity", start, end, user_id=user)
             servers, people = _sum(days, "mcp_servers"), {user: _total(days)}
+        models = sum(calls for _, calls in _sum(days, "models").values())
     except errors:
         pass
     if user is None:
@@ -121,7 +123,7 @@ def read_spend(admin, start: datetime, end: datetime, users: list[str], user: st
                       for u in users[:TOP_USERS]}
         except errors:
             people = None
-    return teams, servers, people
+    return teams, servers, people, models
 
 
 # --- MINT 기록 --------------------------------------------------------------------------------
@@ -169,7 +171,8 @@ def read_first_success(conn: psycopg.Connection, instance: str, user: str | None
 
 def combine(ledger: list[dict], first: list[dict], spend, names: dict, *, scoped: bool) -> dict:
     """호출·차단 집계와 지출을 하나로 합친다. ``spend``는 (팀별, 서버별, 사람별) 읽은 결과."""
-    teams_s, servers_s, people_s = spend
+    teams_s, servers_s, people_s, *rest = spend
+    model_calls = rest[0] if rest else None
 
     def fold(key: str) -> dict[str, list[int]]:
         out: dict[str, list[int]] = {}
@@ -204,7 +207,8 @@ def combine(ledger: list[dict], first: list[dict], spend, names: dict, *, scoped
     return {
         "calls": sum(r["calls"] for r in ledger),
         "blocked": sum(r["blocked"] for r in ledger),
-        "cost": total_cost(None if known is None else sum(v[0] for v in known.values())),
+        "cost": total_cost(
+            None if known is None else sum(v[0] for v in known.values()), model_calls),
         "teams": [] if scoped else rows(fold("team_id"), teams_s),
         "users": rows(fold("user_id"), people_s, firsts=first_user),
         "servers": servers,
@@ -222,7 +226,7 @@ def build(conn, instance, admin, names: dict, period: str, user: str | None = No
         if r["user_id"]:
             per_user[r["user_id"]] = per_user.get(r["user_id"], 0) + r["calls"]
     users = sorted(per_user, key=lambda u: -per_user[u])
-    spend = read_spend(admin, start, end, users, user) if admin else (None, None, None)
+    spend = read_spend(admin, start, end, users, user) if admin else (None, None, None, None)
     first = read_first_success(conn, instance, user)
     report = combine(ledger, first, spend, names, scoped=user is not None)
     emails = {r["user_id"]: r["email"] for r in fetchall(
