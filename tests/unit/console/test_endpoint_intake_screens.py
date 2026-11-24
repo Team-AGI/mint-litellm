@@ -8,6 +8,8 @@ from pathlib import Path
 from mint_litellm.console import labels, pack_view
 
 from .test_intake_contract_screens import add_intake, litellm_permission  # noqa: F401
+
+__all__ = ["litellm_permission"]  # 픽스처(이름으로 주입된다)
 from .test_screen_polish import render
 
 SHA = "ab" * 32
