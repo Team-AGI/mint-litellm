@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
-from mint_litellm.control import alerts, webhook
+from mint_litellm.control import alerts, webhook, webhook_store
 from mint_litellm.control.context import Context
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import conflict, forbidden, not_found
@@ -87,6 +87,7 @@ def send_test(ctx: Context, settings: Stage2Settings) -> list[dict[str, Any]]:
     """설정된 웹훅 주소마다 시험 본문을 한 번 보낸다. 경보도 전송 행도 남기지 않는다(관리자만)."""
     if ctx.operator.role != "admin":
         raise forbidden("시험 발송은 admin 역할만 할 수 있습니다.", exit_code=4)
+    settings = webhook_store.effective(settings, ctx.conn, ctx.instance_id)
     now = datetime.now(UTC)
     row = {"kind": "test", "severity": "low", "subject": {}, "count": 1,
            "first_at": now, "last_at": now}

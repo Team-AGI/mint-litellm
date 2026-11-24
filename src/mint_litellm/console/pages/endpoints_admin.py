@@ -1,29 +1,40 @@
 """엔드포인트·운영자·조직 화면."""
 
+import logging
+import os
+import re
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, Request
+from fastapi.responses import FileResponse, JSONResponse
 
-from mint_litellm.console import api
+from mint_litellm.console import api, setup_state
 from mint_litellm.console.core import Actor, page_actor, require_csrf
 from mint_litellm.console.pages.common import act
 from mint_litellm.console.templating import render
 from mint_litellm.control import (
+    config_transfer,
+    directory,
     endpoint_apps,
     endpoint_coverage,
     endpoint_kits,
     org_suggest,
     siem,
 )
-from mint_litellm.control.errors import AdminCode, AdminError
+from mint_litellm.control.db.connection import fetchall, fetchone
+from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.litellm_admin import LiteLLMError
 from mint_litellm.control.operators import SERVICE_ACCOUNTS
 from mint_litellm.control.services import operators as operator_service
 from mint_litellm.control.services import orgs as org_service
 from mint_litellm.control.services import reads
+from mint_litellm.control.services.base import transact
 from mint_litellm.types.cli_commands import OperatorRole
+from mint_litellm.types.events import EventKind
 
+log = logging.getLogger(__name__)
 router = APIRouter(dependencies=[Depends(require_csrf)])
 
 
@@ -201,6 +212,34 @@ def revoke_app(
     return _device_action(request, actor, "", "", work, "app_revoked", back)
 
 
+@router.post("/endpoints/revoke")
+def revoke_endpoint(
+    request: Request, user_id: str = Form(...), reason: str = Form(""),
+    actor: Actor = Depends(page_actor),
+):
+    """사용자의 단말 연결을 해제한다(분실·퇴사). 직원 본인의 해제와 같은 키 폐기를 쓴다."""
+    issuer = actor.config.kit_issuer
+
+    def action():
+        if actor.role != "admin":
+            raise AdminError(AdminCode.FORBIDDEN, "관리자만 단말 연결을 해제할 수 있습니다.")
+        if issuer is None:
+            raise ControlError("단말 연결을 해제할 수 없습니다.")
+        with transact(actor.ctx):
+            try:
+                count = endpoint_kits.revoke_keys(actor.conn, issuer, actor.instance, user_id)
+            except LiteLLMError:
+                log.exception("단말 설치 묶음 키 해제 실패")
+                raise ControlError("단말 연결을 해제하지 못했습니다.") from None
+            actor.ctx.emit(
+                EventKind.ENDPOINT_REVOKED, user_id, int(datetime.now(UTC).timestamp()),
+                {"user_id": user_id, "installs": count, "reason": reason.strip()[:500]},
+            )
+
+    return act(actor, action, "endpoint_revoked", "/endpoints?tab=installs",
+               lambda **kw: endpoints_page(request, actor, **kw))
+
+
 # --- 운영자·조직 -------------------------------------------------------------------------------
 
 
@@ -229,6 +268,12 @@ def admin_page(request: Request, actor: Actor, error=None, status=200, tab=None)
         "suggestions": org_service.list_suggestions(actor.ctx),
         "transfers": reads.transfers(actor.conn, actor.instance) if actor.role == "admin" else [],
         "siem": siem.listing(actor.conn, actor.instance) if actor.role == "admin" else [],
+        "people": _people(actor) if actor.role == "admin" else [],
+        "backups": backup_folders() if actor.role == "admin" else [],
+        "backup_requested": (
+            setup_state.mark_time(actor, BACKUP_MARK) if actor.role == "admin" else None
+        ),
+        "siem_kinds": siem.KINDS,
         "tab": admin_tab(tab, actor.role),
         "error": error,
     }
@@ -305,6 +350,164 @@ def siem_test(name: str, request: Request, actor: Actor = Depends(page_actor)):
 
     return act(actor, action, "siem_test_requested", "/admin?tab=siem",
                tabbed(request, actor, "siem"))
+
+
+def _admin_only(actor: Actor) -> None:
+    if actor.role != "admin":
+        raise AdminError(AdminCode.FORBIDDEN, "관리자만 할 수 있습니다.")
+
+
+def _people(actor: Actor) -> list[dict]:
+    """운영자로 지정할 수 있는 사람: 로그인한 적 있는 LiteLLM 사용자 중 아직 운영자가 아닌 사람."""
+    return fetchall(
+        actor.conn,
+        "SELECT d.user_id, d.email FROM mint.directory_users d WHERE d.instance_id = %s"
+        " AND d.gone_at IS NULL AND NOT EXISTS (SELECT 1 FROM mint.operators o"
+        " WHERE o.instance_id = d.instance_id AND o.user_id = d.user_id"
+        " AND (o.expires_at IS NULL OR o.expires_at > now()))"
+        " ORDER BY coalesce(d.email, d.user_id)",
+        (actor.instance,),
+    )
+
+
+@router.post("/admin/operators")
+def add_operator(
+    request: Request,
+    user_id: str = Form(...),
+    role: str = Form(...),
+    actor: Actor = Depends(page_actor),
+):
+    """명부의 사람을 운영자로 지정한다. 지정된 사람은 자기 LiteLLM 계정으로 /login에 들어온다."""
+
+    def action():
+        _admin_only(actor)
+        user = fetchone(
+            actor.conn,
+            "SELECT email FROM mint.directory_users WHERE instance_id = %s AND user_id = %s"
+            " AND gone_at IS NULL",
+            (actor.instance, user_id),
+        )
+        if user is None:
+            raise AdminError(AdminCode.NOT_FOUND, "사람 목록에 없는 사용자입니다.")
+        name = directory._operator_name(actor.conn, actor.instance, user_id, user["email"])
+        operator_service.add(actor.ctx, actor.litellm(), name, OperatorRole(role), user_id, None)
+
+    return act(actor, action, "operator_added", "/admin?tab=operators",
+               tabbed(request, actor, "operators"))
+
+
+@router.post("/admin/siem")
+def siem_add(
+    request: Request,
+    name: str = Form(...),
+    kind: str = Form(...),
+    endpoint: str = Form(...),
+    token: str = Form(""),
+    index: str = Form(""),
+    from_start: str = Form(""),
+    actor: Actor = Depends(page_actor),
+):
+    """전달 대상 추가. 토큰 값은 저장하지 않고 읽을 곳(환경 변수 이름이나 비밀 파일)만 적는다."""
+
+    def action():
+        _admin_only(actor)
+        if kind not in siem.KINDS:
+            raise ValueError(kind)
+        target, where = name.strip(), token.strip()
+        ref = (f"file:{where}" if where.startswith("/") else f"env:{where}") if where else None
+        siem.add(
+            actor.conn, actor.instance, name=target, kind=kind, endpoint=endpoint.strip(),
+            secret_ref=ref, options={"index": index.strip()} if index.strip() else {},
+            from_start=bool(from_start), created_by=actor.ctx.operator.name,
+        )
+        actor.ctx.emit(
+            EventKind.SIEM_TARGET_ADDED, f"{target}-{_stamp()}", 1,
+            {"name": target, "kind": kind,
+             "secret_source": ref.partition(":")[0] if ref else None},
+        )
+
+    return act(actor, action, "siem_added", "/admin?tab=siem", tabbed(request, actor, "siem"))
+
+
+@router.post("/admin/siem/{name}/remove")
+def siem_remove(
+    name: str, request: Request, confirm_name: str = Form(""), actor: Actor = Depends(page_actor)
+):
+    def action():
+        _admin_only(actor)
+        api.confirm(name, confirm_name, "SIEM 대상")
+        done = actor.conn.execute(
+            "DELETE FROM mint.siem_targets WHERE instance_id = %s AND name = %s",
+            (actor.instance, name),
+        ).rowcount
+        if not done:
+            raise AdminError(AdminCode.NOT_FOUND, "SIEM 대상이 없습니다.")
+        actor.ctx.emit(EventKind.SIEM_TARGET_REMOVED, f"{name}-{_stamp()}", 1, {"name": name})
+
+    return act(actor, action, "siem_removed", "/admin?tab=siem", tabbed(request, actor, "siem"))
+
+
+# --- 백업 ---------------------------------------------------------------------------------------
+# 예약 백업 컨테이너가 하루 한 번, 그리고 요청 표시가 새로 생기면 1분 안에 두 데이터베이스를
+# backups/<시각>/에 덤프한다. 콘솔은 그 폴더를 읽기 전용으로 보고 요청 표시만 남긴다.
+
+BACKUP_MARK = "backup_requested"
+BACKUP_FOLDER = re.compile(r"\d{8}T\d{6}Z")
+BACKUP_FILES = ("mint.sql", "litellm.sql")
+
+
+def backup_root() -> Path:
+    return Path(os.environ.get("MINT_BACKUP_DIR", "/var/lib/mint/backups"))
+
+
+def backup_folders() -> list[dict]:
+    root = backup_root()
+    if not root.is_dir():
+        return []
+    out = []
+    for d in sorted(root.iterdir(), reverse=True):
+        if d.is_dir() and BACKUP_FOLDER.fullmatch(d.name):
+            files = [{"name": f.name, "size": f.stat().st_size}
+                     for f in (d / n for n in BACKUP_FILES) if f.is_file()]
+            at = datetime.strptime(d.name, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+            out.append({"name": d.name, "files": files, "at": at})
+    return out
+
+
+@router.post("/admin/backups")
+def backup_now(request: Request, actor: Actor = Depends(page_actor)):
+    def action():
+        _admin_only(actor)
+        setup_state.mark(actor.conn, actor.instance, BACKUP_MARK, actor.ctx.operator.name)
+
+    return act(actor, action, "backup_requested", "/admin?tab=transfer",
+               tabbed(request, actor, "transfer"))
+
+
+@router.get("/admin/backups/{folder}/{file}")
+def backup_download(folder: str, file: str, actor: Actor = Depends(page_actor)):
+    _admin_only(actor)
+    path = backup_root() / folder / file
+    if not BACKUP_FOLDER.fullmatch(folder) or file not in BACKUP_FILES or not path.is_file():
+        raise AdminError(AdminCode.NOT_FOUND, "백업 파일이 없습니다.")
+    return FileResponse(path, media_type="application/sql", filename=f"{folder}-{file}")
+
+
+@router.get("/admin/config/export")
+def config_export(actor: Actor = Depends(page_actor)):
+    """설정 내보내기(비밀·토큰 없음). 다른 환경의 가져오기에 쓴다."""
+    _admin_only(actor)
+    doc = config_transfer.export_doc(actor.conn, actor.instance)
+    counts = {k: len(v) for k, v in doc.items() if isinstance(v, list) and k != "refill"}
+    stamp = _stamp()
+    actor.ctx.emit(EventKind.CONFIG_EXPORTED, stamp, 1, {"file": "console", "counts": counts})
+    actor.conn.commit()
+    name = f"mint-config-{stamp[:15]}.json"
+    return JSONResponse(doc, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+def _stamp() -> str:
+    return datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
 
 
 @router.post("/orgs")

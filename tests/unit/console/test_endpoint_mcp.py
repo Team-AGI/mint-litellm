@@ -111,3 +111,19 @@ def test_a_reconnect_request_is_answered_once_to_a_user_level_reporter(world):
     form(world, world.session_client("admin"), "/endpoints/mint-kit-human-8/reconnect")
     sql = "SELECT reconnect_requested FROM mint.endpoint_installs WHERE user_id = 'human-8'"
     assert world.query(sql)[0][0] is True
+def test_the_admin_form_previews_a_repository_and_creates_a_local_request(world, monkeypatch):
+    from mint_litellm.control.services import local_intakes
+
+    repo, sha = "https://github.com/o/ghidra-mcp", "f" * 40
+    command = f"uvx --from git+{repo}@{sha} ghidra-mcp"
+    monkeypatch.setattr(local_intakes, "resolve", lambda url, fetch=None: {
+        "repo": repo, "name": "ghidra_mcp", "commit": sha, "command": command, "note": ""})
+    admin = world.session_client("admin")
+    values = {"csrf": world.csrf(admin), "server_url": repo, "purpose": "분석"}
+    preview = admin.post("/intakes", data=values)
+    assert preview.status_code == 200 and sha in preview.text and "ghidra_mcp" in preview.text
+    assert "소스 저장소 주소입니다" not in preview.text
+    done = admin.post("/intakes", data={**values, "step": "submit", "name": "ghidra_mcp",
+                                        "commit": sha, "command": command})
+    # 이 시험 환경에는 기본 조직이 없어 로컬 신청 생성 자체는 서비스 시험이 맡는다
+    assert done.status_code == 400 and "기본 조직" in done.text

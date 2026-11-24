@@ -68,7 +68,7 @@ def test_a_fresh_install_shows_what_is_missing(world, admin):
     assert state(html, "accounts") == "미완료"
     assert state(html, "approval") == "확인 필요" and "알림 주소 미설정" in html
     endpoint = row_of(html, "endpoint")
-    assert "미완료" in endpoint and 'data-copy="tar -xzf mint-kit.tar.gz' in endpoint
+    assert "미완료" in endpoint and 'href="/staff/endpoint"' in endpoint
     assert state(html, "rule") == state(html, "report") == "미완료"
     assert state(html, "endpoint") == "미완료"
 
@@ -153,12 +153,39 @@ def test_the_test_send_is_admin_only_and_needs_an_address(world, admin):
     assert form_post(world, approver, "/setup/webhook-test").status_code == 403
 
 
+def test_an_admin_saves_the_alert_address_on_screen_and_the_worker_reads_it(
+    world, admin, monkeypatch
+):
+    from mint_litellm.control import webhook_store
+
+    monkeypatch.setenv("MINT_EXPORT_HMAC_KEY", "k" * 32)
+    assert 'action="/setup/webhook"' in admin.get("/setup").text
+    bad = form_post(world, admin, "/setup/webhook", url="http://hooks.example.com/x", fmt="slack")
+    assert bad.status_code == 400
+    ok = form_post(world, admin, "/setup/webhook", url=HOOK, fmt="slack")
+    assert ok.status_code == 303 and "webhook_saved" in ok.headers["location"]
+    stored = world.query("SELECT sealed FROM mint.webhook_settings")[0][0]
+    assert HOOK.encode() not in bytes(stored)
+    import psycopg
+    from psycopg.rows import dict_row
+
+    with psycopg.connect(world.admin_url, row_factory=dict_row) as conn:
+        settings = webhook_store.effective(world.config.stage2, conn, INSTANCE)
+    assert settings.webhook_urls == (HOOK,) and settings.webhook_format(HOOK) == "slack"
+    html = admin.get("/setup").text
+    assert "알림 주소 미설정" not in html and "/setup/webhook-test" in html
+    assert form_post(world, admin, "/setup/webhook", url="").status_code == 303
+    assert world.query("SELECT count(*) FROM mint.webhook_settings")[0][0] == 0
+    approver = world.session_client("approver")
+    assert form_post(world, approver, "/setup/webhook", url=HOOK).status_code == 403
+
+
 @pytest.mark.parametrize("role", ["admin", "approver", "viewer"])
 def test_every_role_can_open_the_checklist_and_the_menu_lists_it(world, role):
     client = world.session_client(role)
     html = client.get("/setup").text
     assert "<h1>시작하기</h1>" in html and 'href="/setup"' in html
-    assert ("data-copy" in html) == (role == "admin")
+    assert "mint-kit.tar.gz" not in html
     assert client.get("/").text.count('href="/setup"') == 1
 
 
@@ -169,7 +196,7 @@ def test_setup_links_the_password_change_and_the_alert_request(world, admin):
     assert item["href"] == "/account/password" and item["status"] is setup_state.OPEN
     assert setup_state._password(False)["status"] is setup_state.DONE
     html = admin.get("/setup").text
-    assert "운영자에게 알림 주소 설정 요청" in html
+    assert "운영자에게 알림 주소 설정 요청" not in html and "「승인」 화면" in html
 
 
 def test_setup_steps_follow_the_onboarding_order(world, admin):

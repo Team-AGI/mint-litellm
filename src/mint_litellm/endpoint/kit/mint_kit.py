@@ -4316,6 +4316,51 @@ def dist_for_module(module: str) -> str:
     return top.replace("_", "-")
 
 
+GIT_FROM = re.compile(
+    r"^git\+(https://(?:github\.com|gitlab\.com|bitbucket\.org|codeberg\.org)"
+    r"/[A-Za-z0-9._-]+/([A-Za-z0-9._-]+?))(?:\.git)?@([0-9a-f]{40})$")
+
+
+HAND_ADD = "`mint add 이름 -- uvx --from git+주소@커밋 실행이름`으로 신청하십시오"
+
+
+def repo_command(url: str, fetch=None) -> list[str]:
+    """GitHub 저장소 주소의 최신 커밋을 고정한 실행 명령(토큰). 못 찾으면 AddError."""
+    owner, repo = repo_parts(url) or ("", "")
+    if urllib.parse.urlsplit(url).hostname != "github.com":
+        raise AddError("저장소 자동 확인은 GitHub만 지원합니다. " + HAND_ADD)
+
+    def get(address: str):
+        request = urllib.request.Request(address, headers={"User-Agent": "mint-kit"})
+        with urllib.request.urlopen(request, timeout=8) as response:  # noqa: S310
+            return response.read(1_000_000)
+
+    fetch = fetch or get
+    base = f"https://github.com/{owner}/{repo}"
+    try:
+        api = f"https://api.github.com/repos/{owner}/{repo}"
+        branch = json.loads(fetch(api))["default_branch"]
+        sha = json.loads(fetch(f"{api}/commits/{branch}"))["sha"]
+        raw = f"https://raw.githubusercontent.com/{owner}/{repo}/{sha}/"
+        try:
+            import tomllib
+
+            doc = tomllib.loads(fetch(raw + "pyproject.toml").decode("utf-8"))
+        except (urllib.error.HTTPError, ImportError, ValueError):
+            doc = {}
+        scripts = doc.get("project", {}).get("scripts") or {}
+        if scripts:
+            return ["uvx", "--from", f"git+{base}@{sha}", next(iter(scripts))]
+        try:
+            if json.loads(fetch(raw + "package.json")).get("bin"):
+                raise AddError("Node.js 저장소는 화면(신청 등록)에서 신청하십시오")
+        except urllib.error.HTTPError:
+            pass
+    except (OSError, ValueError, KeyError, TypeError):
+        raise AddError("저장소 정보를 가져오지 못했습니다. " + HAND_ADD) from None
+    raise AddError("실행 명령을 찾지 못했습니다. " + HAND_ADD)
+
+
 def parse_command(tokens: list[str], home: Path) -> dict:
     """``uvx``·``pipx run``·``python -m`` 명령을 신청 명세로 바꾼다. 실행하지 않는다."""
     if not tokens:
@@ -4347,6 +4392,11 @@ def parse_command(tokens: list[str], home: Path) -> dict:
     if not rest:
         raise AddError("패키지 이름이 없습니다")
     first = rest.pop(0)
+    if origin and (git := GIT_FROM.match(origin)):  # 커밋으로 고정한 저장소 출처
+        if len(rest) > MAX_ARGV or any(len(a) > 4096 or chr(0) in a for a in rest):
+            raise AddError("인자가 너무 많거나 깁니다")
+        return {"index": "git", "git": git.group(1), "name": git.group(2), "version": git.group(3),
+                "extras": [], "command": first, "argv": list(rest)}  # fmt: skip
     if origin:
         name, extras, version = split_spec(origin)
         return finish_spec(name, extras, version, first, rest, home)
@@ -4558,6 +4608,9 @@ def run_add(
     mark_fast(home / STATE_REL, time.time())  # 승인이 곧 올 테니 보고기가 짧은 주기로 돈다
     try:
         server_id, url, tokens, env_names = resolve_target(args, home)
+        if url and repo_parts(url):  # 저장소 주소는 최신 커밋을 고정한 로컬 신청으로
+            server_id = server_id or remote_name(url)
+            tokens, url = repo_command(url), None
         spec = None if url else parse_command(tokens, home)
         server_id = server_id or (remote_name(url) if url else spec["name"])
         if url:
@@ -4603,8 +4656,10 @@ def run_add(
             out(f"자료 등급은 {GRADE_CHOICES} 중 하나입니다")
             return 2
         package = spec["name"] + (f"[{','.join(spec['extras'])}]" if spec["extras"] else "")
+        package = (f"{spec['git']}@{spec['version'][:12]}" if spec["index"] == "git"
+                   else f"{package}=={spec['version']}")
         rows = [
-            ("이름", server_id), ("패키지", f"{package}=={spec['version']}"),
+            ("이름", server_id), ("패키지", package),
             ("명령", " ".join([spec["command"], *spec["argv"]])[:70]),
             ("파일 접근", ", ".join(
                 f"{p} ({'쓰기' if m == 'rw' else '읽기'})" for p, m in access.items()) or "없음"),

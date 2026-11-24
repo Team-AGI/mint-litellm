@@ -6,17 +6,13 @@ from mint_litellm.console import labels
 from mint_litellm.console.core import Actor, can
 from mint_litellm.console.labels import Status
 from mint_litellm.control import status as control_status
+from mint_litellm.control import webhook_store
 from mint_litellm.control.db.connection import fetchone
 from mint_litellm.control.operators import SERVICE_ACCOUNTS
 
 DONE = Status("완료", "ok")
 OPEN = Status("미완료", "wait")
 CHECK = Status("확인 필요", "error")
-
-INSTALL_COMMANDS = (
-    ("리눅스", "tar -xzf mint-kit.tar.gz && ./install.sh"),
-    ("윈도우", "install.cmd"),
-)
 
 
 def _count(actor: Actor, sql: str, *args) -> int:
@@ -131,7 +127,7 @@ def _approval_flow(actor: Actor) -> dict:
         "SELECT count(*) AS n FROM mint.operators WHERE instance_id = %s AND role = 'approver'"
         " AND (expires_at IS NULL OR expires_at > now())",
     )
-    urls = actor.config.stage2.webhook_urls
+    urls = webhook_store.effective(actor.config.stage2, actor.conn, actor.instance).webhook_urls
     tested = mark_time(actor, "webhook_test")
     missing = []
     if not approvers:
@@ -148,13 +144,14 @@ def _approval_flow(actor: Actor) -> dict:
         status = CHECK
     line = "승인자와 알림이 준비되었습니다." if not missing else " · ".join(missing)
     if not approvers:
-        extra = {"href": "/admin", "action": "운영자"}
+        extra = {"href": "/admin?tab=operators#operator-form", "action": "승인자 지정"}
     elif urls and actor.role == "admin":
         extra = {"post": "/setup/webhook-test", "action": "시험 전송"}
     else:
         extra = {}
     if solo and not approvers and not urls:
         line = "기본 관리자가 직접 결정할 수 있습니다."
+    extra["webhook_form"] = actor.role == "admin" and not actor.config.stage2.webhook_urls
     return _item("approval", "알림·승인자", status, line, optional=solo, **extra)
 
 
@@ -168,7 +165,6 @@ def _endpoints(actor: Actor) -> dict:
         "SELECT count(*) AS n FROM mint.endpoint_installs WHERE instance_id = %s"
         f" AND {live} AND reported_at > now() - interval '24 hours'",
     )
-    commands = {"commands": INSTALL_COMMANDS}
     if fresh:
         return _item(
             "endpoint",
@@ -177,7 +173,6 @@ def _endpoints(actor: Actor) -> dict:
             f"최근 24시간 보고 {fresh}대",
             "/endpoints",
             "엔드포인트",
-            **commands,
         )
     if total:
         return _item(
@@ -187,16 +182,14 @@ def _endpoints(actor: Actor) -> dict:
             "최근 24시간 보고가 없습니다.",
             "/endpoints",
             "엔드포인트",
-            **commands,
         )
     return _item(
         "endpoint",
         "직원 PC 연결",
         OPEN,
-        "설치된 엔드포인트가 없습니다.",
+        "연결된 PC가 없습니다. 각 PC에서 「내 단말」의 한 줄 설치 명령을 실행합니다.",
         "/staff/endpoint",
-        "설치 묶음 받기",
-        **commands,
+        "한 줄 설치 명령 받기",
     )
 
 

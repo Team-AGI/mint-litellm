@@ -10,17 +10,16 @@ from fastapi.responses import RedirectResponse
 
 from mint_litellm.console import password_login, setup_state
 from mint_litellm.console.cookies import DEFAULT_PASSWORD, delete_cookie, read_cookie
-from mint_litellm.console.core import Actor, page_actor, require_csrf
+from mint_litellm.console.core import Actor, page_actor, require_csrf, screen_message
 from mint_litellm.console.templating import render
-from mint_litellm.control import webhook
-from mint_litellm.control.errors import AdminCode, AdminError
+from mint_litellm.control import webhook, webhook_store
+from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 
 router = APIRouter(dependencies=[Depends(require_csrf)])
 
 
-def send_test(config) -> bool:
+def send_test(settings) -> bool:
     """설정된 알림 주소 모두에 시험 메시지를 보낸다. 모두 성공해야 참이다."""
-    settings = config.stage2
     now = datetime.now(UTC)
     row = {
         "kind": "webhook_test",
@@ -57,14 +56,35 @@ def setup(request: Request, actor: Actor = Depends(page_actor)):
     return setup_page(request, actor)
 
 
+@router.post("/setup/webhook")
+def webhook_save(
+    request: Request,
+    url: str = Form(""),
+    fmt: str = Form("slack"),
+    actor: Actor = Depends(page_actor),
+):
+    """알림 주소 저장(관리자). 설치 설정에 주소가 있으면 그쪽이 우선이라 화면에서 바꾸지 않는다."""
+    if actor.role != "admin":
+        raise AdminError(AdminCode.FORBIDDEN, "관리자만 알림 주소를 정할 수 있습니다.")
+    if actor.config.stage2.webhook_urls:
+        return setup_page(request, actor, "알림 주소는 설치 설정에서 정해져 있습니다.", 409)
+    try:
+        webhook_store.save(actor.conn, actor.instance, url, fmt, actor.ctx.operator.name)
+    except ControlError as error:
+        actor.conn.rollback()
+        return setup_page(request, actor, screen_message(str(error)), 400)
+    return RedirectResponse("/setup?ok=webhook_saved#step-approval", status_code=303)
+
+
 @router.post("/setup/webhook-test")
 def webhook_test(request: Request, actor: Actor = Depends(page_actor)):
     if actor.role != "admin":
         raise AdminError(AdminCode.FORBIDDEN, "관리자만 시험 전송을 할 수 있습니다.")
-    if not actor.config.stage2.webhook_urls:
+    settings = webhook_store.effective(actor.config.stage2, actor.conn, actor.instance)
+    if not settings.webhook_urls:
         return setup_page(request, actor, "알림 주소가 설정되어 있지 않습니다.", 409)
     try:
-        sent = send_test(actor.config)
+        sent = send_test(settings)
     except Exception:  # 주소 검사 실패·전송 오류 모두 같은 안내로 보인다
         sent = False
     if not sent:

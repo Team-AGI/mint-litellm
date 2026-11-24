@@ -297,6 +297,36 @@ def revoke_consent(sctx: StaffContext, session_id_hash: str, consent_id: str) ->
         conn.execute("SELECT mint.staff_revoke_consent(%s)", (consent_id,))
 
 
+def stop_using(sctx: StaffContext, session_id_hash: str, org_id: str, server_id: str) -> None:
+    """내 사용 권한만 해제한다(본인 사용자 범위 거부). 서버 승인은 그대로 둔다."""
+    _active_session(sctx, session_id_hash)
+    with _staff_transaction(sctx, session_id_hash) as conn:
+        conn.execute("SELECT mint.staff_stop_using(%s, %s)", (org_id, server_id))
+
+
+def resume_using(sctx: StaffContext, session_id_hash: str, org_id: str, server_id: str) -> None:
+    """내가 그만둔 사용을 되돌린다. 관리자가 건 거부는 풀지 않는다."""
+    _active_session(sctx, session_id_hash)
+    with _staff_transaction(sctx, session_id_hash) as conn:
+        conn.execute("SELECT mint.staff_resume_using(%s, %s)", (org_id, server_id))
+
+
+def blocked_servers(sctx: StaffContext) -> dict[str, bool]:
+    """서버 전체가 막힌 서버별로, 내가 그만둔 것이면 True(관리자가 건 거부면 False)."""
+    rows = fetchall(
+        sctx.control,
+        "SELECT server_id, bool_and(scope_type = 'user' AND created_by = %(user)s) AS mine"
+        " FROM mint.denials WHERE instance_id = %(iid)s AND lifted_at IS NULL AND tools IS NULL"
+        " AND server_id IS NOT NULL AND ((scope_type = 'user' AND scope_id = %(user)s)"
+        "   OR (scope_type = 'team' AND scope_id = ANY(%(teams)s))"
+        "   OR (scope_type = 'key' AND scope_id = %(key)s) OR scope_type = 'server')"
+        " GROUP BY server_id",
+        {"user": sctx.user_id, "iid": sctx.instance_id, "teams": list(sctx.team_ids),
+         "key": sctx.key_token},
+    )
+    return {r["server_id"]: r["mine"] for r in rows}
+
+
 # ---------------------------------------------------------------------------
 # 본인 범위 조회
 # ---------------------------------------------------------------------------

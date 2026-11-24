@@ -609,6 +609,7 @@ EVENT_KIND = {
     "endpoint_resumed": "관리 AI 연결 재개",
     "endpoint_app_created": "앱 자격 발급",
     "endpoint_app_revoked": "앱 자격 회수",
+    "endpoint_revoked": "단말 연결 해제",
     "backup_created": "백업 생성",
     "backup_restored": "백업 복원",
     "config_exported": "설정 내보내기",
@@ -658,6 +659,7 @@ SESSION_END_REASON = {
 NOTICES = {
     "password_changed": "비밀번호를 바꿨습니다.",
     "webhook_tested": "시험 메시지를 보냈습니다.",
+    "webhook_saved": "알림 주소를 저장했습니다. 「시험 전송」으로 도착을 확인하십시오.",
     "siem_test_requested": "시험 전송을 요청했습니다. 잠시 뒤 새로 고쳐 결과를 확인하십시오.",
     "suspended": "서버를 중지했습니다.",
     "resumed": "서버를 재개했습니다.",
@@ -705,6 +707,10 @@ NOTICES = {
     "reapproval_planned": "재승인 계획을 등록했습니다.",
     "provisional_approved": "임시 계약을 승인된 도구 계약으로 바꿨습니다.",
     "operator_removed": "운영자를 삭제했습니다.",
+    "operator_added": "운영자를 지정했습니다. 그 사람은 다음 로그인부터 관리 화면을 씁니다.",
+    "siem_added": "SIEM 대상을 추가했습니다. 시험 전송으로 연결을 확인하십시오.",
+    "siem_removed": "SIEM 대상을 제거했습니다.",
+    "backup_requested": "백업을 요청했습니다. 1분 안에 시작하며, 끝나면 목록에 나타납니다.",
     "operator_chat_bound": "채팅 결속을 저장했습니다.",
     "staff_confirmed": "확인했습니다.",
     "staff_rejected": "거절했습니다.",
@@ -718,6 +724,9 @@ NOTICES = {
     "endpoint_reconnect": "연결 복구를 요청했습니다. 단말이 다음에 보고할 때 적용됩니다.",
     "server_ignored": "알림에서 제외했습니다.",
     "server_requested": "도입 신청을 요청했습니다. 단말이 다음에 보고할 때 접수됩니다.",
+    "server_stopped": "사용을 그만뒀습니다. 다시 쓰려면 「다시 사용하기」를 누르십시오.",
+    "server_resumed": "이 MCP 서버를 다시 사용할 수 있습니다.",
+    "endpoint_revoked": "단말 연결을 해제했습니다.",
     "alert_acknowledged": "경보를 확인 처리했습니다.",
 }
 

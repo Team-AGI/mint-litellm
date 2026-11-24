@@ -92,7 +92,12 @@ def _npm(spec: str, registry: str) -> Package:
     return Package("npm", name, version, bool(version and _SEMVER.fullmatch(version)), registry)
 
 
+_GIT_PIN = re.compile(r"(git\+https?://[^@\s]+)@([0-9a-f]{40})")
+
+
 def _pypi(spec: str, registry: str) -> Package:
+    if pin := _GIT_PIN.fullmatch(spec):  # 커밋(40자)으로 고정한 저장소 출처
+        return Package("pypi", pin[1], pin[2], True, _source_host(spec))
     if _SOURCE.match(spec):
         return Package("pypi", spec, None, False, _source_host(spec))
     match = _PY_SPEC.fullmatch(spec.strip())

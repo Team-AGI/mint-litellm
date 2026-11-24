@@ -80,6 +80,37 @@ def _download(requirement: str, destination: Path, python: str, before: str | No
     )
 
 
+_COMMIT = re.compile(r"^[0-9a-f]{40}$")
+_GIT_URL = re.compile(r"^https://github\.com/([A-Za-z0-9._-]{1,100})/([A-Za-z0-9._-]{1,100})$")
+
+
+def _build_git(url: str, destination: Path) -> None:
+    """고정된 커밋의 압축본을 pip로 wheel로 만든다(의존 라이브러리는 받지 않는다)."""
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith("PIP_")}
+    env["PIP_CONFIG_FILE"] = os.devnull
+    subprocess.run(
+        [*_pip(), "wheel", "--no-deps", "--no-cache-dir", "--disable-pip-version-check",
+         "--index-url", "https://pypi.org/simple", "-w", str(destination), url],
+        check=True, env=env, capture_output=True, timeout=600,
+    )
+
+
+def _git_wheel(build, root: Path, repo, commit: str, download, stage: Path, python: str) -> str:
+    """커밋을 wheel로 만들어 stage에 두고 의존 라이브러리를 받는다. 만든 wheel의 이름을 낸다."""
+    scratch = Path(tempfile.mkdtemp(dir=root, prefix=".src-"))
+    try:
+        build(f"https://github.com/{repo.group(1)}/{repo.group(2)}/archive/{commit}.zip", scratch)
+        found = sorted(scratch.glob("*.whl"))
+        if len(found) != 1:
+            raise PackError("PACK_RESOLVE_FAILED")
+        download(str(found[0]), stage, python, None)
+        if not (stage / found[0].name).exists():
+            shutil.copy2(found[0], stage / found[0].name)
+        return found[0].name
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
 def _entry(wheels: list[Path], command: str, spec: dict) -> str:
     for wheel in wheels:
         with zipfile.ZipFile(wheel) as archive:
@@ -134,13 +165,24 @@ def build_pack(
     packs_dir: str | Path | None = None,
     download=None,
     metadata=None,
+    build=None,
 ) -> tuple[str, dict]:
-    """네트워크 경계는 시험에서 download와 metadata로 대체할 수 있다."""
+    """네트워크 경계는 시험에서 download·metadata·build로 대체할 수 있다.
+
+    ``index``가 ``git``이면 GitHub 저장소의 고정 커밋(40자)을 wheel로 만들고, 의존 라이브러리는
+    PyPI에서 받는다.
+    """
     hosts = {
         item.get("value", "").lower() for item in allowlists if item.get("kind") == "egress_target"
     }
-    if spec.get("index") != "pypi" or not {"pypi.org", "files.pythonhosted.org"} <= hosts:
+    git = spec.get("index") == "git"
+    needed = {"pypi.org", "files.pythonhosted.org"} | ({"github.com", "codeload.github.com"}
+                                                       if git else set())
+    if spec.get("index") not in ("pypi", "git") or not needed <= hosts:
         raise PackError("PACK_INDEX_NOT_ALLOWED")
+    repo = _GIT_URL.fullmatch(str(spec.get("git", ""))) if git else None
+    if git and (not repo or not _COMMIT.fullmatch(str(spec.get("version", "")))):
+        raise PackError("PACK_INDEX_NOT_ALLOWED")  # 고정되지 않았거나 GitHub가 아닌 출처
     name, version, extras = spec.get("name"), spec.get("version"), spec.get("extras", [])
     if (
         not isinstance(name, str)
@@ -156,12 +198,19 @@ def build_pack(
     root = Path(packs_dir or os.environ.get("MINT_PACKS_DIR", "/var/lib/mint/packs"))
     root.mkdir(parents=True, exist_ok=True)
     requirement = name + ("[" + ",".join(sorted(extras)) + "]" if extras else "") + "==" + version
-    before = _released_at(name, version, metadata)
+    before = None if git else _released_at(name, version, metadata)
+    built: str | None = None
     with tempfile.TemporaryDirectory(dir=root, prefix=".pack-") as temp:
         stage = Path(temp)
         try:
-            download(requirement, stage, python, before)
+            if git:
+                built = _git_wheel(build or _build_git, root, repo, version, download, stage,
+                                   python)
+            else:
+                download(requirement, stage, python, before)
         except (OSError, subprocess.SubprocessError):
+            if git:
+                raise PackError("PACK_RESOLVE_FAILED") from None
             try:
                 releases = metadata(name, version).get("urls", [])
                 if releases and not any(
@@ -192,6 +241,9 @@ def build_pack(
             if size > MAX_BYTES:
                 raise PackError("PACK_TOO_LARGE")
             digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+            if wheel.name == built:
+                files.append({"name": wheel.name, "sha256": digest, "size": wheel.stat().st_size})
+                continue  # 커밋에서 직접 만든 wheel은 저장소 쪽 해시가 없다(커밋 고정이 무결성)
             try:
                 releases = metadata(parts[0], parts[1])["urls"]
                 expected = next(
@@ -209,10 +261,11 @@ def build_pack(
         manifest = {
             "schema": 1,
             "package": {
-                "index": "pypi",
+                "index": spec["index"],
                 "name": name,
                 "version": version,
                 "extras": sorted(extras),
+                **({"git": spec["git"]} if git else {}),
             },
             "platform": {"os": "linux", "arch": "x86_64", "glibc": "2.28", "python": python},
             "entry": entry,

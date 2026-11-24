@@ -123,9 +123,8 @@ def test_staff_database_role_cannot_write_an_intake_without_the_session_function
 def test_a_port_outside_the_allowed_list_is_refused_on_the_form_not_recorded(sworld):
     # 접수 뒤 자동 거절되는 대신 화면에서 허용 포트를 알려 고치게 한다.
     client = staff_tests.logged_in(sworld)
-    page = client.get("/staff/intakes/new")
-    # 허용 포트 표시(종료 준비 문구는 입력받지 않고 기본값으로 채운다)
-    assert "443, 8443" in page.text
+    # 허용 포트는 거절할 때만 알린다(신청 폼에 개발자식 포트 안내를 두지 않는다)
+    assert "443, 8443" not in client.get("/staff/intakes/new").text
     response = client.post("/staff/intakes",
                            data=form(client, url="https://docs.example.com:8080/mcp"))
     assert response.status_code == 400
@@ -147,3 +146,58 @@ def test_staff_detail_shows_delivery_stages_for_an_approved_intake(sworld, monke
         " SELECT instance_id, id, 1, 'approved' FROM mint.intakes RETURNING 1")
     page = client.get(location.split("?")[0]).text
     assert 'aria-label="적용 단계"' in page and "LiteLLM 등록 대기" in page
+
+
+SHA = "f" * 40
+REPO = "https://github.com/o/ghidra-mcp"
+COMMAND = f"uvx --from git+{REPO}@{SHA} ghidra-mcp"
+
+
+def resolved(monkeypatch, **changes):
+    from mint_litellm.control.services import local_intakes
+
+    out = {"repo": REPO, "name": "ghidra_mcp", "commit": SHA, "command": COMMAND, "note": "",
+           **changes}
+    monkeypatch.setattr(local_intakes, "resolve", lambda url, fetch=None: out)
+
+
+def test_a_repository_address_is_previewed_then_submitted_as_a_local_request(sworld, monkeypatch):
+    resolved(monkeypatch)
+    client = staff_tests.logged_in(sworld)
+    values = {"csrf": staff_tests.csrf(client), "request_id": str(uuid.uuid4()), "url": REPO,
+              "purpose": "분석 보조"}
+    preview = client.post("/staff/intakes", data=values)
+    assert preview.status_code == 200
+    for text in ("ghidra_mcp", SHA, COMMAND, "로컬 MCP"):
+        assert text in preview.text
+    assert "소스 저장소 주소입니다" not in preview.text
+    assert sworld.query("SELECT count(*) FROM mint.intakes") == [(0,)]
+    done = client.post("/staff/intakes", data={
+        **values, "step": "submit", "name": "ghidra_mcp", "commit": SHA, "command": COMMAND})
+    assert done.status_code == 303, done.text
+    row = sworld.query("SELECT source, server_id, requested_by, status FROM mint.intakes")[0]
+    assert row == ("endpoint", "ghidra_mcp", staff_tests.STAFFER, "received")
+    assert sworld.query(
+        "SELECT identity_kind FROM mint.servers WHERE server_id='ghidra_mcp'") == [("stdio",)]
+    assert client.get(done.headers["location"]).status_code == 200
+    assert "ghidra_mcp" in client.get("/staff/intakes").text
+
+
+def test_an_unresolved_repository_shows_the_reason_and_manual_fields(sworld, monkeypatch):
+    resolved(monkeypatch, commit="", command="", note="GitHub에 연결하지 못했습니다. 직접 입력")
+    client = staff_tests.logged_in(sworld)
+    page = client.post("/staff/intakes", data={
+        "csrf": staff_tests.csrf(client), "request_id": str(uuid.uuid4()), "url": REPO,
+        "purpose": "분석"})
+    assert page.status_code == 200 and "연결하지 못했습니다" in page.text
+    assert 'name="commit"' in page.text and 'name="command"' in page.text
+
+
+def test_a_wrong_command_returns_to_the_preview_with_the_reason(sworld, monkeypatch):
+    client = staff_tests.logged_in(sworld)
+    page = client.post("/staff/intakes", data={
+        "csrf": staff_tests.csrf(client), "request_id": str(uuid.uuid4()), "url": REPO,
+        "purpose": "분석", "step": "submit", "name": "ghidra_mcp", "commit": SHA,
+        "command": "uvx other"})
+    assert page.status_code == 400 and "이 커밋을 가리키는" in page.text
+    assert 'name="command"' in page.text

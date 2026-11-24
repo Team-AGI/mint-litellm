@@ -111,3 +111,13 @@ def test_the_exec_drift_summary_names_the_package_change():
     result = exec_drift.classify(old, new)
     text = exec_drift.summary(result, packages.changes(old, new))
     assert "패키지 x 1.0.0 → 1.1.0" in text and "실행 확대" in text
+
+
+def test_a_git_source_is_pinned_only_by_a_full_commit():
+    sha = "a" * 40
+    [p] = pkgs("/u/uvx", "--from", f"git+https://github.com/o/r@{sha}", "cmd")
+    assert (p.name, p.version, p.pinned, p.registry) == (
+        "git+https://github.com/o/r", sha, True, "github.com")
+    for ref in ("main", "abc1234", ""):
+        [q] = pkgs("/u/uvx", "--from", f"git+https://github.com/o/r@{ref}", "cmd")
+        assert not q.pinned

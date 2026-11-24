@@ -29,6 +29,18 @@
 {% endif %}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}{{ m.empty('등록된 운영자가 없습니다', '/setup', '시작하기') }}{% endif %}
+{% if actor.role == 'admin' %}
+<h2 id="operator-form">운영자 지정</h2>
+{% if people %}
+<form method="post" action="/admin/operators" class="filters">
+  {{ m.csrf(actor) }}
+  <label>사람<select name="user_id" required>{% for p in people %}<option value="{{ p.user_id }}">{{ p.email or p.user_id }}</option>{% endfor %}</select></label>
+  <label>역할<select name="role"><option value="approver">{{ L.pick(L.ROLE, 'approver') }}</option><option value="viewer">{{ L.pick(L.ROLE, 'viewer') }}</option><option value="admin">{{ L.pick(L.ROLE, 'admin') }}</option></select></label>
+  <button type="submit" class="primary">운영자로 지정</button>
+</form>
+<p class="muted">승인자는 승인, 조회자는 보기만 합니다.</p>
+{% else %}<p class="muted">한 번 로그인한 사람만 고를 수 있습니다.</p>{% endif %}
+{% endif %}
 {% if system_accounts %}<h2>시스템 계정</h2>
 <table><thead><tr><th>이름</th><th>만료</th></tr></thead><tbody>
 {% for o in system_accounts %}<tr><td>{{ o.name }}</td><td class="nowrap">{{ o.expires_at | when }}</td></tr>{% endfor %}
@@ -58,26 +70,46 @@
 </form>
 {% endif %}
 {% elif tab == 'transfer' and actor.role == 'admin' %}
-{{ m.copy_cmd('mint-litellm backup create backup.mbk') }}
-{{ m.copy_cmd('mint-litellm backup restore backup.mbk --yes') }}
-{{ m.copy_cmd('mint-litellm config export config.json') }}
-{{ m.copy_cmd('mint-litellm config import config.json --dry-run') }}
-{{ m.copy_cmd('mint-litellm config import config.json') }}
+<h2>백업</h2>
+<div class="filters">
+<form method="post" action="/admin/backups" hx-boost="false">{{ m.csrf(actor) }}<button type="submit" class="primary">지금 백업</button></form>
+<a class="button" href="/admin/config/export" hx-boost="false">설정 내보내기(JSON)</a>
+</div>
+<p class="muted">매일 자동 백업, 최근 7개 보관</p>{% if backup_requested and (not backups or backup_requested > backups[0].at) %}<p class="muted">요청한 백업 준비 중({{ backup_requested | when }})</p>{% endif %}
+{% if backups %}
+<table><thead><tr><th>시각</th><th>MINT 데이터</th><th>LiteLLM 데이터</th><th>복원</th></tr></thead><tbody>
+{% for b in backups %}<tr><td class="nowrap">{{ b.at | when }}</td>
+{% for f in ['mint.sql', 'litellm.sql'] %}<td>{% set hit = b.files | selectattr('name', 'equalto', f) | first %}{% if hit %}<a href="/admin/backups/{{ b.name }}/{{ f }}" hx-boost="false" download>내려받기</a> <span class="muted">{{ (hit.size / 1048576) | round(1) }} MB</span>{% else %}—{% endif %}</td>{% endfor %}
+<td>{{ m.copy_cmd('./mint.sh restore backups/' ~ b.name) }}</td></tr>{% endfor %}
+</tbody></table>
+<p class="muted">복원은 서비스를 멈추므로 서버에서 실행합니다.</p>
+{% else %}<div class="empty"><h3>아직 백업이 없습니다</h3></div>{% endif %}
+<h2>백업·이전 기록</h2>
 {% if transfers %}
 <table><thead><tr><th>시각</th><th>종류</th><th>실행자</th><th>파일</th><th>방식</th><th>암호화</th></tr></thead><tbody>
 {% for t in transfers %}<tr><td class="nowrap">{{ t.inserted_at | when }}</td><td>{{ L.pick(L.EVENT_KIND, t.kind) }}</td><td>{{ t.actor | who }}</td><td>{{ t.file | blank }}</td><td>{{ t.mode | blank }}</td><td>{{ '예' if t.encrypted else '아니오' if t.encrypted is not none else '-' }}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}<div class="empty"><h3>백업·이전 기록이 없습니다</h3></div>{% endif %}
 <h2>SIEM 전달</h2>
-{{ m.copy_cmd('mint-litellm siem add 이름 --kind syslog --endpoint tls://호스트:6514') }}
-{{ m.copy_cmd('mint-litellm siem add 이름 --kind hec --endpoint https://호스트:8088 --token-env MINT_SIEM_HEC_TOKEN') }}
+<form method="post" action="/admin/siem" class="filters" id="siem-form">
+  {{ m.csrf(actor) }}
+  <label>이름<input name="name" required pattern="[a-z][a-z0-9_-]{0,31}" placeholder="soc_main"></label>
+  <label>종류<select name="kind">{% for k in siem_kinds %}<option value="{{ k }}">{{ L.pick(L.SIEM_KIND, k) }}</option>{% endfor %}</select></label>
+  <label>받는 주소<input name="endpoint" required placeholder="https://siem.example:9200 또는 tls://siem.example:6514"></label>
+  <label>색인<input name="index" placeholder="Splunk·Elastic만"></label>
+  <label>토큰 위치<input name="token" placeholder="MINT_SIEM_TOKEN 또는 /run/secrets/siem" pattern="(MINT_SIEM_[A-Z0-9_]+|/run/secrets/.+)?"></label>
+  <label><input type="checkbox" name="from_start" value="1"> 지금까지의 기록도 보내기</label>
+  <button type="submit" class="primary">추가</button>
+</form>
+<p class="muted">토큰 값은 저장하지 않고 읽을 곳만 적습니다.</p>
 {% if siem %}
 <table><thead><tr><th>이름</th><th>종류</th><th>주소</th><th>상태</th><th>마지막 전달</th><th class="num">밀린 사건</th><th class="num">보낸 사건</th><th>마지막 시험</th><th></th></tr></thead><tbody>
 {% for s in siem %}{% set st = 'error' if s.failing_since else ('ok' if s.last_delivered_at else 'wait') %}<tr><td>{{ s.name }}</td><td>{{ L.pick(L.SIEM_KIND, s.kind) }}</td><td>{{ s.address }}</td>
 <td>{{ m.badge(L.SIEM_STATE, st) }}{% if s.failing_since %} {{ L.siem_error(s.last_error) }} · {{ s.consecutive_failures }}회 연속 · {{ s.failing_since | when }}부터{% endif %}</td>
 <td class="nowrap">{{ s.last_delivered_at | when }}</td><td class="num">{{ s.backlog }}</td><td class="num">{{ s.sent_total }}</td>
 <td class="nowrap">{% if s.last_test_at %}{{ s.last_test_at | when }} · {{ '실패(' ~ L.siem_error(s.last_test_error) ~ ')' if s.last_test_error else '성공' }}{% else %}—{% endif %}</td>
-<td><form method="post" action="/admin/siem/{{ s.name | urlencode }}/test" class="row-actions">{{ m.csrf(actor) }}<button type="submit">시험 전송</button></form></td></tr>{% endfor %}
+<td><div class="row-actions"><form method="post" action="/admin/siem/{{ s.name | urlencode }}/test" class="row-actions">{{ m.csrf(actor) }}<button type="submit">시험 전송</button></form>
+{% call m.confirm_dialog('siem-remove-' ~ loop.index, '제거', 'SIEM 대상 제거', '이 대상으로 보내기를 멈춥니다. 이미 보낸 기록은 받는 쪽에 남습니다.', '/admin/siem/' ~ (s.name | urlencode) ~ '/remove', actor, '제거', confirm_name=s.name) %}{% endcall %}</div></td></tr>{% endfor %}
 </tbody></table>
 {% else %}<div class="empty"><h3>SIEM 전달 대상이 없습니다</h3></div>{% endif %}
 {% else %}

@@ -5,9 +5,9 @@
 <h1>MCP 서버 도입 신청</h1>
 <form method="post" action="/staff/intakes" class="form cols">
 {{ m.csrf(actor) }}<input type="hidden" name="request_id" value="{{ f.request_id }}">
-<label class="full">MCP 서버 주소<input type="url" name="url" value="{{ f.url }}" maxlength="2048" placeholder="https://mcp.example.com/mcp" required><small class="muted">https · 포트 {{ ports }}</small></label>
+{% if f.step == 'submit' %}<input type="hidden" name="url" value="{{ f.url }}">{% include "_repo_intake.html" %}{% else %}<label class="full">MCP 서버 주소 또는 소스 저장소 주소<input type="url" name="url" value="{{ f.url }}" maxlength="2048" placeholder="https://mcp.example.com/mcp" required><small class="muted">저장소 주소는 이 PC의 로컬 MCP로 신청합니다.</small></label>{% endif %}
 <label class="full">도입 목적<textarea name="purpose" maxlength="256" required>{{ f.purpose }}</textarea></label>
 <div class="actions full"><button type="submit" class="primary">신청 제출</button><a class="button" href="/staff/intakes">취소</a></div>
-<div class="full"><p>로컬 실행은 이 PC 터미널에서 신청</p>{{ m.copy_cmd('mint add 이름 -- uvx 패키지==판본') }}</div>
+{% if f.step != 'submit' %}<div class="full"><p>또는 이 PC 터미널에서 신청</p>{{ m.copy_cmd('mint add 이름 -- uvx 패키지==판본') }}</div>{% endif %}
 </form>
 {% endblock %}

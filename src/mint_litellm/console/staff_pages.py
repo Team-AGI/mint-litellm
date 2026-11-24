@@ -48,7 +48,13 @@ from mint_litellm.control import (
 from mint_litellm.control.db.connection import connect, fetchall, fetchone
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.litellm_admin import LiteLLMError
-from mint_litellm.control.services import console_sessions, reads, staff, staff_intakes
+from mint_litellm.control.services import (
+    console_sessions,
+    local_intakes,
+    reads,
+    staff,
+    staff_intakes,
+)
 from mint_litellm.control.services import intakes as intakes_service
 from mint_litellm.endpoint.kit_build import HARNESSES, build_kit, kit_version
 from mint_litellm.plugin.snapshot import WINDOW_MAX_USES
@@ -184,8 +190,29 @@ def intake_list(request: Request, actor: StaffActor = Depends(staff_actor)):
     return staff_render(request, "staff_intakes.html", {"rows": rows}, actor)
 
 
+def name_intakes(actor: StaffActor, rows: list[dict]) -> None:
+    """신청 행에 서버 별칭과 신청한 주소를 붙인다(별칭이 없으면 식별자)."""
+    if not rows:
+        return
+    names = server_names(actor.config.litellm_admin)
+    urls = {
+        r["server_id"]: r["url"] for r in fetchall(
+            actor.sctx.control,
+            "SELECT DISTINCT ON (server_id) server_id, url FROM mint.deployment_contracts"
+            " WHERE instance_id = %s AND server_id = ANY(%s)"
+            " AND status IN ('candidate', 'approved')"
+            " ORDER BY server_id, (status = 'candidate') DESC, id DESC",
+            (actor.sctx.instance_id, [r["server_id"] for r in rows]),
+        )
+    }
+    for row in rows:
+        row["server_name"] = names.get(row["server_id"]) or row["server_id"]
+        row["server_url"] = urls.get(row["server_id"])
+
+
 def application_rows(actor: StaffActor) -> list[dict]:
     rows = staff_intakes.listing(actor.sctx)
+    name_intakes(actor, rows)
     if rows:
         details = fetchall(
             actor.sctx.control,
@@ -224,10 +251,14 @@ def intake_new(request: Request, actor: StaffActor = Depends(staff_actor)):
 @router.post("/staff/intakes")
 def intake_submit(
     request: Request, request_id: str = Form(...), url: str = Form(...),
-    purpose: str = Form(...), actor: StaffActor = Depends(staff_actor),
+    purpose: str = Form(...), step: str = Form(""), name: str = Form(""),
+    commit: str = Form(""), command: str = Form(""), actor: StaffActor = Depends(staff_actor),
 ):
     form = dict(request_id=request_id, url=url, purpose=purpose)
     ports = actor.config.stage2.intake_allowed_ports
+    if staff_intakes.repo_parts(url.strip()):
+        return repo_intake(request, actor, {**form, "step": step, "name": name,
+                                            "commit": commit, "command": command})
     target = {}
 
     def action():
@@ -256,6 +287,27 @@ def intake_submit(
     return response
 
 
+def repo_intake(request: Request, actor: StaffActor, form: dict):
+    """소스 저장소 주소: 확인 단계는 미리보기를 보이고, 제출 단계는 로컬 신청을 만든다."""
+    if form["step"] != "submit":
+        try:
+            form = {**form, **local_intakes.resolve(form["url"]), "step": "submit"}
+        except ControlError as error:
+            return intake_form(request, actor, form, error=str(error), status=422)
+        return intake_form(request, actor, form)
+    target = {}
+
+    def action():
+        target["id"] = local_intakes.submit_staff(actor.sctx, actor.id_hash, form["request_id"],
+                                                  form)
+
+    response = act(actor, action, "intake_created", "/staff/intakes/" + form["request_id"],
+                   lambda **kw: intake_form(request, actor, form, **kw))
+    if response.status_code == 303:
+        response.headers["location"] = f"/staff/intakes/{target['id']}?ok=intake_created"
+    return response
+
+
 def _intake_job_error(actor: StaffActor, row: dict):
     from mint_litellm.console.pages.servers import intake_job_error  # 순환 참조를 피한다
 
@@ -265,6 +317,7 @@ def _intake_job_error(actor: StaffActor, row: dict):
 @router.get("/staff/intakes/{intake_id}")
 def intake_detail(intake_id: str, request: Request, actor: StaffActor = Depends(staff_actor)):
     row = staff_intakes.detail(actor.sctx, intake_id)
+    name_intakes(actor, [row])
     reason = row["decision_reason"] or ""
     if reason.startswith("check_failed:"):
         _, check, code = reason.split(":", 2)
@@ -311,6 +364,7 @@ def intake_withdraw(intake_id: str, request: Request, state_version: int = Form(
 
     def rebuild(error=None, status=400):
         row = staff_intakes.detail(actor.sctx, intake_id)
+        name_intakes(actor, [row])
         return staff_render(request, "staff_intake_detail.html",
                             {"i": row, "decision_reason": row["decision_reason"] or "",
                              "error": error}, actor, status)
@@ -482,11 +536,23 @@ def servers_page(request: Request, actor: StaffActor, error=None, status=200, fo
         by_server.setdefault((row["org_id"], row["server_id"]), []).append(row)
     available = staff.list_available(actor.sctx)
     can_consent = {(t["org_id"], t["server_id"]) for t in available}
-    rows = [dict(r) for r in available if r["tools"]]
+    blocked = staff.blocked_servers(actor.sctx)
+    progress = {}  # 내 신청의 진행 화면. 최근 신청부터 보므로 서버마다 가장 최근 것이 남는다
+    for intake in reversed(staff_intakes.listing(actor.sctx)):
+        if intake["decision"] not in ("withdrawn", "rejected"):
+            progress[intake["server_id"]] = f"/staff/intakes/{intake['id']}"
+    rows = []
+    for r in available:
+        sid = r["server_id"]
+        stopped = blocked.get(sid) is True  # 내가 그만둔 서버(관리자가 막은 서버는 보이지 않는다)
+        # 내가 신청해 승인됐지만 도구가 아직 없다(남이 신청한 서버는 승인 전까지 숨긴다)
+        preparing = not r["tools"] and sid not in blocked and sid in progress
+        if r["tools"] or stopped or preparing:
+            rows.append({**r, "stopped": stopped, "preparing": preparing})
     shown = {(r["org_id"], r["server_id"]) for r in rows}
     rows += [  # 도구가 없어진 서버의 기존 동의도 철회할 수 있게 남긴다
         {"org_id": o, "server_id": sid, "org_name": o, "transport": None, "auth_type": None,
-         "tools": [], "valid_until": None}
+         "tools": [], "valid_until": None, "stopped": False, "preparing": False}
         for (o, sid) in by_server if (o, sid) not in shown
     ]
     seen = staff_intakes.observed(actor.sctx)
@@ -499,8 +565,10 @@ def servers_page(request: Request, actor: StaffActor, error=None, status=200, fo
         row["state"] = "active" if active else ("none" if required else "free")
         row["consent_until"] = max((c["valid_until"] for c in active), default=None)
         row["expiring"] = bool(active) and row["consent_until"] < now + EXPIRING
-        row["can_consent"] = key in can_consent
+        row["can_consent"] = key in can_consent and not row["preparing"]
         row["seen"] = seen.get(row["server_id"])
+        row["progress"] = progress.get(row["server_id"])
+        row["local"] = row.get("transport") == "stdio"
     failed = start_failures(actor, [r["server_id"] for r in rows if not r["seen"]])
     for row in rows:
         row["start_failed"] = row["server_id"] in failed
@@ -526,7 +594,7 @@ def servers_page(request: Request, actor: StaffActor, error=None, status=200, fo
         "pending_calls": sum(r["view"] == "pending" for r in my_approvals(actor))
         if not rows
         else 0,
-        "need": sum(r["state"] == "none" for r in rows),
+        "need": sum(r["state"] == "none" and not r["stopped"] and not r["preparing"] for r in rows),
         "expiring": sum(r["expiring"] for r in rows),
         "selected": next((r for r in rows if r["ref"] == opened), None) if opened else None,
         "max_days": actor.config.stage2.staff_consent_max_days,
@@ -576,6 +644,23 @@ def give_consent(
     form = {"target": target, "purpose": purpose, "data_scope": data_scope, "days": valid_days}
     return act(actor, action, "consent_given", "/staff",
                lambda **kw: servers_page(request, actor, form=form, **kw))
+
+
+@router.post("/staff/servers/{action}")
+def stop_or_resume(
+    action: str, request: Request, target: str = Form(...),
+    actor: StaffActor = Depends(staff_actor),
+):
+    """내 사용 권한만 해제하거나(그만두기) 되돌린다. 서버 승인은 그대로다."""
+    if action not in ("stop", "resume"):
+        raise AdminError(AdminCode.NOT_FOUND, "알 수 없는 동작입니다.")
+    org_id, _, server_id = target.partition("|")
+    function = staff.stop_using if action == "stop" else staff.resume_using
+    return act(
+        actor, lambda: function(actor.sctx, actor.id_hash, org_id, server_id),
+        "server_stopped" if action == "stop" else "server_resumed", "/staff",
+        lambda **kw: servers_page(request, actor, **kw),
+    )
 
 
 @router.post("/staff/consents/{consent_id}/revoke")

@@ -21,7 +21,8 @@ LOCK_COLUMN = {"orgs": "state_version", "org_bindings": "state_version",
                "servers": "state_version", "usage_relations": "state_version",
                "settings": "settings_version"}
 SELECTABLE = READ_ONLY | {"console_sessions", "self_confirmations", "consents", "events",
-                          "intakes", "deployment_contracts", "tool_contracts", "jobs", "approvals"}
+                          "intakes", "deployment_contracts", "tool_contracts", "jobs", "approvals",
+                          "denials"}
 INSERTABLE = {
     "signup_requests": {"instance_id", "id", "email", "display_name", "status_token_hash",
                         "password_sealed"},
@@ -29,9 +30,10 @@ INSERTABLE = {
                 "allowed_resources", "provider", "owner_user_id", "readiness", "data_return_terms",
                 "requested_by", "staff_request_sha256", "staff_registry_required"},
     "deployment_contracts": {"id", "instance_id", "server_id", "canonical_text", "sha256", "url",
-                             "url_sha256", "transport", "auth_type", "proposed_by"},
+                             "url_sha256", "transport", "auth_type", "proposed_by", "identity_kind",
+                             "pack_spec"},
     "servers": {"id", "instance_id", "server_id", "status", "url_sha256", "transport", "auth_type",
-                "registered_by"},
+                "registered_by", "identity_kind"},
     "jobs": {"id", "instance_id", "kind", "target_ref", "idempotency_key"},
     "console_sessions": {"id_hash", "instance_id", "subject", "user_id", "key_token", "role",
                          "idle_expiry", "absolute_expiry", "team_ids"},
@@ -39,6 +41,8 @@ INSERTABLE = {
                  "data_scope", "text_version", "source", "granted_at", "valid_until",
                  "registered_by"},
     "events": {"event_id", "instance_id", "kind", "source_key", "actor", "payload"},
+    "denials": {"id", "instance_id", "org_id", "scope_type", "scope_id", "server_id", "reason",
+                "created_by"},
 }
 UPDATABLE = {
     "console_sessions": {"last_seen_at", "idle_expiry", "revoked_at"},
@@ -50,6 +54,7 @@ UPDATABLE = {
     "intakes": {"status", "decision", "decided_by", "decision_reason", "decided_at"},
     "tool_contracts": {"status"},
     "deployment_contracts": {"status"},
+    "denials": {"lifted_at", "lifted_by"},
 }
 
 
@@ -265,7 +270,9 @@ def test_the_staff_login_can_execute_only_the_public_staff_functions(world):
                 "staff_revoke_consent", "staff_start_session", "staff_touch_session",
                 "staff_end_session", "staff_list_confirmations", "staff_list_consents",
                 "staff_list_events", "staff_submit_intake", "staff_withdraw_intake",
-                "staff_signup_submit", "staff_signup_status", "staff_signup_request"}
+                "staff_submit_local_intake",
+                "staff_signup_submit", "staff_signup_status", "staff_signup_request",
+                "staff_stop_using", "staff_resume_using"}
     with psycopg.connect(world[0]) as conn:
         rows = conn.execute(
             "SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace"
