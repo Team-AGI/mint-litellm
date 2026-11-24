@@ -68,7 +68,7 @@ def test_a_fresh_install_shows_what_is_missing(world, admin):
     assert state(html, "accounts") == "미완료"
     assert state(html, "approval") == "확인 필요" and "알림 주소 미설정" in html
     endpoint = row_of(html, "endpoint")
-    assert "미완료" in endpoint and 'data-copy="tar -xzf mint-kit.tar.gz' in endpoint
+    assert "미완료" in endpoint and 'href="/staff/endpoint"' in endpoint
     assert state(html, "rule") == state(html, "report") == "미완료"
     assert state(html, "endpoint") == "미완료"
 
@@ -158,7 +158,7 @@ def test_every_role_can_open_the_checklist_and_the_menu_lists_it(world, role):
     client = world.session_client(role)
     html = client.get("/setup").text
     assert "<h1>시작하기</h1>" in html and 'href="/setup"' in html
-    assert ("data-copy" in html) == (role == "admin")
+    assert "mint-kit.tar.gz" not in html
     assert client.get("/").text.count('href="/setup"') == 1
 
 
@@ -169,7 +169,7 @@ def test_setup_links_the_password_change_and_the_alert_request(world, admin):
     assert item["href"] == "/account/password" and item["status"] is setup_state.OPEN
     assert setup_state._password(False)["status"] is setup_state.DONE
     html = admin.get("/setup").text
-    assert "운영자에게 알림 주소 설정 요청" in html
+    assert "운영자에게 알림 주소 설정 요청" not in html and "「승인」 화면" in html
 
 
 def test_setup_steps_follow_the_onboarding_order(world, admin):
