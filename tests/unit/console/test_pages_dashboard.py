@@ -27,7 +27,7 @@ def test_every_screen_renders_for_every_role(world, role, path):
     response = client.get(path)
     assert response.status_code == 200, response.text[:300]
     assert "text/html" in response.headers["content-type"]
-    assert "MINT 관리자 콘솔" in response.text
+    assert "MINT 관리자 콘솔" in re.sub(r"<[^>]+>", "", response.text)
 
 
 def test_the_login_page_renders_without_a_session(world):
@@ -43,13 +43,12 @@ def test_screens_redirect_to_the_login_page_without_a_session(world):
 
 def test_the_menu_lists_only_screens_that_exist(admin):
     html = admin.get("/").text
-    labels = re.findall(r'<nav class="sidebar".*?</nav>', html, re.S)[0]
-    badge = r'(?: <span class="badge error">\d+</span>)?'
-    names = [n.strip() for n in re.findall(r">([^<]+)" + badge + "</a>", labels)]
+    labels = re.findall(r'<nav\b[^>]*class="sidebar".*?</nav>', html, re.S)[0]
+    names = re.findall(r'<span class="nav-text">([^<]+)</span>', labels)
     assert names == ["대시보드", "시작하기", "승인 센터", "경보", "서버", "도입 신청", "접근 통제",
                      "엔드포인트", "호출 기록", "정책", "감사 보고서", "사용량", "운영자·조직",
                      "가입 요청"]
-    assert re.search(r"승인 센터 <span class=\"badge error\">[1-9]\d*</span>", labels)
+    assert re.search(r"승인 센터</span>\s*<span class=\"badge error\">[1-9]\d*</span>", labels)
     for text in ("준비 중", "예정", "곧 제공", "TBD"):
         assert text not in html
 

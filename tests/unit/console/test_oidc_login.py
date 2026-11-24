@@ -238,14 +238,14 @@ def test_the_signing_key_set_is_cached_and_refetched_on_an_unknown_key_id(sso, i
 
 def test_the_login_pages_offer_sso_first_and_key_login_second(sso):
     page = sso.client.get("/login").text
-    assert "SSO로 로그인" in page and 'name="key"' in page
+    assert "회사 계정으로 로그인" in page and 'name="key"' in page
     assert "target=staff" in sso.client.get("/staff/login").text
 
 
 def test_key_login_can_be_switched_off(sso):
     object.__setattr__(sso.config, "key_login", False)
     page = sso.client.get("/login").text
-    assert "SSO로 로그인" in page and 'name="key"' not in page
+    assert "회사 계정으로 로그인" in page and 'name="key"' not in page
     response = sso.client.post("/login", data={"key": "sk-admin"})
     refused(response, 403)
     assert sessions(sso) == []

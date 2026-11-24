@@ -935,7 +935,7 @@ def test_the_menu_has_three_staff_screens_and_a_badge_for_requests_to_confirm(sw
     page = logged_in(sworld).get("/staff/confirmations").text
     assert page.count('class="active"') >= 1 and 'href="/staff/confirmations"' in page
     assert "내 서버" in page and "내 단말" in page and "내 요청" in page
-    assert '내 요청 <span class="badge error">1</span>' in page
+    assert '내 요청</span> <span class="badge error">1</span>' in page
     assert 'aria-current="page"' in page and "본인 확인 대기" in page and "내 승인 요청" in page
 
 
@@ -960,7 +960,7 @@ def test_the_my_servers_screen_shows_consent_state_and_opens_the_consent_form(sw
 def test_staff_empty_state_suggests_contact_and_request_history(sworld):
     html = logged_in(sworld).get("/staff").text
     assert 'href="/staff/intakes/new"' in html and "쓸 수 있는 서버가 없습니다" in html
-    assert '<details class="mobile-menu">' in html
+    assert 'id="sidebar" class="sidebar"' in html and 'data-sidebar-toggle' in html
     assert 'href="/staff/confirmations"' in html
 
 

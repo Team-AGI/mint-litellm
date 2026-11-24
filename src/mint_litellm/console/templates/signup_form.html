@@ -1,5 +1,5 @@
 <!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>가입 요청 · MINT</title><link rel="stylesheet" href="/static/console.css"></head>
-<body><div class="login"><h1>가입 요청</h1>
+<body class="auth-page"><div class="login"><h1>가입 요청</h1>
 {% if error %}<div class="banner error" role="alert">{{ error }}</div>{% endif %}
 {% if done %}<p>{{ done }}</p>{% else %}<form method="post" action="/staff/signup" class="form">
 <input type="hidden" name="csrf" value="{{ csrf }}">

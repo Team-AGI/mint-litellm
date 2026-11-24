@@ -7,17 +7,17 @@
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
 <link rel="stylesheet" href="/static/console.css">
 </head>
-<body>
+<body class="auth-page">
 <div class="login">
   <h1>MINT 관리자 콘솔</h1>
   {% if error %}<div class="banner error" role="alert">{{ error }}</div>{% endif %}
   <form method="post" action="/login" class="form">
-    <label>아이디<input name="username" autocomplete="username" autofocus required></label>
+    <label>아이디 또는 이메일<input name="username" autocomplete="username" autofocus required></label>
     <label>비밀번호<input type="password" name="password" autocomplete="current-password" required></label>
     <button class="primary" type="submit">로그인</button>
   </form>
   {% if sso %}
-  <a class="button" href="/auth/oidc/login?target=admin">SSO로 로그인</a>
+  <a class="button" href="/auth/oidc/login?target=admin">회사 계정으로 로그인</a>
   {% endif %}
   {% if key_login %}
   <form method="post" action="/login" class="form">

@@ -119,6 +119,6 @@ def test_narrow_screens_scroll_wide_blocks_inside_their_container():
     css = (Path(__file__).parents[3] / "src/mint_litellm/console/static/console.css").read_text(
         encoding="utf-8"
     )
-    narrow = css[css.index("@media (max-width: 767px)") :]
+    narrow = css[css.index("@media (max-width: 1100px)") :]
     assert "table { display: block" in narrow and "overflow-x: auto" in narrow
     assert "button.copy" in narrow and ".segments" in narrow
