@@ -170,6 +170,17 @@ def test_values_are_appended_on_their_own_line_when_env_lacks_a_trailing_newline
 FIX_FLAG = "--fix-config /app/config/litellm.config.yaml"
 
 
+def test_up_on_a_fresh_database_moves_old_export_files_aside(tmp_path):
+    # 새 DB(운영자 0명)면 남은 옛 내보내기 파일을 옆 폴더로 옮겨 복원 판정이 막히지 않게 한다.
+    (tmp_path / "deploy").mkdir()
+    (tmp_path / "deploy" / "litellm.config.example.yaml").write_text("{}\n", encoding="utf-8")
+    tail = 'case "$*" in *"psql"*) echo 0;; esac\n'
+    result, _, _ = run(tmp_path, "POSTGRES_PASSWORD=x\n", "up", docker_tail=tail)
+    assert result.returncode == 0, result.stderr
+    log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+    assert "--user 0 --entrypoint sh control -c" in log and "stale-" in log
+
+
 def test_upgrade_and_up_ask_init_to_add_missing_guardrail_modes_to_the_operator_config(tmp_path):
     (tmp_path / "deploy").mkdir()
     (tmp_path / "deploy" / "litellm.config.example.yaml").write_text("{}\n", encoding="utf-8")

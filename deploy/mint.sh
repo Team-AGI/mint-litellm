@@ -558,6 +558,16 @@ prepare_default_root() {
          ELSE (SELECT count(*) FROM mint.operators) END" 2>/dev/null || echo 0)"
     [ "$count" = "0" ] || return 0
     NEED_DEFAULT_ROOT=1
+    # 새 DB인데 내보내기 볼륨에 옛 파일이 남아 있으면(볼륨만 남은 재설치) 복원 판정이 새 DB를
+    # 「되돌림」으로 보고 봉인·권한 동기화를 멈춘다. 옛 파일은 지우지 않고 옆 폴더로 옮긴다.
+    "${COMPOSE[@]}" run --rm --no-deps -T --user 0 --entrypoint sh control -c '
+d=/var/lib/mint/export
+old=$(find "$d" -mindepth 1 -maxdepth 1 ! -name "stale-*" 2>/dev/null | head -1)
+[ -n "$old" ] || exit 0
+keep="$d/stale-$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "$keep"
+find "$d" -mindepth 1 -maxdepth 1 ! -name "stale-*" -exec mv {} "$keep"/ \;
+echo "새 DB라 옛 내보내기 파일을 ${keep#$d/}로 옮겼습니다."' < /dev/null || true
     reply="$("${COMPOSE[@]}" run --rm --no-deps -T --entrypoint python control -c "
 from pathlib import Path
 from mint_litellm.control.litellm_config import ensure_password_policy
