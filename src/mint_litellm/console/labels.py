@@ -221,6 +221,9 @@ CHECK = {
     "exec_shape": "실행 명세 형식",
     "pack_build": "묶음 준비",
     "inspection": "도구 목록 검사",
+    "sbom": "구성요소 목록(SBOM)",
+    "code_scan": "코드·비밀 검사(SAST)",
+    "dependency_vulns": "의존성 취약점(SCA)",
 }
 INSPECTION_STATUS = {
     "issued": "단말 검사 대기", "consumed": "단말 검사 중", "submitted": "단말 검사 받음",
@@ -263,6 +266,15 @@ CHECK_REASON = {
     "PACK_SDIST_ONLY": "소스 배포본만 있어 묶을 수 없음",
     "PACK_TOO_LARGE": "묶음이 너무 큼",
     "PACK_UNAVAILABLE": "묶음이 없어 검사하지 못함",
+    "CRITICAL_VULNERABILITY": "심각한 취약점 있음",
+    "VULN_FEED_UNREACHABLE": "취약점 조회처에 닿지 못함",
+    "SOURCE_UNAVAILABLE": "소스를 받지 못함",
+    "SOURCE_UNSUPPORTED": "검사할 수 없는 소스 형식",
+    "SOURCE_TOO_LARGE": "소스가 너무 큼",
+    "CODE_SCAN_FAILED": "코드 검사 실패",
+    "SECRET_SCAN_FAILED": "비밀 검사 실패",
+    "SCANNER_UNAVAILABLE": "소스 검사기가 응답하지 않음",
+    "SCAN_INCOMPLETE": "검사 미완료",
     "SPEC_INVALID": "신청 명세 형식 오류",
     "TIMEOUT": "검사 시간 초과",
     "VERSION_INVALID": "판본 형식 오류",
@@ -739,6 +751,21 @@ def litellm_missing(info: dict | None) -> str:
 _LIBRARY_ERROR = re.compile(r"ImportError|ModuleNotFoundError|cannot import name")
 
 
+def scan_summary(check: dict) -> str:
+    """공급망 검사의 한 줄 요약(통과해도 발견 수를 보인다)."""
+    i = check.get("inputs") if isinstance(check.get("inputs"), dict) else {}
+    name = check.get("check")
+    if name == "sbom" and "components" in i:
+        return f"구성요소 {i['components']}개"
+    if name == "dependency_vulns" and "packages" in i:
+        return (f"패키지 {i['packages']}개 · 심각 {i.get('critical', 0)} · 높음 {i.get('high', 0)}"
+                f" · 보통 {i.get('medium', 0)} · 낮음 {i.get('low', 0)}")
+    if name == "code_scan" and "files" in i:
+        return (f"파일 {i['files']}개 · 코드 높음 {i.get('code_high', 0)}"
+                f" · 보통 {i.get('code_medium', 0)} · 비밀 {i.get('secrets', 0)}")
+    return ""
+
+
 def check_reason(check: dict) -> str:
     """검사 결과의 사유 이름. 서버가 시작 단계에서 끝난 옛 기록은 오류 출력으로 사유를 가른다."""
     inputs = check.get("inputs")
@@ -748,7 +775,10 @@ def check_reason(check: dict) -> str:
         tail = detail.get("stderr_tail") or ""
         code = "SERVER_DEPS_MISMATCH" if _LIBRARY_ERROR.search(tail) else "SERVER_START_FAILED"
         return CHECK_REASON[code]
-    return pick(CHECK_REASON, check["reason_code"])
+    summary, reason = scan_summary(check), pick(CHECK_REASON, check["reason_code"])
+    if summary:
+        return summary if check.get("result") == "pass" else f"{reason} · {summary}"
+    return reason
 
 
 def pick(mapping: dict[str, str] | dict[str, Status], value: str | None) -> str:

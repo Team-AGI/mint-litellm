@@ -1,0 +1,18 @@
+rules:
+  - id: python-subprocess-shell
+    languages: [python]
+    severity: ERROR
+    message: "MCP 구성요소에서 shell=True 실행은 입력 경계를 우회할 수 있습니다."
+    pattern: subprocess.$FUNC(..., shell=True, ...)
+  - id: python-tls-verification-disabled
+    languages: [python]
+    severity: ERROR
+    message: "원격 MCP 또는 모델 호출에서 TLS 검증을 끄면 안 됩니다."
+    pattern-either:
+      - pattern: httpx.$FUNC(..., verify=False, ...)
+      - pattern: requests.$FUNC(..., verify=False, ...)
+  - id: python-url-open
+    languages: [python]
+    severity: WARNING
+    message: "외부 URL을 여는 코드는 허용 목록과 격리 경계를 검토해야 합니다."
+    pattern: urllib.request.urlopen(...)

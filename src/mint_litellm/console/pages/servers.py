@@ -419,6 +419,29 @@ def check_na(check: dict) -> bool:
         "NOT_APPLICABLE", "UNSUPPORTED")
 
 
+@router.get("/intakes/{intake_id}/sbom.json")
+def intake_sbom(intake_id: str, actor: Actor = Depends(page_actor)):
+    """신청 실행 묶음의 구성요소 목록(CycloneDX)."""
+    from fastapi.responses import JSONResponse
+
+    from mint_litellm.control import source_scan
+
+    row = fetchone(
+        actor.conn,
+        "SELECT i.server_id, d.pack_manifest, d.pack_spec FROM mint.intakes i"
+        " JOIN mint.deployment_contracts d ON d.instance_id = i.instance_id"
+        " AND d.server_id = i.server_id WHERE i.instance_id = %s AND i.id::text = %s"
+        " AND d.pack_manifest IS NOT NULL ORDER BY d.id DESC LIMIT 1",
+        (actor.instance, intake_id),
+    )
+    if row is None:
+        raise AdminError(AdminCode.NOT_FOUND, "구성요소 목록이 없습니다.")
+    spec = row["pack_spec"] or {}
+    doc = source_scan.sbom(row["pack_manifest"], row["server_id"], spec.get("version"))
+    name = f"{row['server_id']}-sbom.cdx.json"
+    return JSONResponse(doc, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
 def intake_progress(
     intake: dict, lacking: list[str], checks: list[dict] | None = None,
     hold: bool = False, cause: bool = False, seen: int = 0,

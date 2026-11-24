@@ -1,0 +1,3 @@
+# The operator owns this config; never load the submitted repository's allowlists.
+[extend]
+useDefault = true

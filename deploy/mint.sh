@@ -464,6 +464,7 @@ cmd_up() {
     ensure_kit_issuer_key
     ensure_control_key
     "${COMPOSE[@]}" --profile worker up -d worker inspector
+    start_scanner
     "${COMPOSE[@]}" --profile console up -d console
     ensure_backup_dir
     "${COMPOSE[@]}" up -d backup
@@ -691,6 +692,13 @@ UPGRADE_STOPPED=""
 BACKUP_DIR=""
 
 upgrade_build() { "${COMPOSE[@]}" build litellm; }
+
+# 신청 소스 검사기. 빌드·기동에 실패해도 나머지는 멈추지 않는다(신청 검사가 「검사기 응답 없음」으로 남는다).
+start_scanner() {
+    { "${COMPOSE[@]}" --profile worker build scanner < /dev/null \
+        && "${COMPOSE[@]}" --profile worker up -d scanner < /dev/null; } \
+        || echo "경고: 소스 검사기를 시작하지 못했습니다. 신청의 코드·비밀 검사가 판별 불가로 남습니다." >&2
+}
 upgrade_postgres() { "${COMPOSE[@]}" up -d --wait postgres; }
 upgrade_backup() { cmd_backup; }
 upgrade_stop() {
@@ -723,6 +731,7 @@ upgrade_rest() {
         refresh_control_routes "$(env_value MINT_SECRETS_DIR)/control.key"
     fi
     "${COMPOSE[@]}" --profile worker up -d worker inspector
+    start_scanner
     "${COMPOSE[@]}" --profile console up -d console
     "${COMPOSE[@]}" up -d backup
 }
