@@ -43,6 +43,10 @@ LOCAL_CHECKS = (
     "description_scan",
     "risk_grade",
     "termination_readiness",
+    # 공급망 검사는 끝에 둔다. 심각 취약점(실패)이 앞의 도구 검사를 건너뛰게 하지 않는다.
+    "sbom",
+    "code_scan",
+    "dependency_vulns",
 )
 
 # 증거 유효 기간(일): 연결·정의 30, 공급망 90, 기타 365

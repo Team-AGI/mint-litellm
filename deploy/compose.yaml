@@ -209,6 +209,7 @@ services:
       - packs:/var/lib/mint/packs
       - inspect:/var/lib/mint/inspect
       - inspectwork:/var/lib/mint/inspect-work
+      - scan:/var/lib/mint/scan
     depends_on:
       postgres:
         condition: service_healthy
@@ -239,6 +240,30 @@ services:
       - packs:/packs:ro
       - inspect:/inspect
       - inspectwork:/work
+    depends_on:
+      worker:
+        condition: service_started
+    restart: unless-stopped
+
+  # 신청 소스 검사기(코드 검사 Semgrep·비밀 검사 Gitleaks). 고정 커밋의 소스를 GitHub에서 받아야 해서
+  # 검사 컨테이너(inspector)와 달리 바깥 연결이 있다. 신청한 코드를 실행하지는 않는다.
+  scanner:
+    build:
+      context: ./scanner
+    image: mint-scanner:${COMPOSE_PROJECT_NAME:-local}
+    profiles: ["worker"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=1024m
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 256
+    volumes:
+      - packs:/packs:ro
+      - scan:/scan
     depends_on:
       worker:
         condition: service_started
@@ -298,3 +323,4 @@ volumes:
   packs:
   inspect:
   inspectwork:
+  scan:

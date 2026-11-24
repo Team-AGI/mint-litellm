@@ -12,7 +12,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from mint_litellm.control import alerts, inspection, packs
+from mint_litellm.control import alerts, inspection, packs, source_scan
 from mint_litellm.control import allowlists as allowlist_domain
 from mint_litellm.control import intake_checks as checks
 from mint_litellm.control import servers as server_domain
@@ -414,6 +414,15 @@ def _run_local_checks(job: JobContext, ctx: Context, row: dict, attempt: int) ->
             out = checks.risk_grade(defs, row["data_grade"], data)
             if out.extra.get("graded"):
                 intakes.store_grades(ctx, server_id, out.extra["graded"])
+        elif name == "sbom":
+            out = source_scan.sbom_outcome(pack and pack[1])
+        elif name == "code_scan":
+            request = source_scan.scan_request(spec, pack)
+            out = source_scan.code_outcome(
+                source_scan.request_scan(request, wait=job.checkpoint) if request else None)
+        elif name == "dependency_vulns":
+            feed = getattr(job.settings, "vuln_feed_url", None) or "https://api.osv.dev"
+            out = source_scan.dependency_outcome(pack and pack[1], feed)
         else:
             out = checks.termination_readiness(row["readiness"])
         pending.append((name, out))
