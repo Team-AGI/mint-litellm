@@ -116,7 +116,9 @@ def test_server_state_codes_are_shown_in_korean():
 
 # UI-013·014: 신청 결정 패널
 def test_the_decision_panel_shows_no_buttons_to_the_requester(world, admin):
-    from mint_litellm.console import templating  # noqa: F401  (템플릿 로드 확인)
+    from mint_litellm.console import templating
+
+    assert templating.templates is not None  # 템플릿 로드 확인
 
     source = open("src/mint_litellm/console/templates/intake_detail.html", encoding="utf-8").read()
     assert "actor.session.user_id != i.requested_by" not in source

@@ -10,7 +10,7 @@ from mint_litellm.endpoint.kit import mint_kit
 @pytest.mark.parametrize("name", [staff_intakes.server_name, mint_kit.remote_name])
 def test_names_have_no_hyphen_and_follow_the_repository(name):
     assert name("https://mcp.context7.com/mcp") == "context7_com"
-    assert name("https://mcp.deepwiki.com/mcp") == "deepwiki_com"
+    assert name("https://mcp.docsearch.com/mcp") == "docsearch_com"
     assert name("https://github.com/bethington/ghidra-mcp") == "ghidra_mcp"
     assert name("https://gitlab.com/a/b-c.git") == "b_c"
 

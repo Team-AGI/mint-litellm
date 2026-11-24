@@ -41,20 +41,31 @@ WHERE a.instance_id = %(iid)s AND a.status = 'active'
           WHERE instance_id = %(iid)s AND default_org_id IS NOT NULL)))
 ORDER BY a.server_id
 """
+APPLICABLE_SQL = _APPLICABLE
 
 
 def desired_permission(
     conn: psycopg.Connection, instance_id: str, user_id: str, team_id: str | None, key_token: str
 ) -> Permission:
     """사용자·팀·키 범위의 활성 승인에서 게이트웨이 키가 가져야 할 서버 목록과 도구 맵."""
+    return fold_permission(fetchall(conn, _APPLICABLE, applicable_params(
+        instance_id, user_id, team_id, key_token)))
+
+
+def applicable_params(
+    instance_id: str, user_id: str, team_id: str | None, key_token: str
+) -> dict[str, str]:
+    """``_APPLICABLE``의 원격 서버 질의 매개변수(플러그인의 비동기 읽기도 같은 질의를 쓴다)."""
+    return {"iid": instance_id, "key": key_token, "user": user_id, "team": team_id or "",
+            "kind": "remote"}
+
+
+def fold_permission(rows: list[dict]) -> Permission:
+    """``_APPLICABLE`` 행을 서버 목록과 도구 맵으로 접는다."""
     servers: list[str] = []
     tools: dict[str, set[str]] = {}
     open_servers: set[str] = set()  # 모든 도구를 허용하는 승인: 도구 제한을 걸지 않는다
-    for row in fetchall(
-        conn, _APPLICABLE,
-        {"iid": instance_id, "key": key_token, "user": user_id, "team": team_id or "",
-         "kind": "remote"},
-    ):
+    for row in rows:
         if row["server_id"] not in servers:
             servers.append(row["server_id"])
         if row["open_tools"]:
@@ -99,6 +110,14 @@ def sync_kit_keys(conn: psycopg.Connection, instance_id: str, client: LiteLLMSyn
                 continue
             raise
         changed += 1
+    # 직원이 만든 앱 키: 게이트웨이 키와 같은 방식으로 승인·팀 소속을 따라간다
+    for row in fetchall(
+        conn,
+        "SELECT user_id, team_id, key_token AS mcp_key_token FROM mint.endpoint_apps"
+        " WHERE instance_id = %s AND revoked_at IS NULL AND expires_at > now()",
+        (instance_id,),
+    ):
+        rows.append({**row, "app": True})
     for row in rows:
         row["team_id"] = current_team(client, row["user_id"], row["team_id"])
         servers, tools = desired_permission(
@@ -140,6 +159,8 @@ def current_team(client: LiteLLMSync, user_id: str, installed: str | None) -> st
 
 
 def _record_key_receipts(conn, instance_id: str, row: dict, servers: list[str]) -> None:
+    if row.get("app"):
+        return  # 앱 키는 단말 도달 확인(수신 기록) 대상이 아니다
     approvals = fetchall(conn, _APPLICABLE, {
         "iid": instance_id, "key": row["mcp_key_token"], "user": row["user_id"],
         "team": row["team_id"] or "", "kind": "remote",

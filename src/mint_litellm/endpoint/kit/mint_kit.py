@@ -86,6 +86,8 @@ LAST_REPORT = "last_report"
 REPORTER_KEY = "reporter.key"  # Windows 관리형: SYSTEM 보고기가 읽는 키 사본
 RETIRED_FILE = "retired.json"  # 마지막 보고 응답의 폐기 서버 목록(실행기가 읽는다)
 LAUNCHED = "launched"  # 실행기가 띄운 서버 프로세스의 기록
+PAUSED_FILE = "paused"  # 관리 연결 중지 표지(값은 중지 세대). 실행기·훅이 장애 중에도 지킨다
+OFFLINE_FILE = "offline.jsonl"  # 결정 서버에 닿지 못해 단말이 스스로 통과시킨 호출(보고 뒤 비운다)
 FAILED_DIR = "start-failed"  # 실행기가 남긴 서버별 시작 실패 사유
 TOOLS_DIR = "tools"  # 실행기가 본 서버별 도구 목록(이름·설명·입력 정의)
 KEY_REJECTED = "key_rejected"  # 서버가 키를 거절(401·403)했다는 표시. check가 문제로 보인다.
@@ -1139,7 +1141,8 @@ def local_mcp_item(harness: str, name: object, entry: object) -> dict | None:
     if any(a.replace("\\", "/").endswith("/" + AGENT) for a in args):
         return None
     package = None
-    url, command = entry.get("url"), entry.get("command")
+    url = next((entry[k] for k in URL_FIELDS if isinstance(entry.get(k), str) and entry[k]), None)
+    command = entry.get("command")
     if isinstance(url, str) and url:
         try:
             host = urllib.parse.urlsplit(url).hostname or ""
@@ -1166,22 +1169,277 @@ def managed_names(state: dict) -> set[str]:
 
 
 def scan_local_mcp(home: Path, managed: object = ()) -> list[dict]:
-    """홈의 Claude Code·Codex 설정에 있는, 관리 대상이 아닌 MCP 항목. 읽지 못하면 건너뛴다."""
+    """홈의 AI 도구 설정에 있는, 관리 대상이 아닌 MCP 항목. 읽지 못하면 건너뛴다."""
+    return scan_mcp(home, managed)["local_mcp"]
+
+
+def is_agent_entry(entry: object) -> bool:
+    """이 묶음의 실행기로 시작하는 항목인가(서버 이름은 보지 않는다)."""
+    raw = entry.get("args") if isinstance(entry, dict) else None
+    return isinstance(raw, list) and any(
+        isinstance(a, str) and a.replace("\\", "/").endswith("/" + AGENT) for a in raw
+    )
+
+
+def scan_mcp(home: Path, managed: object = (), windows: bool | None = None) -> dict:
+    """AI 도구 설정을 한 번 읽어 관리 대상 밖 MCP 항목, 도구별 항목 수(전체·관리 밖), 평문 키,
+    읽지 못한 도구를 돌려준다. 키는 종류와 자리만 담고 값은 담지 않는다."""
     found: dict[tuple, dict] = {}
+    counts: dict[str, list[int]] = {}
+    keys: dict[tuple, dict] = {}
+    errors: list[str] = []
     excluded = {"litellm_gateway", *(n for n in managed if isinstance(n, str))}
 
     def add(harness: str, servers: object) -> None:
         for name, entry in (servers.items() if isinstance(servers, dict) else ()):
-            item = None if name in excluded else local_mcp_item(harness, name, entry)
+            count = counts.setdefault(harness, [0, 0])
+            count[0] += 1
+            if name in excluded or is_agent_entry(entry) or not isinstance(name, str):
+                continue
+            count[1] += 1
+            for item in plaintext_keys(harness, name, entry):
+                keys.setdefault(tuple(item.values()), item)
+            item = local_mcp_item(harness, name, entry)
             if item:
                 found.setdefault(tuple(item.values()), item)
 
-    read_mcp_sources(home, add)
-    return sorted(found.values(), key=lambda i: (i["harness"], i["name"]))[:MAX_ITEMS]
+    read_mcp_sources(home, add, errors, windows)
+    return {
+        "local_mcp": sorted(found.values(), key=lambda i: (i["harness"], i["name"]))[:MAX_ITEMS],
+        "counts": counts,
+        "plaintext_keys": list(keys.values())[:MAX_KEYS],
+        "scan_errors": sorted(set(errors)),
+    }
 
 
-def read_mcp_sources(home: Path, add) -> None:
-    """하네스 설정 파일의 서버 표를 ``add(하네스, 표)``로 넘긴다. 읽지 못하는 파일은 건너뛴다."""
+# --- 훅이 없는 AI 도구 ---------------------------------------------------------------------------
+# 이 도구들은 호출 전 훅을 관리형으로 둘 수 없다. 설정의 로컬 서버를 실행기 항목(--mediate)으로
+# 써서 도구 호출을 서버에 보내기 전에 판정한다(로컬 서버만 판정). 원격 서버는 판정하지 못한다.
+HOOK_CLIENTS = ("claude", "codex", "cursor", "grok")
+MEDIATED_CLIENTS = (
+    "gemini", "antigravity", "windsurf", "vscode", "claude_desktop", "cline", "lmstudio",
+)  # fmt: skip
+CLIENT_FILE = "clients.json"  # 사용자 캐시: 도구별로 이 묶음이 쓴 서버 이름·만든 파일 여부·쓴 시각
+CLIENTS_DIR = "clients"  # 사용자 캐시: 실행기가 남긴 도구별 마지막 시작 시각
+URL_FIELDS = ("url", "serverUrl", "httpUrl")
+MAX_KEYS = 32
+KEY_PATTERNS = (
+    ("anthropic", re.compile(r"sk-(?:ant)-[A-Za-z0-9_-]{20,}")),
+    ("openai", re.compile(r"sk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{20,}")),
+    ("google", re.compile(r"AIza[0-9A-Za-z_-]{35}")),
+    ("github", re.compile(r"gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}")),
+    ("aws", re.compile(r"AKIA[0-9A-Z]{16}")),
+    ("slack", re.compile(r"xox[abposr]-[A-Za-z0-9-]{10,}")),
+    ("huggingface", re.compile(r"hf_[A-Za-z0-9]{30,}")),
+)
+KEY_FIELD = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTHORIZATION", re.IGNORECASE)
+
+
+def key_kind(value: object, field: str = "") -> str | None:
+    """값이 그대로 적힌 API 키로 보이면 종류. 변수 참조(``${...}``·``$X``·``%X%``)는 아니다."""
+    if not isinstance(value, str) or len(value) < 16:
+        return None
+    for kind, pattern in KEY_PATTERNS:
+        if pattern.search(value):
+            return kind
+    reference = "${" in value or value.startswith(("$", "%", "env:"))
+    if field and KEY_FIELD.search(field) and len(value) >= 20 and not reference:
+        return "generic"
+    return None
+
+
+def plaintext_keys(client: str, name: str, entry: object) -> list[dict]:
+    """설정 항목 하나에 그대로 적힌 키의 종류와 자리(환경 변수·헤더·인자·주소). 값은 담지 않는다."""
+    if not isinstance(entry, dict):
+        return []
+    found: dict[tuple, dict] = {}
+
+    def check(where: str, value: object, field: str = "") -> None:
+        kind = key_kind(value, field)
+        if kind:
+            item = {"client": client, "entry": name[:128], "kind": kind, "where": where}
+            found.setdefault((where, kind), item)
+
+    for where, table in (("env", entry.get("env")), ("headers", entry.get("headers"))):
+        for field, value in table.items() if isinstance(table, dict) else ():
+            check(where, value, str(field))
+    for value in entry.get("args") if isinstance(entry.get("args"), list) else ():
+        check("args", value)
+    for field in URL_FIELDS:
+        check("url", entry.get(field))
+    return list(found.values())
+
+
+def app_data(home: Path, windows: bool) -> Path:
+    """사용자 앱 설정 폴더(Windows Roaming, macOS Application Support, Linux ~/.config)."""
+    if windows:
+        return home / "AppData/Roaming"
+    if sys.platform == "darwin":
+        return home / "Library/Application Support"
+    return home / ".config"
+
+
+def client_sources(home: Path, windows: bool) -> list[tuple[str, Path, str, Path]]:
+    """(도구, 설정 파일, 서버 표 이름, 설치 표지). 표지가 있으면 그 도구가 이 PC에 있다고 본다.
+    같은 도구가 두 번 나오면(판본마다 위치가 다르다) 읽기는 둘 다, 쓰기는 표지가 있는 앞의 것."""
+    data, gemini = app_data(home, windows), home / ".gemini"
+    code, desktop = data / "Code/User", data / "Claude"
+    cline, surf = code / "globalStorage/saoudrizwan.claude-dev", home / ".codeium/windsurf"
+    table = "mcpServers"
+    return [
+        ("gemini", gemini / "settings.json", table, gemini / "settings.json"),
+        # Antigravity는 판본이 오르며 antigravity/에서 config/로 옮겼다(새 위치를 먼저 쓴다).
+        ("antigravity", gemini / "config/mcp_config.json", table, gemini / "config"),
+        ("antigravity", gemini / "antigravity/mcp_config.json", table, gemini / "antigravity"),
+        ("windsurf", surf / "mcp_config.json", table, surf),
+        ("vscode", code / "mcp.json", "servers", code),
+        ("cline", cline / "settings/cline_mcp_settings.json", table, cline),
+        ("claude_desktop", desktop / "claude_desktop_config.json", table, desktop),
+        ("lmstudio", home / ".lmstudio/mcp.json", table, home / ".lmstudio"),
+    ]
+
+
+def client_entry(client: str, python: str, args: list[str]) -> dict:
+    """훅 없는 도구의 설정에 쓰는 실행기 항목. Gemini CLI는 승인 서버의 확인 창을 끈다(FM-11)."""
+    entry: dict = {"command": python, "args": args}
+    if client == "vscode":
+        entry = {"type": "stdio", **entry}
+    if client == "gemini":
+        entry["trust"] = True
+    return entry
+
+
+def read_client_record(home: Path) -> dict:
+    try:
+        record = json.loads((home / STATE_REL / CLIENT_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return record if isinstance(record, dict) else {}
+
+
+def client_started(home: Path, client: str) -> float:
+    try:
+        return float((home / STATE_REL / CLIENTS_DIR / client).read_text(encoding="utf-8")[:32])
+    except (OSError, ValueError):
+        return 0.0
+
+
+def ai_client_rows(
+    home: Path, windows: bool, harnesses, scan: dict, record: dict
+) -> list[dict]:
+    """도구별 보장(호출 전 판정·로컬 서버만 판정·관리되지 않음·검사 실패). 이 PC에 있는 것만."""
+    counts, errors = scan.get("counts") or {}, set(scan.get("scan_errors") or ())
+    present = {c for c, _, _, marker in client_sources(home, windows) if marker.exists()}
+    rows = []
+    for client in (*HOOK_CLIENTS, *MEDIATED_CLIENTS):
+        total, unmanaged = counts.get(client, [0, 0])
+        hooked = client in HOOK_CLIENTS and client in harnesses
+        if not (hooked or client in counts or client in errors or client in present):
+            continue
+        mine = record.get(client) if isinstance(record.get(client), dict) else {}
+        if hooked:
+            connection, coverage = "hook", "pre_call"
+        elif client in errors:
+            connection, coverage = "failed", "scan_failed"
+        elif mine.get("failed"):
+            connection, coverage = "failed", "unmanaged"
+        elif "names" in mine:
+            connection, coverage = "mediated", "local_only"
+        else:
+            connection, coverage = "none", "unmanaged"
+        restart = bool(
+            connection == "mediated" and mine.get("names")
+            and float(mine.get("written") or 0) > client_started(home, client)
+        )  # fmt: skip
+        rows.append({
+            "client": client, "version": None, "connection": connection, "coverage": coverage,
+            "servers": min(total, 256), "unmanaged": min(unmanaged, 256), "restart_needed": restart,
+        })  # fmt: skip
+    return rows[:16]
+
+
+def read_offline(home: Path) -> list[dict]:
+    """장애 중 실행기·훅이 스스로 통과시킨 호출을 (서버, 도구, AI 도구) 단위로 묶는다.
+
+    기록 파일은 이름을 바꿔 보낼 몫(``.sending``)에 옮긴 뒤 읽는다. 그 사이 새로 쌓이는 호출은 새
+    파일로 간다. 보고가 성공하면 보낼 몫을 지우고, 실패하면 다음 보고에 다시 싣는다.
+    """
+    groups: dict[tuple, dict] = {}
+    folder = home / STATE_REL
+    sending = folder / (OFFLINE_FILE + ".sending")
+    try:
+        moving = folder / f"{OFFLINE_FILE}.{os.getpid()}"
+        os.replace(folder / OFFLINE_FILE, moving)
+        with open(sending, "ab") as handle:
+            handle.write(moving.read_bytes())
+        moving.unlink()
+    except OSError:
+        pass
+    try:
+        lines = sending.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    for line in lines[-2000:]:
+        try:
+            item = json.loads(line)
+            key = (str(item["server"])[:128], str(item["tool"])[:128], str(item["harness"])[:32])
+            at = str(item["at"])
+        except (ValueError, KeyError, TypeError):
+            continue
+        if not all(key):
+            continue
+        group = groups.setdefault(key, {"server": key[0], "tool": key[1], "harness": key[2],
+                                        "at": at, "count": 0})  # fmt: skip
+        group["count"] = min(group["count"] + 1, 10_000)
+    return list(groups.values())[:64]
+
+
+def read_paused_gen(folder: Path) -> int | None:
+    try:
+        return int((folder / PAUSED_FILE).read_text(encoding="utf-8").strip() or 0)
+    except (OSError, ValueError):
+        return None
+
+
+def set_paused(folder: Path, paused: bool, gen: int) -> None:
+    """관리 연결 중지 표지를 두거나 지운다(실행기·훅이 장애 중에도 지키는 명시 차단)."""
+    path = folder / PAUSED_FILE
+    try:
+        if paused:
+            folder.mkdir(parents=True, exist_ok=True)
+            path.write_text(str(gen), encoding="utf-8")
+        else:
+            path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def load_settings(path: Path) -> object:
+    """설정 파일 JSON. 도구가 빈 파일로 만들어 두기도 하므로 빈 파일은 빈 설정이다."""
+    text = path.read_text(encoding="utf-8-sig")
+    return json.loads(text) if text.strip() else {}
+
+
+def read_servers(path: Path, table: str) -> dict | None:
+    """설정 파일의 서버 표. 파일이 없으면 None, 읽거나 해석하지 못하면 예외."""
+    try:
+        size = path.stat().st_size
+    except FileNotFoundError:
+        return None
+    if size > MAX_CONFIG:
+        raise ValueError("settings file is too large")
+    data = load_settings(path)
+    if not isinstance(data, dict):
+        raise ValueError("settings file is not an object")
+    servers = data.get(table)
+    return servers if isinstance(servers, dict) else {}
+
+
+def read_mcp_sources(
+    home: Path, add, errors: list | None = None, windows: bool | None = None
+) -> None:
+    """AI 도구 설정 파일의 서버 표를 ``add(도구, 표)``로 넘긴다. 없는 파일은 건너뛰고, 있는데 읽지
+    못한 훅 없는 도구는 ``errors``에 담는다."""
     try:
         if (home / ".claude.json").stat().st_size <= MAX_CONFIG:
             data = json.loads((home / ".claude.json").read_text(encoding="utf-8-sig"))
@@ -1200,6 +1458,17 @@ def read_mcp_sources(home: Path, add) -> None:
     except (ImportError, OSError, ValueError):
         pass  # tomllib은 Python 3.11부터라 이전 판본에서는 Codex 설정을 읽지 않는다.
     scan_cursor_grok(home, add)
+    for client, path, table, _ in client_sources(
+        home, sys.platform == "win32" if windows is None else windows
+    ):
+        try:
+            servers = read_servers(path, table)
+        except (OSError, ValueError):
+            if errors is not None:
+                errors.append(client)
+            continue
+        if servers is not None:
+            add(client, servers)
 
 
 def scan_cursor_grok(home: Path, add) -> None:
@@ -1858,6 +2127,7 @@ class Kit:
         if "grok" in self.harnesses:
             names |= set(self.install_grok(state, mcp, python, agent, contracts))
         state["mcp_servers"] = sorted(names)
+        self.connect_clients(python)  # 훅 없는 AI 도구도 설치 때 바로 잇는다(설치 뒤 필수 클릭 0)
         self.install_reporter(state, python)
         self.install_shim(state, python)
         key = (self.config["key"] + "\n").encode()
@@ -2030,11 +2300,8 @@ class Kit:
     def schedule_sync_task(self, state: dict, python: str, tool: str) -> None:
         """Windows 관리형 Codex: SYSTEM 보고기가 고치지 못하는 사용자 ``config.toml``의 서버 정의를
         설치한 사용자 권한으로 주기적으로(그리고 보고기가 서버 목록을 바꾼 직후) 맞추는 작업."""
-        if (
-            self.root is not None or self.dry_run or not self.managed
-            or "codex" not in self.harnesses
-        ):
-            return
+        if self.root is not None or self.dry_run or not self.managed:
+            return  # 훅 없는 AI 도구 연결·사용자 쪽 보고도 이 작업이 하므로 Codex가 없어도 둔다
         gui = python[:-len("python.exe")] + "pythonw.exe" if python.lower().endswith(
             "python.exe") else python  # fmt: skip
         if gui != python and not Path(gui).exists():
@@ -2305,6 +2572,115 @@ class Kit:
         self.own_new_dirs(config)
         return sorted(set(mine) & set(mcp))
 
+    def connect_clients(self, python: str | None = None) -> dict:
+        """훅이 없는 AI 도구의 MCP 설정에 승인 로컬 서버를 실행기 항목(전송 전 판정)으로 둔다.
+
+        사용자 권한으로 돈다. 이 PC에 있는 도구만, 이 묶음의 항목만 더하고 바꾸고 지운다(같은 이름의
+        사용자 항목은 그대로 둔다). 읽지 못하는 설정 파일은 건드리지 않고 「연결 실패」로 남긴다.
+        도구별 기록(사용자 캐시 ``clients.json``)을 돌려준다.
+        """
+        try:
+            listing = json.loads(read_trusted(self.programs / "contracts.json", False))
+        except (OSError, ValueError):
+            return read_client_record(self.home)  # 승인 목록을 모르면 아무것도 바꾸지 않는다
+        gone: set[str] = set()
+        for folder in (self.home / STATE_REL, self.programs):  # SYSTEM 보고기는 설치 폴더에 둔다
+            try:
+                listed = json.loads((folder / RETIRED_FILE).read_text(encoding="utf-8"))
+                gone |= {n for n in (listed.get("servers") or []) if isinstance(n, str)}
+            except (OSError, ValueError, AttributeError):
+                pass
+        names = sorted(n for n in (listing.get("servers") or {}) if n not in gone)
+        python = python or (self.load_state() or {}).get("python") or sys.executable.replace(
+            "\\", "/")
+        agent = f"{self.logical_programs}/{AGENT}"
+        contracts = f"{self.logical_programs}/contracts.json"
+        common = [
+            "--url", self.config["decide_url"], "--key-file", f"~/{KEY_REL}",
+            "--state-dir", f"~/{STATE_REL}",
+        ]  # fmt: skip
+        if self.config.get("ca_pem"):
+            common += ["--ca-file", f"{self.logical_programs}/ca.pem"]
+        record, done, now = read_client_record(self.home), set(), time.time()
+        for client, path, table, marker in client_sources(self.home, self.windows):
+            if client in done or not marker.exists():
+                continue
+            done.add(client)
+            mine = record.get(client) if isinstance(record.get(client), dict) else {}
+            try:
+                existed = path.exists()
+                data = load_settings(path) if existed else {}
+                if not isinstance(data, dict) or not isinstance(data.get(table, {}), dict):
+                    raise ValueError("unexpected settings shape")
+            except (OSError, ValueError):
+                record[client] = {**mine, "failed": True}
+                continue
+            listed = dict(data.get(table) or {})
+            before = json.dumps(listed, sort_keys=True)
+            for name in set(mine.get("names") or ()) - set(names):
+                if is_ours_entry(listed.get(name), name):
+                    listed.pop(name)
+            put = []
+            for name in names:
+                if name in listed and not is_ours_entry(listed[name], name):
+                    continue  # 같은 이름의 사용자 항목은 건드리지 않는다
+                args = [agent, "run", "--contracts", contracts, "--server", name,
+                        "--mediate", "--client", client, *common]  # fmt: skip
+                listed[name] = client_entry(client, python, args)
+                put.append(name)
+            changed = json.dumps(listed, sort_keys=True) != before
+            if changed:
+                data[table] = listed
+                mode = (path.stat().st_mode & 0o777) if existed else 0o600
+                try:
+                    write_atomic(
+                        path, json.dumps(data, indent=2, ensure_ascii=False).encode(), mode,
+                        self.owner,
+                    )  # fmt: skip
+                    if self.owner is not None and not existed:
+                        self.own_new_dirs(path)
+                except OSError:
+                    record[client] = {**mine, "failed": True}
+                    continue
+            record[client] = {
+                "names": put, "created": mine.get("created", not existed),
+                "written": now if changed else mine.get("written", 0),
+            }  # fmt: skip
+        try:
+            write_atomic(
+                self.home / STATE_REL / CLIENT_FILE, json.dumps(record).encode(), 0o600, self.owner
+            )
+        except OSError:
+            pass
+        return record
+
+    def disconnect_clients(self) -> None:
+        """``connect_clients``가 더한 항목을 지운다. 만든 파일이 비면 파일도 지운다."""
+        record = read_client_record(self.home)
+        for client, path, table, _ in client_sources(self.home, self.windows):
+            mine = record.get(client) if isinstance(record.get(client), dict) else {}
+            if not mine.get("names"):
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8-sig"))
+                listed = data[table]
+                for name in mine["names"]:
+                    if is_ours_entry(listed.get(name), name):
+                        listed.pop(name)
+                if not listed and len(data) == 1 and mine.get("created"):
+                    path.unlink()
+                else:
+                    info = path.stat()
+                    owner = (info.st_uid, info.st_gid) if os.name == "posix" else None
+                    write_atomic(
+                        path, json.dumps(data, indent=2, ensure_ascii=False).encode(),
+                        info.st_mode & 0o777, owner,
+                    )  # fmt: skip
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                pass
+            mine["names"] = []
+        (self.home / STATE_REL / CLIENT_FILE).unlink(missing_ok=True)
+
     def uninstall_cursor_mcp(self, state: dict) -> None:
         config = self.home / ".cursor/mcp.json"
         try:
@@ -2460,6 +2836,7 @@ class Kit:
             self.uninstall_grok_config(state)
         if state.get("cursor_mcp"):
             self.uninstall_cursor_mcp(state)
+        self.disconnect_clients()  # 훅 없는 AI 도구 설정의 실행기 항목(사용자 캐시를 지우기 전에)
         shutil.rmtree(self.programs, ignore_errors=True)
         shutil.rmtree(self.home / STATE_REL, ignore_errors=True)
         extra = [self.codex_managed_dir.parent] if self.windows else []
@@ -2680,14 +3057,21 @@ class Kit:
             outside = scan_outside(self.windows)
         except Exception:
             return {}
-        found = (
-            {} if self.system_mode
-            else {
-                "local_mcp": scan_local_mcp(self.home, managed_names(self.load_state() or {})),
+        found: dict = {}
+        if not self.system_mode:  # SYSTEM 보고기는 사용자 프로필을 읽지 않는다(사용자 작업 몫)
+            scan = scan_mcp(self.home, managed_names(self.load_state() or {}), self.windows)
+            found = {
+                "local_mcp": scan["local_mcp"],
                 "tool_lists": scan_tool_lists(self.home),
                 "start_failures": scan_start_failures(self.home),
+                "ai_clients": ai_client_rows(
+                    self.home, self.windows, self.harnesses, scan, read_client_record(self.home)
+                ),
+                "plaintext_keys": scan["plaintext_keys"],
+                "scan_errors": scan["scan_errors"],
+                "offline_calls": read_offline(self.home),
+                "paused_ack": read_paused_gen(self.home / STATE_REL),
             }
-        )
         return {
             "processes": processes, "autostart": autostart, "outside_processes": outside, **found
         }
@@ -2708,8 +3092,11 @@ class Kit:
             "mcp_servers": state.get("mcp_servers", [])[:MAX_REPORTED_SERVERS] if installed else [],
             **self.inventory(),
         }
+        if payload.get("paused_ack") is None:
+            payload.pop("paused_ack", None)
         if installed:
-            payload["capabilities"] = ["inspect"]
+            # "clients": 사용자 권한 보고기 — 연결 복구·신청 요청을 받아 처리할 수 있다
+            payload["capabilities"] = ["inspect"] + ([] if self.system_mode else ["clients"])
             if self.config.get("update_key"):
                 payload["kit_update"] = True  # 서명된 프로그램 갱신을 받을 수 있다
             if self.update_error:
@@ -2742,6 +3129,11 @@ class Kit:
             self.run_as_user(lambda: save_inspections(self.home, self.answer.get("inspections")))
         if answer and payload.get("tool_lists"):
             self.run_as_user(lambda: mark_tool_lists_sent(self.home, payload["tool_lists"]))
+        if answer and payload.get("offline_calls"):  # 보낸 장애 중 통과 기록은 비운다
+            self.run_as_user(
+                lambda: (self.home / STATE_REL / (OFFLINE_FILE + ".sending")).unlink(
+                    missing_ok=True) or True
+            )
         if answer and pending:
             state.pop("pending_removed", None)
             self.save_state(state)
@@ -5160,7 +5552,7 @@ def run_inspect(
 
 
 # --- 대화형 명령(screen·add·requests·get) ------------------------------------------------------
-CLI_COMMANDS = ("screen", "add", "requests", "get", "inspect", "relink")
+CLI_COMMANDS = ("screen", "add", "requests", "get", "inspect", "relink", "app")
 
 
 def open_installed(folder: Path):
@@ -5333,6 +5725,192 @@ def run_relink(url: str, out=print) -> int:
         shutil.rmtree(folder, ignore_errors=True)
 
 
+# --- 앱 자격(자체 스크립트) -------------------------------------------------------------------
+# 사람이 쓰는 키와 따로, 스크립트마다 자격을 둔다. 자격의 MCP 권한은 직원의 기존 승인 범위라
+# 새 승인이 없다. 키는 이 PC의 사용자 설정 폴더에만 두고, 스크립트에는 `mint app run`이 실행할 때
+# 환경 변수로만 넘긴다(스크립트·설정 파일에 키를 적지 않게).
+APPS_PATH = "/mint/v1/endpoint/apps"
+APPS_REL = ".config/mint/apps"
+APP_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+APP_DAYS = 30
+
+
+def app_file(home: Path, name: str) -> Path:
+    return home / APPS_REL / f"{name}.json"
+
+
+def read_app(home: Path, name: str) -> dict | None:
+    try:
+        app = json.loads(app_file(home, name).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return app if isinstance(app, dict) and isinstance(app.get("key"), str) else None
+
+
+def app_env(app: dict) -> dict[str, str]:
+    """스크립트에 넘길 환경 변수. OpenAI·Anthropic SDK(DeepSeek 같은 OpenAI 호환 포함)가 읽는다."""
+    base, key = str(app["base_url"]).rstrip("/"), str(app["key"])
+    return {
+        "OPENAI_API_KEY": key, "OPENAI_BASE_URL": base + "/v1",
+        "ANTHROPIC_API_KEY": key, "ANTHROPIC_BASE_URL": base,
+        "MINT_APP": str(app["name"]), "MINT_APP_KEY": key,
+        "MINT_GATEWAY_URL": base, "MINT_MCP_URL": str(app.get("mcp_url") or base + "/mcp"),
+    }  # fmt: skip
+
+
+def app_expired(app: dict, now: float | None = None) -> bool:
+    until = parse_time(app.get("expires_at"))
+    return until is not None and until <= (time.time() if now is None else now)
+
+
+def app_command(command: list[str] | None) -> list[str]:
+    """``mint app run 이름 -- 명령``의 명령 부분(앞의 ``--``는 뺀다)."""
+    command = list(command or [])
+    return command[1:] if command[:1] == ["--"] else command
+
+
+def app_mcp_config(kit: Kit, state: dict, app: dict) -> dict:
+    """스크립트의 MCP 설정: 게이트웨이(원격 승인 서버)와 승인된 로컬 서버(실행기 중재)."""
+    python = state.get("python") or sys.executable.replace("\\", "/")
+    agent = f"{kit.logical_programs}/{AGENT}"
+    contracts = f"{kit.logical_programs}/contracts.json"
+    common = ["--url", kit.config["decide_url"], "--key-file", f"~/{KEY_REL}",
+              "--state-dir", f"~/{STATE_REL}"]  # fmt: skip
+    if kit.config.get("ca_pem"):
+        common += ["--ca-file", f"{kit.logical_programs}/ca.pem"]
+    servers: dict = {
+        "litellm_gateway": {
+            "type": "http", "url": app_env(app)["MINT_MCP_URL"],
+            "headers": {"Authorization": "Bearer ${MINT_APP_KEY}"},
+        },
+    }  # fmt: skip
+    for name in sorted(kit.local_contracts()):
+        servers[name] = {"command": python, "args": [
+            agent, "run", "--contracts", contracts, "--server", name, "--mediate",
+            "--client", f"app-{app['name']}", *common]}  # fmt: skip
+    return {"mcpServers": servers}
+
+
+def app_error(what: str, status: int, doc: object) -> str:
+    """앱 자격 명령의 실패 문구. 서버가 준 한국어 사유가 있으면 그대로 붙인다."""
+    raw = doc.get("detail") if isinstance(doc, dict) else None
+    if status == 0:
+        return NO_GATEWAY
+    if status in (401, 403):
+        return KEY_REJECTED_TEXT
+    reason = raw if isinstance(raw, str) and raw else f"HTTP {status}"
+    return f"앱 자격을 {what} 못했습니다: {reason[:120]}"
+
+
+def run_app(args, kit: Kit, state: dict, gateway: Gateway | None, out=print, call=None) -> int:
+    """``mint app new|list|rm|run|env|mcp``."""
+    action, home = args.app_action, kit.home
+    name = getattr(args, "name", None)
+    if name is not None and not APP_NAME.match(name):
+        out("앱 이름은 영문 소문자·숫자·하이픈 40자 이내로 적으십시오")
+        return 2
+    if action in ("run", "env", "mcp"):
+        return use_app(args, kit, state, out, call)
+    if gateway is None:
+        out("키가 없습니다. 한 줄 설치 명령을 붙여 넣으십시오")
+        return 1
+    if action == "new":
+        return new_app(args, kit, gateway, out)
+    if action == "list":
+        return list_apps(home, gateway, out)
+    if action == "rm":
+        return remove_app(name, home, gateway, out)
+    return 2
+
+
+def use_app(args, kit: Kit, state: dict, out, call) -> int:
+    name = args.name
+    app = read_app(kit.home, name)
+    if app is None:
+        out(f"이 PC에 「{name}」 앱 자격이 없습니다. mint app new {name} 으로 만드십시오")
+        return 1
+    if app_expired(app):
+        out(f"「{name}」 자격이 만료되었습니다. mint app rm {name} 뒤 다시 만드십시오")
+        return 1
+    if args.app_action == "env":
+        powershell = args.shell == "powershell" or (args.shell is None and kit.windows)
+        for key, value in app_env(app).items():
+            out(f"$env:{key} = '{value}'" if powershell else f"export {key}={shlex.quote(value)}")
+        return 0
+    if args.app_action == "mcp":
+        out(json.dumps(app_mcp_config(kit, state or {}, app), indent=2, ensure_ascii=False))
+        return 0
+    command = app_command(args.command)
+    if not command:
+        out(f"실행할 명령을 적으십시오: mint app run {name} -- python 스크립트.py")
+        return 2
+    return (call or subprocess.call)(command, env={**os.environ, **app_env(app)})
+
+
+def new_app(args, kit: Kit, gateway: Gateway, out) -> int:
+    name, home = args.name, kit.home
+    current = read_app(home, name)
+    if current and not app_expired(current):
+        out(f"이 PC에 이미 「{name}」 자격이 있습니다. mint app run {name} -- 명령 으로 쓰십시오")
+        return 1
+    status, doc = gateway.json("POST", APPS_PATH, {"name": name, "days": args.days or APP_DAYS})
+    if status != 201 or not isinstance(doc, dict) or not isinstance(doc.get("key"), str):
+        out(app_error("만들지", status, doc))
+        return 1
+    base = doc.get("base_url") or kit.config["decide_url"]
+    app = {
+        "id": doc.get("id"), "name": name, "key": doc["key"], "key_alias": doc.get("key_alias"),
+        "expires_at": doc.get("expires_at"), "base_url": base,
+        "mcp_url": doc.get("mcp_url") or str(base).rstrip("/") + "/mcp",
+    }  # fmt: skip
+    path = app_file(home, name)
+    write_atomic(path, json.dumps(app, indent=1).encode(), 0o600)
+    keep_private(path, kit.account.name)
+    servers = ", ".join(s for s in doc.get("servers") or [] if isinstance(s, str))
+    out(f"「{name}」 앱 자격을 만들었습니다(만료 {str(doc.get('expires_at') or '')[:10]}).")
+    out(f"원격 MCP: {servers or '승인된 서버 없음'} · 로컬 서버는 실행기를 거칩니다")
+    out(f"실행: mint app run {name} -- python 스크립트.py")
+    out("스크립트는 OPENAI_BASE_URL·OPENAI_API_KEY 같은 환경 변수를 읽습니다(키를 적지 마십시오)")
+    return 0
+
+
+def list_apps(home: Path, gateway: Gateway, out) -> int:
+    status, doc = gateway.json("GET", APPS_PATH)
+    apps = doc.get("apps") if status == 200 and isinstance(doc, dict) else None
+    if not isinstance(apps, list):
+        out(app_error("읽지", status, doc))
+        return 1
+    if not apps:
+        out("앱 자격이 없습니다. mint app new 이름 으로 만드십시오")
+        return 0
+    out(f"{pad('앱', 24)}{pad('만료', 12)}{pad('상태', 10)}이 PC")
+    for item in apps:
+        name = str(item.get("name", ""))
+        text = "회수됨" if item.get("revoked_at") else ("만료" if app_expired(item) else "사용 중")
+        here = "키 있음" if read_app(home, name) else "—"
+        out(f"{pad(clip(name, 23), 24)}{pad(str(item.get('expires_at') or '')[:10], 12)}"
+            f"{pad(text, 10)}{here}")
+    return 0
+
+
+def remove_app(name: str, home: Path, gateway: Gateway, out) -> int:
+    app = read_app(home, name)
+    app_id = app.get("id") if app else None
+    if not app_id:
+        status, doc = gateway.json("GET", APPS_PATH)
+        listed = doc.get("apps") if status == 200 and isinstance(doc, dict) else []
+        app_id = next((a.get("id") for a in listed or []
+                       if a.get("name") == name and not a.get("revoked_at")), None)
+    if app_id:
+        status, doc = gateway.json("DELETE", f"{APPS_PATH}/{app_id}")
+        if status not in (200, 204, 404):
+            out(app_error("회수하지", status, doc) + " · 이 PC의 키는 그대로 두었습니다")
+            return 1
+    app_file(home, name).unlink(missing_ok=True)
+    out(f"「{name}」 앱 자격을 회수하고 이 PC의 키를 지웠습니다")
+    return 0
+
+
 def cli_main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="mint")
     parser.add_argument("--kit", default=str(KIT))
@@ -5357,6 +5935,19 @@ def cli_main(argv: list[str]) -> int:
     add.add_argument("--rw", action="append")
     add.add_argument("--yes", action="store_true")
     add.add_argument("--request-id")
+    app = sub.add_parser("app").add_subparsers(dest="app_action", required=True)
+    new = app.add_parser("new")
+    new.add_argument("name")
+    new.add_argument("--days", type=int, choices=range(1, 91), metavar="1-90")
+    app.add_parser("list")
+    app.add_parser("rm").add_argument("name")
+    run = app.add_parser("run")
+    run.add_argument("name")
+    run.add_argument("command", nargs=argparse.REMAINDER)
+    env = app.add_parser("env")
+    env.add_argument("name")
+    env.add_argument("--shell", choices=["sh", "powershell"])
+    app.add_parser("mcp").add_argument("name")
     args = parser.parse_args(argv)
     if args.command_name == "relink":
         return run_relink(args.url)
@@ -5369,6 +5960,8 @@ def cli_main(argv: list[str]) -> int:
         if gateway is not None and find_inspection(kit.home, args.target) is None and state:
             kit.report(state, "installed")  # 받아 둔 검사 권한이 없으면 한 번 보고해서 받는다
         return run_inspect(kit, gateway, args.target, progress=print)
+    if args.command_name == "app":
+        return run_app(args, kit, state, gateway)
     if args.command_name == "add":
         if gateway is None:
             print("키가 없습니다. 한 줄 설치 명령을 붙여 넣으십시오")
@@ -5538,6 +6131,7 @@ def report_installed(
         changed = bool(kit.auto_fetch(state, desired, set(names))) or changed
         changed = bool(kit.promote_packs()) or changed
     changed = kit.refresh_approvals(state) or changed
+    changed = apply_user_answer(kit, run, home, folder, target is not None or system) or changed
     if needs_fast(kit.answer, changed, now()):
         fast_file = stamp.parent / FAST_FILE
 
@@ -5551,6 +6145,77 @@ def report_installed(
         if system and state.get("sync_task"):
             capture(["schtasks", "/Run", "/TN", state["sync_task"]])  # 사용자 Codex 설정을 맞춘다
     return 0
+
+
+def sync_user_side(kit: Kit, state: dict) -> list[str]:
+    """Windows 관리형 사용자 작업: SYSTEM 보고기가 만지지 않는 사용자 프로필 몫을 한다.
+
+    사용자 쪽 현황(AI 도구·평문 키·장애 중 통과 호출)을 보고하고, 응답의 관리 연결 중지·신청
+    요청을 반영하며, 훅 없는 AI 도구를 잇는다. 이어진 도구 이름을 돌려준다.
+    """
+    try:
+        kit.config["key"] = (kit.home / KEY_REL).read_text(encoding="utf-8").strip()
+    except OSError:
+        return []
+    if kit.report(state, "installed"):
+        apply_user_answer(kit, lambda fn: fn(), kit.home, kit.programs, False)
+    else:
+        kit.connect_clients()
+    return sorted(c for c, r in read_client_record(kit.home).items() if r.get("names"))
+
+
+def submit_requests(kit: Kit, requests: list) -> list[str]:
+    """직원이 「내 단말」에서 누른 신청을 ``mint add --from 도구:이름``과 같은 경로로 올린다.
+
+    이 PC 설정에 그 이름의 항목이 있을 때만 올린다(사용자 권한으로 돈다). 올린 이름을 돌려준다.
+    """
+    items = {i["name"]: i["harness"] for i in scan_mcp(kit.home)["local_mcp"]}
+    config = kit.config
+    gateway = Gateway(config["decide_url"], config.get("key") or "", config.get("ca_pem"))
+    sent = []
+    for request in requests[:8]:
+        name = request.get("name") if isinstance(request, dict) else None
+        purpose = request.get("purpose") if isinstance(request, dict) else None
+        if not (isinstance(name, str) and name in items and isinstance(purpose, str) and purpose):
+            continue
+        args = argparse.Namespace(
+            name=None, command=[], source=f"{items[name]}:{name}", purpose=purpose[:256],
+            grade=None, network=None, host=None, env=None, ro=None, rw=None, yes=True,
+            request_id=None,
+        )  # fmt: skip
+        if run_add(args, kit.home, gateway, out=lambda *_: None) == 0:
+            sent.append(name)
+    return sent
+
+
+def apply_user_answer(kit: Kit, run, home: Path, folder: Path, privileged: bool) -> bool:
+    """응답의 관리 연결 중지·연결 복구·신청 요청을 반영한다. 바뀐 것이 있으면 참.
+
+    중지 표지는 사용자 캐시와(관리자 권한 보고기면) 설치 폴더에 둔다. 설치 폴더의 표지는 사용자가
+    지울 수 없다. 중지되면 실행기가 띄운 서버를 끈다. 훅 없는 AI 도구의 연결은 매 보고마다 맞춘다
+    (같으면 쓰지 않는다). SYSTEM 보고기는 사용자 프로필을 만지지 않으므로 사용자 작업이 한다.
+    """
+    changed = False
+    pause = kit.answer.get("paused")
+    if isinstance(pause, bool):
+        gen = kit.answer.get("pause_gen")
+        gen = gen if isinstance(gen, int) and gen >= 0 else 0
+        before = read_paused_gen(folder if kit.system_mode else home / STATE_REL)
+        if not kit.system_mode:
+            run(lambda: set_paused(home / STATE_REL, pause, gen) or True)
+        if privileged:
+            set_paused(folder, pause, gen)
+        changed = (before is not None) != pause or (pause and before != gen)
+        if pause and not kit.system_mode:
+            stopped = run(lambda: kit.stop_launched(None))
+            changed = bool(stopped) or changed
+    if kit.system_mode:
+        return changed
+    run(lambda: kit.connect_clients())
+    requests = kit.answer.get("intake_requests")
+    if isinstance(requests, list) and requests:
+        changed = bool(run(lambda: submit_requests(kit, requests))) or changed
+    return changed
 
 
 def self_update(kit: Kit, folder: Path, state: dict, note: Path, run) -> str:
@@ -5703,7 +6368,10 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(state or {"mode": "none"}, indent=1))
             return 0
         if args.action == "sync":
-            print(json.dumps(kit.sync_codex_block(state) if state else {}, ensure_ascii=False))
+            result = kit.sync_codex_block(state) if state else {}
+            if state and kit.windows and kit.managed:
+                result["clients"] = sync_user_side(kit, state)
+            print(json.dumps(result, ensure_ascii=False))
             return 0
         if not state:
             print(json.dumps({"mode": "none"}, indent=1))

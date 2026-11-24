@@ -76,6 +76,8 @@ class HookData:
     arguments_confirmed: bool = True
     # 호출자가 보낸 Bearer 토큰 원문. 로그·표시에 싣지 않는다.
     bearer: str | None = field(default=None, repr=False, compare=False)
+    # 단말 판정 요청이 밝힌 호출 주체(앱이 부른 로컬 호출은 ``app:<이름>``). 단말의 주장이다.
+    client: str | None = None
 
 
 _ARGUMENTS_MARK = "\nArguments: "

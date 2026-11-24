@@ -37,6 +37,49 @@
 <td class="nowrap">{{ r.reported_at | when }}</td>
 </tr>{% endfor %}
 </tbody></table>
+{% if tools %}
+<h2>AI 도구</h2>
+<table><thead><tr><th>클라이언트</th><th>보장</th><th>상태</th></tr></thead><tbody>
+{% for t in tools %}<tr>
+<td>{{ L.pick(L.AI_CLIENT, t.client) }}</td>
+<td>{{ L.pick(L.AI_COVERAGE, t.coverage) }}</td>
+<td>{% if t.connection == 'failed' %}<span class="badge error">연결 실패</span>
+<form method="post" action="/staff/endpoint/reconnect" hx-boost="false">{{ m.csrf(actor) }}<input type="hidden" name="alias" value="{{ t.install.key_alias }}"><button type="submit">연결 복구</button></form>
+{% elif t.restart_needed %}새 세션부터 적용{% else %}—{% endif %}</td>
+</tr>{% endfor %}
+</tbody></table>
+{% endif %}
+{% if servers %}
+<h2>이 PC에서 쓰던 서버</h2>
+<table><thead><tr><th>서버</th><th>도구</th><th>상태</th></tr></thead><tbody>
+{% for s in servers %}<tr>
+<td>{{ s.name }}{% if s.excluded %} <span class="badge off">알림에서 제외됨</span>{% endif %}</td>
+<td>{{ L.pick(L.AI_CLIENT, s.harness) }}</td>
+<td>{% if s.ask and s.ask.intake %}{{ m.badge(L.DECISION if s.ask.intake.decision else L.INTAKE, s.ask.intake.decision or s.ask.intake.status) }}
+{% elif s.ask and s.ask.purpose %}{% if s.ask.sent_at %}신청 전달됨{% else %}신청 대기{% endif %}
+{% else %}<form method="post" action="/staff/endpoint/request" hx-boost="false" class="inline">{{ m.csrf(actor) }}<input type="hidden" name="name" value="{{ s.name }}"><input name="purpose" maxlength="256" required data-needs-text placeholder="사용 목적" aria-label="{{ s.name }} 사용 목적"><button type="submit" class="primary">신청</button></form>
+{% if not s.excluded %}<form method="post" action="/staff/endpoint/ignore" hx-boost="false" class="inline">{{ m.csrf(actor) }}<input type="hidden" name="name" value="{{ s.name }}"><button type="submit">알림에서 제외</button></form>{% endif %}{% endif %}</td>
+</tr>{% endfor %}
+</tbody></table>
+{% endif %}
+{% if keys %}
+<h2>보관이 필요한 키</h2>
+<table><thead><tr><th>클라이언트</th><th>서버</th><th>종류</th><th>위치</th></tr></thead><tbody>
+{% for k in keys %}<tr><td>{{ L.pick(L.AI_CLIENT, k.client) }}</td><td>{{ k.entry }}</td><td>{{ L.pick(L.KEY_KIND, k.kind) }}</td><td>{{ L.pick(L.KEY_WHERE, k.where) }}</td></tr>{% endfor %}
+</tbody></table>
+<details><summary>키 보관 방법 보기</summary>
+<ul><li>키를 AI 도구 설정 파일에서 빼십시오.</li><li>운영체제 자격 증명 저장소나 설정 파일 밖의 환경 변수에 두십시오.</li><li>노출된 키는 발급처에서 다시 발급받으십시오.</li></ul>
+</details>
+{% endif %}
+<h2>앱</h2>
+{% if apps %}<table><thead><tr><th>이름</th><th>만든 날</th><th>만료</th><th>상태</th><th></th></tr></thead><tbody>
+{% for a in apps %}<tr>
+<td>{{ a.name }}</td><td class="nowrap">{{ a.created_at | when }}</td><td class="nowrap">{{ a.expires_at | when }}</td>
+<td>{{ m.badge(L.APP, a.state) }}</td>
+<td>{% if a.state == 'active' %}{{ m.confirm_dialog('app-' ~ a.id, '자격 회수', '앱 자격 회수', a.name ~ ' 앱의 키가 지워져 이 앱의 모델·MCP 호출이 바로 멈춥니다. 되돌릴 수 없고 새로 만들어야 합니다.', '/staff/endpoint/apps/' ~ a.id ~ '/revoke', actor, '회수') }}{% endif %}</td>
+</tr>{% endfor %}
+</tbody></table>{% endif %}
+<p class="muted">PC 터미널에서 `mint app new 이름`으로 만듭니다.</p>
 {% if active %}{{ m.confirm_dialog('revoke-endpoint', '연결 해제', '단말 연결을 해제합니다', '이 단말의 키가 지워집니다. 새 설치 명령을 붙여 넣어야 다시 연결됩니다.', '/staff/endpoint/revoke', actor, '연결 해제') }}{% endif %}
 {% else %}<div class="empty"><h3>설치한 단말이 없습니다</h3></div>{% endif %}
 {% endblock %}

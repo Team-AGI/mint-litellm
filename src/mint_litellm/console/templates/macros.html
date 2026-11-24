@@ -58,11 +58,11 @@
 {% endmacro %}
 
 {# 위험 작업 확인 창. effect는 「무엇을·몇 건·되돌릴 수 있는지」 한 줄. confirm_name이 있으면 이름을 입력해야 한다. #}
-{% macro confirm_dialog(id, trigger, title, effect, action, actor, verb, confirm_name=none, danger=true, name_label='이름 입력', trigger_class=none) %}
+{% macro confirm_dialog(id, trigger, title, effect, action, actor, verb, confirm_name=none, danger=true, name_label='이름 입력', trigger_class=none, ref=none) %}
 <button type="button" class="{{ trigger_class if trigger_class is not none else ('danger' if danger else '') }}" data-dialog-open="{{ id }}">{{ trigger }}</button>
 <dialog id="{{ id }}" class="confirm" aria-labelledby="{{ id }}-title">
   <form method="post" action="{{ action }}" hx-boost="false">
-    {{ csrf(actor) }}
+    {{ csrf(actor) }}{% if ref %}<input type="hidden" name="ref" value="{{ ref }}">{% endif %}
     <h3 id="{{ id }}-title">{{ title }}</h3>
     <div class="effect">{{ effect }}</div>
     {% if caller is defined %}{{ caller() }}{% endif %}

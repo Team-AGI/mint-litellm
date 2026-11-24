@@ -89,6 +89,28 @@ def test_a_viewer_cannot_submit_the_form_and_a_failed_submit_keeps_the_values(wo
     assert "게이트웨이 관리 키" in response.text
 
 
+def test_an_admin_pauses_and_resumes_a_device_and_the_pause_is_logged(world):
+    from console_pages_support import form_post
+
+    add_install(world, "human-9", "managed", [])
+    admin = world.session_client("admin")
+    assert form_post(world, admin, "/endpoints/mint-kit-human-9/pause").status_code == 303
+    sql = "SELECT paused_at IS NOT NULL, pause_gen FROM mint.endpoint_installs WHERE user_id = %s"
+    assert tuple(world.query(sql, "human-9")[0]) == (True, 1)
+    assert world.query("SELECT count(*) FROM mint.events WHERE kind = 'endpoint_paused'")[0][0] == 1
+    assert form_post(world, admin, "/endpoints/mint-kit-human-9/pause").status_code == 400
+    assert form_post(world, admin, "/endpoints/mint-kit-human-9/resume").status_code == 303
+    assert tuple(world.query(sql, "human-9")[0]) == (False, 1)
+    viewer = world.session_client("viewer")
+    assert form_post(world, viewer, "/endpoints/mint-kit-human-9/pause").status_code == 403
+
+
+def test_a_reconnect_request_is_answered_once_to_a_user_level_reporter(world):
+    add_install(world, "human-8", "managed", [])
+    form = __import__("console_pages_support").form_post
+    form(world, world.session_client("admin"), "/endpoints/mint-kit-human-8/reconnect")
+    sql = "SELECT reconnect_requested FROM mint.endpoint_installs WHERE user_id = 'human-8'"
+    assert world.query(sql)[0][0] is True
 def test_the_admin_form_previews_a_repository_and_creates_a_local_request(world, monkeypatch):
     from mint_litellm.control.services import local_intakes
 

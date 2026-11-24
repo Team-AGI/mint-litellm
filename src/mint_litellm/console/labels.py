@@ -47,6 +47,11 @@ INSTALL = {
     "removed": Status("제거됨", "off"),
     "revoked": Status("연결 해제", "block"),
 }
+APP = {
+    "active": Status("사용 중", "ok"),
+    "expired": Status("만료", "off"),
+    "revoked": Status("회수됨", "block"),
+}
 APPROVAL = {
     "pending": Status("대기", "wait"),
     "active": Status("유효", "ok"),
@@ -354,6 +359,21 @@ KIT_HARNESS = {
     "claude": "Claude Code", "codex": "Codex", "cursor": "Cursor", "grok": "Grok Build CLI",
     "all": "모든 도구",
 }
+AI_CLIENT = {
+    **{k: v for k, v in KIT_HARNESS.items() if k != "all"},
+    "gemini": "Gemini CLI", "antigravity": "Antigravity", "windsurf": "Windsurf",
+    "vscode": "VS Code", "claude_desktop": "Claude Desktop", "cline": "Cline",
+    "lmstudio": "LM Studio",
+}
+AI_COVERAGE = {
+    "pre_call": "호출 전 판정", "local_only": "로컬 서버만 판정", "unmanaged": "관리되지 않음",
+    "unknown": "확인되지 않음", "scan_failed": "검사 실패",
+}
+KEY_KIND = {
+    "openai": "OpenAI", "anthropic": "Anthropic", "google": "Google", "github": "GitHub",
+    "aws": "AWS", "slack": "Slack", "huggingface": "Hugging Face", "generic": "일반 비밀 값",
+}
+KEY_WHERE = {"env": "환경 변수", "headers": "헤더", "args": "인자", "url": "주소"}
 ORG_RULE = {
     "team_metadata": "팀 메타데이터",
     "team_alias": "팀 별칭",
@@ -596,6 +616,11 @@ EVENT_KIND = {
     "policy_shadow_set": "정책 시험 적용 시작",
     "policy_shadow_cleared": "정책 시험 적용 취소",
     "endpoint_remediated": "단말 항목 자동 제거",
+    "endpoint_offline_call": "장애 중 단말 판단으로 통과",
+    "endpoint_paused": "관리 AI 연결 중지",
+    "endpoint_resumed": "관리 AI 연결 재개",
+    "endpoint_app_created": "앱 자격 발급",
+    "endpoint_app_revoked": "앱 자격 회수",
     "endpoint_revoked": "단말 연결 해제",
     "backup_created": "백업 생성",
     "backup_restored": "백업 복원",
@@ -705,6 +730,12 @@ NOTICES = {
     "consent_given": "동의를 등록했습니다.",
     "consent_withdrawn": "동의를 철회했습니다.",
     "kit_revoked": "단말 연결을 해제했습니다.",
+    "endpoint_paused": "이 단말의 관리 AI 연결을 중지했습니다.",
+    "endpoint_resumed": "이 단말의 관리 AI 연결을 재개했습니다.",
+    "app_revoked": "앱 자격을 회수했습니다.",
+    "endpoint_reconnect": "연결 복구를 요청했습니다. 단말이 다음에 보고할 때 적용됩니다.",
+    "server_ignored": "알림에서 제외했습니다.",
+    "server_requested": "도입 신청을 요청했습니다. 단말이 다음에 보고할 때 접수됩니다.",
     "server_stopped": "사용을 그만뒀습니다. 다시 쓰려면 「다시 사용하기」를 누르십시오.",
     "server_resumed": "이 MCP 서버를 다시 사용할 수 있습니다.",
     "endpoint_revoked": "단말 연결을 해제했습니다.",

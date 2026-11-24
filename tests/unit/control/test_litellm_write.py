@@ -15,7 +15,7 @@ from mint_litellm.control.litellm_write import (
     check_kit_write,
     check_write,
 )
-from mint_litellm.endpoint.routes import KIT_KEY_ROUTES
+from mint_litellm.endpoint.routes import APP_KEY_ROUTES, KIT_KEY_ROUTES
 
 SRV = "srv-1"
 FULL = {"mcp_servers": [SRV], "mcp_tool_permissions": {SRV: ["a"]}}
@@ -265,7 +265,8 @@ def test_a_kit_key_is_limited_to_the_hook_routes_and_the_workers_client_cannot_m
     assert fake.generated[0]["allowed_routes"] == [
         "/mint/v1/decide", "/mint/v1/result", "/mint/v1/endpoint/report",
         "/mint/v1/endpoint/outcomes", "/mint/v1/endpoint/me", "/mint/v1/endpoint/intakes",
-        "/mint/v1/endpoint/packs/*", "/mint/v1/endpoint/inspections/*"]
+        "/mint/v1/endpoint/packs/*", "/mint/v1/endpoint/inspections/*",
+        "/mint/v1/endpoint/apps", "/mint/v1/endpoint/apps/*"]
     kit.generate_kit_key(user_id="u2", team_id=None, alias="mint-kit-cd34")
     assert "team_id" not in fake.generated[1]
     with pytest.raises(WriteRefused):
@@ -384,3 +385,60 @@ def test_block_is_post_only_and_the_kit_client_cannot_use_it():
         check_write("PUT", "/key/block", {"key": "k1"})
     with pytest.raises(WriteRefused):
         check_kit_write("POST", "/key/block", {"key": "k1"})
+
+
+# --- 직원 앱 키 ------------------------------------------------------------------------------
+
+APP_KEY = {
+    "user_id": "u1", "team_id": "t1", "key_alias": "mint-kit-app-bot-1a2b3c",
+    "allowed_routes": list(APP_KEY_ROUTES),
+    "object_permission": {"mcp_servers": ["srv-1"], "mcp_tool_permissions": {}},
+    "duration": "30d", "metadata": {"mint_app": "bot"},
+}  # fmt: skip
+
+
+def test_an_app_key_gets_model_and_mcp_routes_and_the_users_permission_only(fake):
+    kit = LiteLLMKitKeys(fake.url, CONTROL_KEY)
+    key = kit.generate_app_key(
+        user_id="u1", team_id="t1", alias="mint-kit-app-bot-1a2b3c", name="bot", days=30,
+        permission={"mcp_servers": ["srv-1"], "mcp_tool_permissions": {}},
+    )
+    assert key.startswith("sk-")
+    assert fake.generated == [APP_KEY]
+    assert "/mint/v1/decide" not in APP_KEY_ROUTES and "/mcp" in APP_KEY_ROUTES
+    check_kit_write("POST", "/key/delete", {"key_aliases": [APP_KEY["key_alias"]]})
+
+
+@pytest.mark.parametrize("change", [
+    {"allowed_routes": [*APP_KEY_ROUTES, "/mint/v1/decide"]},
+    {"allowed_routes": list(KIT_KEY_ROUTES)},
+    {"allowed_routes": ["llm_api_routes"]},
+    {"duration": "91d"}, {"duration": "0d"}, {"duration": "30"}, {"duration": "30d; x"},
+    {"metadata": {"mint_app": "other"}},
+    {"metadata": {"mint_app": "bot", "extra": 1}},
+    {"key_alias": "mint-kit-app-Bad_Name-1a2b3c"},
+    {"key_alias": "mint-kit-app-bot-zz"},
+    {"key_alias": "mint-kit-app--1a2b3c"},
+    {"object_permission": {"mcp_servers": ["a"]}},
+    {"object_permission": {"mcp_servers": [], "mcp_tool_permissions": {}, "x": 1}},
+    {"models": ["gpt"]}, {"user_role": "proxy_admin"}, {"max_budget": 1000000},
+    {"user_id": ""},
+])
+def test_an_app_key_request_of_any_other_shape_is_refused(change):
+    with pytest.raises(WriteRefused):
+        check_kit_write("POST", "/key/generate", {**APP_KEY, **change})
+    for missing in ("duration", "metadata", "object_permission"):
+        with pytest.raises(WriteRefused):
+            check_kit_write(
+                "POST", "/key/generate", {k: v for k, v in APP_KEY.items() if k != missing})
+
+
+def test_the_app_shape_opens_nothing_for_other_aliases():
+    check_kit_write("POST", "/key/generate", APP_KEY)
+    with pytest.raises(WriteRefused):  # 설치 묶음·게이트웨이 별칭에는 앱 모양을 허용하지 않는다
+        check_kit_write("POST", "/key/generate", {**APP_KEY, "key_alias": "mint-kit-ab12"})
+    with pytest.raises(WriteRefused):
+        check_kit_write(
+            "POST", "/key/generate", {**APP_KEY, "key_alias": "mint-kit-mcp-ab12"})
+    with pytest.raises(WriteRefused):  # 훅 키 모양에 기간·메타데이터를 얹을 수 없다
+        check_kit_write("POST", "/key/generate", {**KIT_KEY, "duration": "30d"})

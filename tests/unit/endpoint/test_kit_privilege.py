@@ -247,7 +247,7 @@ def test_a_system_reporter_leaves_profile_files_and_processes_alone(
     record.parent.mkdir(parents=True)
     record.write_text(json.dumps({"server": "srv-1", "pid": 5, "start": "1"}))
     mark = kit.home / "AppData/mark.txt"
-    mark.parent.mkdir(parents=True)
+    mark.parent.mkdir(parents=True, exist_ok=True)  # 설치가 mint 명령을 AppData 아래에 둔다
     mark.write_text("x")
     state["files"][str(mark)] = kit_module.sha256_file(mark)
     state["autostart"] = [{"server": "srv-1", "file": str(mark)}]

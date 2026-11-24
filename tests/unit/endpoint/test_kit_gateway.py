@@ -415,20 +415,19 @@ def test_a_windows_managed_install_registers_the_user_sync_and_the_firewall_task
     assert (kit.programs / "net" / "req").is_dir()
 
 
-def test_the_sync_task_is_only_for_a_managed_windows_install_with_codex(
-    tmp_path, reports, monkeypatch
-):
+def test_the_sync_task_is_for_every_managed_windows_install(tmp_path, reports, monkeypatch):
     kit = windows_managed(tmp_path, monkeypatch)
     kit.root = None
     calls = []
     monkeypatch.setattr(kit_module, "capture", lambda command: calls.append(command) or "SUCCESS")
-    kit.harnesses = ["claude"]
-    kit.schedule_sync_task({}, "python.exe", "mint_kit.py")
-    kit.harnesses = ["claude", "codex"]
+    kit.harnesses = ["claude"]  # Codex가 없어도 훅 없는 AI 도구 연결·사용자 쪽 보고를 맡는다
+    state = {}
+    kit.schedule_sync_task(state, "python.exe", "mint_kit.py")
+    assert state.get("sync_task") == kit_module.SYNC_TASK_NAME and len(calls) == 1
     kit.managed = False
     kit.schedule_sync_task({}, "python.exe", "mint_kit.py")
     kit.schedule_net_task({}, "python.exe")
-    assert calls == []
+    assert len(calls) == 1
 
 
 def test_the_system_reporter_runs_the_user_sync_right_after_the_server_list_changes(

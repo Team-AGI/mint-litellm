@@ -578,6 +578,8 @@ class DecisionSnapshot(BaseModel):
     snapshot_stale: bool | None = None
     # 집행 상태를 확인하지 못한 채 승인된 호출을 통과시켰으면 참.
     enforcement_unverified: bool | None = None
+    # 단말이 밝힌 호출 주체(앱이 단말 중개로 부른 호출은 ``app:<이름>``). 단말의 주장이다.
+    client: str | None = None
     cause: str | None = Field(default=None, exclude=True)
 
     @field_validator("missing_reasons", mode="after")

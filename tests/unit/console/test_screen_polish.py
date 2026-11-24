@@ -431,3 +431,59 @@ def test_templates_use_the_one_argument_join_filter():
     pattern = re.compile(r"\|\s*join\(")
     used = [p.name for p in folder.glob("*.html") if pattern.search(p.read_text("utf-8"))]
     assert used == []
+
+
+def test_ai_tool_screens_show_korean_labels_and_the_four_pause_states():
+    from mint_litellm.console.pages.endpoints_admin import STATES, VIOLATIONS
+    from mint_litellm.control.endpoint_coverage import coverage_view
+
+    at = datetime(2026, 11, 4, tzinfo=UTC)
+    row = {
+        "user_id": "u1", "team_id": None, "state": "managed", "key_alias": "mint-kit-a",
+        "reported_at": at, "issued_at": at, "paused_at": at, "paused_ack": 1, "pause_gen": 1,
+        "paused_ack_at": None, "claude_version": None, "mcp_servers": [],
+        "ai_clients": [{"client": "claude_desktop", "coverage": "unmanaged"}],
+        "plaintext_keys": [{"client": "cursor", "entry": "gh", "kind": "github", "where": "env"}],
+        "offline_calls": [{"count": 2}, {"count": 1}], "group": "applied", "violations": set(),
+        "pause_view": {"paused": True, "blocked_at": at, "received": None, "runner_at": None},
+    }
+    ai = coverage_view([row], [])
+    common = dict(
+        rows=[row], mcp=[], count={"applied": 1, "unapplied": 0, "stale": 0, "violation": 0},
+        donut={}, bars={}, state="", STATES=STATES, VIOLATIONS=VIOLATIONS, kind="", ai=ai,
+    )
+    page = render("endpoints.html", **common, tab="ai-tools", selected=None,
+                  client=ai["clients"][0])
+    for text in ("Claude Desktop", "관리되지 않음", "연결 복구", "재개", "평문 키"):
+        assert text in page, text
+    detail = render("endpoints.html", **common, tab="installs", selected=row, client=None)
+    for text in ("서버 차단", "수신 대기", "확인 전", "확인되지 않음", "장애 중 통과한 호출",
+                 "3건", "환경 변수", "GitHub"):
+        assert text in detail, text
+    for enum in ("claude_desktop", "unmanaged", "github", "env<"):
+        assert enum not in detail, enum
+
+
+def test_the_staff_endpoint_screen_lists_tools_servers_and_keys():
+    at = datetime(2026, 11, 4, tzinfo=UTC)
+    install = {"key_alias": "mint-kit-a"}
+    page = render(
+        "staff_endpoint.html", active=True,
+        rows=[{"user_id": "u", "team_id": None, "state": "managed", "claude_version": None,
+               "mcp_servers": [], "issued_at": at, "reported_at": at, "gateway": False}],
+        tools=[{"client": "cursor", "coverage": "pre_call", "connection": "failed",
+                "restart_needed": False, "install": install},
+               {"client": "windsurf", "coverage": "local_only", "connection": "hook",
+                "restart_needed": True, "install": install}],
+        servers=[{"name": "docs", "harness": "codex", "excluded": False, "ask": None},
+                 {"name": "notes", "harness": "claude", "excluded": False,
+                  "ask": {"purpose": "x", "sent_at": None, "intake": None}},
+                 {"name": "git", "harness": "claude", "excluded": True,
+                  "ask": {"purpose": None, "sent_at": None,
+                          "intake": {"status": "checking", "decision": None}}}],
+        keys=[{"client": "cursor", "entry": "gh", "kind": "openai", "where": "headers"}],
+    )
+    for text in ("연결 실패", "연결 복구", "새 세션부터 적용", "신청 대기", "검사 중",
+                 "알림에서 제외", "알림에서 제외됨", "키 보관 방법 보기", "OpenAI", "헤더"):
+        assert text in page, text
+    assert 'name="purpose"' in page

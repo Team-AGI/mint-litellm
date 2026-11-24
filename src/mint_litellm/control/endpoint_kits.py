@@ -11,7 +11,7 @@ from typing import Any
 
 import psycopg
 
-from mint_litellm.control import kit_key_sync
+from mint_litellm.control import endpoint_apps, kit_key_sync
 from mint_litellm.control.db.connection import fetchall
 from mint_litellm.control.errors import ControlError
 from mint_litellm.control.litellm_write import (
@@ -139,14 +139,19 @@ def issue_gateway_key(
 
 
 def revoke_keys(
-    conn: psycopg.Connection, issuer: LiteLLMKitKeys, instance_id: str, user_id: str
+    conn: psycopg.Connection, issuer: LiteLLMKitKeys, instance_id: str, user_id: str,
+    actor: str | None = None,
 ) -> int:
-    """사용자의 설치 묶음 키를 모두 지운다(이미 설치된 단말은 더 이상 판정을 받지 못한다)."""
+    """사용자의 설치 묶음 키를 모두 지운다(이미 설치된 단말은 더 이상 판정을 받지 못한다).
+
+    그 사람이 만든 앱의 자격도 함께 회수한다(앱은 사람의 접근 권한을 따른다).
+    """
     aliases = _active_aliases(conn, instance_id, user_id)
     if not aliases:
         raise ControlError("해제할 단말 연결이 없습니다.")
     issuer.delete_kit_keys(aliases)
     _mark_revoked(conn, instance_id, user_id)
+    endpoint_apps.revoke_user_apps(conn, issuer, instance_id, user_id, actor or user_id)
     return len(aliases)
 
 
@@ -162,7 +167,10 @@ def local_mcp_inventory(conn: psycopg.Connection, instance_id: str) -> list[dict
         "SELECT i.user_id, i.key_alias, i.install_mode, i.reported_at,"
         " x.item ->> 'harness' AS harness, x.item ->> 'name' AS name, x.item ->> 'kind' AS kind,"
         " x.item ->> 'target' AS target, x.item ->> 'package' AS package,"
-        " x.item ->> 'first_seen' AS first_seen"
+        " x.item ->> 'first_seen' AS first_seen,"
+        " EXISTS (SELECT 1 FROM mint.endpoint_ignored_servers g WHERE g.instance_id ="
+        " i.instance_id AND g.user_id = i.user_id AND g.server_name = x.item ->> 'name')"
+        " AS ignored"
         " FROM mint.endpoint_installs i,"
         " LATERAL jsonb_array_elements(coalesce(i.local_mcp, '[]'::jsonb)) AS x(item)"
         " WHERE i.instance_id = %s AND i.revoked_at IS NULL"
@@ -193,7 +201,8 @@ def installs(
         conn,
         "SELECT user_id, team_id, issued_at, revoked_at, install_mode, kit_version,"
         " claude_version, mcp_servers, processes, outside_processes, reported_at, expires_at,"
-        " update_error,"
+        " update_error, key_alias, ai_clients, plaintext_keys, scan_errors, offline_calls,"
+        " paused_at, paused_by, pause_gen, paused_ack, paused_ack_at, reconnect_requested,"
         " mcp_key_alias IS NOT NULL AS gateway"
         " FROM mint.endpoint_installs"
         " WHERE instance_id = %s AND (%s::text IS NULL OR user_id = %s)"

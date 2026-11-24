@@ -105,6 +105,11 @@ class EventKind(StrEnum):
     EVENT_PARTITION_EXPORTED = "event_partition_exported"
     EVENT_PARTITION_DROPPED = "event_partition_dropped"
     ENDPOINT_REMEDIATED = "endpoint_remediated"
+    ENDPOINT_OFFLINE_CALL = "endpoint_offline_call"
+    ENDPOINT_PAUSED = "endpoint_paused"
+    ENDPOINT_RESUMED = "endpoint_resumed"
+    ENDPOINT_APP_CREATED = "endpoint_app_created"
+    ENDPOINT_APP_REVOKED = "endpoint_app_revoked"
     ENDPOINT_REVOKED = "endpoint_revoked"
     BACKUP_CREATED = "backup_created"
     BACKUP_RESTORED = "backup_restored"
@@ -216,6 +221,11 @@ CONTROL_ENTITY: dict[EventKind, str] = {
     EventKind.EVENT_PARTITION_EXPORTED: "event_partition",
     EventKind.EVENT_PARTITION_DROPPED: "event_partition",
     EventKind.ENDPOINT_REMEDIATED: "endpoint",
+    EventKind.ENDPOINT_OFFLINE_CALL: "endpoint",
+    EventKind.ENDPOINT_PAUSED: "endpoint",
+    EventKind.ENDPOINT_RESUMED: "endpoint",
+    EventKind.ENDPOINT_APP_CREATED: "endpoint_app",
+    EventKind.ENDPOINT_APP_REVOKED: "endpoint_app",
     EventKind.ENDPOINT_REVOKED: "endpoint",
     EventKind.BACKUP_CREATED: "backup",
     EventKind.BACKUP_RESTORED: "backup",

@@ -1,6 +1,31 @@
 {% extends "base.html" %}{% import "macros.html" as m %}
 {% block title %}엔드포인트 · MINT{% endblock %}
 {% block page_class %}wide{% endblock %}
+{% macro apps_panel(r, apps, with_revoke, action_base, ref='') %}
+<h3>앱</h3>
+{% if apps %}<table><thead><tr><th>이름</th><th>만든 날</th><th>만료</th><th>상태</th>{% if with_revoke %}<th></th>{% endif %}</tr></thead><tbody>
+{% for a in apps %}<tr>
+<td>{{ a.name }}</td><td class="nowrap">{{ a.created_at | when }}</td><td class="nowrap">{{ a.expires_at | when }}</td>
+<td>{{ m.badge(L.APP, a.state) }}</td>
+{% if with_revoke %}<td>{% if a.state == 'active' %}{{ m.confirm_dialog('app-' ~ a.id, '자격 회수', '앱 자격 회수', a.name ~ ' 앱의 키가 지워져 이 앱의 모델·MCP 호출이 바로 멈춥니다. 되돌릴 수 없고 새로 만들어야 합니다.', action_base ~ a.id ~ '/revoke', actor, '회수', ref=ref) }}{% endif %}</td>{% endif %}
+</tr>{% endfor %}
+</tbody></table>
+{% else %}<p class="muted">만든 앱이 없습니다</p>{% endif %}
+{% endmacro %}
+{% macro pause_panel(r, client) %}
+{% set p = r.pause_view %}
+<h3>관리 AI 연결</h3>
+<dl class="detail">
+  <dt>서버 차단</dt><dd>{% if p.paused %}{{ p.blocked_at | when }}{% else %}—{% endif %}</dd>
+  <dt>단말 수신</dt><dd>{% if not p.paused %}—{% elif p.received %}{{ r.paused_ack_at | when }}{% else %}수신 대기{% endif %}</dd>
+  <dt>실행기 정지</dt><dd>{% if not p.paused %}—{% elif p.runner_at %}{{ p.runner_at | when }}{% else %}확인 전{% endif %}</dd>
+  <dt>관리 밖 경로</dt><dd>{% if p.paused %}확인되지 않음{% else %}—{% endif %}</dd>
+</dl>
+{% if actor.role == 'admin' %}<div class="actions">
+{% if p.paused %}<form method="post" action="/endpoints/{{ r.key_alias }}/resume" hx-boost="false">{{ m.csrf(actor) }}<input type="hidden" name="client" value="{{ client }}"><button type="submit" class="primary">재개</button></form>
+{% else %}{{ m.confirm_dialog('pause-' ~ r.key_alias ~ client, '관리 AI 연결 중지', '관리 AI 연결 중지', r.user_id ~ ' 단말의 로컬 서버·내장 도구 호출이 거절되고 실행기가 띄운 서버가 멈춥니다. 원격 MCP 게이트웨이 키는 그대로입니다. 재개하면 바로 다시 사용할 수 있습니다.', '/endpoints/' ~ r.key_alias ~ '/pause', actor, '중지') }}{% endif %}
+</div>{% endif %}
+{% endmacro %}
 {% block body %}
 {% set total = count.applied + count.unapplied + count.stale %}
 <h1>엔드포인트</h1>
@@ -10,7 +35,7 @@
   {{ m.kpi('보고 끊김', count.stale, href='/endpoints?tab=installs&state=stale', level='wait' if count.stale) }}
   {{ m.kpi('관리 밖 MCP', mcp | length, href='/endpoints?tab=local-mcp') }}
 </div>
-{{ m.tabs([('installs', '단말 현황', total), ('local-mcp', '관리 밖 MCP', mcp | length)], tab, '/endpoints') }}
+{{ m.tabs([('installs', '단말 목록', total), ('local-mcp', '관리 밖 MCP', mcp | length), ('ai-tools', 'AI 도구 현황', none)], tab, '/endpoints') }}
 {% if tab == 'installs' %}
 {% if total %}
 <div class="grid">
@@ -41,15 +66,50 @@
   <dt>MCP 서버</dt><dd>{{ (selected.mcp_servers or []) | join }}</dd>
   <dt>MCP 서버 격리</dt><dd>{% for p in selected.processes or [] %}{{ p.server }} {{ L.SANDBOX.get(p.sandbox, '확인 안 됨') }}{% if p.egress_unfiltered %} · 호스트 제한 미집행{% endif %}{% if p.egress_refused %} · 허용 밖 접속 {{ p.egress_refused }}건 거절{% endif %}{% if not loop.last %}<br>{% endif %}{% else %}—{% endfor %}</dd>
   <dt>실행기 밖 실행</dt><dd>{% for o in selected.outside_processes or [] %}{{ o.package }} ({{ L.pick(L.PACKAGE_ECOSYSTEM, o.ecosystem) }}) {{ o.count }}개{% if not loop.last %}<br>{% endif %}{% else %}—{% endfor %}</dd>
+  <dt>장애 중 통과한 호출</dt><dd>{{ (selected.offline_calls or []) | sum(attribute='count') }}건</dd>
   <dt>발급</dt><dd>{{ selected.issued_at | when }}</dd>
   <dt>마지막 보고</dt><dd>{{ selected.reported_at | when }}</dd>
 </dl>
+{% if selected.plaintext_keys %}<h3>평문 키</h3>
+<table><thead><tr><th>클라이언트</th><th>서버</th><th>종류</th><th>위치</th></tr></thead><tbody>
+{% for k in selected.plaintext_keys %}<tr><td>{{ L.pick(L.AI_CLIENT, k.client) }}</td><td>{{ k.entry }}</td><td>{{ L.pick(L.KEY_KIND, k.kind) }}</td><td>{{ L.pick(L.KEY_WHERE, k.where) }}</td></tr>{% endfor %}
+</tbody></table>{% endif %}
+{% if selected.state in ('managed', 'user') and selected.pause_view %}{{ pause_panel(selected, '') }}{% endif %}
+{{ apps_panel(selected, selected.apps, actor.role == 'admin', '/endpoints/apps/', selected.ref) }}
 {% if actor.role == 'admin' and selected.group %}
-<div class="actions">{% call m.confirm_dialog('revoke-endpoint', '연결 해제', '단말 연결을 해제합니다', selected.user_id ~ ' 사용자의 설치 묶음 키가 지워지고, 이 사용자의 단말은 더 이상 판정을 받지 못합니다. 새 설치 명령으로 다시 설치해야 연결됩니다.', '/endpoints/revoke', actor, '연결 해제') %}
+<div class="actions">{% call m.confirm_dialog('revoke-endpoint', '연결 해제', '단말 연결을 해제합니다', selected.user_id ~ ' 사용자의 설치 묶음 키와 앱 자격이 지워지고, 이 사용자의 단말은 더 이상 판정을 받지 못합니다. 새 설치 명령으로 다시 설치해야 연결됩니다.', '/endpoints/revoke', actor, '연결 해제') %}
 <input type="hidden" name="user_id" value="{{ selected.user_id }}">
 <label>해제 사유(선택)<input name="reason" maxlength="500" autocomplete="off"></label>
 {% endcall %}</div>
 {% endif %}
+{% endcall %}{% endif %}
+{% elif tab == 'ai-tools' %}
+<div class="cards">
+  {{ m.kpi('발견한 AI 도구', ai.found) }}
+  {{ m.kpi('연결된 단말', ai.connected ~ ' / ' ~ ai.reporting ~ '대', level='wait' if ai.connected < ai.reporting) }}
+  {{ m.kpi('미승인 서버', ai.unapproved, href='/endpoints?tab=local-mcp') }}
+  {{ m.kpi('평문 키', ai['keys'], level='danger' if ai['keys']) }}
+</div>
+{% if ai.clients %}
+<table class="clickable"><thead><tr><th>클라이언트</th><th class="num">단말 수</th><th>보장</th><th>마지막 보고</th></tr></thead><tbody>
+{% for c in ai.clients %}<tr>
+<td><a href="/endpoints?tab=ai-tools&client={{ c.client }}">{{ L.pick(L.AI_CLIENT, c.client) }}</a></td>
+<td class="num">{{ c.devices | length }}대</td>
+<td>{% for k, n in c.coverage.items() %}{{ L.pick(L.AI_COVERAGE, k) }} {{ n }}{% if not loop.last %} · {% endif %}{% endfor %}</td>
+<td class="nowrap">{{ c.last | when }}</td>
+</tr>{% endfor %}
+</tbody></table>
+{% else %}{{ m.empty('AI 도구 현황을 보고한 단말이 없습니다', '/endpoints?tab=installs', '단말 목록 보기') }}{% endif %}
+{% if client %}{% call m.drawer(L.pick(L.AI_CLIENT, client.client), '/endpoints?tab=ai-tools') %}
+{% for d in client.devices %}<div class="card">
+<p><strong>{{ d.install.user_id }}</strong> · {{ L.pick(L.AI_COVERAGE, d.coverage) }}{% if d.install.paused_at %} · 연결 중지{% endif %}</p>
+<p class="stats-line"><span>단말 {{ d.install.key_alias }}</span><span>마지막 보고 {{ d.install.reported_at | when }}</span></p>
+{% if actor.role == 'admin' %}<div class="row-actions">
+<form method="post" action="/endpoints/{{ d.install.key_alias }}/reconnect" hx-boost="false">{{ m.csrf(actor) }}<input type="hidden" name="client" value="{{ client.client }}"><button type="submit">연결 복구</button></form>
+{% if d.install.paused_at %}<form method="post" action="/endpoints/{{ d.install.key_alias }}/resume" hx-boost="false">{{ m.csrf(actor) }}<input type="hidden" name="client" value="{{ client.client }}"><button type="submit" class="primary">재개</button></form>
+{% else %}{{ m.confirm_dialog('pause-' ~ d.install.key_alias, '관리 AI 연결 중지', '관리 AI 연결 중지', d.install.user_id ~ ' 단말의 로컬 서버·내장 도구 호출이 거절되고 실행기가 띄운 서버가 멈춥니다. 원격 MCP 게이트웨이 키는 그대로입니다. 재개하면 바로 다시 사용할 수 있습니다.', '/endpoints/' ~ d.install.key_alias ~ '/pause', actor, '중지') }}{% endif %}
+</div>{% endif %}
+</div>{% endfor %}
 {% endcall %}{% endif %}
 {% else %}
 {% if mcp %}
@@ -57,8 +117,8 @@
 {% for r in mcp %}<tr>
 <td>{{ r.user_id }}</td>
 <td>{{ m.badge(L.INSTALL, r.state) }}</td>
-<td>{{ r.name }}</td>
-<td>{{ L.pick(L.KIT_HARNESS, r.harness) }}</td>
+<td>{{ r.name }}{% if r.ignored %} <span class="badge off">사용자 제외</span>{% endif %}</td>
+<td>{{ L.pick(L.AI_CLIENT, r.harness) }}</td>
 <td>{{ L.pick(L.LOCAL_TRANSPORT, r.kind) }}</td>
 <td>{{ r.target }}{% if r.package %} {{ r.package }}{% endif %}</td>
 <td class="nowrap">{{ r.last_seen | when }}</td>

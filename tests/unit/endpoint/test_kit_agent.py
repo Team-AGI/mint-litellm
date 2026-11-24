@@ -153,15 +153,46 @@ def test_a_refusal_or_an_unreadable_answer_blocks_the_call(world, answer):
     assert not os.path.exists(os.path.join(world.state, "pending", "toolu_1"))
 
 
-def test_an_error_status_or_an_unreachable_service_blocks_the_call(world):
-    with pytest.raises(agent.Refuse, match="HTTP 503"):
-        decide(world, Wire(status=503))
+def down(*args):
+    raise OSError("refused")
 
-    def down(*args):
-        raise OSError("refused")
 
-    with pytest.raises(agent.Refuse, match="unreachable"):
+def offline_lines(world):
+    path = os.path.join(world.state, agent.OFFLINE_FILE)
+    return [json.loads(x) for x in open(path, encoding="utf-8")] if os.path.exists(path) else []
+
+
+@pytest.mark.parametrize("wire", [Wire(status=503), down], ids=["5xx", "unreachable"])
+def test_an_approved_call_passes_during_an_outage_and_is_recorded(world, wire):
+    decide(world, wire)  # 공통 장애 계약: 승인 목록의 서버는 통과
+    (line,) = offline_lines(world)
+    assert (line["server"], line["tool"], line["harness"]) == ("srv-1", "search", "claude")
+    assert "q" not in json.dumps(line)  # 인자 값은 남기지 않는다
+
+
+def test_an_unknown_server_stays_blocked_during_an_outage(world):
+    with pytest.raises(agent.Refuse, match="not an approved"):
+        decide(world, down, tool_name="mcp__other__x", mcp_server={"name": "other"})
+    assert offline_lines(world) == []
+
+
+def test_a_retired_server_or_a_paused_pc_stays_blocked_during_an_outage(world):
+    os.makedirs(world.state)
+    with open(os.path.join(world.state, agent.RETIRED_FILE), "w") as handle:
+        json.dump({"servers": ["srv-1"]}, handle)
+    with pytest.raises(agent.Unreachable):
         decide(world, down)
+    os.unlink(os.path.join(world.state, agent.RETIRED_FILE))
+    open(os.path.join(world.state, agent.PAUSED_FILE), "w").write("3")
+    with pytest.raises(agent.Refuse, match="관리 AI 연결을 중지"):
+        decide(world, down)
+    assert offline_lines(world) == []
+
+
+def test_a_refusal_status_still_blocks_and_is_not_an_outage(world):
+    with pytest.raises(agent.Refuse, match="HTTP 401") as caught:
+        decide(world, Wire(status=401))
+    assert not isinstance(caught.value, agent.Unreachable)
 
 
 def test_a_server_that_is_not_approved_is_blocked_without_a_request(world):
@@ -313,7 +344,7 @@ def test_an_approved_script_server_really_starts_and_a_replaced_one_does_not(wor
     assert run_agent(*args).returncode == agent.REFUSED and not marker.exists()
 
 
-def test_the_command_line_hook_blocks_on_bad_input_and_an_unreachable_service(world):
+def test_the_command_line_hook_blocks_bad_input_and_follows_the_outage_contract(world):
     key = world.tmp / "key"
     key.write_text("sk-k")
     base = (
@@ -321,7 +352,11 @@ def test_the_command_line_hook_blocks_on_bad_input_and_an_unreachable_service(wo
         "--state-dir", world.state,
     )  # fmt: skip
     assert run_agent("pre", *base, stdin="not json").returncode == 2
-    assert run_agent("pre", *base, stdin=json.dumps(event())).returncode == 2
+    # 결정 서버에 닿지 못하면 승인 목록의 서버는 통과하고 기록된다(공통 장애 계약).
+    assert run_agent("pre", *base, stdin=json.dumps(event())).returncode == 0
+    assert [line["tool"] for line in offline_lines(world)] == ["search"]
+    unknown = event(tool_name="mcp__other__x", mcp_server={"name": "other"})
+    assert run_agent("pre", *base, stdin=json.dumps(unknown)).returncode == 2
     assert run_agent("pre", *base, stdin=json.dumps(event(tool_name="Read"))).returncode == 0
     # 호출 뒤 훅은 어떤 경우에도 호출을 막지 않는다.
     assert run_agent("post", *base, stdin="not json").returncode == 0
@@ -552,3 +587,22 @@ def test_the_result_hook_returns_the_held_decision_version(world, monkeypatch, t
     wire = Wire({"recorded": True})
     assert report(world, wire) is True
     assert wire.requests[0][2]["decision_version"] == 3
+
+
+def test_after_an_outage_the_next_calls_do_not_wait_for_another_timeout(world):
+    calls = []
+
+    def slow_down(*args):
+        calls.append(1)
+        raise OSError("refused")
+
+    decide(world, slow_down)
+    decide(world, slow_down, tool_use_id="toolu_2")
+    assert len(calls) == 1  # 두 번째 호출은 묻지 않고 장애 계약대로 처리했다
+    assert len(offline_lines(world)) == 2
+    hold = os.path.join(world.state, agent.DOWN_FILE)
+    with open(hold, "w") as handle:
+        handle.write(str(time.time() - 1))  # 유지 시간이 지나면 다시 묻는다
+    wire = Wire()
+    decide(world, wire, tool_use_id="toolu_3")
+    assert len(wire.requests) == 1
