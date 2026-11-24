@@ -138,6 +138,8 @@ def test_up_hands_worker_and_staff_passwords_to_init_and_starts_the_worker(tmp_p
     assert "--profile worker up -d worker inspector" in log
     assert "--profile console up -d console" in log
     assert "--user 0 --entrypoint chown control -R 65532:65532 /var/lib/mint/export /bundles" in log
+    # 새 DB(운영자 없음)면 남은 옛 내보내기 파일을 옆 폴더로 옮겨 복원 판정이 막히지 않게 한다.
+    assert "--user 0 --entrypoint sh control -c" in log and "stale-" in log
     assert "--user 0 --entrypoint chown litellm -R 65532:65532 /var/lib/mint/buffer" in log
     assert "chgrp -R 65532 /app/config && chmod -R g+rX /app/config" in log
 
