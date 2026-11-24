@@ -16,9 +16,15 @@
   {{ m.kpi('만료 임박(7일)', expiring, level='wait' if expiring) }}
 </div>
 {% if need %}<p>동의가 필요한 MCP 서버가 {{ need }}개 있습니다.</p>{% endif %}
-{{ m.tabs([('servers', 'MCP 서버 목록', none), ('applications', '내 신청 이력', none), ('records', '내 기록', none)], tab, '/staff') }}
+{{ m.tabs([('servers', 'MCP 서버 목록', none), ('applications', '내 신청 이력', none), ('calls', '내 호출', none), ('records', '내 기록', none)], tab, '/staff') }}
 {% if tab == 'applications' %}
 {% include "_staff_applications.html" %}
+{% elif tab == 'calls' %}
+{% if calls %}
+<table><thead><tr><th>시각</th><th>MCP 서버</th><th>도구</th><th>결과</th><th>사유</th></tr></thead><tbody>
+{% for c in calls %}<tr><td class="nowrap">{{ c.at | when }}</td><td>{{ c.server_name or '—' }}</td><td>{{ c.tool or '—' }}</td><td>{{ L.pick(L.OUTCOME_BUCKET, c.bucket) }}</td><td>{{ c.reason or '—' }}</td></tr>{% endfor %}
+</tbody></table>
+{% else %}{{ m.empty('호출 기록이 없습니다', '/staff', '내 MCP 서버') }}{% endif %}
 {% elif tab == 'records' %}
 {% if records %}
 <table><thead><tr><th>시각</th><th>종류</th></tr></thead><tbody>
@@ -53,6 +59,13 @@
   <dt>승인 만료</dt><dd>{{ selected.valid_until | when if selected.valid_until else '—' }}</dd>
 </dl>
 <div class="actions">{{ stop_use(selected, 'open') }}</div>
+<h3>이용 방법</h3>
+<dl class="detail">
+  {% if guide.purpose %}<dt>사용 목적</dt><dd>{{ guide.purpose }}</dd>{% endif %}
+  <dt>보이는 곳</dt><dd>{{ '내 PC에 설치되어 AI 도구 목록에 나타납니다' if selected.local else '연결한 AI 도구의 게이트웨이 항목에 나타납니다' }}</dd>
+  <dt>안 보이면</dt><dd>AI 도구를 다시 열고 <a href="/staff/endpoint">내 단말</a>에서 연결을 확인하십시오</dd>
+  {% if guide.repo %}<dt>출처</dt><dd>{{ guide.repo }}{% if guide.commit %} · {{ guide.commit }}{% endif %}</dd>{% endif %}
+</dl>
 {% if selected.consents %}
 <h3>동의 내역</h3>
 <table><thead><tr><th>목적</th><th>범위</th><th>유효 기간</th><th>상태</th><th></th></tr></thead><tbody>
@@ -67,12 +80,17 @@
 <h3>동의 등록</h3>
 <form method="post" action="/staff/consents" class="form">
   {{ m.csrf(actor) }}<input type="hidden" name="text_version" value="{{ text_version }}"><input type="hidden" name="target" value="{{ selected.ref }}">
-  <label>목적<input name="purpose" maxlength="128" value="{{ form.purpose }}" required></label>
-  <label>데이터 범위<input name="data_scope" value="{{ form.data_scope }}" required></label>
+  {% set purpose = form.purpose or guide.purpose %}{% set scope = form.data_scope or guide.scope %}
+  <dl class="detail"><dt>목적</dt><dd>{{ purpose or '—' }}</dd><dt>데이터 범위</dt><dd>{{ scope or '—' }}</dd></dl>
+  <details class="full"{{ ' open' if not (purpose and scope) }}><summary>내용 고치기</summary>
+  <label>목적<input name="purpose" maxlength="128" value="{{ purpose }}" required></label>
+  <label>데이터 범위<input name="data_scope" value="{{ scope }}" required></label>
   <label>유효 기간(일)<input type="number" name="valid_days" min="1" max="{{ max_days }}" value="{{ form.days or max_days }}" required></label>
+  </details>
   <p>{{ text }}</p>
   <div class="actions"><button type="submit" class="primary">동의</button></div>
 </form>
+<form method="post" action="/staff/servers/stop" class="inline">{{ m.csrf(actor) }}<input type="hidden" name="target" value="{{ selected.ref }}"><button type="submit">동의하지 않음</button></form>
 {% endif %}
 {% endcall %}{% endif %}
 {% endblock %}

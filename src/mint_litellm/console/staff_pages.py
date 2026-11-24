@@ -243,6 +243,31 @@ def intake_form(request: Request, actor: StaffActor, form=None, error=None, stat
                         {"f": values, "error": error, "ports": ports}, actor, status)
 
 
+@router.post("/staff/intakes/probe")
+def intake_probe(
+    request: Request, request_id: str = Form(""), url: str = Form(""), purpose: str = Form(""),
+    actor: StaffActor = Depends(staff_actor),
+):
+    """제출 전 주소 확인. 실패해도 제출은 막지 않는다."""
+    form = dict(request_id=request_id or str(new_uuid7()), url=url, purpose=purpose)
+    ports = actor.config.stage2.intake_allowed_ports
+    try:
+        found = staff_intakes.probe(
+            url.strip(), ports, fetchall(
+                actor.sctx.control,
+                "SELECT id, kind, value FROM mint.allowlists WHERE instance_id = %s"
+                " AND status = 'active' AND valid_from <= now() AND valid_until > now()"
+                " AND org_id IS NULL", (actor.sctx.instance_id,)),
+            actor.config.control.litellm_control())
+    except ControlError as error:
+        if staff_intakes.repo_parts(url.strip()):  # 저장소 주소는 확인 대신 신청 단계로 안내한다
+            return intake_form(request, actor, form, error="저장소 주소는 신청 제출 때 확인합니다.")
+        return intake_form(request, actor, form, error=str(error), status=422)
+    text = labels.PROBE[found["state"]].format(
+        tools=found["tools"], reason=labels.pick(labels.CHECK_REASON, found.get("reason")))
+    return intake_form(request, actor, {**form, "probe": text, "probe_ok": found["state"] == "ok"})
+
+
 @router.get("/staff/intakes/new")
 def intake_new(request: Request, actor: StaffActor = Depends(staff_actor)):
     return intake_form(request, actor)
@@ -527,6 +552,55 @@ def start_failures(actor: StaffActor, server_ids: list[str]) -> set[str]:
     return {r["server_id"] for r in found if r["reason_code"] in START_FAILED}
 
 
+CALL_BUCKET = {"allowed": "allow", "observed": "observe", "pending_approval": "approve"}
+
+
+def my_calls(actor: StaffActor) -> list[dict]:
+    """내 호출 판정 목록. 읽기는 직원 역할의 본인 범위 함수가 맡아 다른 사람 호출은 오지 않는다."""
+    rows = []
+    for e in staff.list_events(actor.sctx, 1000):
+        if e["kind"] != "decision_evaluated":
+            continue
+        p = e["payload"] or {}
+        outcome = p.get("outcome") or ("allowed" if p.get("enforced_action") == "allow" else "")
+        bucket = CALL_BUCKET.get(outcome, "block")
+        code = ((p.get("stop") or {}).get("reason_code")
+                or ((p.get("findings") or [{}])[0] or {}).get("reason_code"))
+        rows.append({
+            "at": e["inserted_at"], "server_id": p.get("resolved_server_id") or p.get("server_id"),
+            "tool": p.get("tool"), "bucket": bucket,
+            "reason": labels.outcome_reason(code) if bucket == "block" else None,
+        })
+        if len(rows) == RECENT_RECORDS:
+            break
+    name_servers(actor, rows)
+    return rows
+
+
+def server_guide(actor: StaffActor, row: dict) -> dict:
+    """서랍의 「이용 방법」과 동의 미리 채움: 승인된 신청의 목적·자료 범위, 로컬이면 출처."""
+    control, iid = actor.sctx.control, actor.sctx.instance_id
+    intake = fetchone(
+        control,
+        "SELECT purpose, data_grade, allowed_resources FROM mint.intakes WHERE instance_id = %s"
+        " AND server_id = %s AND decision IN ('approved', 'exception')"
+        " ORDER BY decided_at DESC LIMIT 1", (iid, row["server_id"])) or {}
+    resources = intake.get("allowed_resources")
+    scope = ", ".join(str(r) for r in resources)[:200] if isinstance(resources, list) else ""
+    if not scope and intake:
+        scope = f"{labels.pick(labels.DATA_GRADE, intake['data_grade'])} 자료"
+    out = {"purpose": (intake.get("purpose") or "")[:128], "scope": scope, "repo": None,
+           "commit": None}
+    if row["local"]:
+        spec = (fetchone(
+            control,
+            "SELECT pack_spec FROM mint.deployment_contracts WHERE instance_id = %s"
+            " AND server_id = %s AND status = 'approved'", (iid, row["server_id"])) or {}
+                ).get("pack_spec") or {}
+        out.update(repo=spec.get("git"), commit=(spec.get("version") or "")[:12] or None)
+    return out
+
+
 def servers_page(request: Request, actor: StaffActor, error=None, status=200, form=None):
     now = datetime.now(UTC)
     by_server: dict[tuple, list[dict]] = {}
@@ -574,7 +648,7 @@ def servers_page(request: Request, actor: StaffActor, error=None, status=200, fo
         row["start_failed"] = row["server_id"] in failed
     name_servers(actor, rows)
     tab = request.query_params.get("tab", "servers")
-    tab = tab if tab in ("servers", "applications", "records") else "servers"
+    tab = tab if tab in ("servers", "applications", "records", "calls") else "servers"
     search = request.query_params.get("q", "").strip()[:256]
     catalog = [r for r in rows if search.casefold() in
                f"{r['server_name']} {r['org_name']}".casefold()]
@@ -584,6 +658,7 @@ def servers_page(request: Request, actor: StaffActor, error=None, status=200, fo
     ] if tab == "records" else []
     form = form or {}
     opened = form.get("target") or request.query_params.get("open")
+    selected = next((r for r in rows if r["ref"] == opened), None) if opened else None
     ctx = {
         "rows": rows,
         "catalog": catalog,
@@ -591,12 +666,14 @@ def servers_page(request: Request, actor: StaffActor, error=None, status=200, fo
         "applications": application_rows(actor) if tab == "applications" else [],
         "tab": tab,
         "records": records,
+        "calls": my_calls(actor) if tab == "calls" else [],
         "pending_calls": sum(r["view"] == "pending" for r in my_approvals(actor))
         if not rows
         else 0,
         "need": sum(r["state"] == "none" and not r["stopped"] and not r["preparing"] for r in rows),
         "expiring": sum(r["expiring"] for r in rows),
-        "selected": next((r for r in rows if r["ref"] == opened), None) if opened else None,
+        "selected": selected,
+        "guide": server_guide(actor, selected) if selected else None,
         "max_days": actor.config.stage2.staff_consent_max_days,
         "text_version": labels.CONSENT_TEXT_VERSION,
         "text": labels.CONSENT_TEXT[labels.CONSENT_TEXT_VERSION],

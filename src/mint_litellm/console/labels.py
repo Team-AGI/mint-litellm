@@ -358,6 +358,14 @@ UPDATE_ERROR = {
     "not_writable": "설치 폴더에 쓸 수 없음", "no_config": "설정 파일 없음",
     "write_failed": "파일 쓰기 실패", "needed": "다시 설치 필요",
 }
+# 직원 신청 전 「주소 확인」 결과 문구
+PROBE = {
+    "ok": "응답했습니다. 도구 {tools}개를 확인했습니다.",
+    "auth": "응답했지만 인증이 필요합니다. 제출은 할 수 있습니다.",
+    "fail": "주소에 닿았지만 도구를 받지 못했습니다. 제출은 할 수 있습니다.",
+    "unknown": "지금은 확인하지 못했습니다. 제출은 할 수 있습니다.",
+    "blocked": "이 주소는 쓸 수 없습니다: {reason}",
+}
 LOCAL_TRANSPORT = {"stdio": "로컬 실행", "http": "원격(HTTP)", "sse": "원격(SSE)"}
 KIT_HARNESS = {
     "claude": "Claude Code", "codex": "Codex", "cursor": "Cursor", "grok": "Grok Build CLI",
