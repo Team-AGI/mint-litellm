@@ -5,6 +5,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -601,6 +602,19 @@ def test_backup_says_the_env_file_and_secrets_folder_are_not_included(tmp_path):
     result, _, _ = run(tmp_path, "POSTGRES_PASSWORD=x\n", "backup")
     assert result.returncode == 0, result.stderr
     assert ".env와 비밀 폴더" in result.stdout
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX 권한")
+def test_backup_takes_back_a_backups_folder_the_backup_container_created(tmp_path):
+    # 예약 백업 컨테이너가 backups를 root 소유로 먼저 만들면 운영자 계정으로 돌려놓는다.
+    (tmp_path / "deploy" / "backups").mkdir(parents=True)
+    (tmp_path / "deploy" / "backups").chmod(0o555)
+    try:
+        run(tmp_path, "POSTGRES_PASSWORD=x\n", "backup")
+    finally:
+        (tmp_path / "deploy" / "backups").chmod(0o755)
+    log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+    assert "--entrypoint chown backup" in log and "/backups" in log
 
 
 def test_up_waits_for_litellm_and_shows_its_log_tail_when_it_never_gets_ready(tmp_path):

@@ -356,6 +356,14 @@ fix_volume_owners() {
         -c 'chgrp -R 65532 /app/config && chmod -R g+rX /app/config' < /dev/null
 }
 
+# backups는 운영자 계정이 쓴다. 예약 백업 컨테이너가 먼저 만들면 root 소유가 되어 ./mint.sh backup이
+# 하위 폴더를 만들지 못하므로, 미리 만들고 이미 root 소유면 운영자 계정으로 돌려놓는다.
+ensure_backup_dir() {
+    mkdir -p backups 2>/dev/null || true
+    [ -w backups ] && return 0
+    "${COMPOSE[@]}" run --rm --no-deps -T --user 0 --entrypoint chown backup         "$(id -u):$(id -g)" /backups < /dev/null
+}
+
 # LiteLLM은 처음 뜰 때 40~60초 걸린다. 준비될 때까지 기다리고, 실패하면 최근 로그와 함께 멈춘다.
 wait_litellm() {
     echo "LiteLLM이 준비될 때까지 기다립니다(처음에는 40~60초 걸립니다)."
@@ -453,6 +461,7 @@ cmd_up() {
     ensure_control_key
     "${COMPOSE[@]}" --profile worker up -d worker inspector
     "${COMPOSE[@]}" --profile console up -d console
+    ensure_backup_dir
     "${COMPOSE[@]}" up -d backup
     ensure_default_root
     register_heal
@@ -617,6 +626,7 @@ cmd_backup() {
     require_env
     local dir
     dir="backups/$(date -u +%Y%m%dT%H%M%SZ)"
+    ensure_backup_dir
     mkdir -p "$dir"
     for database in mint litellm; do
         "${COMPOSE[@]}" exec -T postgres pg_dump -U postgres -d "$database" < /dev/null > "$dir/$database.sql"
