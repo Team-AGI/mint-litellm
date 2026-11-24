@@ -1050,11 +1050,16 @@ def test_stopping_use_is_refused_for_a_server_outside_the_organization(sworld):
 
 
 def test_an_approved_server_without_tools_is_preparing_only_for_its_requester(sworld):
+    import json
+
+    readiness = json.dumps({"credential_notice": True, "revocation_record": True,
+                            "audit_access_days": 30})
     sworld.query(
         "INSERT INTO mint.intakes (id, instance_id, org_id, server_id, source, purpose,"
         " data_grade, allowed_resources, provider, owner_user_id, readiness, data_return_terms,"
-        " requested_by, status) VALUES (gen_random_uuid(), %s, 'acme', 'srv-ok', 'staff', '시험',"
-        " 'internal', '{}', 'p', %s, '{}', '{}', %s, 'received')", INSTANCE, STAFFER, STAFFER)
+        " requested_by) VALUES (gen_random_uuid(), %s, 'acme', 'srv-ok', 'staff', '시험',"
+        " 'internal', %s, 'p', %s, %s, '반환', %s)",
+        INSTANCE, json.dumps(["docs"]), STAFFER, readiness, STAFFER)
     page = logged_in(sworld).get("/staff")
     assert "준비 중" in page.text and "진행 상황 보기" in page.text
     assert "준비 중" not in logged_in(sworld, OTHER_KEY).get("/staff").text

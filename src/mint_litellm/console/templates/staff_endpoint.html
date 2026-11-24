@@ -18,12 +18,12 @@
 {% set other = 'linux' if mine == 'windows' else 'windows' %}
 {% set names = {'linux': 'Linux', 'windows': 'Windows PowerShell'} %}
 <h3>{{ names[mine] }}</h3>
-<p>{{ '시작 메뉴에서 PowerShell을 열어' if mine == 'windows' else '터미널을 열어' }} 아래 명령을 붙여 넣고 Enter를 누르십시오. 끝나면 Claude Code 같은 도구를 다시 여십시오.</p>
+<div>{{ '시작 메뉴에서 PowerShell을 열어' if mine == 'windows' else '터미널을 열어' }} 아래 명령을 붙여 넣고 Enter를 누르십시오. 끝나면 Claude Code 같은 도구를 다시 여십시오.</div>
 {{ m.copy_cmd(commands[mine]) }}
 <details><summary>다른 운영체제용 명령 ({{ names[other] }})</summary>
 {{ m.copy_cmd(commands[other]) }}
 </details>
-<p class="muted">한 번만 쓰고 15분 뒤 만료됩니다. 설치가 끝나면 이 화면의 설치 상태가 바뀝니다.</p>
+<div class="muted">한 번만 쓰고 15분 뒤 만료됩니다. 설치가 끝나면 이 화면의 설치 상태가 바뀝니다.</div>
 {% endif %}
 {% if behind %}<p class="muted">한 번만 다시 설치하면 이후 자동 갱신됩니다</p>{% endif %}
 {% if rows %}
