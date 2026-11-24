@@ -91,7 +91,7 @@ def test_the_endpoint_screen_counts_the_fleet_and_links_each_slice(fleet):
     for label in ("적용률", "격리 위반", "보고 끊김", "관리 밖 MCP"):
         assert label in html
     assert 'data-chart="' in html and "state=stale" in html and "state=violation" in html
-    assert "단말 현황" in html and "tab=local-mcp" in html
+    assert "단말 목록" in html and "tab=local-mcp" in html
     assert "ok-1" in html and "gone-1" in html  # 해제된 단말도 목록에는 남는다
 
 

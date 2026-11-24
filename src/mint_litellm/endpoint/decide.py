@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import time
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from pathlib import Path
@@ -56,6 +57,7 @@ from mint_litellm.types.decision import (
     ResolvedServer,
     is_builtin_server,
 )
+from mint_litellm.types.errors import DispatchState, MintError
 from mint_litellm.types.exec_contract import ExecContract
 from mint_litellm.types.identity import Principal
 
@@ -164,12 +166,57 @@ _TARGET = r"^[A-Za-z0-9._-]{1,128}$"
 _PACKAGE = r"^(@[a-z0-9._-]{1,64}/)?[a-z0-9._-]{1,64}(@[A-Za-z0-9._-]{1,32})?$"
 
 
+ClientName = Literal[
+    "claude", "codex", "cursor", "grok", "gemini", "antigravity", "windsurf", "vscode",
+    "claude_desktop", "cline", "lmstudio",
+]
+
+
+class AiClientItem(BaseModel):
+    """단말에서 찾은 AI 도구 하나와 그 연결·보장 상태(단말의 주장)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    client: ClientName
+    version: str | None = Field(default=None, max_length=64)
+    connection: Literal["hook", "mediated", "config", "none", "failed"]
+    coverage: Literal["pre_call", "local_only", "unmanaged", "unknown", "scan_failed"]
+    servers: int = Field(ge=0, le=256)
+    unmanaged: int = Field(ge=0, le=256)
+    restart_needed: bool = False
+
+
+class PlaintextKeyItem(BaseModel):
+    """MCP 설정에 평문으로 든 키의 위치. 종류와 위치만 받고 값은 받지 않는다."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    client: ClientName
+    entry: str = Field(min_length=1, max_length=128)
+    kind: Literal[
+        "openai", "anthropic", "google", "github", "aws", "slack", "huggingface", "generic"
+    ]
+    where: Literal["env", "headers", "args", "url"]
+
+
+class OfflineCallItem(BaseModel):
+    """결정 서비스에 닿지 못해 단말이 스스로 통과시킨 호출(뒤늦게 한꺼번에 보고, 단말의 주장)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    server: str = Field(min_length=1, max_length=128)
+    tool: str = Field(min_length=1, max_length=128)
+    harness: str = Field(min_length=1, max_length=32)
+    at: datetime
+    count: int = Field(ge=1, le=10000)
+
+
 class LocalMcpItem(BaseModel):
     """하네스 설정에 있는, 관리 대상이 아닌 MCP 항목. 인자·환경 변수·토큰은 받지 않는다."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    harness: Literal["claude", "codex", "cursor", "grok"]
+    harness: ClientName
     name: str = Field(min_length=1, max_length=128)
     kind: Literal["stdio", "http", "sse"]
     target: str = Field(pattern=_TARGET)  # stdio는 실행 파일 이름, 원격은 호스트
@@ -381,6 +428,13 @@ class ReportBody(BaseModel):
     # 단말이 서명된 키트 갱신을 받을 수 있는가(고정 공개 키가 있다). 직전 갱신 실패 사유(있을 때만).
     kit_update: bool | None = None
     update_error: str | None = Field(default=None, max_length=80)
+    # AI 도구별 보장 현황·평문 키 위치·검사 실패·장애 중 통과 호출. 이전 묶음은 보내지 않는다.
+    ai_clients: list[AiClientItem] | None = Field(default=None, max_length=16)
+    plaintext_keys: list[PlaintextKeyItem] | None = Field(default=None, max_length=32)
+    scan_errors: list[ClientName] | None = Field(default=None, max_length=16)
+    offline_calls: list[OfflineCallItem] | None = Field(default=None, max_length=64)
+    # 단말이 적용한 연결 중지 세대.
+    paused_ack: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def _mode_matches_action(self) -> ReportBody:
@@ -443,6 +497,30 @@ def local_request(
         resolver=lambda _hook: resolved,
         principal_factory=principal_factory,
     )
+
+
+PAUSED_CODE = "MINT-ENDPOINT-PAUSED"
+PAUSED_GUIDANCE = (
+    "관리자가 이 PC의 관리 AI 연결을 중지했습니다. 재개되면 바로 다시 호출하십시오."
+)
+# 판정마다 DB를 읽지 않도록 키별로 잠깐 기억한다(중지·재개는 이 초만큼 늦게 닿는다).
+_PAUSE_TTL = 5.0
+_pause_seen: dict[str, tuple[float, bool]] = {}
+
+
+async def _paused(runtime: Any, key_id: str) -> bool:
+    now = time.monotonic()
+    hit = _pause_seen.get(key_id)
+    if hit is not None and hit[0] > now:
+        return hit[1]
+    try:
+        paused = bool(await runtime.database.endpoint_paused(runtime.config.instance_id, key_id))
+    except Exception:  # 가용성 우선: 읽지 못하면 막지 않는다
+        return False
+    if len(_pause_seen) > 4096:
+        _pause_seen.clear()
+    _pause_seen[key_id] = (now + _PAUSE_TTL, paused)
+    return paused
 
 
 async def _legacy_network(body: DecideBody, runtime: Any) -> DecideBody:
@@ -531,6 +609,13 @@ def make_router(
     async def decide(request: Request, auth: Any = Depends(auth_dependency)) -> dict[str, Any]:
         runtime = ready(verified=False)
         body = await _body(request, DecideBody)
+        who = principal_factory(auth, instance_id=runtime.config.instance_id)
+        if who.key_id is not None and await _paused(runtime, who.key_id):
+            error = MintError(
+                code=PAUSED_CODE, dispatch_state=DispatchState.NOT_DISPATCHED, retry_safe=True,
+                reference="endpoint-paused", guidance=PAUSED_GUIDANCE, retry_after=60)
+            return {"decision": "deny", "reference": error.reference,
+                    "error": json.loads(error.detail())}
         body = await _legacy_network(body, runtime)
         call = local_request(
             body, auth, instance_id=runtime.config.instance_id, principal_factory=principal_factory
@@ -609,6 +694,11 @@ def make_router(
                 tool_lists=_dump(body.tool_lists),
                 hook_trust=body.hook_trust,
                 update_error=body.update_error,
+                ai_clients=_dump(body.ai_clients),
+                plaintext_keys=_dump(body.plaintext_keys),
+                scan_errors=body.scan_errors,
+                offline_calls=_dump(body.offline_calls, json_mode=True),
+                paused_ack=body.paused_ack,
             )
         except Exception as exc:
             log.exception("install report could not be stored")
@@ -653,6 +743,11 @@ def make_router(
         except Exception:
             desired = None  # 마찬가지로 못 만들면 싣지 않는다(단말은 설정을 바꾸지 않는다)
         answer: dict[str, Any] = {"recorded": True, "renewed": outcome == "renewed"}
+        try:
+            answer.update(await runtime.database.endpoint_control(
+                runtime.config.instance_id, who.key_id, "clients" in (body.capabilities or ())))
+        except Exception:
+            log.exception("endpoint control state could not be read")  # 싣지 않으면 단말은 유지
         bundle = kit_sign.update_bundle()
         if bundle:
             answer["kit_version"] = bundle["version"]
@@ -877,8 +972,9 @@ async def _inspection_call(call: Any) -> None:
         raise HTTPException(status_code=status, detail=_intake_detail(exc)) from exc
 
 
-def _dump(items: list[Any] | None) -> list[dict[str, Any]] | None:
-    return None if items is None else [item.model_dump() for item in items]
+def _dump(items: list[Any] | None, json_mode: bool = False) -> list[dict[str, Any]] | None:
+    mode = "json" if json_mode else "python"
+    return None if items is None else [item.model_dump(mode=mode) for item in items]
 
 
 def install(app: Any, router: APIRouter) -> bool:

@@ -57,7 +57,7 @@ def test_the_report_asks_for_inspections_and_stores_them_apart_from_the_harness_
     sent, reply = [], [{"inspections": [remote()], "desired": []}]
     answers(monkeypatch, sent, reply)
     assert kit.report(state, "installed") is True
-    assert sent[0]["capabilities"] == ["inspect"]
+    assert sent[0]["capabilities"] == ["inspect", "clients"]  # 사용자 권한 보고기
     assert [i["id"] for i in kit_module.load_inspections(kit.home)] == ["ins-1"]
     path = kit.home / ".cache/mint/inspections.json"
     # 하네스 설정·계약 파일·시작 허가에는 검사 권한이 새지 않는다.

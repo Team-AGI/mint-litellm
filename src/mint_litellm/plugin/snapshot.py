@@ -26,7 +26,12 @@ from mint_litellm.endpoint.refresh import (
     scoped_desired,
     without_network,
 )
-from mint_litellm.endpoint.remediation import remediation_events, retired_names
+from mint_litellm.endpoint.remediation import (
+    merge_offline_calls,
+    offline_call_events,
+    remediation_events,
+    retired_names,
+)
 from mint_litellm.plugin.buffer import ConsumeRequest, ConsumptionLost
 from mint_litellm.types.canonical import sha256
 from mint_litellm.types.events import Event
@@ -1207,6 +1212,11 @@ class PluginDatabase:
         tool_lists: Sequence[dict[str, Any]] | None = None,
         hook_trust: str | None = None,
         update_error: str | None = None,
+        ai_clients: Sequence[dict[str, Any]] | None = None,
+        plaintext_keys: Sequence[dict[str, Any]] | None = None,
+        scan_errors: Sequence[str] | None = None,
+        offline_calls: Sequence[dict[str, Any]] | None = None,
+        paused_ack: int | None = None,
     ) -> str:
         """설치 묶음에 발급한 키의 설치 상태 보고를 남기고 결과를 돌려준다.
 
@@ -1221,7 +1231,7 @@ class PluginDatabase:
                 cursor = await conn.execute(
                     "SELECT expires_at IS NOT NULL AND expires_at <= clock_timestamp(),"
                     " expires_at IS NOT NULL AND expires_at <= clock_timestamp() + %s,"
-                    " user_id, key_alias, local_mcp"
+                    " user_id, key_alias, local_mcp, offline_calls"
                     " FROM mint.endpoint_installs WHERE instance_id = %s AND key_token = %s"
                     " AND revoked_at IS NULL FOR UPDATE",
                     (RENEW_WINDOW, instance_id, key_token),
@@ -1235,11 +1245,18 @@ class PluginDatabase:
                 seen = row[4] if local_mcp is None else merge_local_mcp(
                     local_mcp, row[4], datetime.now(UTC).isoformat()
                 )
+                kept_calls = merge_offline_calls(row[5], offline_calls)
                 await conn.execute(
                     "UPDATE mint.endpoint_installs SET install_mode = %s, kit_version = %s,"
                     " claude_version = %s, mcp_servers = %s, processes = %s, autostart = %s,"
                     " local_mcp = %s, outside_processes = %s, hook_trust = %s,"
-                    " update_error = %s, reported_at = clock_timestamp(), expires_at = CASE WHEN %s"
+                    " update_error = %s, ai_clients = coalesce(%s, ai_clients),"
+                    " plaintext_keys = coalesce(%s, plaintext_keys),"
+                    " scan_errors = coalesce(%s, scan_errors), offline_calls = %s,"
+                    " paused_ack = coalesce(%s::int, paused_ack),"
+                    " paused_ack_at = CASE WHEN %s::int IS NULL THEN paused_ack_at"
+                    " ELSE clock_timestamp() END,"
+                    " reported_at = clock_timestamp(), expires_at = CASE WHEN %s"
                     " THEN clock_timestamp() + make_interval(days => ttl_days) ELSE expires_at END"
                     " WHERE instance_id = %s AND key_token = %s",
                     (mode, kit_version, claude_version, Jsonb(list(mcp_servers)),
@@ -1247,7 +1264,12 @@ class PluginDatabase:
                      None if autostart is None else Jsonb(list(autostart)),
                      None if seen is None else Jsonb(list(seen)),
                      None if outside_processes is None else Jsonb(list(outside_processes)),
-                     hook_trust, update_error, row[1], instance_id, key_token),
+                     hook_trust, update_error,
+                     None if ai_clients is None else Jsonb(list(ai_clients)),
+                     None if plaintext_keys is None else Jsonb(list(plaintext_keys)),
+                     None if scan_errors is None else Jsonb(list(scan_errors)),
+                     None if kept_calls is None else Jsonb(kept_calls),
+                     paused_ack, paused_ack, row[1], instance_id, key_token),
                 )
                 for item in tool_lists or ():
                     await conn.execute(
@@ -1272,7 +1294,77 @@ class PluginDatabase:
             at=datetime.now(UTC),
         ):
             await self.insert_event(event)
+        for event in offline_call_events(
+            instance_id, user_id=user_id, key_alias=key_alias, calls=offline_calls or (),
+            at=datetime.now(UTC),
+        ):
+            await self.insert_event(event)
         return str(status)
+
+    async def endpoint_paused(self, instance_id: str, key_token: str) -> bool:
+        """설치 키가 관리자에 의해 연결 중지 상태인가."""
+
+        async def read(conn: Any) -> Any:
+            cursor = await conn.execute(
+                "SELECT paused_at IS NOT NULL FROM mint.endpoint_installs"
+                " WHERE instance_id = %s AND key_token = %s AND revoked_at IS NULL",
+                (instance_id, key_token),
+            )
+            return await cursor.fetchone()
+
+        row = await self._run(read)
+        return bool(row and row[0])
+
+    async def endpoint_control(
+        self, instance_id: str, key_token: str, clients: bool = False
+    ) -> dict[str, Any]:
+        """보고 응답에 싣는 관리자 지시: 중지 여부·세대, 연결 복구 요청(한 번만), 제외한 서버,
+        직원이 동의하고 올린 신청 요청(아직 보내지 않은 것, 보낸 뒤 표시). 연결 복구와 신청 요청은
+        사용자 권한 보고기(``clients``)에만 싣고 그때만 보냄 처리한다."""
+
+        async def run(conn: Any) -> Any:
+            async with conn.transaction():
+                cursor = await conn.execute(
+                    "SELECT user_id, reconnect_requested, paused_at IS NOT NULL, pause_gen"
+                    " FROM mint.endpoint_installs WHERE instance_id = %s AND key_token = %s"
+                    " AND revoked_at IS NULL FOR UPDATE",
+                    (instance_id, key_token),
+                )
+                row = await cursor.fetchone()
+                if row is None:
+                    return None
+                user_id = row[0]
+                reconnect = bool(row[1]) and clients
+                if reconnect:
+                    await conn.execute(
+                        "UPDATE mint.endpoint_installs SET reconnect_requested = false"
+                        " WHERE instance_id = %s AND key_token = %s",
+                        (instance_id, key_token),
+                    )
+                cursor = await conn.execute(
+                    "SELECT server_name FROM mint.endpoint_ignored_servers"
+                    " WHERE instance_id = %s AND user_id = %s ORDER BY server_name LIMIT 256",
+                    (instance_id, user_id),
+                )
+                ignored = [r[0] for r in await cursor.fetchall()]
+                found = {"paused": row[2], "pause_gen": row[3], "ignored": ignored}
+                if clients:
+                    cursor = await conn.execute(
+                        "UPDATE mint.endpoint_intake_requests SET sent_at = clock_timestamp()"
+                        " WHERE instance_id = %s AND user_id = %s AND sent_at IS NULL"
+                        " RETURNING server_name, purpose",
+                        (instance_id, user_id),
+                    )
+                    found["reconnect"] = reconnect
+                    found["intake_requests"] = [
+                        {"name": r[0], "purpose": r[1]} for r in await cursor.fetchall()
+                    ]
+                return found
+
+        found = await self._run(run)
+        if found is None:
+            raise LookupError("no such kit key")
+        return found
 
     async def record_delivery(
         self, instance_id: str, key_token: str, stage: str, servers: Sequence[str],

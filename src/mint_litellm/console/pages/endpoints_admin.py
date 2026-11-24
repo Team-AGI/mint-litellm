@@ -8,7 +8,7 @@ from mint_litellm.console import api
 from mint_litellm.console.core import Actor, page_actor, require_csrf
 from mint_litellm.console.pages.common import act
 from mint_litellm.console.templating import render
-from mint_litellm.control import endpoint_kits, org_suggest, siem
+from mint_litellm.control import endpoint_coverage, endpoint_kits, org_suggest, siem
 from mint_litellm.control.errors import AdminCode, AdminError
 from mint_litellm.control.operators import SERVICE_ACCOUNTS
 from mint_litellm.control.services import operators as operator_service
@@ -75,14 +75,22 @@ def endpoint_view(rows: list[dict], mcp: list[dict], now: datetime) -> dict:
     return {"rows": rows, "count": count, "mcp": mcp, "donut": donut, "bars": bars}
 
 
+TABS = ("installs", "local-mcp", "ai-tools")
+
+
 @router.get("/endpoints")
 def endpoints(request: Request, actor: Actor = Depends(page_actor)):
+    return endpoints_page(request, actor)
+
+
+def endpoints_page(request: Request, actor: Actor, error=None, status=200):
     view = endpoint_view(
         endpoint_kits.installs(actor.conn, actor.instance),
         endpoint_kits.local_mcp_inventory(actor.conn, actor.instance),
         datetime.now(UTC),
     )
-    tab = "local-mcp" if request.query_params.get("tab") == "local-mcp" else "installs"
+    asked = request.query_params.get("tab")
+    tab = asked if asked in TABS else "installs"
     state = request.query_params.get("state", "")
     if state in STATES:
         view["rows"] = [
@@ -96,9 +104,68 @@ def endpoints(request: Request, actor: Actor = Depends(page_actor)):
         kind = ""
     opened = request.query_params.get("open")
     selected = next((r for r in view["rows"] if r["ref"] == opened), None) if opened else None
+    ai = endpoint_coverage.coverage_view(view["rows"], view["mcp"])
+    chosen = request.query_params.get("client", "")
+    client = next((c for c in ai["clients"] if c["client"] == chosen), None)
+    if selected is not None:
+        selected["pause_view"] = pause_view(actor, selected)
     ctx = {**view, "tab": tab, "state": state if state in STATES else "", "STATES": STATES,
-           "VIOLATIONS": VIOLATIONS, "selected": selected, "kind": kind}
-    return render(request, "endpoints.html", ctx, actor=actor)
+           "VIOLATIONS": VIOLATIONS, "selected": selected, "kind": kind, "ai": ai,
+           "client": client, "error": error}
+    return render(request, "endpoints.html", ctx, actor=actor, status=status)
+
+
+def pause_view(actor: Actor, row: dict) -> dict:
+    """연결 중지의 네 상태: 서버 차단 · 단말 수신 · 실행기 정지 · 관리 밖 경로."""
+    paused = row.get("paused_at")
+    runner = None
+    if paused:
+        runner = endpoint_coverage.paused_runner_at(
+            actor.conn, actor.instance, row["key_alias"], paused)
+    return {
+        "paused": bool(paused), "blocked_at": paused,
+        "received": row.get("paused_ack") == row.get("pause_gen") and row.get("paused_ack_at"),
+        "runner_at": runner,
+    }
+
+
+def _back(client: str) -> str:
+    return "/endpoints?tab=ai-tools" + (f"&client={client}" if client else "")
+
+
+def _device_action(request: Request, actor: Actor, alias: str, client: str, work, ok: str):
+    def action():
+        if actor.role != "admin":
+            raise AdminError(AdminCode.FORBIDDEN, "관리자만 할 수 있습니다.")
+        work()
+
+    return act(actor, action, ok, _back(client), lambda **kw: endpoints_page(request, actor, **kw))
+
+
+@router.post("/endpoints/{alias}/pause")
+def pause_endpoint(
+    alias: str, request: Request, client: str = Form(""), actor: Actor = Depends(page_actor)
+):
+    return _device_action(request, actor, alias, client,
+                          lambda: endpoint_coverage.pause(actor.ctx, alias), "endpoint_paused")
+
+
+@router.post("/endpoints/{alias}/resume")
+def resume_endpoint(
+    alias: str, request: Request, client: str = Form(""), actor: Actor = Depends(page_actor)
+):
+    return _device_action(request, actor, alias, client,
+                          lambda: endpoint_coverage.resume(actor.ctx, alias), "endpoint_resumed")
+
+
+@router.post("/endpoints/{alias}/reconnect")
+def reconnect_endpoint(
+    alias: str, request: Request, client: str = Form(""), actor: Actor = Depends(page_actor)
+):
+    return _device_action(
+        request, actor, alias, client,
+        lambda: endpoint_coverage.request_reconnect(actor.conn, actor.instance, alias),
+        "endpoint_reconnect")
 
 
 # --- 운영자·조직 -------------------------------------------------------------------------------

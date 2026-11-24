@@ -178,6 +178,13 @@ function initConsole(root) {
     input.addEventListener("input", sync);
     sync();
   });
+  // 입력이 비어 있으면 같은 폼의 제출 단추를 끈다.
+  root.querySelectorAll("input[data-needs-text]").forEach(function (input) {
+    var button = input.form.querySelector("button[type=submit]");
+    function sync() { button.disabled = input.value.trim() === ""; }
+    input.addEventListener("input", sync);
+    sync();
+  });
   // 시간 범위 칩: 고르면 바로 조회한다(인라인 핸들러 대신).
   root.querySelectorAll("[data-autosubmit]").forEach(function (input) {
     input.addEventListener("change", function () { input.form.requestSubmit(); });

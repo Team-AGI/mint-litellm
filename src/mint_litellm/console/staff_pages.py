@@ -37,6 +37,7 @@ from mint_litellm.console.pages.common import see_other, server_names
 from mint_litellm.console.templating import render
 from mint_litellm.control import (
     directory,
+    endpoint_coverage,
     endpoint_kits,
     kit_codes,
     kit_key_sync,
@@ -703,11 +704,27 @@ def usage(request: Request, period: str = "", actor: StaffActor = Depends(staff_
 # --- 14 단말 설치 -----------------------------------------------------------------------------
 
 
+def own_endpoint_tools(actor: StaffActor, rows: list[dict]) -> dict:
+    """내 단말의 AI 도구 보장, 이 PC에서 쓰던 서버, 보관이 필요한 키."""
+    live = [r for r in rows if r["state"] in ("managed", "user")]
+    tools = [{**c, "install": r} for r in live for c in r.get("ai_clients") or []]
+    keys = [k for r in live for k in r.get("plaintext_keys") or []]
+    sctx = actor.sctx
+    ignored = endpoint_coverage.ignored_names(sctx.control, sctx.instance_id, actor.user_id)
+    asked = endpoint_coverage.intake_requests(sctx.control, sctx.instance_id, actor.user_id)
+    found: dict[str, dict] = {}
+    for m in endpoint_kits.local_mcp_inventory(sctx.control, sctx.instance_id):
+        if m["user_id"] == actor.user_id and m["name"] not in found:
+            found[m["name"]] = {**m, "excluded": m["name"] in ignored, "ask": asked.get(m["name"])}
+    return {"tools": tools, "keys": keys, "servers": list(found.values())}
+
+
 def endpoint_page(request: Request, actor: StaffActor, error=None, status=200, commands=None):
     rows = endpoint_kits.installs(actor.sctx.control, actor.sctx.instance_id, actor.user_id)
     # 받는 사람의 브라우저가 Windows면 Windows 묶음을 미리 고른다.
     windows = "windows" in request.headers.get("user-agent", "").lower()
     ctx = {
+        **own_endpoint_tools(actor, rows),
         "rows": rows, "active": any(r["state"] != "revoked" for r in rows), "error": error,
         "platform": "windows" if windows else "linux", "commands": commands,
         # 서버 판본보다 뒤처진 단말: 고정 공개 키가 없는 옛 설치는 한 번 다시 설치해야 한다.
@@ -830,6 +847,47 @@ def kit_redeem(
         return PlainTextResponse(f"{refused}\n", status_code=refused.status)
     return PlainTextResponse(
         kit_codes.script(name, kit), headers={"Cache-Control": "no-store"})
+
+
+@router.post("/staff/endpoint/reconnect")
+def endpoint_reconnect(
+    request: Request, alias: str = Form(...), actor: StaffActor = Depends(staff_actor)
+):
+    sctx = actor.sctx
+    return act(
+        actor,
+        lambda: endpoint_coverage.request_reconnect(
+            sctx.control, sctx.instance_id, alias, actor.user_id),
+        "endpoint_reconnect", "/staff/endpoint",
+        lambda **kw: endpoint_page(request, actor, **kw))
+
+
+@router.post("/staff/endpoint/ignore")
+def endpoint_ignore(
+    request: Request, name: str = Form(..., max_length=128),
+    actor: StaffActor = Depends(staff_actor),
+):
+    sctx = actor.sctx
+    return act(
+        actor,
+        lambda: endpoint_coverage.ignore_server(
+            sctx.control, sctx.instance_id, actor.user_id, name),
+        "server_ignored", "/staff/endpoint",
+        lambda **kw: endpoint_page(request, actor, **kw))
+
+
+@router.post("/staff/endpoint/request")
+def endpoint_request(
+    request: Request, name: str = Form(..., max_length=128),
+    purpose: str = Form("", max_length=256), actor: StaffActor = Depends(staff_actor),
+):
+    sctx = actor.sctx
+    return act(
+        actor,
+        lambda: endpoint_coverage.request_intake(
+            sctx.control, sctx.instance_id, actor.user_id, name, purpose),
+        "server_requested", "/staff/endpoint",
+        lambda **kw: endpoint_page(request, actor, **kw))
 
 
 @router.post("/staff/endpoint/revoke")

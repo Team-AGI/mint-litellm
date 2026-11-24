@@ -49,8 +49,69 @@ def remediation_events(
                 source_key=f"endpoint:{digest}:{int(at.timestamp())}:endpoint_remediated",
                 actor=ACTOR,
                 subject={"user_id": user_id, "key_alias": key_alias, "server_id": item["server"]},
-                payload={"kind": item["kind"], "target": item.get("target"),
-                         "server_id": item["server"]},
+                payload={
+                    "kind": item["kind"],
+                    "target": item.get("target"),
+                    "server_id": item["server"],
+                },
+            )
+        )
+    return events
+
+
+MAX_OFFLINE_KEPT = 200
+
+
+def merge_offline_calls(
+    kept: Iterable[Mapping[str, Any]] | None, new: Iterable[Mapping[str, Any]] | None
+) -> list[dict[str, Any]] | None:
+    """행에 남길 장애 중 통과 호출. 새 보고를 뒤에 붙이고 같은 항목은 한 번만, 최근 것만 남긴다.
+
+    보고에 이 목록이 없으면(None) 앞서 남긴 목록을 그대로 둔다.
+    """
+    if new is None:
+        return None if kept is None else list(kept)
+    seen: set[tuple] = set()
+    out: list[dict[str, Any]] = []
+    for item in [*(kept or ()), *new]:
+        key = (item["server"], item["tool"], item["harness"], item["at"])
+        if key not in seen:
+            seen.add(key)
+            out.append(dict(item))
+    return out[-MAX_OFFLINE_KEPT:]
+
+
+def offline_call_events(
+    instance_id: str,
+    *,
+    user_id: str,
+    key_alias: str,
+    calls: Iterable[Mapping[str, Any]],
+    at: datetime,
+) -> list[Event]:
+    """장애 중 단말이 스스로 통과시킨 호출마다 사건 하나(단말의 주장). 같은 항목은 같은 사건이다."""
+    events = []
+    for item in calls:
+        when = datetime.fromisoformat(str(item["at"]).replace("Z", "+00:00"))
+        digest = hashlib.sha256(
+            f"{key_alias}|{item['server']}|{item['tool']}|{item['harness']}|{item['at']}".encode()
+        ).hexdigest()[:24]
+        events.append(
+            Event(
+                instance_id=instance_id,
+                inserted_at=at,
+                kind=EventKind.ENDPOINT_OFFLINE_CALL,
+                source_key=f"endpoint:{digest}:{int(when.timestamp())}:endpoint_offline_call",
+                actor=ACTOR,
+                subject={"user_id": user_id, "key_alias": key_alias, "server_id": item["server"]},
+                payload={
+                    "server_id": item["server"],
+                    "tool": item["tool"],
+                    "harness": item["harness"],
+                    "at": str(item["at"]),
+                    "count": item["count"],
+                    "outcome": "allowed_by_endpoint_offline",
+                },
             )
         )
     return events

@@ -103,6 +103,44 @@ class NoPermit(Refuse):
     """시작 허가가 없거나 만료됐다. 보고를 당겨 받으면 풀릴 수 있다."""
 
 
+class Unreachable(Refuse):
+    """결정 서버에 닿지 못했거나(연결·시간 초과) 서버가 5xx로 실패했다. 거절과 다르다."""
+
+
+# 공통 장애 계약: 결정 서버에 닿지 못하면 알려진 승인 호출은 통과시키고 뒤에 보고한다. 명시
+# 차단(관리 연결 중지)은 단말에 남은 표지로 계속 지킨다. 처음 보는 서버는 막는다.
+PAUSED_FILE = "paused"  # 보고기가 쓴다: 관리자가 이 PC의 관리 AI 연결을 중지했다
+OFFLINE_FILE = "offline.jsonl"  # 장애 중 단말 판단으로 통과한 호출(보고기가 보내고 비운다)
+OFFLINE_MAX = 256 * 1024
+CLIENTS_DIR = "clients"  # 실행기를 띄운 AI 도구별 마지막 시작 시각(재시작 필요 표시용)
+PAUSED_TEXT = "관리자가 이 PC의 관리 AI 연결을 중지했습니다. 재개되면 바로 다시 호출하십시오."
+
+
+def paused(state_dir: str) -> bool:
+    """사용자 캐시나 설치 폴더에 관리 연결 중지 표지가 있는가."""
+    return any(
+        os.path.exists(os.path.join(folder, PAUSED_FILE))
+        for folder in (os.path.expanduser(state_dir), KIT_DIR)
+    )
+
+
+def record_offline(state_dir: str, server: str, tool: str, harness: str) -> None:
+    """장애 중 통과한 호출을 남긴다(인자 값은 남기지 않는다). 못 남겨도 호출은 그대로다."""
+    path = os.path.join(os.path.expanduser(state_dir), OFFLINE_FILE)
+    try:
+        if os.path.exists(path) and os.path.getsize(path) > OFFLINE_MAX:
+            return  # ponytail: 상한을 넘으면 더 쌓지 않는다(보고되면 비워진다)
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        line = json.dumps({
+            "server": server[:128], "tool": tool[:128], "harness": harness[:32],
+            "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),  # noqa: UP017
+        }, ensure_ascii=False)  # fmt: skip
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    except OSError:
+        pass
+
+
 def sha256_fd(fd: int) -> str:
     digest = hashlib.sha256()
     os.lseek(fd, 0, os.SEEK_SET)
@@ -487,7 +525,9 @@ def _call(post: Post, base: str, path: str, key: str, payload: dict, timeout: fl
     try:
         status, raw = post(base.rstrip("/") + path, headers, json.dumps(payload).encode(), timeout)
     except (OSError, ValueError) as exc:
-        raise Refuse(f"decision service is unreachable ({type(exc).__name__})") from exc
+        raise Unreachable(f"decision service is unreachable ({type(exc).__name__})") from exc
+    if status >= 500:
+        raise Unreachable(f"decision service failed (HTTP {status}{_refusal_code(raw)})")
     if status != 200:
         hint = (
             " MINT 키가 거절되었습니다. 한 줄 설치 명령을 다시 붙여 넣으십시오."
@@ -550,6 +590,46 @@ def builtin_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
     raise Refuse("built-in tool arguments are too large to judge")
 
 
+def ask_decision(
+    payload: dict[str, Any],
+    *,
+    url: str,
+    key: str,
+    post: Post,
+    http_timeout: float = HTTP_TIMEOUT,
+    on_pending: Callable[[], None] | None = None,
+) -> dict[str, Any]:
+    """판정을 묻고 허용 응답을 돌려준다. 거부면 안내를 첫 줄에 둔 ``Refuse``, 결정 서버에 닿지
+    못하면 ``Unreachable``이다."""
+    answer = _call(post, url, DECIDE_PATH, key, payload, http_timeout)
+    if answer.get("decision") not in {"allow", "deny"}:
+        raise Refuse("decision service sent an unreadable answer")
+    if answer["decision"] == "deny":
+        error = answer.get("error") if isinstance(answer.get("error"), dict) else {}
+        code = error.get("code", "denied")
+        message = f"blocked by MINT: {code} reference={answer.get('reference')}"
+        if error.get("approval_requested") is True:
+            message += " approval_requested=true"
+            if on_pending is not None:
+                on_pending()
+        if isinstance(error.get("guidance"), str):  # 하네스가 앞부분만 보여 주므로 안내를 첫 줄에
+            message = " ".join(error["guidance"].split())[:300] + "\n" + message
+        raise Refuse(message)
+    return answer
+
+
+def offline_allowed(server: str, contracts: str, state_dir: str) -> bool:
+    """결정 서버에 닿지 못할 때 단말이 스스로 통과시켜도 되는 호출인가(공통 장애 계약).
+
+    관리 연결이 중지됐으면 아니다. 내장 도구와 승인 목록에 있고 폐기되지 않은 서버만 그렇다.
+    """
+    if paused(state_dir):
+        return False
+    if server.startswith("builtin:"):
+        return True
+    return server in known_servers(contracts) and server not in load_retired(state_dir)
+
+
 def decide(
     event: Mapping[str, Any],
     *,
@@ -597,20 +677,17 @@ def decide(
         }
     else:
         return  # 판정 대상이 아닌 도구
-    answer = _call(post, url, DECIDE_PATH, key, payload, http_timeout)
-    if answer.get("decision") not in {"allow", "deny"}:
-        raise Refuse("decision service sent an unreadable answer")
-    if answer["decision"] == "deny":
-        error = answer.get("error") if isinstance(answer.get("error"), dict) else {}
-        code = error.get("code", "denied")
-        message = f"blocked by MINT: {code} reference={answer.get('reference')}"
-        if error.get("approval_requested") is True:
-            message += " approval_requested=true"
-            if on_pending is not None:
-                on_pending()
-        if isinstance(error.get("guidance"), str):  # 하네스가 앞부분만 보여 주므로 안내를 첫 줄에
-            message = " ".join(error["guidance"].split())[:300] + "\n" + message
-        raise Refuse(message)
+    try:
+        answer = ask_decision(
+            payload, url=url, key=key, post=post, http_timeout=http_timeout, on_pending=on_pending
+        )
+    except Unreachable:
+        if not offline_allowed(payload["server"], contracts, state_dir):
+            if paused(state_dir):
+                raise Refuse(PAUSED_TEXT) from None
+            raise
+        record_offline(state_dir, payload["server"], payload["tool"], harness)
+        return
     # 호출 뒤 훅이 결과를 보고할 수 있게 판정 참조를 호출 식별자로 남긴다.
     if isinstance(tool_use_id, str) and SAFE_ID.match(tool_use_id) and answer.get("reference"):
         pending = os.path.join(state_dir, "pending")
@@ -664,36 +741,59 @@ def report_result(
             reference, _, called_server = handle.read(512).strip().partition("\n")
     except OSError:
         return False
-    payload: dict[str, Any] = {"reference": reference}
+    if failed:
+        # 사용자가 중단한 호출은 도구가 실행됐는지 알 수 없다.
+        outcome, size = ("unknown" if event.get("is_interrupt") else "error"), None
+    else:
+        outcome = "success"
+        size = len(json.dumps(event.get("tool_response", "")).encode("utf-8"))
+    sent = send_result(
+        reference, called_server.strip(), outcome, size,
+        url=url, key=key, state_dir=state_dir, post=post, http_timeout=http_timeout,
+    )  # fmt: skip
+    if sent:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    return sent
+
+
+def send_result(
+    reference: str,
+    server: str,
+    outcome: str,
+    size: int | None,
+    *,
+    url: str,
+    key: str,
+    state_dir: str,
+    post: Post,
+    http_timeout: float = HTTP_TIMEOUT,
+) -> bool:
+    """판정 참조 하나의 결과(success·error·unknown)를 보고한다. 성공이면 첫 호출 성공 표지."""
+    payload: dict[str, Any] = {"reference": reference, "outcome": outcome}
+    if size is not None:
+        payload["size_bytes"] = size
     try:
         with open(os.path.join(KIT_DIR, VERSIONS_FILE), encoding="utf-8") as handle:
-            version = json.load(handle)["versions"].get(called_server.strip())
+            version = json.load(handle)["versions"].get(server)
         if isinstance(version, int) and version > 0:
             payload["decision_version"] = version
     except (OSError, ValueError, KeyError, AttributeError):
         pass  # 옛 설치: 버전을 모르면 보내지 않는다(최신 버전으로 본다).
-    if failed:
-        # 사용자가 중단한 호출은 도구가 실행됐는지 알 수 없다.
-        payload["outcome"] = "unknown" if event.get("is_interrupt") else "error"
-    else:
-        payload["outcome"] = "success"
-        payload["size_bytes"] = len(json.dumps(event.get("tool_response", "")).encode("utf-8"))
     try:
         _call(post, url, RESULT_PATH, key, payload, http_timeout)
     except Refuse:
         return False
-    if not failed and SERVER_ID.match(called_server.strip()):
+    if outcome == "success" and SERVER_ID.match(server):
         try:
             called = os.path.join(state_dir, "called")
             os.makedirs(called, mode=0o700, exist_ok=True)
-            with open(os.path.join(called, called_server.strip()), "w", encoding="utf-8"):
+            with open(os.path.join(called, server), "w", encoding="utf-8"):
                 pass
         except OSError:
             pass
-    try:
-        os.unlink(path)
-    except OSError:
-        pass
     return True
 
 
@@ -2427,10 +2527,11 @@ class AppContainerRun:
         stdout = os.fdopen(out_r, "rb")
         self.parent_fds = None
         tap = self.tap
+        forward, back = relays(tap)
 
         def feed() -> None:
             try:
-                relay(sys.stdin.buffer, stdin, tap.client_line)
+                forward(sys.stdin.buffer, stdin, tap.client_line)
             except (OSError, ValueError):
                 pass
             try:
@@ -2440,7 +2541,7 @@ class AppContainerRun:
 
         def drain() -> None:
             try:
-                relay(stdout, sys.stdout.buffer, tap.server_line)
+                back(stdout, sys.stdout.buffer, tap.server_line)
             except (OSError, ValueError):
                 pass
             finally:
@@ -2597,6 +2698,7 @@ class ToolListTap:
         self.pages: list[Any] = []
         self.state_dir = state_dir
         self.listed = False  # 도구 목록을 한 번이라도 받았는가
+        self.mediator: Mediator | None = None  # 훅 없는 AI 도구: 보내기 전에 판정한다
 
     def fail(self, reason: str) -> None:
         """서버가 도구 목록을 내기 전에 죽었다. 짧은 사유만 남긴다(보고기가 MINT에 알린다)."""
@@ -2724,6 +2826,222 @@ def relay(source: Any, sink: Any, watch: Callable[[bytes], None] | None) -> None
             over = False
 
 
+Judge = Callable[[str, "dict[str, Any]"], "str | None"]  # (도구, 인자) -> 판정 참조, 거부면 Refuse
+Outcome = Callable[[str, str, "int | None"], None]  # (판정 참조, 결과, 크기)
+
+
+class Mediator:
+    """훅이 없는 AI 도구용 전송 전 중재. 하네스가 보낸 ``tools/call``을 서버에 보내기 전에 판정한다.
+
+    허용이면 그대로 보내고 응답을 보아 결과를 보고한다. 거부면 서버에 보내지 않고 같은 식별자로
+    도구 오류 결과(``isError``)를 돌려준다(세션은 그대로다). 다른 메시지는 그대로 보낸다.
+    출력은 한 줄 단위로 잠가 거부 응답이 서버 응답 줄 중간에 끼지 않게 한다.
+    """
+
+    def __init__(self, judge: Judge, outcome: Outcome) -> None:
+        self.judge, self.outcome = judge, outcome
+        self.out = threading.Lock()  # 하네스 쪽 출력(서버 응답과 거부 응답이 함께 쓴다)
+        self.sink: Any = None
+        self.allowed: dict[Any, str] = {}  # 허용해 보낸 요청 식별자 -> 판정 참조
+
+    def _reply(self, request_id: Any, text: str) -> bytes:
+        return json.dumps({
+            "jsonrpc": "2.0", "id": request_id,
+            "result": {"content": [{"type": "text", "text": text}], "isError": True},
+        }, ensure_ascii=False).encode() + b"\n"  # fmt: skip
+
+    def _write(self, data: bytes) -> None:
+        sink = self.sink or sys.stdout.buffer  # 서버 응답보다 거부가 먼저 나가도 하네스 출력이다
+        with self.out:
+            sink.write(data)
+            sink.flush()
+
+    def _check(self, msg: Any) -> bytes | None:
+        """``tools/call`` 하나를 판정한다. 막았으면 하네스에 돌려줄 줄, 보내도 되면 None."""
+        if not (isinstance(msg, dict) and msg.get("method") == "tools/call" and "id" in msg):
+            return None
+        params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
+        tool, arguments = params.get("name"), params.get("arguments")
+        arguments = {} if arguments is None else arguments
+        if not isinstance(tool, str) or not isinstance(arguments, dict):
+            return self._reply(msg["id"], "MINT가 판정할 수 없는 도구 호출이라 막았습니다.")
+        try:
+            reference = self.judge(tool, arguments)
+        except Refuse as exc:
+            return self._reply(msg["id"], str(exc))
+        except Exception as exc:  # 어떤 오류도 허용으로 새지 않는다.
+            return self._reply(msg["id"], f"MINT 판정 중 오류로 막았습니다({type(exc).__name__}).")
+        if reference and isinstance(msg["id"], (str, int)) and len(self.allowed) < 256:
+            self.allowed[msg["id"]] = reference
+        return None
+
+    def feed(self, source: Any, sink: Any, watch: Callable[[bytes], None] | None) -> None:
+        """하네스 -> 서버. 완성된 줄마다 판정하고, 막은 요청은 서버에 보내지 않는다.
+
+        ponytail: 판정은 한 번에 하나씩이라 동시 호출은 줄을 선다(호출당 판정 상한은 HTTP 대기).
+        """
+        buffer = bytearray()
+        while True:
+            chunk = source.readline(65536)
+            if not chunk:
+                return
+            buffer += chunk
+            if not chunk.endswith(b"\n") and len(buffer) <= LINE_MAX:
+                continue
+            line = bytes(buffer)
+            buffer.clear()
+            if len(line) > LINE_MAX:
+                # 판정할 수 없는 큰 줄: 도구 호출로 보이면 보내지 않는다(식별자가 보이면 답한다).
+                if b"tools/call" in line[:65536]:
+                    found = re.search(rb'"id"\s*:\s*("[^"]{0,128}"|\d{1,18})', line[:65536])
+                    if found:
+                        text = "호출 인자가 너무 커서 MINT가 판정하지 못해 막았습니다."
+                        self._write(self._reply(json.loads(found.group(1)), text))
+                    continue
+                sink.write(line)
+                sink.flush()
+                continue
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                msg = None
+            if isinstance(msg, list):  # 일괄 요청: 도구 호출만 판정하고 나머지는 그대로 보낸다
+                replies = [r for r in (self._check(m) for m in msg) if r is not None]
+                denied = {json.loads(r)["id"] for r in replies}
+                kept = [m for m in msg if not (isinstance(m, dict) and m.get("id") in denied
+                                                and m.get("method") == "tools/call")]
+                if replies:
+                    self._write(b"[" + b",".join(r.rstrip(b"\n") for r in replies) + b"]\n")
+                    line = json.dumps(kept).encode() + b"\n" if kept else b""
+            else:
+                reply = self._check(msg)
+                if reply is not None:
+                    self._write(reply)
+                    line = b""
+            if line:
+                sink.write(line)
+                sink.flush()
+                if watch is not None:
+                    try:
+                        watch(line)
+                    except Exception:  # 관측은 전달을 막지 않는다.
+                        pass
+
+    def drain(self, source: Any, sink: Any, watch: Callable[[bytes], None] | None) -> None:
+        """서버 -> 하네스. 줄이 끝날 때까지 출력을 잠그고, 허용한 호출의 응답이면 결과를 알린다."""
+        self.sink = sink
+        line, over, held = bytearray(), False, False
+        try:
+            while True:
+                chunk = source.readline(65536)
+                if not chunk:
+                    return
+                if not held:
+                    self.out.acquire()
+                    held = True
+                sink.write(chunk)
+                sink.flush()
+                if not over:
+                    line += chunk
+                    if len(line) > LINE_MAX:
+                        over, line = True, bytearray()
+                if chunk.endswith(b"\n"):
+                    self.out.release()
+                    held = False
+                    if not over:
+                        self._seen(bytes(line), watch)
+                    line, over = bytearray(), False
+        finally:
+            if held:
+                self.out.release()
+            for reference in self.allowed.values():  # 응답 없이 끝난 호출: 실행 여부를 모른다
+                self._report(reference, "unknown", None)
+            self.allowed.clear()
+
+    def _seen(self, line: bytes, watch: Callable[[bytes], None] | None) -> None:
+        if watch is not None:
+            try:
+                watch(line)
+            except Exception:
+                pass
+        if not self.allowed or b'"id"' not in line:
+            return
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            return
+        key = msg.get("id") if isinstance(msg, dict) else None
+        if not isinstance(key, (str, int)) or key not in self.allowed:
+            return
+        result = msg.get("result")
+        failed = "error" in msg or (isinstance(result, dict) and result.get("isError") is True)
+        self._report(self.allowed.pop(key), "error" if failed else "success", len(line))
+
+    def _report(self, reference: str, outcome: str, size: int | None) -> None:
+        threading.Thread(target=self.outcome, args=(reference, outcome, size), daemon=True).start()
+
+
+def relays(tap: Any) -> tuple[Callable[..., None], Callable[..., None]]:
+    """(하네스 -> 서버, 서버 -> 하네스) 전달 함수. 중재가 켜졌으면 중재기의 것을 쓴다."""
+    mediator = getattr(tap, "mediator", None)
+    if mediator is not None:
+        return mediator.feed, mediator.drain
+    return relay, relay
+
+
+def mediator_for(
+    server: str,
+    *,
+    contracts: str,
+    state_dir: str,
+    url: str,
+    key: str,
+    post: Post,
+    client: str,
+    http_timeout: float = HTTP_TIMEOUT,
+) -> Mediator:
+    """실행기용 중재기. 판정은 훅과 같은 결정 경로와 같은 장애 계약을 쓴다."""
+
+    def judge(tool: str, arguments: dict[str, Any]) -> str | None:
+        payload = {
+            "server": server, "tool": tool, "arguments": arguments,
+            "contract": observed_contract(load_contract(contracts, server)),
+            "tool_use_id": "mx-" + os.urandom(12).hex(),
+        }  # fmt: skip
+        try:
+            answer = ask_decision(payload, url=url, key=key, post=post, http_timeout=http_timeout)
+        except Unreachable:
+            if not offline_allowed(server, contracts, state_dir):
+                if paused(state_dir):
+                    raise Refuse(PAUSED_TEXT) from None
+                raise
+            record_offline(state_dir, server, tool, client)
+            return None
+        reference = answer.get("reference")
+        return str(reference) if reference else None
+
+    def outcome(reference: str, result: str, size: int | None) -> None:
+        send_result(
+            reference, server, result, size,
+            url=url, key=key, state_dir=state_dir, post=post, http_timeout=http_timeout,
+        )  # fmt: skip
+
+    return Mediator(judge, outcome)
+
+
+def mark_client_start(state_dir: str, client: str) -> None:
+    """이 AI 도구가 실행기를 띄운 시각을 남긴다(설정을 바꾼 뒤 재시작했는지 보고기가 본다)."""
+    if not SERVER_ID.match(client):
+        return
+    folder = os.path.join(os.path.expanduser(state_dir), CLIENTS_DIR)
+    try:
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        with open(os.path.join(folder, client), "w", encoding="utf-8") as handle:
+            handle.write(str(time.time()))
+    except OSError:
+        pass
+
+
 def spawn_and_relay(
     path: str,
     argv: Sequence[str],
@@ -2758,9 +3076,11 @@ def spawn_and_relay(
         errors = threading.Thread(target=pump_errors, daemon=True)
         errors.start()
 
+    forward, back = relays(tap)
+
     def feed() -> None:
         try:
-            relay(sys.stdin.buffer, child.stdin, tap.client_line if tap else None)
+            forward(sys.stdin.buffer, child.stdin, tap.client_line if tap else None)
         except (OSError, ValueError):
             pass
         try:
@@ -2770,7 +3090,7 @@ def spawn_and_relay(
 
     threading.Thread(target=feed, daemon=True).start()
     try:
-        relay(child.stdout, sys.stdout.buffer, tap.server_line if tap else None)
+        back(child.stdout, sys.stdout.buffer, tap.server_line if tap else None)
     except (OSError, ValueError):
         pass
     except KeyboardInterrupt:
@@ -2800,15 +3120,21 @@ def run_server(
     state_dir: str | None = None,
     sandbox: Sandbox | None = None,
     packs_dir: str | None = None,
+    mediator: Mediator | None = None,
 ) -> None:
     """승인된 서버만 시작한다. 검증을 통과하지 못하면 ``Refuse``이고 서버는 시작되지 않는다.
 
     ``state_dir``가 있으면 폐기 서버 목록을 확인하고 시작한 프로세스를 기록한다. ``sandbox``가
     있으면 계약에서 만든 격리(Linux bubblewrap, Windows AppContainer) 안에서 시작하고(실행기가
     부모로 남는다), 관리형이면 격리할 수 없을 때 ``Refuse``이다. 없으면(시험용) 격리하지 않는다.
+    ``mediator``가 있으면(훅 없는 AI 도구) 도구 호출을 서버에 보내기 전에 판정한다.
     """
     if state_dir is not None and server in load_retired(state_dir):
         raise Refuse(f"server {server} was retired by MINT")
+    if state_dir is not None and paused(state_dir):
+        raise Refuse(PAUSED_TEXT)
+    if mediator is not None and state_dir is None:
+        raise Refuse("mediated launch needs the state folder")
     approved = load_contract(contracts, server)
     if approved.get("pack") is not None:
         approved = verify_pack(
@@ -2829,6 +3155,8 @@ def run_server(
     if approved.get("cwd"):
         os.chdir(approved["cwd"])
     tap = ToolListTap(state_dir, server) if state_dir is not None else None
+    if tap is not None:
+        tap.mediator = mediator
     wrapped, status, box = None, None, None
     home = env.get("HOME") or os.path.expanduser("~")
     hosts = network_mode(approved) == "hosts" and os.name != "nt" and sandbox is not None
@@ -2897,6 +3225,9 @@ def run_server(
     if execve is None and tap is not None and os.path.isdir("/proc/self/fd"):
         # 검증한 기술자로 자식을 띄워 사이에서 도구 목록 응답만 본다(/proc이 있는 리눅스).
         sys.exit(spawn_and_relay(executable, argv, env, tap, pass_fd=fd))
+    if mediator is not None:  # 중재는 사이에 남아야 하므로 exec로 자리를 넘기지 않는다
+        os.close(fd)
+        sys.exit(spawn_and_relay(executable, argv, env, tap))
     execve = execve or os.execve
     try:
         execve(fd, argv, env)
@@ -2987,6 +3318,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--harness", choices=["claude", "codex", "cursor", "grok"], default="claude"
     )
+    # 훅이 없는 AI 도구의 설정에 쓴 실행기 항목: 도구 호출을 서버에 보내기 전에 판정한다.
+    parser.add_argument("--mediate", action="store_true")
+    parser.add_argument("--client", default="")
     parser.add_argument("--no-keepalive", action="store_true")
     parser.add_argument("--idle", type=float, default=BROKER_IDLE)
     parser.add_argument("--http-timeout", type=float, default=HTTP_TIMEOUT)
@@ -3037,10 +3371,32 @@ def main(argv: list[str] | None = None) -> None:
             kick_report(folder, wait=True)
 
         try:
+            mediator = None
+            if args.mediate:
+                if not args.url or not args.key_file:
+                    raise Refuse("mediated launch needs --url and --key-file")
+                with open(os.path.expanduser(args.key_file), encoding="utf-8") as handle:
+                    key = handle.read().strip()
+                ca, sock_path = args.ca_file, os.path.join(
+                    os.path.expanduser(state_dir), BROKER_SOCKET)
+
+                def post(url: str, headers: dict, body: bytes, timeout: float) -> tuple[int, bytes]:
+                    try:
+                        return broker_post(sock_path, url, headers, body, timeout)
+                    except BrokerDown:
+                        start_broker(os.path.expanduser(state_dir), args.contracts, ca)
+                    return http_post(url, headers, body, timeout, ca)
+
+                mediator = mediator_for(
+                    args.server or "", contracts=args.contracts, state_dir=state_dir,
+                    url=args.url, key=key, post=post, client=args.client or "mediated",
+                    http_timeout=args.http_timeout,
+                )
+                mark_client_start(state_dir, args.client)
             start_with_permit_retry(
                 lambda: run_server(
                     args.server or "", args.contracts, os.environ,
-                    state_dir=state_dir, sandbox=sandbox_policy(),
+                    state_dir=state_dir, sandbox=sandbox_policy(), mediator=mediator,
                 ),
                 pull_report, PERMIT_WAIT,
             )  # fmt: skip

@@ -153,15 +153,46 @@ def test_a_refusal_or_an_unreadable_answer_blocks_the_call(world, answer):
     assert not os.path.exists(os.path.join(world.state, "pending", "toolu_1"))
 
 
-def test_an_error_status_or_an_unreachable_service_blocks_the_call(world):
-    with pytest.raises(agent.Refuse, match="HTTP 503"):
-        decide(world, Wire(status=503))
+def down(*args):
+    raise OSError("refused")
 
-    def down(*args):
-        raise OSError("refused")
 
-    with pytest.raises(agent.Refuse, match="unreachable"):
+def offline_lines(world):
+    path = os.path.join(world.state, agent.OFFLINE_FILE)
+    return [json.loads(x) for x in open(path, encoding="utf-8")] if os.path.exists(path) else []
+
+
+@pytest.mark.parametrize("wire", [Wire(status=503), down], ids=["5xx", "unreachable"])
+def test_an_approved_call_passes_during_an_outage_and_is_recorded(world, wire):
+    decide(world, wire)  # 공통 장애 계약: 승인 목록의 서버는 통과
+    (line,) = offline_lines(world)
+    assert (line["server"], line["tool"], line["harness"]) == ("srv-1", "search", "claude")
+    assert "q" not in json.dumps(line)  # 인자 값은 남기지 않는다
+
+
+def test_an_unknown_server_stays_blocked_during_an_outage(world):
+    with pytest.raises(agent.Refuse, match="not an approved"):
+        decide(world, down, tool_name="mcp__other__x", mcp_server={"name": "other"})
+    assert offline_lines(world) == []
+
+
+def test_a_retired_server_or_a_paused_pc_stays_blocked_during_an_outage(world):
+    os.makedirs(world.state)
+    with open(os.path.join(world.state, agent.RETIRED_FILE), "w") as handle:
+        json.dump({"servers": ["srv-1"]}, handle)
+    with pytest.raises(agent.Unreachable):
         decide(world, down)
+    os.unlink(os.path.join(world.state, agent.RETIRED_FILE))
+    open(os.path.join(world.state, agent.PAUSED_FILE), "w").write("3")
+    with pytest.raises(agent.Refuse, match="관리 AI 연결을 중지"):
+        decide(world, down)
+    assert offline_lines(world) == []
+
+
+def test_a_refusal_status_still_blocks_and_is_not_an_outage(world):
+    with pytest.raises(agent.Refuse, match="HTTP 401") as caught:
+        decide(world, Wire(status=401))
+    assert not isinstance(caught.value, agent.Unreachable)
 
 
 def test_a_server_that_is_not_approved_is_blocked_without_a_request(world):
