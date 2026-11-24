@@ -78,7 +78,8 @@
 <form method="post" action="/denials" class="form">
   {{ m.csrf(actor) }}
   <label>대상 구분<select name="scope_type"><option value="key">키</option><option value="user">사용자</option><option value="team">팀</option><option value="server">MCP 서버</option></select></label>
-  <label>대상 식별자<input name="scope_id" required></label>
+  <label>대상 식별자<input name="scope_id" required list="people-list" autocomplete="off"></label>
+  <datalist id="people-list">{% for p in people or [] %}<option value="{{ p.user_id }}">{{ p.email or p.user_id }}</option>{% endfor %}</datalist>
   <label>MCP 서버<input name="server_id"></label>
   <label>도구(비우면 MCP 서버 전체)<input name="tools"></label>
   <label>사유(선택)<input name="reason" maxlength="500"></label>

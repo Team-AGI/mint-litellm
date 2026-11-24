@@ -341,6 +341,10 @@ AXIS = {"file": "파일 접근", "exec": "실행", "network": "네트워크"}
 AXIS_VERDICT = {"widened": "확대", "narrowed": "축소", "unchanged": "변화 없음"}
 
 ROLE = {"admin": "관리자", "approver": "승인자", "viewer": "조회자", "staff": "직원"}
+LITELLM_ROLE = {
+    "proxy_admin": "관리자", "proxy_admin_viewer": "조회 관리자", "internal_user": "일반 사용자",
+    "internal_user_viewer": "조회 사용자", "customer": "외부 사용자",
+}
 MODE = {"enforce": "집행", "observe": "관측"}
 SCOPE = {"key": "키", "user": "사용자", "team": "팀", "org": "조직", "server": "MCP 서버"}
 APPROVAL_CLASS = {"standard": "일반", "exception": "예외"}
@@ -720,6 +724,10 @@ NOTICES = {
     "provisional_approved": "임시 계약을 승인된 도구 계약으로 바꿨습니다.",
     "operator_removed": "운영자를 삭제했습니다.",
     "operator_added": "운영자를 지정했습니다. 그 사람은 다음 로그인부터 관리 화면을 씁니다.",
+    "person_blocked": "이 사람의 MCP 사용을 차단했습니다.",
+    "person_unblocked": "이 사람의 MCP 차단을 해제했습니다.",
+    "relation_terminating": "이용을 종료했습니다. 삭제·반환 증빙을 붙여 종료를 완료하십시오.",
+    "relation_finished": "이용 종료를 완료했습니다.",
     "siem_added": "SIEM 대상을 추가했습니다. 시험 전송으로 연결을 확인하십시오.",
     "siem_removed": "SIEM 대상을 제거했습니다.",
     "backup_requested": "백업을 요청했습니다. 1분 안에 시작하며, 끝나면 목록에 나타납니다.",
