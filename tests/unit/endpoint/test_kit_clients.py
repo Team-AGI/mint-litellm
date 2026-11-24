@@ -303,3 +303,28 @@ def test_antigravity_uses_its_new_settings_folder_and_an_empty_file_is_empty_set
     assert list(json.loads(new.read_text())["mcpServers"]) == ["srv-1"]
     assert not (kit.home / ".gemini/antigravity/mcp_config.json").exists()
     assert kit_module.scan_mcp(kit.home, (), windows=False)["scan_errors"] == []
+
+
+def test_a_resumed_pc_starts_right_after_pulling_a_report_and_a_paused_one_fails_fast():
+    state = {"paused": True}
+    calls = []
+
+    def start():
+        calls.append("start")
+        if state["paused"]:
+            raise agent.Paused(agent.PAUSED_TEXT)
+        return "started"
+
+    def report_resumed():
+        calls.append("report")
+        state["paused"] = False  # 보고 응답이 재개를 알려 표지를 지웠다
+
+    def no_sleep(seconds):
+        raise AssertionError("중지는 기다리지 않는다")
+
+    assert agent.start_with_permit_retry(start, report_resumed, 8, no_sleep) == "started"
+    assert calls == ["start", "report", "start"]
+    state["paused"], calls[:] = True, []
+    with pytest.raises(agent.Paused):
+        agent.start_with_permit_retry(start, lambda: calls.append("report"), 8, no_sleep)
+    assert calls == ["start", "report", "start"]

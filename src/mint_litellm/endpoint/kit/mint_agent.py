@@ -103,6 +103,10 @@ class NoPermit(Refuse):
     """시작 허가가 없거나 만료됐다. 보고를 당겨 받으면 풀릴 수 있다."""
 
 
+class Paused(NoPermit):
+    """관리자가 이 PC의 관리 AI 연결을 중지했다(표지). 재개 직후면 보고를 당겨 받아 풀린다."""
+
+
 class Unreachable(Refuse):
     """결정 서버에 닿지 못했거나(연결·시간 초과) 서버가 5xx로 실패했다. 거절과 다르다."""
 
@@ -3132,7 +3136,7 @@ def run_server(
     if state_dir is not None and server in load_retired(state_dir):
         raise Refuse(f"server {server} was retired by MINT")
     if state_dir is not None and paused(state_dir):
-        raise Refuse(PAUSED_TEXT)
+        raise Paused(PAUSED_TEXT)
     if mediator is not None and state_dir is None:
         raise Refuse("mediated launch needs the state folder")
     approved = load_contract(contracts, server)
@@ -3277,6 +3281,9 @@ def start_with_permit_retry(start, report, wait, sleep=time.sleep) -> None:
     """시작 허가가 없으면 보고를 한 번 당겨 받고 다시 시도한다(승인 직후 기다리지 않게)."""
     try:
         return start()
+    except Paused:
+        report()  # 재개됐으면 이 보고가 표지를 지운다(다음 정기 보고까지 기다리지 않는다)
+        return start()  # 아직 중지면 기다리지 않고 바로 거절한다
     except NoPermit:
         report()
     for attempt in range(PERMIT_RETRIES):
