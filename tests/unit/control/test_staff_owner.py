@@ -23,7 +23,8 @@ LOCK_COLUMN = {"orgs": "state_version", "org_bindings": "state_version",
 SELECTABLE = READ_ONLY | {"console_sessions", "self_confirmations", "consents", "events",
                           "intakes", "deployment_contracts", "tool_contracts", "jobs", "approvals"}
 INSERTABLE = {
-    "signup_requests": {"instance_id", "id", "email", "display_name", "status_token_hash"},
+    "signup_requests": {"instance_id", "id", "email", "display_name", "status_token_hash",
+                        "password_sealed"},
     "intakes": {"id", "instance_id", "org_id", "server_id", "source", "purpose", "data_grade",
                 "allowed_resources", "provider", "owner_user_id", "readiness", "data_return_terms",
                 "requested_by", "staff_request_sha256", "staff_registry_required"},
@@ -264,7 +265,7 @@ def test_the_staff_login_can_execute_only_the_public_staff_functions(world):
                 "staff_revoke_consent", "staff_start_session", "staff_touch_session",
                 "staff_end_session", "staff_list_confirmations", "staff_list_consents",
                 "staff_list_events", "staff_submit_intake", "staff_withdraw_intake",
-                "staff_signup_submit", "staff_signup_status"}
+                "staff_signup_submit", "staff_signup_status", "staff_signup_request"}
     with psycopg.connect(world[0]) as conn:
         rows = conn.execute(
             "SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace"

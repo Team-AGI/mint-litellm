@@ -1657,12 +1657,14 @@ dependencies = [
 
 [package.optional-dependencies]
 console = [
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "jinja2" },
     { name = "python-multipart" },
     { name = "uvicorn" },
 ]
 dev = [
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "jinja2" },
     { name = "psycopg", extra = ["binary"] },
@@ -1684,6 +1686,8 @@ litellm = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.9,<4" },
+    { name = "cryptography", marker = "extra == 'console'", specifier = ">=42" },
+    { name = "cryptography", marker = "extra == 'dev'", specifier = ">=42" },
     { name = "fastapi", marker = "extra == 'console'", specifier = ">=0.115" },
     { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.115" },
     { name = "fastapi", marker = "extra == 'litellm'", specifier = ">=0.115" },
