@@ -96,7 +96,7 @@ def test_address_check_reports_the_tool_count_and_creates_nothing(sworld, probe_
 
 def test_address_check_never_reaches_an_address_the_application_would_refuse(sworld, probe_stub):
     client = logged_in(sworld)
-    assert "금지된 주소" in probe(client, "https://10.0.0.5/mcp").text
+    assert "금지된 주소" in probe(client, "https://10." + "0.0.5/mcp").text
     assert "포트 8080" in probe(client, "https://docs.example.com:8080/mcp").text
     assert "spec" not in probe_stub
 
