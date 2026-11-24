@@ -153,7 +153,7 @@ def test_backups_are_listed_downloaded_and_requested_from_the_screen(
     assert form_post(world, admin, "/admin/backups").status_code == 303
     sql = "SELECT count(*) FROM mint.setup_marks WHERE mark = 'backup_requested'"
     assert world.query(sql)[0][0] == 1
-    assert "요청한 백업을 준비하고 있습니다" in admin.get("/admin?tab=transfer").text
+    assert "요청한 백업 준비 중" in admin.get("/admin?tab=transfer").text
 
 
 def test_the_config_is_exported_as_a_download(world, admin):

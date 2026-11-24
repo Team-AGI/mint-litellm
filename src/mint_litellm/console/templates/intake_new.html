@@ -6,7 +6,7 @@
 {% if can(actor, 'intake create') %}
 <form method="post" action="/intakes" class="form cols">
   {{ m.csrf(actor) }}
-  {% if f.step == 'submit' %}<input type="hidden" name="server_url" value="{{ f.server_url }}">{% include "_repo_intake.html" %}{% else %}<label class="full">MCP 서버 주소 또는 소스 저장소 주소<input type="url" name="server_url" value="{{ f.server_url }}" maxlength="2048" required><small class="muted">GitHub 저장소 주소를 넣으면 직원 PC에서 실행하는 로컬 MCP로 신청합니다.</small></label>{% endif %}
+  {% if f.step == 'submit' %}<input type="hidden" name="server_url" value="{{ f.server_url }}">{% include "_repo_intake.html" %}{% else %}<label class="full">MCP 서버 주소 또는 소스 저장소 주소<input type="url" name="server_url" value="{{ f.server_url }}" maxlength="2048" required><small class="muted">저장소 주소는 로컬 MCP로 신청합니다.</small></label>{% endif %}
   <label class="full">목적<textarea name="purpose" maxlength="256" required>{{ f.purpose }}</textarea></label>
   <div class="actions full">
     <button class="primary" type="submit">신청 등록</button>

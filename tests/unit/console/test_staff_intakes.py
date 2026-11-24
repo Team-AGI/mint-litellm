@@ -123,9 +123,8 @@ def test_staff_database_role_cannot_write_an_intake_without_the_session_function
 def test_a_port_outside_the_allowed_list_is_refused_on_the_form_not_recorded(sworld):
     # 접수 뒤 자동 거절되는 대신 화면에서 허용 포트를 알려 고치게 한다.
     client = staff_tests.logged_in(sworld)
-    page = client.get("/staff/intakes/new")
-    # 허용 포트 표시(종료 준비 문구는 입력받지 않고 기본값으로 채운다)
-    assert "443, 8443" in page.text
+    # 허용 포트는 거절할 때만 알린다(신청 폼에 개발자식 포트 안내를 두지 않는다)
+    assert "443, 8443" not in client.get("/staff/intakes/new").text
     response = client.post("/staff/intakes",
                            data=form(client, url="https://docs.example.com:8080/mcp"))
     assert response.status_code == 400

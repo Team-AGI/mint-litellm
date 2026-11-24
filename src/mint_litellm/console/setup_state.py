@@ -6,6 +6,7 @@ from mint_litellm.console import labels
 from mint_litellm.console.core import Actor, can
 from mint_litellm.console.labels import Status
 from mint_litellm.control import status as control_status
+from mint_litellm.control import webhook_store
 from mint_litellm.control.db.connection import fetchone
 from mint_litellm.control.operators import SERVICE_ACCOUNTS
 
@@ -126,7 +127,7 @@ def _approval_flow(actor: Actor) -> dict:
         "SELECT count(*) AS n FROM mint.operators WHERE instance_id = %s AND role = 'approver'"
         " AND (expires_at IS NULL OR expires_at > now())",
     )
-    urls = actor.config.stage2.webhook_urls
+    urls = webhook_store.effective(actor.config.stage2, actor.conn, actor.instance).webhook_urls
     tested = mark_time(actor, "webhook_test")
     missing = []
     if not approvers:
@@ -150,6 +151,7 @@ def _approval_flow(actor: Actor) -> dict:
         extra = {}
     if solo and not approvers and not urls:
         line = "기본 관리자가 직접 결정할 수 있습니다."
+    extra["webhook_form"] = actor.role == "admin" and not actor.config.stage2.webhook_urls
     return _item("approval", "알림·승인자", status, line, optional=solo, **extra)
 
 
