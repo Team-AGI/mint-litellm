@@ -16,13 +16,13 @@ import psycopg
 from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
 
-from mint_litellm.console.cookies import set_cookie
+from mint_litellm.console.cookies import DEFAULT_PASSWORD, set_cookie
 from mint_litellm.console.core import config_of, too_many_attempts
 from mint_litellm.console.login import LoginRefused
 from mint_litellm.console.oidc import login_context
 from mint_litellm.console.sso_pages import PAGES, TOO_MANY, human_user, open_session
 from mint_litellm.console.templating import render
-from mint_litellm.control import signup
+from mint_litellm.control import default_admin, signup
 from mint_litellm.control.errors import AdminError
 from mint_litellm.control.services import console_sessions
 
@@ -103,6 +103,7 @@ def sign_in(
     if too_many_attempts(request):
         return refuse(TOO_MANY, 429)
     host = request.client.host if request.client else ""
+    first = default_admin.is_default(username, password)
     try:
         user_id = verify(config.litellm_url, username, password, host)
         user = human_user(config, user_id)
@@ -125,6 +126,8 @@ def sign_in(
         password = ""  # 비밀번호는 여기서 버린다
     response = RedirectResponse("/" if target == "admin" else "/staff", status_code=303)
     set_cookie(response, request, cookie, session_id)
+    if first:
+        set_cookie(response, request, DEFAULT_PASSWORD, "1")
     return response
 
 

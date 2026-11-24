@@ -24,7 +24,12 @@ from mint_litellm.console import (
     staff_pages,
     ui_launch,
 )
-from mint_litellm.console.cookies import delete_cookie, delete_litellm_token, set_cookie
+from mint_litellm.console.cookies import (
+    DEFAULT_PASSWORD,
+    delete_cookie,
+    delete_litellm_token,
+    set_cookie,
+)
 from mint_litellm.console.core import (
     COOKIE,
     STAFF_COOKIE,
@@ -256,6 +261,7 @@ def create_app(
             target = app.state.oidc.logout_url(request, target) or target
         response = RedirectResponse(target, status_code=303)
         delete_cookie(response, request, COOKIE)
+        delete_cookie(response, request, DEFAULT_PASSWORD)
         return response
 
     return app

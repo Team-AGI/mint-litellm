@@ -36,7 +36,7 @@ def test_only_the_bundled_example_relaxes_the_password_policy_not_the_init_snipp
     root = Path(mint_litellm.__file__).resolve().parents[2]
     example = root / "deploy" / "litellm.config.example.yaml"
     general = yaml.safe_load(example.read_text(encoding="utf-8"))["general_settings"]
-    assert general["password_policy_min_length"] == 12
+    assert general["password_policy_min_length"] == 8
     for name in ("uppercase", "lowercase", "numbers", "special_characters"):
         assert general[f"password_policy_require_{name}"] is False
     assert general["password_policy_check_breached_passwords"] is False
@@ -280,7 +280,7 @@ def test_ensure_password_policy_adds_the_relaxed_rules_only_when_none_are_set(tm
     assert added == list(litellm_config.PASSWORD_POLICY)
     general = yaml.safe_load(path.read_text(encoding="utf-8"))["general_settings"]
     assert general["master_key"] == "k" and general["password_policy_require_numbers"] is False
-    assert general["password_policy_min_length"] == 12
+    assert general["password_policy_min_length"] == 8
     assert len(list(tmp_path.glob("config.yaml.bak-*"))) == 1
     assert litellm_config.ensure_password_policy(path) == []  # 이미 있으면 그대로
 

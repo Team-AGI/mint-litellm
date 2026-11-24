@@ -23,7 +23,7 @@ SERVER_LIMITS = {"rpm": DEFAULT_SERVER_RPM, "max_concurrent_requests": DEFAULT_S
 
 # MINT 자체 스택의 기본 관리자(root)가 들어오도록 LiteLLM 비밀번호 규칙은 길이만 둔다.
 PASSWORD_POLICY: dict[str, Any] = {
-    "password_policy_min_length": 12,
+    "password_policy_min_length": 8,
     "password_policy_require_uppercase": False,
     "password_policy_require_lowercase": False,
     "password_policy_require_numbers": False,

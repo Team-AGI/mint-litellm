@@ -427,8 +427,8 @@ def test_up_creates_the_default_root_admin_on_a_fresh_install(tmp_path):
     assert "operator bootstrap --name root --user-id root" in log
     assert "policy activate initial" in log
     assert (secrets / "operator.token").read_text(encoding="utf-8") == "mint_op-1_x\n"
-    assert "root / 비밀번호 rootrootroot" in result.stdout
-    assert "rootrootroot" not in log and not list(secrets.glob("ui-login-*"))
+    assert "root / 비밀번호 rootroot" in result.stdout
+    assert "rootroot" not in log and not list(secrets.glob("ui-login-*"))
 
 
 def test_up_recreates_root_after_a_database_reset_even_with_an_old_token_file(tmp_path):

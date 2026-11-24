@@ -6,6 +6,8 @@ from fastapi import Request
 from fastapi.responses import Response
 
 COOKIE_OPTIONS = {"httponly": True, "samesite": "strict", "path": "/"}
+# 기본 계정을 기본 비밀번호로 로그인했다는 표시. 화면 위 「비밀번호 바꾸기」 알림에만 쓴다.
+DEFAULT_PASSWORD = "mint_default_pw"
 
 
 def is_https(request: Request) -> bool:

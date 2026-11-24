@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
 
 from mint_litellm.console import password_login, setup_state
+from mint_litellm.console.cookies import DEFAULT_PASSWORD, delete_cookie
 from mint_litellm.console.core import Actor, page_actor, require_csrf
 from mint_litellm.console.templating import render
 from mint_litellm.control import webhook
@@ -95,4 +96,6 @@ def password_submit(
     )
     if error:
         return password_page(request, actor, error, status)
-    return RedirectResponse("/account/password?ok=password_changed", status_code=303)
+    response = RedirectResponse("/account/password?ok=password_changed", status_code=303)
+    delete_cookie(response, request, DEFAULT_PASSWORD)
+    return response
