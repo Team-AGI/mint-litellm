@@ -43,7 +43,7 @@ def test_spend_is_summed_per_team_and_server_over_days():
         day(2.0, 4, {"t1": (1.5, 3), "t2": (0.5, 1)}, {"srv": (0.0, 1)})],
         "/user/daily/activity": {"u1": [day(0.25, 1)]}})
     start, end = usage_reader.window("7d")
-    teams, servers, people = usage_reader.read_spend(admin, start, end, ["u1"], None)
+    teams, servers, people, _ = usage_reader.read_spend(admin, start, end, ["u1"], None)
     assert teams == {"t1": (2.5, 5), "t2": (0.5, 1)}
     assert servers == {"srv": (0.5, 2)}
     assert people == {"u1": (0.25, 1)}
@@ -62,7 +62,7 @@ def test_staff_reads_only_their_own_user():
     fresh()
     admin = FakeAdmin({"/user/daily/activity": {"me": [day(2.0, 2, servers={"srv": (2.0, 2)})]}})
     start, end = usage_reader.window("7d")
-    teams, servers, people = usage_reader.read_spend(admin, start, end, ["other"], "me")
+    teams, servers, people, _ = usage_reader.read_spend(admin, start, end, ["other"], "me")
     assert teams is None and people == {"me": (2.0, 2)} and servers == {"srv": (2.0, 2)}
     assert {p for p, _ in admin.calls} == {"/user/daily/activity"}
     assert all(q["user_id"] == "me" for _, q in admin.calls)
@@ -74,7 +74,7 @@ def test_unreadable_spend_is_shown_as_not_collected_not_zero():
                       fail={"/team/daily/activity", "/user/daily/activity"})
     start, end = usage_reader.window("7d")
     spend = usage_reader.read_spend(admin, start, end, ["u1"], None)
-    assert spend == (None, None, None)
+    assert spend == (None, None, None, None)
     ledger = [{"team_id": "t1", "user_id": "u1", "server_id": "s", "calls": 3, "blocked": 1}]
     out = usage_reader.combine(ledger, [], spend, {}, scoped=False)
     assert out["cost"]["text"] == "미수집" and out["calls"] == 3
@@ -144,10 +144,24 @@ def test_ledger_reads_the_user_from_the_principal_and_cost_is_never_half_known(c
     assert usage_reader.read_tools(conn, INSTANCE, "s") == []
 
 
+def test_model_use_with_zero_spend_totals_zero_not_not_applicable():
+    fresh()
+    zero = day(0.0, 4)
+    zero["breakdown"]["models"] = {"gpt": {"metrics": {"spend": 0.0, "api_requests": 4}}}
+    admin = FakeAdmin({"/team/daily/activity": [zero], "/user/daily/activity": {}})
+    start, end = usage_reader.window("7d")
+    spend = usage_reader.read_spend(admin, start, end, [], None)
+    assert spend[3] == 4
+    assert usage_reader.combine([], [], spend, {}, scoped=False)["cost"]["text"] == "$0.00"
+
+
 def test_total_without_model_spend_is_not_applicable():
     assert usage_reader.total_cost(0.0)["text"] == "해당 없음(모델 지출 없음)"
     assert usage_reader.total_cost(1.5)["text"] == "$1.50"
     assert usage_reader.total_cost(None)["text"] == "미수집"
+    # 모델을 썼는데 지출이 0이면 「해당 없음」이 아니라 실제 0원이다.
+    assert usage_reader.total_cost(0.0, model_calls=3)["text"] == "$0.00"
+    assert usage_reader.total_cost(0.0, model_calls=0)["state"] == "none"
 
 
 def test_mcp_server_keys_are_grouped_by_server():
