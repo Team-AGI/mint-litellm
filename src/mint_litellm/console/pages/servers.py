@@ -139,6 +139,7 @@ def server_page(
     row = reads.server(actor.conn, actor.instance, server_id)
     if row is None:
         raise AdminError(AdminCode.NOT_FOUND, f"서버 {server_id}을(를) 찾을 수 없습니다.")
+    server_display(actor, [row])
     tab = tab or request.query_params.get("tab", "")
     tab = TAB_ALIAS.get(tab, tab)
     tab = tab if tab in dict(SERVER_TABS) else "overview"

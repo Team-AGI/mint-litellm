@@ -1,9 +1,9 @@
 {% extends "staff_base.html" %}{% import "macros.html" as m %}
-{% block title %}{{ i.server_id }} 도입 신청 · MINT{% endblock %}
+{% block title %}{{ i.server_name }} 도입 신청 · MINT{% endblock %}
 {% block body %}
-<h1>{{ i.server_id }} {{ m.badge(L.DECISION, i.decision) if i.decision == 'withdrawn' else m.badge(L.INTAKE, i.status) }}</h1>
+<h1>{{ i.server_name }} {{ m.badge(L.DECISION, i.decision) if i.decision == 'withdrawn' else m.badge(L.INTAKE, i.status) }}</h1>
 {% if i.status in ('received','checking','passed','indeterminate') %}
-{% call m.confirm_dialog('cancel-intake', '대기 취소', '신청 철회', i.server_id, '/staff/intakes/' ~ i.id ~ '/withdraw', actor, '신청 취소') %}
+{% call m.confirm_dialog('cancel-intake', '대기 취소', '신청 철회', i.server_name, '/staff/intakes/' ~ i.id ~ '/withdraw', actor, '신청 취소') %}
 <input type="hidden" name="state_version" value="{{ i.state_version }}">
 <input type="hidden" name="reason" value="신청자 취소"><input type="hidden" name="confirm" value="yes">
 {% endcall %}
@@ -11,6 +11,7 @@
 {% if stages %}<ol class="steps" aria-label="진행 단계">{% for level, text in stages %}<li class="{{ level }}"><span class="icon" aria-hidden="true">{{ ICONS[level] }}</span>{{ text }}</li>{% endfor %}</ol>{% endif %}
 {% if delivery %}<ol class="steps" aria-label="적용 단계">{% for level, text in delivery %}<li class="{{ level }}"><span class="icon" aria-hidden="true">{{ ICONS[level] }}</span>{{ text }}</li>{% endfor %}</ol>{% endif %}
 <dl class="detail">
+{% if i.server_url %}<dt>주소</dt><dd>{{ i.server_url }}</dd>{% endif %}
 <dt>출처</dt><dd>{{ m.source_badge(source | default('staff')) }}</dd>
 <dt>신청자</dt><dd>{{ actor.user_id }}</dd>
 <dt>목적</dt><dd>{{ i.purpose }}</dd>

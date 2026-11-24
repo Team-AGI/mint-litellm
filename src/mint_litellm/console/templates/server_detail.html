@@ -1,8 +1,8 @@
 {% extends "base.html" %}{% import "macros.html" as m %}{% import "_server_actions.html" as a %}
-{% block title %}{{ s.server_id }} · MINT{% endblock %}
+{% block title %}{{ s.server_name or s.server_id }} · MINT{% endblock %}
 {% block page_class %}wide{% endblock %}
 {% block body %}
-<h1>{{ s.server_id }} {{ m.badge(L.SERVER, s.status) }}{% if provisional and s.status not in ('rejected', 'terminated') %} <span title="승인된 계약이 없어 호출마다 추정한 계약으로 검사합니다">{{ m.badge(L.CONTRACT_STATE, 'provisional') }}</span>{% endif %}</h1>
+<h1>{{ s.server_name or s.server_id }} {{ m.badge(L.SERVER, s.status) }}{% if provisional and s.status not in ('rejected', 'terminated') %} <span title="승인된 계약이 없어 호출마다 추정한 계약으로 검사합니다">{{ m.badge(L.CONTRACT_STATE, 'provisional') }}</span>{% endif %}</h1>
 {% if actor.role == 'admin' and s.status in ('approved', 'suspended') %}
 <div class="actions">{% if s.status == 'approved' %}{{ a.suspend(s, actor, 'stop-server', active_approvals, '', true) }}{% else %}{{ a.resume(s, actor, 'resume-server') }}{% endif %}</div>
 {% endif %}
