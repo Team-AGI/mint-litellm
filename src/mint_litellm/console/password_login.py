@@ -22,6 +22,7 @@ from mint_litellm.console.login import LoginRefused
 from mint_litellm.console.oidc import login_context
 from mint_litellm.console.sso_pages import PAGES, TOO_MANY, human_user, open_session
 from mint_litellm.console.templating import render
+from mint_litellm.control import signup
 from mint_litellm.control.errors import AdminError
 from mint_litellm.control.services import console_sessions
 
@@ -116,7 +117,8 @@ def sign_in(
             {"method": "password"},
         )
     except LoginRefused as refused:
-        return refuse(str(refused), 401)
+        hint = signup.login_hint(conn, config.instance_id, username) if target == "staff" else None
+        return refuse(hint or str(refused), 401)
     except AdminError as refused:
         return refuse(refused.message, 403)
     finally:
