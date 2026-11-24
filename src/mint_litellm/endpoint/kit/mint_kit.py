@@ -4393,13 +4393,14 @@ def render_screen(model: dict, ui: dict, width: int = 80, height: int = 24,
     title = " 엔드포인트 · MCP 연결 관리"
     head = mark + title + " " * max(1, width - 6 - cell_width(title) - cell_width(state))
     head += screen_color(state, "32" if model["connected"] else "31", color)
-    counts = (model["server_count"], len(model["servers"]), len(model["intakes"]))
-    tabs = "  ".join(screen_color(f" {i + 1} {t} {counts[i]} ", "7", color)
-                     if i == ui["tab"] else f" {i + 1} {t} {counts[i]} "
-                     for i, t in enumerate(TABS))
+    # 상태 탭은 건수가 없다. 서버·신청 탭에만 건수를 붙인다.
+    counts = (None, len(model["servers"]), len(model["intakes"]))
+    names = [f"{i + 1} {t}" + (f" {counts[i]}" if counts[i] is not None else "")
+             for i, t in enumerate(TABS)]
+    tabs = "  ".join(screen_color(f" {n} ", "7", color) if i == ui["tab"] else f" {n} "
+                     for i, n in enumerate(names))
     if not color:
-        tabs = "  ".join(f"[{i + 1} {t} {counts[i]}]" if i == ui["tab"] else
-                         f" {i + 1} {t} {counts[i]} " for i, t in enumerate(TABS))
+        tabs = "  ".join(f"[{n}]" if i == ui["tab"] else f" {n} " for i, n in enumerate(names))
     tab = ui["tab"]
     body = (tab1_lines(model), tab2_lines(model, ui), tab3_lines(model, ui))[tab]
     sections = []
@@ -4408,8 +4409,9 @@ def render_screen(model: dict, ui: dict, width: int = 80, height: int = 24,
         sections = [(f"도입 신청 · {len(model['intakes'])}", body[:cut]),
                     (f"이 PC의 관리되지 않는 로컬 MCP · {len(model['found'])}", body[cut + 1:])]
     else:
-        names = ("연결 상태", "승인된 MCP 서버", "도입 신청")
-        sections = [(f"{names[tab]} · {counts[tab]}", body)]
+        titles = ("연결 상태", "승인된 MCP 서버", "도입 신청")
+        sections = [(titles[tab] if counts[tab] is None else f"{titles[tab]} · {counts[tab]}",
+                     body)]
     available = height - 7
     # 선택 항목이 화면에 남도록 앞의 행부터 줄인다.
     cards = []
@@ -4431,15 +4433,20 @@ def render_screen(model: dict, ui: dict, width: int = 80, height: int = 24,
         content.extend(screen_box(title, rows, width, color))
     keys = [("1-3", "화면"), ("↑↓", "선택"), ("Enter", "상세"), ("n", "신청"),
             ("s", "받기"), ("c", "점검"), ("r", "새로고침"), ("o", "웹"), ("q", "끝")]
+    sizes = [cell_width(f" {k} ") + 1 + cell_width(v) for k, v in keys]
+    # 한 줄에 들어가도록 간격을 좁히고, 그래도 넘치면 화살표 안내를 뺀다(↑↓는 어디서나 같다).
+    gap = 2 if sum(sizes) + 2 * (len(keys) - 1) <= width else 1
+    if sum(sizes) + gap * (len(keys) - 1) > width:
+        keys = [k for k in keys if k[0] != "↑↓"]
     bars, line, used = [], "", 0
     for key, label in keys:
         item = f" {key} "
         size = cell_width(item) + 1 + cell_width(label)
-        if used and used + 2 + size > width:
+        if used and used + gap + size > width:
             bars.append(line)
             line, used = "", 0
-        line += ("  " if used else "") + screen_color(item, "7", color) + " " + label
-        used += (2 if used else 0) + size
+        line += (" " * gap if used else "") + screen_color(item, "7", color) + " " + label
+        used += (gap if used else 0) + size
     bars.append(line)
     if ui.get("message"):
         bars[0] = clip(str(ui["message"]), width)
