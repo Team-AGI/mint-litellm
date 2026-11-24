@@ -87,3 +87,21 @@ def test_a_viewer_cannot_submit_the_form_and_a_failed_submit_keeps_the_values(wo
     response = admin.post("/intakes", data=fields(world, admin))
     assert response.status_code == 403 and "목적" in response.text
     assert "게이트웨이 관리 키" in response.text
+
+
+def test_the_admin_form_previews_a_repository_and_creates_a_local_request(world, monkeypatch):
+    from mint_litellm.control.services import local_intakes
+
+    repo, sha = "https://github.com/o/ghidra-mcp", "f" * 40
+    command = f"uvx --from git+{repo}@{sha} ghidra-mcp"
+    monkeypatch.setattr(local_intakes, "resolve", lambda url, fetch=None: {
+        "repo": repo, "name": "ghidra_mcp", "commit": sha, "command": command, "note": ""})
+    admin = world.session_client("admin")
+    values = {"csrf": world.csrf(admin), "server_url": repo, "purpose": "분석"}
+    preview = admin.post("/intakes", data=values)
+    assert preview.status_code == 200 and sha in preview.text and "ghidra_mcp" in preview.text
+    assert "소스 저장소 주소입니다" not in preview.text
+    done = admin.post("/intakes", data={**values, "step": "submit", "name": "ghidra_mcp",
+                                        "commit": sha, "command": command})
+    # 이 시험 환경에는 기본 조직이 없어 로컬 신청 생성 자체는 서비스 시험이 맡는다
+    assert done.status_code == 400 and "기본 조직" in done.text

@@ -46,7 +46,13 @@ from mint_litellm.control import (
 from mint_litellm.control.db.connection import connect, fetchall, fetchone
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.litellm_admin import LiteLLMError
-from mint_litellm.control.services import console_sessions, reads, staff, staff_intakes
+from mint_litellm.control.services import (
+    console_sessions,
+    local_intakes,
+    reads,
+    staff,
+    staff_intakes,
+)
 from mint_litellm.control.services import intakes as intakes_service
 from mint_litellm.endpoint.kit_build import HARNESSES, build_kit, kit_version
 from mint_litellm.plugin.snapshot import WINDOW_MAX_USES
@@ -222,10 +228,14 @@ def intake_new(request: Request, actor: StaffActor = Depends(staff_actor)):
 @router.post("/staff/intakes")
 def intake_submit(
     request: Request, request_id: str = Form(...), url: str = Form(...),
-    purpose: str = Form(...), actor: StaffActor = Depends(staff_actor),
+    purpose: str = Form(...), step: str = Form(""), name: str = Form(""),
+    commit: str = Form(""), command: str = Form(""), actor: StaffActor = Depends(staff_actor),
 ):
     form = dict(request_id=request_id, url=url, purpose=purpose)
     ports = actor.config.stage2.intake_allowed_ports
+    if staff_intakes.repo_parts(url.strip()):
+        return repo_intake(request, actor, {**form, "step": step, "name": name,
+                                            "commit": commit, "command": command})
     target = {}
 
     def action():
@@ -251,6 +261,27 @@ def intake_submit(
     if response.status_code == 303:
         notice = "intake_existing" if target["existing"] else "intake_created"
         response.headers["location"] = f"/staff/intakes/{target['id']}?ok={notice}"
+    return response
+
+
+def repo_intake(request: Request, actor: StaffActor, form: dict):
+    """소스 저장소 주소: 확인 단계는 미리보기를 보이고, 제출 단계는 로컬 신청을 만든다."""
+    if form["step"] != "submit":
+        try:
+            form = {**form, **local_intakes.resolve(form["url"]), "step": "submit"}
+        except ControlError as error:
+            return intake_form(request, actor, form, error=str(error), status=422)
+        return intake_form(request, actor, form)
+    target = {}
+
+    def action():
+        target["id"] = local_intakes.submit_staff(actor.sctx, actor.id_hash, form["request_id"],
+                                                  form)
+
+    response = act(actor, action, "intake_created", "/staff/intakes/" + form["request_id"],
+                   lambda **kw: intake_form(request, actor, form, **kw))
+    if response.status_code == 303:
+        response.headers["location"] = f"/staff/intakes/{target['id']}?ok=intake_created"
     return response
 
 

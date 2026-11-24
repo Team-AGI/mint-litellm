@@ -212,11 +212,15 @@ MAX_OBSERVED_TOOLS = 200
 
 
 class IntakeSpec(BaseModel):
-    """신청할 PyPI 패키지와 실행 명령. 인자 값에 비밀을 넣지 않는다."""
+    """신청할 PyPI 패키지(또는 커밋으로 고정한 저장소)와 실행 명령. 인자 값에 비밀을 넣지 않는다."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    index: Literal["pypi"]
+    index: Literal["pypi", "git", "npm"]
+    git: str | None = Field(
+        default=None,
+        pattern=r"^https://(github\.com|gitlab\.com|bitbucket\.org|codeberg\.org)"
+                r"/[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}$")
     name: str = Field(pattern=_NAME)
     version: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._+!-]{0,63}$")
     extras: list[Annotated[str, Field(pattern=r"^[A-Za-z0-9._-]{1,64}$")]] = Field(
@@ -224,6 +228,13 @@ class IntakeSpec(BaseModel):
     )
     command: str = Field(min_length=1, max_length=128)
     argv: list[Annotated[str, Field(max_length=512)]] = Field(default_factory=list, max_length=64)
+
+    @model_validator(mode="after")
+    def _source_is_pinned(self) -> IntakeSpec:
+        if (self.index == "pypi") != (self.git is None) or (
+                self.index != "pypi" and not re.fullmatch(r"[0-9a-f]{40}", self.version)):
+            raise ValueError("a repository source needs its address and a 40-character commit")
+        return self
 
 
 class FileAccessItem(BaseModel):
