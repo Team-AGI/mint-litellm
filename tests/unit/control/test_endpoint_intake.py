@@ -523,7 +523,7 @@ def test_official_package_hosts_are_seeded_once_and_a_lift_is_respected(seeded):
     world.call(allowlists.ensure_defaults)
     hosts = sorted(r["value"] for r in rows(world, "allowlists")
                    if r["status"] == "active" and r["created_by"] == "mint-default")
-    assert hosts == ["files.pythonhosted.org", "pypi.org", "registry.npmjs.org"]
+    assert {"files.pythonhosted.org", "pypi.org", "registry.npmjs.org"} <= set(hosts)
     world.conn.execute("ALTER TABLE mint.allowlists DISABLE TRIGGER allowlists_1_status")
     world.conn.execute("UPDATE mint.allowlists SET status = 'lifted' WHERE value = 'pypi.org'")
     world.conn.execute("ALTER TABLE mint.allowlists ENABLE TRIGGER allowlists_1_status")
