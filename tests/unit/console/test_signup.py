@@ -50,8 +50,8 @@ def test_signup_flow(world, monkeypatch):
     claimed = []
     monkeypatch.setattr(signup, "claim", lambda base, inv, pw: claimed.append((inv, pw)))
     client = world.client
-    assert "가입 요청" in client.get("/staff/login").text
-    assert "가입 요청" not in client.get("/login").text
+    assert "가입 요청" in client.get("/login").text
+    assert client.get("/staff/login").status_code == 303
     response = client.post("/staff/signup", data={"email": "x@example.test", "name": "직원"})
     assert response.status_code == 403
     assert "두 칸이 같아야" in submit(client, "person@example.test", confirm="other-pass-123").text

@@ -16,6 +16,12 @@
   --danger: #b91c1c;
   --danger-soft: #fef2f2;
   --off: #4b5563;
+  --chart-1: #2563eb;
+  --chart-2: #60a5fa;
+  --chart-3: #1e40af;
+  --chart-4: #93c5fd;
+  --chart-5: #0891b2;
+  --chart-6: #64748b;
   --c6: #2563eb;
   --c7: #15803d;
   --c8: #92400e;
@@ -226,9 +232,9 @@ tr.selected td { background: var(--accent-soft); }
 .card.kpi.danger { border-color: var(--danger); }
 .card.kpi.wait { border-color: var(--wait); }
 .card.kpi .foot { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 12px; }
-svg.spark { color: var(--accent); }
+svg.spark { color: var(--chart-1); }
 svg.bullet .range { fill: var(--bg-subtle); }
-svg.bullet .bar { fill: var(--accent); }
+svg.bullet .bar { fill: var(--chart-1); }
 svg.bullet.over .bar { fill: var(--danger); }
 svg.bullet .goal { fill: var(--text); }
 .skeleton { background: var(--bg-subtle); border-radius: 6px; min-height: 24px; }
@@ -306,3 +312,12 @@ dialog.confirm .actions { justify-content: flex-end; }
 
 .cmd { display: flex; gap: var(--s2); align-items: center; margin: var(--s2) 0; }
 .cmd .cmd-text { flex: 1; padding: var(--s2); background: var(--bg-subtle); border-radius: 4px; font-family: monospace; overflow-wrap: anywhere; }
+
+.strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); border: 1px solid var(--border); border-radius: 6px; background: var(--bg); margin-bottom: var(--gap); overflow: hidden; }
+.strip .stat { display: flex; flex-direction: column; gap: 2px; padding: var(--s2) var(--s3); color: inherit; text-decoration: none; border-left: 1px solid var(--border); border-top: 1px solid var(--border); margin: -1px 0 0 -1px; }
+.strip .stat .label { color: var(--muted); font-size: 12px; }
+.strip .stat .value { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.strip a.stat:hover { background: var(--bg-subtle); }
+.strip .stat.wait .value { color: var(--wait); }
+.strip .stat.danger .value { color: var(--danger); }
+section > .strip { margin-bottom: var(--s3); }

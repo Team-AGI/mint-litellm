@@ -1,6 +1,6 @@
 {% import "macros.html" as m %}
 {% if holds %}
-<table><thead><tr><th>서버</th><th>신청자</th><th>요청</th><th>대상</th><th>기간</th><th>사유</th><th>만료</th><th></th></tr></thead><tbody>
+<table><thead><tr><th>MCP 서버</th><th>신청자</th><th>요청</th><th>대상</th><th>기간</th><th>사유</th><th>만료</th><th></th></tr></thead><tbody>
 {% for h in holds %}<tr>
 <td><a href="/intakes/{{ h.intake_id }}">{{ h.server_id }}</a></td>
 <td>{{ h.requested_by | who }}</td><td>{{ h.first_name }}</td>

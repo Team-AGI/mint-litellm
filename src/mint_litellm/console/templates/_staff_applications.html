@@ -1,6 +1,6 @@
 {% import "macros.html" as m %}
 {% if applications %}
-<table><thead><tr><th>서버</th><th>목적</th><th>진행</th><th>결정</th><th>접수 시각</th><th></th></tr></thead><tbody>
+<table><thead><tr><th>MCP 서버</th><th>목적</th><th>진행</th><th>결정</th><th>접수 시각</th><th></th></tr></thead><tbody>
 {% for r in applications %}<tr>
 <td><a href="/staff/intakes/{{ r.id }}">{{ r.server_id }}</a> {{ m.source_badge(r.source) }}</td><td>{{ r.purpose }}</td>
 <td>{{ m.badge(L.INTAKE, r.status) }}</td><td>{{ L.pick(L.DECISION, r.decision) if r.decision else '—' }}</td><td>{{ r.created_at | when }}</td>

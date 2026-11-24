@@ -74,7 +74,7 @@ def test_per_call_review_is_off_until_the_admin_turns_it_on(world):
 
 def test_the_setup_page_has_no_separate_registration_steps(world):
     html = world.session_client("admin").get("/setup").text
-    assert "root / rootroot로 로그인" in html
+    assert "기본 비밀번호 바꾸기" in html
     for text in ("LiteLLM에서 서버 등록", "object_permission", "이용 승인"):
         assert text not in html
 

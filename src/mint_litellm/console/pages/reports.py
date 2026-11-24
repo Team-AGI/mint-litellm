@@ -73,7 +73,7 @@ def audit_api(
 def usage_view(admin, conn, instance, period: str, base: str, user: str | None = None) -> dict:
     """사용량 화면 공통 자료. 기간 이름이 틀리면 기본 기간으로 본다."""
     period = period if period in usage_reader.PERIODS else usage_reader.DEFAULT_PERIOD
-    report = usage_reader.build(conn, instance, admin, server_names(admin), period, user)
+    report = usage_reader.build(conn, instance, server_names(admin), period, user)
     return {
         "report": report,
         "bars": {"kind": "bars", "horizontal": True, **report["bars"]},

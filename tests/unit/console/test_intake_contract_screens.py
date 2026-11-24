@@ -293,7 +293,7 @@ def test_the_drift_list_shows_only_servers_with_changes(world):
 
 def test_an_empty_drift_list_has_one_next_action(world):
     html = world.session_client("viewer").get("/servers?filter=changed").text
-    assert "계약 변경이 있는 서버가 없습니다" in html and html.count('class="empty"') == 1
+    assert "계약 변경이 있는 MCP 서버가 없습니다" in html and html.count('class="empty"') == 1
 
 
 def test_the_comparison_lists_added_removed_and_changed_items(world):
@@ -574,7 +574,8 @@ def test_missing_evidence_does_not_disable_the_approve_button(world):
     assert "disabled" not in html.split('id="decision"')[1].split("</form>")[0]
 
 
-def test_decided_failed_check_does_not_show_passed_progress(world):
+def test_decided_failed_check_does_not_show_passed_progress(world, monkeypatch):
+    monkeypatch.setenv("MINT_REQUIRE_PROVIDER_ALLOWLIST", "true")
     intake = add_intake(world, url_blocked=True)
     world.query(
         "UPDATE mint.intakes SET status = 'decided', decision = 'rejected', "
@@ -585,7 +586,8 @@ def test_decided_failed_check_does_not_show_passed_progress(world):
     assert "검사 실패" in html and "제공자 허용" in html and "다시 신청" in html
 
 
-def test_a_held_unlisted_provider_asks_for_a_recheck_not_a_new_request(world):
+def test_a_held_unlisted_provider_asks_for_a_recheck_not_a_new_request(world, monkeypatch):
+    monkeypatch.setenv("MINT_REQUIRE_PROVIDER_ALLOWLIST", "true")
     intake = add_intake(world, url_blocked=True, status="indeterminate")
     html = world.session_client("admin").get(f"/intakes/{intake}").text
     assert "제공자 허용" in html and "재검사하세요" in html and "다시 신청" not in html

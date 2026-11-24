@@ -325,7 +325,7 @@ AXIS_VERDICT = {"widened": "확대", "narrowed": "축소", "unchanged": "변화 
 
 ROLE = {"admin": "관리자", "approver": "승인자", "viewer": "조회자", "staff": "직원"}
 MODE = {"enforce": "집행", "observe": "관측"}
-SCOPE = {"key": "키", "user": "사용자", "team": "팀", "org": "조직", "server": "서버"}
+SCOPE = {"key": "키", "user": "사용자", "team": "팀", "org": "조직", "server": "MCP 서버"}
 APPROVAL_CLASS = {"standard": "일반", "exception": "예외"}
 PRINCIPAL = {"user": "사용자", "team_key": "팀 키", "service_account": "서비스 계정"}
 KIT_PLATFORM = {"linux": "Linux", "windows": "Windows"}
@@ -354,7 +354,7 @@ ALLOWLIST_KIND = {
     "registry_source": "레지스트리 출처",
 }
 ALLOWLIST_KIND_HELP = {
-    "provider": "서버를 운영하는 업체의 호스트 주소",
+    "provider": "제공자 제한을 켰을 때만 쓰는 업체 호스트 주소",
     "auth_server": "OAuth 인증 서버의 발급자 주소",
     "egress_target": "공개 주소가 아니어도 연결을 허용할 내부 대상",
     "registry_source": "패키지를 받아 올 레지스트리",
@@ -519,12 +519,12 @@ EVENT_KIND = {
     "server_identity_mismatch_observed": "서버 신원 불일치 관측",
     "buffer_overflow": "버퍼 초과",
     "buffer_replayed": "버퍼 재전송",
-    "server_registered": "서버 등록",
-    "server_approved": "서버 승인",
-    "server_suspended": "서버 중지",
-    "server_resumed": "서버 재개",
-    "server_terminating": "서버 폐기",
-    "server_terminated": "서버 폐기 완료",
+    "server_registered": "MCP 서버 등록",
+    "server_approved": "MCP 서버 승인",
+    "server_suspended": "MCP 서버 중지",
+    "server_resumed": "MCP 서버 재개",
+    "server_terminating": "MCP 서버 폐기",
+    "server_terminated": "MCP 서버 폐기 완료",
     "relation_created": "이용 관계 생성",
     "relation_terminating": "이용 관계 종료",
     "relation_terminated": "이용 관계 종료 완료",

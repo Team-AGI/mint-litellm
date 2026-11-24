@@ -155,13 +155,13 @@ def test_the_admin_cookie_does_not_open_staff_screens(sworld):
     assert admin.get("/staff").status_code == 303
     admin.cookies.set(STAFF_COOKIE, session_id)
     response = admin.get("/staff")
-    assert response.status_code == 303 and response.headers["location"] == "/staff/login"
+    assert response.status_code == 303 and response.headers["location"] == "/login"
 
 
 def test_logout_revokes_the_staff_session_and_records_it(sworld):
     client = logged_in(sworld)
     response = client.post("/staff/logout", data={"csrf": csrf(client)})
-    assert response.status_code == 303 and response.headers["location"] == "/staff/login"
+    assert response.status_code == 303 and response.headers["location"] == "/login"
     assert client.get("/staff").status_code == 303
     ended = sworld.query("SELECT actor FROM mint.events WHERE kind = 'console_session_ended'")
     assert ended == [(STAFFER,)]
@@ -278,7 +278,7 @@ def test_the_server_screen_lists_servers_with_the_tools_approved_for_this_user(s
     add_approval(sworld, "org", "acme", tools=("ping",))
     page = logged_in(sworld).get("/staff")
     assert page.status_code == 200
-    assert "내 서버" in page.text and "srv-ok" in page.text
+    assert "내 MCP 서버" in page.text and "srv-ok" in page.text
     assert "echo, ping" in page.text and "secret_tool" not in page.text
     assert "srv-wait" not in page.text
     assert 'class="catalog-card"' in page.text and "서버 보기" in page.text
@@ -288,7 +288,7 @@ def test_a_staff_member_without_an_organization_sees_an_empty_screen(sworld):
     sworld.stub.own("sk-loner", "human-7")
     sworld.stub.control("sk-loner", "human-7")
     page = logged_in(sworld, "sk-loner").get("/staff")
-    assert page.status_code == 200 and "쓸 수 있는 서버가 없습니다" in page.text
+    assert page.status_code == 200 and "쓸 수 있는 MCP 서버가 없습니다" in page.text
     assert "srv-ok" not in page.text
 
 
@@ -568,12 +568,12 @@ def test_a_denied_tool_or_server_is_not_listed_as_usable(sworld):
                  " 'srv-ok', '시험', 'admin')",
                  INSTANCE)
     page = logged_in(sworld).get("/staff")
-    assert "쓸 수 있는 서버가 없습니다" in page.text
+    assert "쓸 수 있는 MCP 서버가 없습니다" in page.text
 
 
 def test_a_server_without_any_approval_for_the_user_is_not_listed(sworld):
     page = logged_in(sworld).get("/staff")
-    assert "쓸 수 있는 서버가 없습니다" in page.text
+    assert "쓸 수 있는 MCP 서버가 없습니다" in page.text
     assert "srv-ok" not in logged_in(sworld).get("/staff").text
 
 
@@ -934,7 +934,7 @@ def test_the_menu_has_three_staff_screens_and_a_badge_for_requests_to_confirm(sw
     add_confirmation(sworld)
     page = logged_in(sworld).get("/staff/confirmations").text
     assert page.count('class="active"') >= 1 and 'href="/staff/confirmations"' in page
-    assert "내 서버" in page and "내 단말" in page and "내 요청" in page
+    assert "내 MCP 서버" in page and "내 단말" in page and "내 요청" in page
     assert '내 요청</span> <span class="badge error">1</span>' in page
     assert 'aria-current="page"' in page and "본인 확인 대기" in page and "내 승인 요청" in page
 
@@ -959,7 +959,7 @@ def test_the_my_servers_screen_shows_consent_state_and_opens_the_consent_form(sw
 
 def test_staff_empty_state_suggests_contact_and_request_history(sworld):
     html = logged_in(sworld).get("/staff").text
-    assert 'href="/staff/intakes/new"' in html and "쓸 수 있는 서버가 없습니다" in html
+    assert 'href="/staff/intakes/new"' in html and "쓸 수 있는 MCP 서버가 없습니다" in html
     assert 'id="sidebar" class="sidebar"' in html and 'data-sidebar-toggle' in html
     assert 'href="/staff/confirmations"' in html
 

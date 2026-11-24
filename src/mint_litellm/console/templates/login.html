@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MINT 관리자 콘솔 로그인</title>
+<title>MINT 로그인</title>
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
 <link rel="stylesheet" href="/static/console.css">
 </head>
 <body class="auth-page">
 <div class="login">
-  <h1>MINT 관리자 콘솔</h1>
+  <h1>MINT</h1>
   {% if error %}<div class="banner error" role="alert">{{ error }}</div>{% endif %}
   <form method="post" action="/login" class="form">
     <label>아이디 또는 이메일<input name="username" autocomplete="username" autofocus required></label>
@@ -17,7 +17,7 @@
     <button class="primary" type="submit">로그인</button>
   </form>
   {% if sso %}
-  <a class="button" href="/auth/oidc/login?target=admin">회사 계정으로 로그인</a>
+  <a class="button" href="/auth/oidc/login">회사 계정으로 로그인</a>
   {% endif %}
   {% if key_login %}
   <form method="post" action="/login" class="form">
@@ -25,7 +25,7 @@
     <button type="submit">키로 로그인</button>
   </form>
   {% endif %}
-  <p><a href="/staff/login">직원 화면 로그인</a>{% if litellm_ui_url %} · <a href="{{ litellm_ui_url }}">LiteLLM 관리 화면</a>{% endif %}</p>
+  <p><a href="/staff/signup">가입 요청</a>{% if litellm_ui_url %} · <a href="{{ litellm_ui_url }}">LiteLLM 관리 화면</a>{% endif %}</p>
 </div>
 </body>
 </html>

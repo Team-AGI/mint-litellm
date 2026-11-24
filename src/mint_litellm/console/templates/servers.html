@@ -1,13 +1,13 @@
 {% extends "base.html" %}{% import "macros.html" as m %}{% import "_server_actions.html" as a %}
-{% block title %}서버 · MINT{% endblock %}
+{% block title %}MCP 서버 · MINT{% endblock %}
 {% block page_class %}wide{% endblock %}
 {% block body %}
-<h1>서버</h1>
+<h1>MCP 서버</h1>
 {% if total %}
 <div class="grid">
   <div class="chart" data-chart="{{ dict(donut, kind='donut') | to_json }}"></div>
   <div class="cards">
-    {{ m.kpi('서버', total, '/servers') }}
+    {{ m.kpi('MCP 서버', total, '/servers') }}
     {{ m.kpi('계약 변경', numbers.changed, '/servers?filter=changed', level='danger' if numbers.changed) }}
     {{ m.kpi('취약점 조치 필요', numbers.vuln, '/servers?filter=vuln', level='danger' if numbers.vuln) }}
   </div>
@@ -15,7 +15,7 @@
 <nav class="tabs" aria-label="필터">{% for href, label, n in chips %}<a href="/servers{{ href }}"{% if (kind and href == '?filter=' ~ kind) or (not kind and not href) %} class="active" aria-current="page"{% endif %}>{{ label }} <span class="count">{{ n }}</span></a>{% endfor %}</nav>
 {% endif %}
 {% if rows %}
-<table class="clickable"><thead><tr><th>서버</th><th>상태</th><th>계약</th><th>취약점</th><th class="num">유효 승인</th><th class="num">도구</th><th>서버 허용</th></tr></thead><tbody>
+<table class="clickable"><thead><tr><th>MCP 서버</th><th>상태</th><th>계약</th><th>취약점</th><th class="num">유효 승인</th><th class="num">도구</th><th>MCP 서버 허용</th></tr></thead><tbody>
 {% for s in rows %}<tr>
 <td><a href="/servers/{{ s.server_id | urlencode }}">{{ s.server_name or s.server_id }}</a>{% if s.server_url %}<div class="muted">{{ s.server_url }}</div>{% endif %}</td>
 <td>{{ m.badge(L.SERVER, s.status) }}</td>
@@ -25,7 +25,7 @@
 <td>{{ a.permission(s, actor, 'permission-' ~ loop.index, '/servers') }}</td>
 </tr>{% endfor %}
 </tbody></table>
-{% elif kind == 'changed' %}{{ m.empty('계약 변경이 있는 서버가 없습니다', '/servers', '서버 목록 보기') }}
-{% elif kind or status %}{{ m.empty('조건에 맞는 서버가 없습니다', '/servers', '조건 지우기') }}
+{% elif kind == 'changed' %}{{ m.empty('계약 변경이 있는 MCP 서버가 없습니다', '/servers', 'MCP 서버 목록 보기') }}
+{% elif kind or status %}{{ m.empty('조건에 맞는 MCP 서버가 없습니다', '/servers', '조건 지우기') }}
 {% else %}{{ m.empty('등록된 MCP 서버가 없습니다', '/intakes', '도입 신청 보기') }}{% endif %}
 {% endblock %}

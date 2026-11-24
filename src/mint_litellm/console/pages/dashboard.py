@@ -112,7 +112,7 @@ def dashboard_cards(o, series, previous, coverage, workers, wait, hours):
             "승인 대기",
             waiting,
             "/approvals",
-            f"호출 {o['pending_calls']} · 서버 {o['pending_servers']}"
+            f"호출 {o['pending_calls']} · MCP 서버 {o['pending_servers']}"
             f" · 신청 {o['pending_intakes']} · 갱신 {o['reapproval']}",
             "wait" if slow else None,
         ),
@@ -134,8 +134,6 @@ def dashboard_cards(o, series, previous, coverage, workers, wait, hours):
             total,
             "/ledger",
             f"전 기간 {before}" if before else None,
-            None,
-            series["total"],
         ),
         card(
             "적용 엔드포인트",
@@ -229,27 +227,27 @@ def dashboard(
         "links": [f"/alerts?status=open&severity={k}" for k in order],
     }
     month = usage_reader.build(
-        conn, instance, actor.config.litellm_admin, server_names(actor.config.litellm_admin),
-        "month",
+        conn, instance, server_names(actor.config.litellm_admin), "month",
     )
+    latency = dashboard_reads.latency_series(conn, instance, hours, zone)
+    cards = dashboard_cards(
+        o, series, previous, dashboard_reads.endpoint_coverage(conn, instance), workers, wait,
+        hours,
+    )
+    cards += [
+        card("이번 달 호출", month["calls"], "/reports/usage"),
+        card("이번 달 차단", month["blocked"], "/ledger?result=deny"),
+        card(
+            "MINT 판정 지연(중앙값·95%)",
+            f"{latency['median']:g} · {latency['tail']:g} ms" if latency["count"] else "—",
+            None,
+            f"판정 {latency['count']}건" if latency["count"] else None,
+        ),
+    ]
     ctx = {
         "range": name,
         "ranges": choices("/", {}, "range", RANGES, name),
-        "usage_cards": [
-            card("이번 달 비용", month["cost"]["text"], "/reports/usage", None,
-                 "wait" if month["cost"]["state"] == "missing" else None),
-            card("이번 달 호출", month["calls"], "/reports/usage"),
-            card("이번 달 차단", month["blocked"], "/ledger?result=deny"),
-        ],
-        "cards": dashboard_cards(
-            o,
-            series,
-            previous,
-            dashboard_reads.endpoint_coverage(conn, instance),
-            workers,
-            wait,
-            hours,
-        ),
+        "cards": cards,
         "trend": trend_chart(series, previous),
         "trend_has_data": sum(series["total"]) > 0,
         "reasons": reason_donut(
@@ -266,13 +264,6 @@ def dashboard(
         "alert_total": sum(alert_bars["values"]),
         "approval_cards": [
             card(
-                "대기",
-                wait["count"],
-                "/approvals",
-                f"최장 {span(wait['oldest_seconds'])}" if wait["count"] else None,
-                "wait" if (wait["average_seconds"] or 0) >= SLOW_WAIT_SECONDS else None,
-            ),
-            card(
                 "중앙 처리 시간",
                 span(metrics["median_seconds"]),
                 None,
@@ -284,10 +275,24 @@ def dashboard(
                 metrics["opened"],
                 None,
                 f"사람 {metrics['approved_by_person']} · 규칙 {metrics['approved_by_rule']}",
-                None,
-                metrics["series"]["values"],
             ),
         ],
+        "approval_trend": {
+            "kind": "bars",
+            "labels": metrics["series"]["labels"],
+            "values": metrics["series"]["values"],
+        },
+        "approval_has_data": sum(metrics["series"]["values"]) > 0,
+        "latency_trend": {
+            "kind": "lines",
+            "labels": latency["labels"],
+            "unit": "ms",
+            "series": [
+                {"name": "중앙값", "data": latency["p50"]},
+                {"name": "95%", "data": latency["p95"]},
+            ],
+        },
+        "latency_has_data": bool(latency["count"]),
         "dots": status_dots(o, workers, zone),
     }
     return render(request, "dashboard.html", ctx, actor=actor)

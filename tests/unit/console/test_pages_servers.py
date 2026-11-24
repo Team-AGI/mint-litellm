@@ -21,7 +21,7 @@ def test_status_names_are_korean_on_the_list_and_the_detail(admin):
 def test_suspending_from_the_screen_needs_the_name_and_shows_the_effect(world, admin):
     add_approval(world)
     html = admin.get("/servers/srv-ok").text
-    assert "영향받는 서버 1개, 유효 승인 1건" in html
+    assert "영향받는 MCP 서버 1개, 유효 승인 1건" in html
     assert 'data-confirm="srv-ok"' in html and "danger" in html
     version = world.query("SELECT state_version FROM mint.servers WHERE server_id = 'srv-ok'")[0][0]
     wrong = form_post(world, admin, "/servers/srv-ok/suspend", state_version=version,
