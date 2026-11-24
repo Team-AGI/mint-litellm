@@ -1160,13 +1160,19 @@ def local_mcp_item(harness: str, name: object, entry: object) -> dict | None:
             "package": package}  # fmt: skip
 
 
-def scan_local_mcp(home: Path) -> list[dict]:
+def managed_names(state: dict) -> set[str]:
+    return {n for n in [*(state.get("mcp_servers") or []), state.get("gateway"),
+                        state.get("user_gateway")] if isinstance(n, str)}
+
+
+def scan_local_mcp(home: Path, managed: object = ()) -> list[dict]:
     """홈의 Claude Code·Codex 설정에 있는, 관리 대상이 아닌 MCP 항목. 읽지 못하면 건너뛴다."""
     found: dict[tuple, dict] = {}
+    excluded = {"litellm_gateway", *(n for n in managed if isinstance(n, str))}
 
     def add(harness: str, servers: object) -> None:
         for name, entry in (servers.items() if isinstance(servers, dict) else ()):
-            item = local_mcp_item(harness, name, entry)
+            item = None if name in excluded else local_mcp_item(harness, name, entry)
             if item:
                 found.setdefault(tuple(item.values()), item)
 
@@ -2677,7 +2683,8 @@ class Kit:
         found = (
             {} if self.system_mode
             else {
-                "local_mcp": scan_local_mcp(self.home), "tool_lists": scan_tool_lists(self.home),
+                "local_mcp": scan_local_mcp(self.home, managed_names(self.load_state() or {})),
+                "tool_lists": scan_tool_lists(self.home),
                 "start_failures": scan_start_failures(self.home),
             }
         )
@@ -4356,19 +4363,90 @@ def tab3_lines(model: dict, ui: dict) -> list[str]:
     return out
 
 
-def render_screen(model: dict, ui: dict, width: int = 80, height: int = 24) -> list[str]:
-    """화면 한 장(줄 목록, 각 줄은 ``width``칸 이내)."""
-    tabs = "".join(
-        f"[{i + 1} {t}]" if i == ui["tab"] else f" {i + 1} {t} " for i, t in enumerate(TABS)
-    )
-    state = "연결됨" if model["connected"] else NO_GATEWAY
-    head = pad("MINT  " + tabs, width - cell_width(state) - 1) + " " + state
-    body = (tab1_lines(model), tab2_lines(model, ui), tab3_lines(model, ui))[ui["tab"]]
-    room = max(height - 4, 3)
-    lines = [head, "-" * width, *body[:room]]
-    lines += [""] * (height - 2 - len(lines))
-    lines += ["-" * width, ui.get("message") or HELP]
-    return [clip(line, width) for line in lines]
+def screen_color(text: str, code: str, color: bool) -> str:
+    return f"\x1b[{code}m{text}\x1b[0m" if color else text
+
+
+def screen_box(title: str, rows: list[str], width: int, color: bool) -> list[str]:
+    inner = width - 4
+    title = clip(title, inner - 3)
+    border = lambda value: screen_color(value, "90", color)  # noqa: E731
+    top = border("╭─ ") + screen_color(title, "1", color) + border(
+        " " + "─" * max(0, width - cell_width(title) - 5) + "╮")
+    lines = [top]
+    for row in rows:
+        row = clip("".join(c if c.isprintable() else " " for c in row), inner)
+        role = "32" if any(x in row for x in ("사용 가능", "연결됨", "이상 없음")) else (
+            "31" if any(x in row for x in ("차단", "막힘", "실패", "거절")) else
+            "33" if any(x in row for x in ("대기", "필요", "검사 중", "동의")) else "0")
+        lines.append(border("│ ") + screen_color(row, role, color) +
+                     " " * (inner - cell_width(row)) + border(" │"))
+    return [*lines, border("╰" + "─" * (width - 2) + "╯")]
+
+
+def render_screen(model: dict, ui: dict, width: int = 80, height: int = 24,
+                  color: bool = False) -> list[str]:
+    """화면 한 장. ANSI 코드는 표시 폭에 포함하지 않는다."""
+    width, height = max(width, 40), max(height, 12)
+    state = "● 연결됨" if model["connected"] else "● " + NO_GATEWAY
+    mark = screen_color(" MINT ", "1;7;94", color)
+    title = " 엔드포인트 · MCP 연결 관리"
+    head = mark + title + " " * max(1, width - 6 - cell_width(title) - cell_width(state))
+    head += screen_color(state, "32" if model["connected"] else "31", color)
+    counts = (model["server_count"], len(model["servers"]), len(model["intakes"]))
+    tabs = "  ".join(screen_color(f" {i + 1} {t} {counts[i]} ", "7", color)
+                     if i == ui["tab"] else f" {i + 1} {t} {counts[i]} "
+                     for i, t in enumerate(TABS))
+    if not color:
+        tabs = "  ".join(f"[{i + 1} {t} {counts[i]}]" if i == ui["tab"] else
+                         f" {i + 1} {t} {counts[i]} " for i, t in enumerate(TABS))
+    tab = ui["tab"]
+    body = (tab1_lines(model), tab2_lines(model, ui), tab3_lines(model, ui))[tab]
+    sections = []
+    if tab == 2 and model["found"]:
+        cut = next(i for i, line in enumerate(body) if line.startswith("이 PC의 관리되지"))
+        sections = [(f"도입 신청 · {len(model['intakes'])}", body[:cut]),
+                    (f"이 PC의 관리되지 않는 로컬 MCP · {len(model['found'])}", body[cut + 1:])]
+    else:
+        names = ("연결 상태", "승인된 MCP 서버", "도입 신청")
+        sections = [(f"{names[tab]} · {counts[tab]}", body)]
+    available = height - 7
+    # 선택 항목이 화면에 남도록 앞의 행부터 줄인다.
+    cards = []
+    for title, rows in sections:
+        rows = [r for r in rows if r] or ["-"]
+        cards.append((title, rows))
+    limit = max(1, available - 2 * len(cards) - (len(cards) - 1))
+    while sum(len(rows) for _, rows in cards) > limit:
+        idx = max(range(len(cards)), key=lambda i: len(cards[i][1]))
+        rows = cards[idx][1]
+        if len(rows) <= 1:
+            break
+        selected = next((i for i, row in enumerate(rows) if row.startswith(">")), 0)
+        rows.pop(1 if selected == 0 else 0)
+    content = []
+    for title, rows in cards:
+        if content:
+            content.append("")
+        content.extend(screen_box(title, rows, width, color))
+    keys = [("1-3", "화면"), ("↑↓", "선택"), ("Enter", "상세"), ("n", "신청"),
+            ("s", "받기"), ("c", "점검"), ("r", "새로고침"), ("o", "웹"), ("q", "끝")]
+    bars, line, used = [], "", 0
+    for key, label in keys:
+        item = f" {key} "
+        size = cell_width(item) + 1 + cell_width(label)
+        if used and used + 2 + size > width:
+            bars.append(line)
+            line, used = "", 0
+        line += ("  " if used else "") + screen_color(item, "7", color) + " " + label
+        used += (2 if used else 0) + size
+    bars.append(line)
+    if ui.get("message"):
+        bars[0] = clip(str(ui["message"]), width)
+    content = content[:max(0, height - 3 - len(bars))]
+    lines = [head, tabs, "", *content]
+    lines += [""] * max(0, height - len(lines) - len(bars))
+    return [*lines, *bars][:height]
 
 
 def handle_key(key: str, ui: dict, model: dict) -> str | None:
@@ -4482,7 +4560,8 @@ def build_model(kit, state: dict, gateway: Gateway | None) -> dict:
     blocked = state.get("mode") == "managed"
     found = [
         {**item, "blocked": blocked and item["harness"] == "codex"}
-        for item in (scan_local_mcp(kit.home) if kit.home.exists() else [])
+        for item in (scan_local_mcp(kit.home, managed_names(state) | set(names))
+                     if kit.home.exists() else [])
         if item["name"] not in applied
     ]
     return {
@@ -4508,8 +4587,11 @@ def run_screen(kit, state: dict, gateway: Gateway | None, actions, read=read_key
     model = build_model(kit, state, gateway)
     while True:
         size = shutil.get_terminal_size((80, 24))
-        width, height = min(size.columns, 80), max(size.lines, 12)
-        out.write("\x1b[2J\x1b[H" + "\n".join(render_screen(model, ui, width, height)) + "\n")
+        width, height = max(size.columns, 40), max(size.lines, 12)
+        color = bool(getattr(out, "isatty", lambda: False)() and "NO_COLOR" not in os.environ
+                     and os.environ.get("TERM") != "dumb")
+        lines = render_screen(model, ui, width, height, color)
+        out.write("\x1b[2J\x1b[H" + "\n".join(lines) + "\n")
         out.flush()
         ui["message"] = ""
         action = handle_key(read(), ui, model)

@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import sys
 import time
 import zipfile
@@ -645,12 +646,23 @@ def ui(**kw):
 
 
 @pytest.mark.parametrize("tab", [0, 1, 2])
-def test_every_tab_fits_eighty_columns_with_korean_text(tab):
+@pytest.mark.parametrize(("width", "height"), [(80, 24), (120, 40)])
+def test_every_tab_fits_eighty_columns_with_korean_text(tab, width, height):
     for detail in (False, True):
-        lines = kit_module.render_screen(model(), ui(tab=tab, detail=detail), 80, 24)
-        assert len(lines) == 24
-        assert all(kit_module.cell_width(line) <= 80 for line in lines)
+        lines = kit_module.render_screen(model(), ui(tab=tab, detail=detail), width, height)
+        assert len(lines) == height
+        assert all(kit_module.cell_width(line) <= width for line in lines)
+        assert all("\x1b" not in line for line in lines)
+        assert any(line.startswith("╭") for line in lines)
     assert any(f"[{tab + 1}" in line for line in lines)
+
+
+def test_color_screen_keeps_cell_width_and_marks_status():
+    lines = kit_module.render_screen(model(), ui(tab=1), 80, 24, color=True)
+    plain = [re.sub(r"\x1b\[[0-9;]*m", "", line) for line in lines]
+    assert all(kit_module.cell_width(line) <= 80 for line in plain)
+    assert any("\x1b[32m" in line and "사용 가능" in line for line in lines)
+    assert any("\x1b[7m" in line for line in lines)
 
 
 def test_the_screen_shows_local_facts_when_the_gateway_is_unreachable():
@@ -695,6 +707,20 @@ def test_a_scripted_session_draws_and_quits(tmp_path, folder, reports):
     gateway = FakeGateway(me={"user": "u", "servers": [], "intakes": []})
     assert kit_module.run_screen(kit, state, gateway, {}, read=lambda: next(keys), out=out) == 0
     assert "내 서버" in out.getvalue() and "도입 신청" in out.getvalue()
+
+
+def test_no_color_disables_colors_on_a_terminal(tmp_path, folder, reports, monkeypatch):
+    class Terminal(io.StringIO):
+        def isatty(self):
+            return True
+
+    local = make_kit(folder, tmp_path, managed=False)
+    state = local.install()
+    out = Terminal()
+    monkeypatch.setenv("NO_COLOR", "1")
+    kit_module.run_screen(local, state, None, {}, read=lambda: "q", out=out)
+    assert "\x1b[32m" not in out.getvalue() and "\x1b[7m" not in out.getvalue()
+    assert "╭" in out.getvalue()
 
 
 def test_check_prints_a_table_with_the_problems_listed():

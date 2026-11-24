@@ -75,6 +75,20 @@ def test_entries_that_start_through_the_kit_launcher_are_not_reported(home):
     assert "managed-like" not in {i["name"] for i in kit.scan_local_mcp(home)}
 
 
+def test_gateway_and_managed_names_are_excluded_from_scan_and_report(home):
+    (home / ".cursor").mkdir()
+    (home / ".cursor/mcp.json").write_text(json.dumps({"mcpServers": {
+        "litellm_gateway": {"url": "https://mint.test/mcp"},
+        "managed-name": {"url": "https://mint.test/mcp"},
+        "approved": {"command": "node"}, "other": {"command": "node"},
+    }}))
+    state = {"gateway": "managed-name", "mcp_servers": ["approved"]}
+    items = kit.scan_local_mcp(home, kit.managed_names(state))
+    assert [item["name"] for item in items] == ["other"]
+    assert ReportBody.model_validate({"kit_version": "k", "action": "installed",
+                                      "mode": "managed", "local_mcp": items}).local_mcp
+
+
 def test_codex_tables_are_read_but_the_kit_block_is_not(home):
     (home / ".codex").mkdir()
     (home / ".codex/config.toml").write_text(
