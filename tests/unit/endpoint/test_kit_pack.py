@@ -1072,3 +1072,16 @@ def test_an_old_key_the_server_no_longer_knows_is_retired_quietly(capsys):
 
     assert kit_module.retire_key(Refused(), "sk-old") is False
     assert "해제하지 못했습니다" in capsys.readouterr().out
+
+
+def test_status_tab_ends_with_the_single_next_step_and_tabs_show_pending_counts():
+    assert kit_module.next_step(model()) .startswith("pyghidra-mcp: 곧 자동으로")
+    assert kit_module.next_step(model(servers=[], intakes=[])) == "할 일 없음"
+    assert "한 줄 설치 명령" in kit_module.next_step(model(connected=False))
+    row = {"name": "x", "kind": "묶음", "state": "받기 실패", "reason": "해시 불일치"}
+    bad = model(servers=[row])
+    assert "받기 실패 (해시 불일치)" in kit_module.next_step(bad)
+    lines = kit_module.render_screen(bad, ui(), 80, 24)
+    assert any(line.startswith("│ 다음 할 일") for line in lines)
+    assert any("2 내 서버 1 실패 1" in line for line in lines)
+    assert all(kit_module.cell_width(line) <= 80 for line in lines)
