@@ -164,12 +164,22 @@ templates.env.globals["nav_active"] = nav_active
 
 
 def is_root(actor: Any) -> bool:
-    """Root 운영자인가. 운영자 표지가 생기면 WP-07이 이 함수 하나만 표지 읽기로 바꾼다."""
+    """Root 운영자인가: 기본 계정 root이거나 설정의 Root 표지(root_operators)에 든 관리자."""
+    from mint_litellm.control.services.root_controls import root_names
+
     session = getattr(actor, "session", None)
+    ctx = getattr(actor, "ctx", None)
     name = getattr(session, "operator_name", None) or getattr(
-        getattr(getattr(actor, "ctx", None), "operator", None), "name", None
+        getattr(ctx, "operator", None), "name", None
     )
-    return getattr(actor, "role", None) == "admin" and name == "root"
+    if getattr(actor, "role", None) != "admin" or not name:
+        return False
+    if name == "root":
+        return True
+    try:
+        return name in root_names(ctx.conn, ctx.instance_id)
+    except Exception:  # 표지를 못 읽으면 Root로 보지 않는다(메뉴만 덜 그린다)
+        return False
 
 
 def has_route(request: Any, path: str) -> bool:
