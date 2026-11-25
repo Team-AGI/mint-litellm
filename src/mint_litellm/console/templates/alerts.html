@@ -38,7 +38,7 @@
   {% for name, lines in fields %}<dt>{{ name }}</dt><dd>{% for line in lines %}<div>{{ line }}</div>{% endfor %}</dd>{% endfor %}
 </dl>
 <div class="actions">
-  {% if link %}<a class="button" href="{{ link[0] }}">{{ link[1] }}</a>{% endif %}
+  {% if link %}<a class="button" href="{{ link[0] }}"{% if link[0].startswith('http') %} target="_blank" rel="noopener" hx-boost="false"{% endif %}>{{ link[1] }}</a>{% endif %}
   {% if a.status == 'open' and actor.role == 'admin' %}
   <form method="post" action="/alerts/{{ a.id }}/acknowledge">{{ m.csrf(actor) }}<button type="submit" class="primary">확인함</button></form>
   {% endif %}

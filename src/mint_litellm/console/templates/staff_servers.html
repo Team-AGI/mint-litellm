@@ -77,7 +77,8 @@
 </tr>{% endfor %}
 </tbody></table>
 {% endif %}
-{% if selected.can_consent and not selected.stopped %}
+{% if selected.state == 'free' and not selected.stopped %}<p class="muted">이 서버는 동의 없이 쓸 수 있습니다.</p>
+{% elif selected.can_consent and not selected.stopped %}
 <h3>동의 등록</h3>
 <form method="post" action="/staff/consents" class="form">
   {{ m.csrf(actor) }}<input type="hidden" name="text_version" value="{{ text_version }}"><input type="hidden" name="target" value="{{ selected.ref }}">

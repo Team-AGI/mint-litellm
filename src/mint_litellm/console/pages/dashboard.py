@@ -105,7 +105,9 @@ def dashboard_cards(o, series, previous, coverage, workers, wait, hours):
         rate_note = f"전 기간 대비 {100 * blocked / total - 100 * blocked_before / before:+.0f}%p"
     else:
         rate_note = f"호출 {total}건 중 {blocked}건" if total else "호출 없음"
-    waiting = o["pending_calls"] + o["pending_servers"] + o["pending_intakes"] + o["reapproval"]
+    # 메뉴 「승인 센터」 표지와 같은 수(도입 신청은 메뉴 「도입 신청」에 따로 센다)
+    holds = o.get("pending_holds", 0)
+    waiting = o["pending_calls"] + o["pending_servers"] + holds + o["reapproval"]
     slow = (wait["average_seconds"] or 0) >= SLOW_WAIT_SECONDS
     return [
         card(
@@ -113,7 +115,7 @@ def dashboard_cards(o, series, previous, coverage, workers, wait, hours):
             waiting,
             "/approvals",
             f"호출 {o['pending_calls']} · MCP 서버 {o['pending_servers']}"
-            f" · 신청 {o['pending_intakes']} · 갱신 {o['reapproval']}",
+            f" · 예외 {holds} · 갱신 {o['reapproval']}",
             "wait" if slow else None,
         ),
         card(
