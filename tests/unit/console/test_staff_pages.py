@@ -238,7 +238,8 @@ def run_verify(world):
 
 
 def add_approval(world, scope_type, scope_id, tools=("echo", "ping"), server_id="srv-ok",
-                 org_id="acme"):
+                 org_id="acme", consent=False):
+    """``consent``: 승인 조건에 동의 요구를 건다(기본 서버는 동의 없이 쓴다)."""
     relation = world.query(
         "SELECT id FROM mint.usage_relations WHERE server_id = %s AND org_id = %s",
         server_id, org_id)[0][0]
@@ -246,7 +247,13 @@ def add_approval(world, scope_type, scope_id, tools=("echo", "ping"), server_id=
         "INSERT INTO mint.approvals (id, instance_id, org_id, relation_id, class, server_id,"
         " tools, scope_type, scope_id, valid_from, valid_until, basis, granted_by, requested_by,"
         " status) VALUES (gen_random_uuid(), %s, %s, %s, 'standard', %s, %s, %s, %s, now(),"
-        " now() + interval '30 days', '{}', 'admin', 'x', 'active')",
+        " now() + interval '30 days', '{}', 'admin', 'x', 'active')"
+        if not consent else
+        "INSERT INTO mint.approvals (id, instance_id, org_id, relation_id, class, server_id,"
+        " tools, scope_type, scope_id, valid_from, valid_until, basis, granted_by, requested_by,"
+        " status, conditions) VALUES (gen_random_uuid(), %s, %s, %s, 'standard', %s, %s, %s, %s,"
+        " now(), now() + interval '30 days', '{}', 'admin', 'x', 'active',"
+        " '{\"require_consent\": true}')",
         INSTANCE, org_id, relation, server_id, list(tools), scope_type, scope_id)
 
 
@@ -459,7 +466,7 @@ def test_a_staff_member_grants_a_purpose_consent_for_themselves(sworld):
 
 
 def test_the_consent_screen_shows_the_consent_text_and_the_maximum_period(sworld):
-    add_approval(sworld, "user", STAFFER, tools=("echo",))
+    add_approval(sworld, "user", STAFFER, tools=("echo",), consent=True)
     page = logged_in(sworld).get("/staff?open=acme%7Csrv-ok")
     assert "철회할 수 있습니다" in page.text
     assert 'max="90"' in page.text and 'name="text_version" value="v1"' in page.text
@@ -571,10 +578,12 @@ def test_a_denied_tool_or_server_is_not_listed_as_usable(sworld):
     assert "쓸 수 있는 MCP 서버가 없습니다" in page.text
 
 
-def test_a_server_without_any_approval_for_the_user_is_not_listed(sworld):
+def test_a_server_without_any_approval_for_the_user_is_not_listed_as_usable(sworld):
     page = logged_in(sworld).get("/staff")
     assert "쓸 수 있는 MCP 서버가 없습니다" in page.text
-    assert "srv-ok" not in logged_in(sworld).get("/staff").text
+    # 쓸 수 있는 서버 카드는 없고, 조직에서 쓰는 서버로만 이름과 「사용 요청」이 보인다.
+    assert "MCP 서버 보기" not in page.text and "동의 확인" not in page.text
+    assert "조직에서 쓰는 서버" in page.text and "사용 요청" in page.text
 
 
 def test_revoking_a_users_operator_sessions_leaves_their_staff_session_alone(sworld):

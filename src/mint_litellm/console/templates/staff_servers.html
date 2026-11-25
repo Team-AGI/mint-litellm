@@ -7,12 +7,24 @@
 {% if r.local %}<div class="muted">내 PC에 설치된 로컬 MCP 항목은 다음 동기화 때 빠집니다. 그 전에도 호출은 막힙니다.</div>{% endif %}
 {% endcall %}{% endif %}
 {% endmacro %}
+{% macro ask(id, label, server_id, tool, code, title) %}
+{% call m.confirm_dialog(id, label, title, '승인자가 요청을 보고 차단 해제·기간 허용 등으로 처리합니다. 결과는 「내 요청」의 권한 요청 탭에서 볼 수 있습니다.', '/staff/access-requests', actor, '요청 보내기', danger=false, trigger_class='') %}<input type="hidden" name="server_id" value="{{ server_id }}"><input type="hidden" name="tool" value="{{ tool }}"><input type="hidden" name="reason_code" value="{{ code }}"><label>사유(선택)<input name="note" maxlength="500" placeholder="무엇을 하려는지 한 줄"></label>{% endcall %}
+{% endmacro %}
+{% macro request_form(server_id, tool, code, name) %}
+<h3>권한 요청</h3>
+{% if open_requests.get(server_id ~ '|' ~ tool) %}<p>같은 요청이 이미 대기 중입니다. {{ waiting_request(server_id, tool) }}</p>
+{% else %}<form method="post" action="/staff/access-requests" class="form">{{ m.csrf(actor) }}<input type="hidden" name="server_id" value="{{ server_id }}"><input type="hidden" name="tool" value="{{ tool }}"><input type="hidden" name="reason_code" value="{{ code }}">
+<dl class="detail"><dt>서버</dt><dd>{{ name }}</dd><dt>도구</dt><dd>{{ tool or '서버 전체' }}</dd><dt>막힌 사유</dt><dd>{{ L.pick(L.OUTCOME_REASON, code) }}</dd></dl>
+<label>사유(선택)<input name="note" maxlength="500" placeholder="무엇을 하려는지 한 줄"></label>
+<div class="actions"><button type="submit" class="primary">요청 보내기</button></div></form>{% endif %}
+{% endmacro %}
+{% macro waiting_request(server_id, tool) %}<span class="badge wait">요청 대기 중</span> <a href="/staff/confirmations?tab=access">내 요청 보기</a>{% endmacro %}
 <h1>내 MCP 서버</h1>
 <div class="actions"><a class="button primary" href="/staff/intakes/new">MCP 서버 신청</a></div>
 <div class="cards">
   {{ m.kpi('내 PC 연결', pcs, href='/staff/endpoint', note=none if pcs else '설치 명령 받기', level=none if pcs else 'wait') }}
-  {{ m.kpi('승인됨', rows | rejectattr('stopped') | rejectattr('preparing') | list | length) }}
-  {{ m.kpi('도구 발견', rows | selectattr('seen') | list | length) }}
+  {{ m.kpi('사용 가능', ready) }}
+  {{ m.kpi('준비 중', waiting, level='wait' if waiting) }}
   {{ m.kpi('동의 필요', need, level='wait' if need) }}
   {{ m.kpi('만료 임박(7일)', expiring, level='wait' if expiring) }}
 </div>
@@ -22,8 +34,9 @@
 {% include "_staff_applications.html" %}
 {% elif tab == 'calls' %}
 {% if calls %}
-<table><thead><tr><th>시각</th><th>MCP 서버</th><th>도구</th><th>결과</th><th>사유</th></tr></thead><tbody>
-{% for c in calls %}<tr><td class="nowrap">{{ c.at | when }}</td><td>{{ c.server_name or '—' }}</td><td>{{ c.tool or '—' }}</td><td>{{ L.pick(L.OUTCOME_BUCKET, c.bucket) }}</td><td>{{ c.reason or '—' }}</td></tr>{% endfor %}
+<table><thead><tr><th>시각</th><th>MCP 서버</th><th>도구</th><th>결과</th><th>사유</th><th></th></tr></thead><tbody>
+{% for c in calls %}<tr><td class="nowrap">{{ c.at | when }}</td><td>{{ c.server_name or '—' }}</td><td>{{ c.tool or '—' }}</td><td>{{ L.pick(L.OUTCOME_BUCKET, c.bucket) }}</td><td>{{ c.reason or '—' }}</td>
+<td>{% if c.code in ('DENIED', 'TOOL_NOT_IN_APPROVAL', 'APPROVAL_ABSENT', 'APPROVAL_EXPIRED', 'APPROVAL_REVOKED', 'CALL_APPROVAL_REQUIRED', 'CALL_APPROVAL_DENIED') and c.server_id %}{% if c.requested %}{{ waiting_request(c.server_id, c.tool or '') }}{% else %}{{ ask('ask-call-' ~ loop.index, '권한 요청', c.server_id, c.tool or '', c.code, (c.server_name or c.server_id) ~ ' ' ~ (c.tool or '') ~ ' 권한 요청') }}{% endif %}{% endif %}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}{{ m.empty('호출 기록이 없습니다', '/staff', '내 MCP 서버') }}{% endif %}
 {% elif tab == 'records' %}
@@ -38,8 +51,8 @@
 {% for r in catalog %}<article class="catalog-card">
 <h2><a href="/staff?open={{ r.ref | urlencode }}">{{ r.server_name }}</a></h2>
 <div class="muted">{{ r.org_name }}</div>
-<div>{% if r.stopped %}<span class="badge off">사용 그만둠</span>{% elif r.preparing %}<span class="badge wait">준비 중</span>{% else %}{{ m.badge(L.CONSENT_STATE, r.state) }}{% endif %}</div>
-<div>{% if r.preparing and not r.start_failed %}승인됐고 도구를 확인하는 중입니다{% else %}{{ ('도구 발견 ' ~ (r.seen | when)) if r.seen else (('시작 실패' ~ (' · ' ~ r.start_reason if r.start_reason else '')) if r.start_failed else '승인됨') }}{% endif %}</div>
+<div>{% if r.phase == 'stopped' %}<span class="badge off">사용 그만둠</span>{% elif r.phase == 'failed' %}<span class="badge error">시작 실패</span>{% elif r.phase == 'preparing' %}<span class="badge wait">준비 중</span>{% else %}<span class="badge ok">사용 가능</span>{% endif %} {% if r.phase not in ('stopped', 'failed', 'preparing') %}{{ m.badge(L.CONSENT_STATE, r.state) }}{% endif %}</div>
+<div class="muted">{% if r.phase == 'ready' %}{{ ('도구 발견 ' ~ (r.seen | when)) if r.seen else '게이트웨이로 연결됩니다' }}{% else %}{{ r.phase_note }}{% endif %}</div>
 <dl class="detail"><dt>도구</dt><dd>{{ '모든 도구' if '*' in r.tools else ((r.tools | join) or '—') }}</dd><dt>승인 만료</dt><dd>{{ r.valid_until | when if r.valid_until and r.valid_until.year < 2900 else '기한 없음' }}</dd></dl>
 <div class="actions"><a class="button" href="/staff?open={{ r.ref | urlencode }}">{{ '동의 확인' if r.state == 'none' and not r.stopped and not r.preparing else 'MCP 서버 보기' }}</a>
 {% if r.preparing and r.progress %}<a class="button" href="{{ r.progress }}">진행 상황 보기</a>{% endif %}
@@ -47,8 +60,19 @@
 </article>{% endfor %}</div>
 {% elif search %}{{ m.empty('조건에 맞는 MCP 서버가 없습니다', '/staff', '검색 지우기') }}
 {% else %}{% if pending_calls %}<p>처리 대기 중인 호출 요청이 {{ pending_calls }}건 있습니다. <a href="/staff/confirmations?tab=mine">요청 상태 확인</a></p>{% endif %}{{ m.empty('쓸 수 있는 MCP 서버가 없습니다', '/staff/intakes/new', 'MCP 서버 신청') }}{% endif %}
+{% if org_servers and not search %}<section class="org-servers"><h2>조직에서 쓰는 서버</h2>
+<p class="muted">조직에 승인돼 있지만 내 사용 권한이 없는 서버입니다. 사용 요청을 보내면 승인자가 처리합니다.</p>
+<div class="catalog">{% for r in org_servers %}<article class="catalog-card">
+<h2>{{ r.server_name }}</h2><div class="muted">{{ r.org_name }}</div>
+<div>{{ r.purpose or '목적이 기록되어 있지 않습니다' }}</div>
+<div class="actions">{% if open_requests.get(r.ref) is none and open_requests.get(r.server_id ~ '|') is none %}{{ ask('ask-org-' ~ loop.index, '사용 요청', r.server_id, '', r.reason_code, r.server_name ~ ' 사용 요청') }}{% else %}{{ waiting_request(r.server_id, '') }}{% endif %}</div>
+</article>{% endfor %}</div></section>{% endif %}
 {% endif %}
-{% if selected %}{% call m.drawer(selected.server_name, '/staff', has_input=selected.can_consent) %}
+{% if selected_org %}{% call m.drawer(selected_org.server_name, '/staff', has_input=true) %}
+<dl class="detail"><dt>조직</dt><dd>{{ selected_org.org_name }}</dd><dt>목적</dt><dd>{{ selected_org.purpose or '—' }}</dd></dl>
+{{ request_form(selected_org.server_id, '', preset.reason_code if preset else selected_org.reason_code, selected_org.server_name) }}
+{% endcall %}{% endif %}
+{% if selected %}{% call m.drawer(selected.server_name, '/staff', has_input=selected.can_consent or preset) %}
 {% if selected.stopped %}<div class="muted">내가 사용을 그만둔 MCP 서버입니다. 서버 승인은 그대로이고 다른 사람에게는 영향이 없습니다.</div>
 {% elif selected.preparing and selected.start_failed %}<div class="error">이 PC에서 시작하지 못했습니다{% if selected.start_reason %}: {{ selected.start_reason }}{% endif %}.{% if selected.progress %} <a href="{{ selected.progress }}">진행 상황 보기</a>{% endif %}</div>
 {% elif selected.preparing %}<div class="muted">승인됐고 도구를 확인하는 중입니다. 도구가 확인되면 여기서 바로 쓸 수 있습니다.{% if selected.progress %} <a href="{{ selected.progress }}">진행 상황 보기</a>{% endif %}</div>{% endif %}
@@ -56,11 +80,20 @@
   <dt>조직</dt><dd>{{ selected.org_name }}</dd>
   <dt>전송</dt><dd>{{ L.pick(L.TRANSPORT, selected.transport) if selected.transport else '—' }}</dd>
   <dt>인증</dt><dd>{{ L.pick(L.AUTH_TYPE, selected.auth_type) if selected.auth_type else '—' }}</dd>
-  <dt>상태</dt><dd>{{ ('도구 발견 ' ~ (selected.seen | when)) if selected.seen else (('시작 실패' ~ (' · ' ~ selected.start_reason if selected.start_reason else '')) if selected.start_failed else '승인됨') }}</dd>
+  <dt>상태</dt><dd>{% if selected.phase == 'ready' %}사용 가능{{ (' · 도구 발견 ' ~ (selected.seen | when)) if selected.seen else '' }}{% elif selected.phase == 'stopped' %}사용 그만둠{% else %}{{ selected.phase_note }}{% endif %}</dd>
   <dt>도구</dt><dd>{{ '모든 도구' if '*' in selected.tools else ((selected.tools | join) or '—') }}</dd>
   <dt>승인 만료</dt><dd>{{ selected.valid_until | when if selected.valid_until and selected.valid_until.year < 2900 else '기한 없음' }}</dd>
 </dl>
 <div class="actions">{{ stop_use(selected, 'open') }}</div>
+{% if tools_table %}<h3>도구</h3>
+<table><thead><tr><th>도구</th><th>상태</th><th>근거</th><th>마지막 호출</th><th></th></tr></thead><tbody>
+{% for t in tools_table %}<tr><td>{{ t.name }}</td>
+<td><span class="badge {{ t.state }}">{{ t.text }}</span></td><td class="muted">{{ t.source }}</td>
+<td class="nowrap">{{ (t.last | when) if t.last else '—' }}</td>
+<td>{% if t.code %}{% if open_requests.get(selected.server_id ~ '|' ~ t.name) %}{{ waiting_request(selected.server_id, t.name) }}{% else %}{{ ask('ask-tool-' ~ loop.index, '권한 요청', selected.server_id, t.name, t.code, t.name ~ ' 권한 요청') }}{% endif %}{% endif %}</td></tr>{% endfor %}
+</tbody></table>
+<p class="muted">「검사 후보」는 신청 검사 때 발견한 도구이고, 「내 PC가 확인」은 내 PC가 실제로 본 도구입니다.</p>{% endif %}
+{% if preset and preset.server_id == selected.server_id %}{{ request_form(preset.server_id, preset.tool, preset.reason_code, selected.server_name) }}{% endif %}
 <h3>이용 방법</h3>
 <dl class="detail">
   {% if guide.purpose %}<dt>사용 목적</dt><dd>{{ guide.purpose }}</dd>{% endif %}

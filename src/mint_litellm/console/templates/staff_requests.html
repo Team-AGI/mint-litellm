@@ -6,8 +6,9 @@
   {{ m.kpi('확인 대기', pending_count, level='wait' if pending_count) }}
   {{ m.kpi('가장 이른 만료까지', (soonest | span) if soonest is not none else '—', level='wait' if soonest is not none and soonest < 300) }}
   {{ m.kpi('승인 대기', mine_waiting) }}
+  {{ m.kpi('권한 요청 대기', access_waiting, level='wait' if access_waiting) }}
 </div>
-{{ m.tabs([('pending', '본인 확인 대기', pending_count), ('mine', '내 승인 요청', mine_waiting)], tab, '/staff/confirmations') }}
+{{ m.tabs([('pending', '본인 확인 대기', pending_count), ('mine', '내 승인 요청', mine_waiting), ('access', '권한 요청', access_waiting)], tab, '/staff/confirmations') }}
 {% if tab == 'pending' %}
 {% if waiting %}
 <table><thead><tr><th>MCP 서버</th><th>도구</th><th>목적</th><th>표시 값</th><th>만료</th><th>상태</th><th></th></tr></thead><tbody>
@@ -37,6 +38,17 @@
 </tr>{% endfor %}
 </tbody></table>
 {% endif %}
+{% elif tab == 'access' %}
+{% if asked %}
+<table><thead><tr><th>MCP 서버</th><th>도구</th><th>막힌 사유</th><th>요청</th><th>상태</th><th>처리자 · 사유</th><th></th></tr></thead><tbody>
+{% for r in asked %}<tr id="access-{{ r.id }}">
+<td>{{ r.server_name }}</td><td>{{ r.tool or '서버 전체' }}</td><td>{{ r.reason_text }}{% if r.note %}<br><span class="muted">{{ r.note | clip(120) }}</span>{% endif %}</td>
+<td class="nowrap">{{ r.created_at | when }}</td><td>{{ m.badge(L.ACCESS_REQUEST, r.status) }}</td>
+<td>{% if r.status == 'open' %}—{% else %}{{ r.decided_by | masked(64) if r.decided_by else '—' }}{% if r.status == 'rejected' and r.decision_note %}<br>{{ r.decision_note | masked }}{% endif %}{% if r.status == 'resolved' %}<br><span class="muted">{{ {'lift': '차단 해제', 'grant': '기간 허용', 'temp': '30분 허용'}.get(r.resolution, r.resolution) }}</span>{% endif %}{% endif %}</td>
+<td>{% if r.status == 'open' %}{{ m.confirm_dialog('cancel-access-' ~ r.id, '요청 취소', '권한 요청 취소', r.server_name ~ ' ' ~ (r.tool or '서버 전체') ~ ' 요청을 거둡니다. 다시 필요하면 새로 요청할 수 있습니다.', '/staff/access-requests/' ~ r.id ~ '/cancel', actor, '요청 취소') }}{% endif %}</td>
+</tr>{% endfor %}
+</tbody></table>
+{% else %}{{ m.empty('보낸 권한 요청이 없습니다', '/staff?tab=calls', '내 호출에서 막힌 호출 보기') }}{% endif %}
 {% else %}
 {% if mine %}
 <table class="clickable"><thead><tr><th>MCP 서버</th><th>도구</th><th>요청</th><th>상태</th><th>남은 시간</th></tr></thead><tbody>

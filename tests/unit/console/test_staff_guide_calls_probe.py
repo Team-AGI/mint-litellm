@@ -31,7 +31,7 @@ def intake_for(world, purpose="고객 문의 정리", decision="approved"):
 
 
 def test_the_consent_form_is_prefilled_from_the_approved_application(sworld):
-    add_approval(sworld, "user", STAFFER, tools=("echo",))
+    add_approval(sworld, "user", STAFFER, tools=("echo",), consent=True)
     intake_for(sworld)
     page = logged_in(sworld).get("/staff?open=acme%7Csrv-ok").text
     assert 'value="고객 문의 정리"' in page and "내부 자료" in page

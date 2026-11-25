@@ -106,13 +106,12 @@ def test_staff_history_has_a_single_cancel_confirmation():
     assert 'name="state_version" value="2"' in html
     assert 'name="confirm" value="yes"' in html and 'name="reason" value="신청자 취소"' in html
     assert 'type="checkbox"' not in html and "required" not in html
-    # 진행 중(검사·관리자 결정 대기)에도 취소할 수 있고, 끝난 신청에는 취소가 없다.
-    for waiting in ("checking", "passed", "indeterminate"):
+    # 진행 중(검사·관리자 결정 대기)과 검사 실패 신청도 취소할 수 있고, 결정이 난 신청에는 없다.
+    for waiting in ("checking", "passed", "indeterminate", "failed"):
         html = render("_staff_applications.html", applications=[application(waiting)])
         assert "대기 취소" in html
-    for done in ("failed", "approved"):
-        html = render("_staff_applications.html", applications=[application(done)])
-        assert "대기 취소" not in html
+    html = render("_staff_applications.html", applications=[application("decided")])
+    assert "대기 취소" not in html
 
 
 def test_staff_catalog_and_application_history_have_distinct_tabs():
