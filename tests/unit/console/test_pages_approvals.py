@@ -95,7 +95,8 @@ def test_only_an_admin_can_confirm_from_the_screen(world):
     version = world.query("SELECT state_version FROM mint.approvals")[0][0]
     for role in ("approver", "viewer"):
         client = world.session_client(role)
-        assert not re.search(r"<button(?![^>]*disabled)[^>]*>재확인</button>", client.get("/access").text)
+        page = client.get("/access").text
+        assert not re.search(r"<button(?![^>]*disabled)[^>]*>재확인</button>", page)
         response = form_post(world, client, f"/approvals/{approval_id}/recertify",
                              state_version=version)
         assert response.status_code == 403

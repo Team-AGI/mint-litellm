@@ -118,7 +118,8 @@ def test_opening_the_approval_form_without_a_relation_explains_what_to_do(admin)
     moved = admin.get("/approvals/new")
     assert moved.status_code == 303 and moved.headers["location"] == "/approvals/review"
     response = admin.get("/approvals/review")
-    assert response.status_code == 200 and "어느 이용 관계를 승인할지 먼저 고르십시오" in response.text
+    assert response.status_code == 200
+    assert "어느 이용 관계를 승인할지 먼저 고르십시오" in response.text
     assert "/servers" in response.text
 
 
