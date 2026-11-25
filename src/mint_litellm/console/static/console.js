@@ -52,7 +52,7 @@ sidebarMobile.addEventListener("change", function () { syncSidebar(); closeSideb
 //   donut:   {kind, items:[{name, value, decision?, href?}]}
 //   bars:    {kind, labels:[], values:[], horizontal?:bool, links?:[]}
 // 결정 값(allow·approve·block·observe)은 결정색 토큰으로, 조각을 누르면 links/href 로 이동한다.
-var DECISION_TOKEN = { allow: "--ok", approve: "--wait", block: "--danger", observe: "--off" };
+var DECISION_TOKEN = { allow: "--ok", approve: "--wait", block: "--danger", observe: "--off", other: "--chart-4" };
 var PALETTE = ["--chart-1", "--chart-2", "--chart-3", "--chart-4", "--chart-5", "--chart-6"];
 
 function token(name) {
@@ -208,12 +208,32 @@ document.addEventListener("click", function (event) {
     return;
   }
   var copy = event.target.closest("[data-copy]");
-  if (copy && navigator.clipboard) {
-    navigator.clipboard.writeText(copy.getAttribute("data-copy")).then(function () {
+  if (copy) {
+    var text = copy.getAttribute("data-copy");
+    var done = function () {
       var label = copy.textContent;
       copy.textContent = "복사됨";
       setTimeout(function () { copy.textContent = label; }, 1500);
-    });
+    };
+    // http 주소(사내망)에서는 navigator.clipboard가 없다: 숨긴 입력칸을 골라 execCommand로 복사한다
+    var fallback = function () {
+      var area = document.createElement("textarea");
+      area.value = text;
+      area.setAttribute("readonly", "");
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      area.select();
+      var ok = false;
+      try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+      document.body.removeChild(area);
+      if (ok) done(); else window.prompt("복사할 내용", text);
+    };
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(done, fallback);
+    } else {
+      fallback();
+    }
     return;
   }
   var open = event.target.closest("[data-dialog-open]");

@@ -194,7 +194,7 @@ def test_an_admin_names_a_signed_in_person_as_an_approver(world, admin):
     world.query("INSERT INTO mint.directory_users (instance_id, user_id, email, litellm_role)"
                 " VALUES (%s, 'u-appr', 'appr@acme.test', 'internal_user')", INSTANCE)
     html = admin.get("/admin?tab=operators").text
-    assert "운영자 지정" in html and "appr@acme.test" in html
+    assert "MINT 권한 주기" in html and "appr@acme.test" in html
     got = form_post(world, admin, "/admin/operators", user_id="u-appr", role="approver")
     assert got.status_code == 303, got.text
     row = world.query("SELECT role FROM mint.operators WHERE user_id = 'u-appr'")

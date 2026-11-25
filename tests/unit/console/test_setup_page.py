@@ -67,7 +67,7 @@ def test_a_fresh_install_shows_what_is_missing(world, admin):
     assert state(html, "policy") == "미완료"
     assert state(html, "servers") == "완료" and state(html, "password") == "완료"
     assert state(html, "accounts") == "미완료"
-    assert state(html, "approval") == "확인 필요" and "알림 주소 미설정" in html
+    assert state(html, "approval") == "완료" and "알림 주소" not in html  # 알림은 화면에서 뺐다
     assert state(html, "rule") == state(html, "report") == "미완료"
     # 설치 명령에 필요한 서버 설정이 빠졌으면 관리자에게 정확한 원인을 보인다.
     endpoint = row_of(html, "endpoint")
@@ -130,8 +130,7 @@ def test_the_test_send_marks_the_approval_item_only_when_every_address_answers(w
     client = world.client_with(webhook_urls=(HOOK,), webhook_hmac_key=b"k" * 32)
     login = client.post("/login", data={"key": "sk-admin"})
     assert login.status_code == 303
-    html = client.get("/setup").text
-    assert "시험 전송 전" in html and "/setup/webhook-test" in html
+    assert "/setup/webhook-test" not in client.get("/setup").text  # 화면에는 없고 경로만 남는다
     calls = []
 
     def fake_post(http, url, key, delivery, body, deadline=5.0):
@@ -142,13 +141,11 @@ def test_the_test_send_marks_the_approval_item_only_when_every_address_answers(w
     csrf = world.csrf(client)
     failed = client.post("/setup/webhook-test", data={"csrf": csrf})
     assert failed.status_code == 502 and "보내지 못했습니다" in failed.text
-    assert "시험 전송 전" in client.get("/setup").text
 
     monkeypatch.setattr(setup_page.webhook, "post", lambda *a, **k: (calls.append(a[1]) or True, 1))
     sent = client.post("/setup/webhook-test", data={"csrf": csrf})
     assert sent.status_code == 303 and sent.headers["location"] == "/setup?ok=webhook_tested"
     assert calls[0][0] == HOOK and calls[0][1]["kind"] == "webhook_test"
-    assert state(client.get("/setup").text, "approval") == "완료"
     marks = world.query("SELECT mark FROM mint.setup_marks")
     assert marks == [("webhook_test",)]
 
@@ -166,7 +163,7 @@ def test_an_admin_saves_the_alert_address_on_screen_and_the_worker_reads_it(
     from mint_litellm.control import webhook_store
 
     monkeypatch.setenv("MINT_EXPORT_HMAC_KEY", "k" * 32)
-    assert 'action="/setup/webhook"' in admin.get("/setup").text
+    assert 'action="/setup/webhook"' not in admin.get("/setup").text
     bad = form_post(world, admin, "/setup/webhook", url="http://hooks.example.com/x", fmt="slack")
     assert bad.status_code == 400
     ok = form_post(world, admin, "/setup/webhook", url=HOOK, fmt="slack")
@@ -180,7 +177,7 @@ def test_an_admin_saves_the_alert_address_on_screen_and_the_worker_reads_it(
         settings = webhook_store.effective(world.config.stage2, conn, INSTANCE)
     assert settings.webhook_urls == (HOOK,) and settings.webhook_format(HOOK) == "slack"
     html = admin.get("/setup").text
-    assert "알림 주소 미설정" not in html and "/setup/webhook-test" in html
+    assert "/setup/webhook-test" not in html
     assert form_post(world, admin, "/setup/webhook", url="").status_code == 303
     assert world.query("SELECT count(*) FROM mint.webhook_settings")[0][0] == 0
     approver = world.session_client("approver")
@@ -193,7 +190,8 @@ def test_every_role_can_open_the_checklist_and_the_menu_lists_it(world, role):
     html = client.get("/setup").text
     assert "<h1>시작하기</h1>" in html and 'href="/setup"' in html
     assert "mint-kit.tar.gz" not in html
-    assert client.get("/").text.count('href="/setup"') == 1
+    menu = re.findall(r'<nav\b[^>]*class="sidebar".*?</nav>', client.get("/").text, re.S)[0]
+    assert menu.count('href="/setup"') == 1
 
 
 def test_setup_links_the_password_change_and_the_alert_request(world, admin):
@@ -203,7 +201,7 @@ def test_setup_links_the_password_change_and_the_alert_request(world, admin):
     assert item["href"] == "/account/password" and item["status"] is setup_state.OPEN
     assert setup_state._password(False)["status"] is setup_state.DONE
     html = admin.get("/setup").text
-    assert "운영자에게 알림 주소 설정 요청" not in html and "「승인」 화면" in html
+    assert "알림 주소" not in html
 
 
 def test_setup_steps_follow_the_onboarding_order(world, admin):

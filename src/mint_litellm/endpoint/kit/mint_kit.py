@@ -126,17 +126,7 @@ def sha256_file(path: Path) -> str:
 
 def write_atomic(path: Path, data: bytes, mode: int, owner: tuple[int, int] | None = None) -> None:
     """같은 폴더의 임시 파일에 쓰고 바꿔 넣는다. 기존 심볼릭 링크는 따라가지 않는다."""
-    # 관리자 권한 설치기가 사용자 폴더(~/.cache/mint 등)를 처음 만들면 폴더도 그 사용자 것이어야
-    # 사용자 보고기가 보고 시각을 남긴다(root 소유로 남으면 「아직 보고 없음」으로 보인다).
-    missing = []
-    folder = path.parent
-    while not folder.exists():
-        missing.append(folder)
-        folder = folder.parent
-    for folder in reversed(missing):
-        folder.mkdir(exist_ok=True)
-        if owner is not None:
-            os.chown(folder, *owner)
+    path.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(dir=path.parent, prefix=".mint-")
     try:
         with os.fdopen(fd, "wb") as handle:
@@ -4553,8 +4543,7 @@ def parse_command(tokens: list[str], home: Path, fetch=None) -> dict:
             raise AddError("모듈 이름이 올바르지 않습니다")
         return finish_spec(dist_for_module(module), [], None, module, rest[2:], home)
     else:
-        raise AddError(
-            "실행 명령은 uvx 패키지==판본, npx 패키지@판본 또는 저장소 주소로 적으십시오")
+        raise AddError("P1은 PyPI 패키지만 신청할 수 있습니다")
     origin = None
     while rest and rest[0].startswith("-"):
         flag = rest.pop(0)
@@ -4775,12 +4764,9 @@ def key_refused(gateway: Gateway, out=print) -> bool:
 
 
 def run_add(
-    args, home: Path, gateway: Gateway, out=print, read=input, tty: bool = False, key=None,
-    preview: list | None = None,
+    args, home: Path, gateway: Gateway, out=print, read=input, tty: bool = False, key=None
 ) -> int:
-    """``mint add``. 대상(명령 또는 원격 주소)과 목적만 받는다. 서버는 실행하지 않는다.
-
-    ``preview``(리스트)를 주면 보낼 내용(항목, 값)만 거기에 채우고 보내지 않는다."""
+    """``mint add``. 대상(명령 또는 원격 주소)과 목적만 받는다. 서버는 실행하지 않는다."""
     if key_refused(gateway, out):
         return 1
     mark_fast(home / STATE_REL, time.time())  # 승인이 곧 올 테니 보고기가 짧은 주기로 돈다
@@ -4855,9 +4841,6 @@ def run_add(
         )
         if env_values:
             body["env"] = env_values  # 서버 본문의 최상위 env(명세 안이 아니다)
-    if preview is not None:
-        preview.extend(rows)
-        return 0
     for label, value in rows:
         out(f"{pad(label, 10)}{value}")
     for name in secrets:
@@ -5063,8 +5046,10 @@ def screen_box(title: str, rows: list[str], width: int, color: bool) -> list[str
     return [*lines, border("╰" + "─" * (width - 2) + "╯")]
 
 
-def screen_head(model: dict, ui: dict, width: int, color: bool) -> tuple[list[str], tuple]:
-    """맨 위 두 줄(앱 바·탭)과 탭별 건수. 모든 화면이 같은 틀을 쓴다."""
+def render_screen(model: dict, ui: dict, width: int = 80, height: int = 24,
+                  color: bool = False) -> list[str]:
+    """화면 한 장. ANSI 코드는 표시 폭에 포함하지 않는다."""
+    width, height = max(width, 40), max(height, 12)
     state = "● 연결됨" if model["connected"] else "● " + NO_GATEWAY
     mark = screen_color(" MINT ", "1;7;94", color)
     title = " 엔드포인트 · MCP 연결 관리"
@@ -5081,33 +5066,6 @@ def screen_head(model: dict, ui: dict, width: int, color: bool) -> tuple[list[st
                      for i, n in enumerate(names))
     if not color:
         tabs = "  ".join(f"[{n}]" if i == ui["tab"] else f" {n} " for i, n in enumerate(names))
-    return [head, tabs], counts
-
-
-def key_bar(keys: list[tuple[str, str]], width: int, color: bool) -> list[str]:
-    """맨 아래 키 안내(칩). 한 줄에 안 들어가면 줄을 나눈다."""
-    sizes = [cell_width(f" {k} ") + 1 + cell_width(v) for k, v in keys]
-    # 한 줄에 들어가도록 간격을 좁히고, 그래도 넘치면 화살표 안내를 뺀다(↑↓는 어디서나 같다).
-    gap = 2 if sum(sizes) + 2 * (len(keys) - 1) <= width else 1
-    if sum(sizes) + gap * (len(keys) - 1) > width:
-        keys = [k for k in keys if k[0] != "↑↓"]
-    bars, line, used = [], "", 0
-    for key, label in keys:
-        item = f" {key} "
-        size = cell_width(item) + 1 + cell_width(label)
-        if used and used + gap + size > width:
-            bars.append(line)
-            line, used = "", 0
-        line += (" " * gap if used else "") + screen_color(item, "7", color) + " " + label
-        used += (gap if used else 0) + size
-    return [*bars, line]
-
-
-def render_screen(model: dict, ui: dict, width: int = 80, height: int = 24,
-                  color: bool = False) -> list[str]:
-    """화면 한 장. ANSI 코드는 표시 폭에 포함하지 않는다."""
-    width, height = max(width, 40), max(height, 12)
-    top, counts = screen_head(model, ui, width, color)
     tab = ui["tab"]
     body = (tab1_lines(model), tab2_lines(model, ui), tab3_lines(model, ui))[tab]
     sections = []
@@ -5140,155 +5098,27 @@ def render_screen(model: dict, ui: dict, width: int = 80, height: int = 24,
         content.extend(screen_box(title, rows, width, color))
     keys = [("1-3", "화면"), ("↑↓", "선택"), ("Enter", "상세"), ("n", "신청"),
             ("s", "받기"), ("c", "점검"), ("r", "새로고침"), ("o", "웹"), ("q", "끝")]
-    bars = key_bar(keys, width, color)
+    sizes = [cell_width(f" {k} ") + 1 + cell_width(v) for k, v in keys]
+    # 한 줄에 들어가도록 간격을 좁히고, 그래도 넘치면 화살표 안내를 뺀다(↑↓는 어디서나 같다).
+    gap = 2 if sum(sizes) + 2 * (len(keys) - 1) <= width else 1
+    if sum(sizes) + gap * (len(keys) - 1) > width:
+        keys = [k for k in keys if k[0] != "↑↓"]
+    bars, line, used = [], "", 0
+    for key, label in keys:
+        item = f" {key} "
+        size = cell_width(item) + 1 + cell_width(label)
+        if used and used + gap + size > width:
+            bars.append(line)
+            line, used = "", 0
+        line += (" " * gap if used else "") + screen_color(item, "7", color) + " " + label
+        used += (gap if used else 0) + size
+    bars.append(line)
     if ui.get("message"):
         bars[0] = clip(str(ui["message"]), width)
     content = content[:max(0, height - 3 - len(bars))]
-    lines = [*top, "", *content]
+    lines = [head, tabs, "", *content]
     lines += [""] * max(0, height - len(lines) - len(bars))
     return [*lines, *bars][:height]
-
-
-INTAKE_FIELDS = ("주소 또는 실행 명령", "목적")
-INTAKE_EXAMPLES = (
-    "예) https://github.com/주인/저장소   uvx 패키지==1.2.0   npx 패키지@1.2.0",
-    "예) 사내 문서를 검색해 답변에 쓰려고 합니다",
-)
-INTAKE_LABELS = {"패키지": "판본·커밋 고정", "명령": "실행 명령", "주소": "주소"}
-
-
-def wrap_cells(text: str, width: int) -> list[str]:
-    """표시 폭에 맞춰 줄을 나눈다(가능하면 띄어쓰기에서). 긴 오류·명령이 잘리지 않게 한다."""
-    lines, cur = [], ""
-    for ch in text:
-        if cell_width(cur + ch) > width:
-            cut = cur.rfind(" ")
-            if cut > width // 3:
-                lines.append(cur[:cut])
-                cur = cur[cut + 1:]
-            else:
-                lines.append(cur)
-                cur = ""
-        cur += ch
-    return [*lines, cur]
-
-
-def render_intake(model: dict, form: dict, width: int = 80, height: int = 24,
-                  color: bool = False) -> list[str]:
-    """새 도입 신청 전용 화면. 1 입력 · 2 확인 · 3 결과. 앱 바·탭·키 안내는 다른 화면과 같다."""
-    width, height = max(width, 40), max(height, 12)
-    top, _ = screen_head(model, {"tab": 2}, width, color)
-    step = form["step"]
-    rows: list[str] = []
-    if step == 1:
-        title = "새 도입 신청 · 1/3 입력"
-        keys = [("Enter", "다음"), ("Tab", "칸 이동"), ("Esc", "취소")]
-        for i, label in enumerate(INTAKE_FIELDS):
-            on = form["focus"] == i
-            rows += [label, f"{'>' if on else ' '} {form['values'][i]}{'_' if on else ''}",
-                     f"  {INTAKE_EXAMPLES[i]}", ""]
-    elif step == 2:
-        title = "새 도입 신청 · 2/3 확인"
-        keys = [("Enter", "제출"), ("e", "고치기"), ("Esc", "취소")]
-        rows = ["아래 내용으로 신청합니다", ""]
-        rows += [f"{pad(label, 16)}{value}" for label, value in form["preview"]]
-    else:
-        title = "새 도입 신청 · 3/3 결과"
-        keys = [("아무 키", "신청 목록으로")] if form["ok"] else [
-            ("Enter", "고치기"), ("Esc", "취소")]
-        rows = list(form["result"])
-    if form.get("error"):
-        rows += ["", "! " + form["error"]]
-    wrapped = [part for r in rows if r is not None for part in wrap_cells(r, width - 4)]
-    box = screen_box(title, wrapped, width, color)
-    bars = key_bar(keys, width, color)
-    lines = [*top, "", *box][:max(0, height - len(bars))]
-    lines += [""] * max(0, height - len(lines) - len(bars))
-    return [*lines, *bars][:height]
-
-
-def intake_preview(form: dict, gateway: Gateway, home: Path, submit: bool) -> None:
-    """``mint add``와 같은 해석으로 미리보기(submit=False)하거나 제출한다. 결과는 form에 담는다."""
-    import shlex
-
-    typed, purpose = (v.strip() for v in form["values"])
-    out: list[str] = []
-    form["error"] = ""
-    try:
-        name, tokens = (typed, []) if is_url(typed) else (None, shlex.split(typed))
-        args = argparse.Namespace(
-            source=None, name=name, command=tokens, purpose=purpose, grade=None, network=None,
-            host=[], env=[], ro=[], rw=[], yes=True, request_id=form["request_id"],
-        )
-        rows: list = []
-        code = run_add(args, home, gateway, out=out.append, preview=None if submit else rows)
-    except ValueError:
-        code, out = 2, ["주소 또는 실행 명령의 따옴표가 맞지 않습니다"]
-    except Exception:  # noqa: BLE001 - 화면은 오류 흔적 대신 사람 문구로 알린다
-        code, out = 1, ["확인하지 못했습니다. 입력과 연결을 살펴 다시 시도하십시오"]
-    if submit:
-        form.update(step=3, ok=code == 0, result=out or ["신청하지 못했습니다"])
-        if code:
-            form["error"] = out[-1] if out else "신청하지 못했습니다"
-        return
-    if code:
-        form["error"] = out[-1] if out else "확인하지 못했습니다"
-        form["step"] = 1
-        return
-    kind = "원격" if any(label == "주소" for label, _ in rows) else "로컬"
-    form["preview"] = [("종류", kind)] + [(INTAKE_LABELS.get(a, a), str(b)) for a, b in rows]
-    form["step"] = 2
-
-
-TEXT_KEYS = {"enter", "esc", "tab", "backspace", "up", "down", "left", "right", "q"}
-
-
-def intake_screen(model: dict, gateway: Gateway, home: Path, read=None, out=None) -> str:
-    """새 도입 신청: 입력 → 확인 → 결과. 돌려주는 글은 목록 화면 맨 아래 줄에 보인다."""
-    out, read = out or sys.stdout, read or read_key
-    form = {"step": 1, "focus": 0, "values": ["", ""], "error": "", "ok": False,
-            "preview": [], "result": [], "request_id": str(uuid.uuid4())}  # fmt: skip
-    while True:
-        size = shutil.get_terminal_size((80, 24))
-        color = bool(getattr(out, "isatty", lambda: False)() and "NO_COLOR" not in os.environ
-                     and os.environ.get("TERM") != "dumb")
-        out.write("\x1b[2J\x1b[H" + "\n".join(render_intake(
-            model, form, size.columns, size.lines, color)) + "\n")
-        out.flush()
-        step, key = form["step"], read(True)
-        if key == "esc" and not (step == 3 and form["ok"]):
-            return "신청을 취소했습니다"
-        if step == 3:
-            if form["ok"]:
-                return str(form["result"][-1]) if form["result"] else "신청했습니다"
-            form.update(step=1, request_id=str(uuid.uuid4()))
-        elif step == 2:
-            if key == "e":
-                form.update(step=1, error="")
-            elif key == "enter":
-                out.write("\x1b[2J\x1b[H제출하는 중입니다...\n")
-                out.flush()
-                intake_preview(form, gateway, home, True)
-        elif key in ("tab", "up", "down"):
-            form["focus"] ^= 1
-        elif key == "backspace":
-            form["values"][form["focus"]] = form["values"][form["focus"]][:-1]
-        elif key == "enter":
-            if not form["values"][0].strip():
-                form["error"], form["focus"] = "주소 또는 실행 명령을 적으십시오", 0
-            elif form["focus"] == 0:
-                form["focus"], form["error"] = 1, ""
-            elif not form["values"][1].strip():
-                form["error"] = "목적을 적으십시오"
-            else:
-                out.write("\x1b[2J\x1b[H확인하는 중입니다...\n")
-                out.flush()
-                intake_preview(form, gateway, home, False)
-        elif key and key not in TEXT_KEYS:
-            typed = "".join(c for c in key if c.isprintable())  # 붙여넣은 줄바꿈·제어 문자는 뺀다
-            if typed:
-                form["values"][form["focus"]] += typed
-                form["error"] = ""
 
 
 def handle_key(key: str, ui: dict, model: dict) -> str | None:
@@ -5319,21 +5149,15 @@ def handle_key(key: str, ui: dict, model: dict) -> str | None:
     return None
 
 
-def read_key(text: bool = False) -> str:
-    """키 하나를 이름으로(1·2·3, left/right/up/down, enter, esc, 글자). 입력이 끝나면 q.
-
-    ``text``이면 글자를 있는 그대로(대소문자·한글) 주고 tab·backspace도 이름으로 준다."""
-    fold = (lambda c: c) if text else str.lower
+def read_key() -> str:
+    """키 하나를 이름으로(1·2·3, left/right/up/down, enter, esc, 글자). 입력이 끝나면 q."""
     if os.name == "nt":
         import msvcrt
 
         char = msvcrt.getwch()
         if char in ("\x00", "\xe0"):
             return {"H": "up", "P": "down", "K": "left", "M": "right"}.get(msvcrt.getwch(), "")
-        named = {"\r": "enter", "\x1b": "esc", "\x03": "q"}
-        if text:
-            named |= {"\t": "tab", "\x08": "backspace"}
-        return named.get(char, fold(char))
+        return {"\r": "enter", "\x1b": "esc", "\x03": "q"}.get(char, char.lower())
     import select
     import termios
     import tty
@@ -5351,17 +5175,7 @@ def read_key(text: bool = False) -> str:
             return {b"\x1b[A": "up", b"\x1b[B": "down", b"\x1b[C": "right",
                     b"\x1b[D": "left"}.get(raw, "esc")  # fmt: skip
         named = {b"\n": "enter", b"\r": "enter", b"\x03": "q"}
-        if text:
-            named |= {b"\t": "tab", b"\x7f": "backspace", b"\x08": "backspace", b"\x03": "esc"}
-            # 붙여넣기·한글은 여러 바이트가 한꺼번에 온다: 지금 와 있는 것을 모두 한 번에 읽는다
-            while select.select([fd], [], [], 0.02)[0]:
-                more = os.read(fd, 4096)
-                if not more:
-                    break
-                raw += more
-            if raw not in named:
-                return raw.decode(errors="ignore")
-        return named.get(raw, fold(raw.decode(errors="ignore")))
+        return named.get(raw, raw.decode(errors="ignore").lower())
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
 
@@ -6438,7 +6252,7 @@ def cli_main(argv: list[str]) -> int:
         return "보고했습니다"
 
     def new_action(model, ui):
-        return intake_screen(model, gateway, kit.home)
+        return interactive_add(kit, gateway, kit.home, None, key=read_key)
 
     def found_action(model, ui):
         item = model["found"][ui["cursor"] - len(model["intakes"])]

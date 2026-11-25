@@ -89,8 +89,6 @@ def test_revocation_and_denial_accept_an_empty_reason(world, admin):
 def test_solo_root_approval_notifications_are_optional(monkeypatch):
     monkeypatch.setattr(setup_state, "_count", lambda *args: 0)
     monkeypatch.setattr(setup_state, "mark_time", lambda *args: None)
-    monkeypatch.setattr(setup_state.webhook_store, "effective",
-                        lambda *args: SimpleNamespace(webhook_urls=()))
     stage2 = SimpleNamespace(webhook_urls=())
     actor = SimpleNamespace(config=SimpleNamespace(stage2=stage2), conn=None, instance="i",
                             role="admin")
@@ -211,8 +209,6 @@ def test_service_accounts_do_not_count_as_human_operators(monkeypatch):
     seen = []
     monkeypatch.setattr(setup_state, "_count", lambda a, sql, *args: seen.append(args) or 0)
     monkeypatch.setattr(setup_state, "mark_time", lambda *args: None)
-    monkeypatch.setattr(setup_state.webhook_store, "effective",
-                        lambda *args: SimpleNamespace(webhook_urls=()))
     stage2 = SimpleNamespace(webhook_urls=())
     actor = SimpleNamespace(config=SimpleNamespace(stage2=stage2), conn=None, instance="i",
                             role="admin")

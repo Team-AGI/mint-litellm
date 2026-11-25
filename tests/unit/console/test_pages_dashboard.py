@@ -269,9 +269,9 @@ def test_the_overview_shows_the_litellm_grade_each_replica_reported(world, admin
                       "missing": ["list_hook"]})
     verified("r4:1", None)
     html = admin.get("/").text
-    assert "LiteLLM 1.106.6 · 보장 등급 A" in html
-    assert "LiteLLM 1.107.0 · 보장 등급 A · 검증되지 않은 판본" in html
-    assert "LiteLLM 1.99.0 · 보장 등급 B" in html and 'title="도구 목록 훅"' in html
+    assert "LiteLLM 1.106.6" in html and "보장 등급" not in html
+    assert "LiteLLM 1.107.0 · 검증되지 않은 판본" in html
+    assert "LiteLLM 1.99.0 · MINT에 필요한 기능 없음" in html and 'title="도구 목록 훅"' in html
     assert "list_hook" not in html
 
 

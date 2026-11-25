@@ -13,7 +13,7 @@
   {% if litellm_open %}<a class="button" href="/litellm/open" hx-boost="false">LiteLLM에서 계정 관리</a>{% endif %}
 </form>
 {% if rows %}
-<table><thead><tr><th>사람</th><th>LiteLLM 역할</th><th>팀</th><th>최근 로그인</th><th>운영자 역할</th><th>MCP</th><th></th></tr></thead><tbody>
+<table><thead><tr><th>사람</th><th>LiteLLM 역할</th><th>팀</th><th>최근 로그인</th><th>MINT 권한</th><th>MCP</th><th></th></tr></thead><tbody>
 {% for p in rows %}<tr>
 <td>{{ p.email or p.user_id }}{% if p.email %}<div class="muted">{{ p.user_id }}</div>{% endif %}</td>
 <td>{{ L.pick(L.LITELLM_ROLE, p.litellm_role) }}</td>
@@ -28,8 +28,8 @@
 <label>사유(선택)<input name="reason" maxlength="500" autocomplete="off"></label>
 {% endcall %}{% endif %}
 {% if not p.operator_role %}<form method="post" action="/people/operator" class="inline">{{ m.csrf(actor) }}<input type="hidden" name="user_id" value="{{ p.user_id }}">
-<select name="role" aria-label="운영자 역할"><option value="approver">{{ L.pick(L.ROLE, 'approver') }}</option><option value="viewer">{{ L.pick(L.ROLE, 'viewer') }}</option><option value="admin">{{ L.pick(L.ROLE, 'admin') }}</option></select>
-<button type="submit">운영자로 지정</button></form>{% endif %}
+<select name="role" aria-label="MINT 권한" required><option value="" selected disabled>MINT 권한 선택</option><option value="viewer">조회자 · 화면만 보기</option><option value="approver">승인자 · 신청 승인·거부</option><option value="admin">관리자 · 모든 설정</option></select>
+<button type="submit">권한 주기</button></form>{% endif %}
 </div>{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
