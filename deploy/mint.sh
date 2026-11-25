@@ -359,6 +359,11 @@ fix_volume_owners() {
         -R 65532:65532 /var/lib/mint/export /bundles < /dev/null
     "${COMPOSE[@]}" run --rm --no-deps -T --user 0 --entrypoint chown litellm \
         -R 65532:65532 /var/lib/mint/buffer < /dev/null
+    # 새 볼륨은 이미지의 root 소유 폴더를 그대로 받는다. 묶음·검사 볼륨이 root면 작업 실행기가
+    # 로컬 신청 검사에서 PermissionError로 재시도만 반복한다(클린 설치 실측).
+    "${COMPOSE[@]}" run --rm --no-deps -T --user 0 --entrypoint chown worker \
+        -R 65532:65532 /var/lib/mint/packs /var/lib/mint/inspect /var/lib/mint/inspect-work \
+        /var/lib/mint/scan < /dev/null
     # 설정 폴더는 운영자 파일이라 소유자는 두고 그룹에만 읽기를 연다.
     "${COMPOSE[@]}" run --rm --no-deps -T --user 0 --entrypoint sh control \
         -c 'chgrp -R 65532 /app/config && chmod -R g+rX /app/config' < /dev/null
