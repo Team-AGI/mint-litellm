@@ -996,8 +996,14 @@ def kick_notify(args: Sequence[str]) -> None:
 
 
 def launch_env(approved: Mapping[str, Any], inherited: Mapping[str, str]) -> dict[str, str]:
-    """상속한 환경에서 위험한 변수를 빼고 승인된 환경 값을 얹는다."""
-    env = {k: v for k, v in inherited.items() if not ENV_DENIED.match(k)}
+    """상속한 환경에서 위험한 변수를 빼고 승인된 환경 값을 얹는다.
+
+    ``mint app run``이 스크립트에 넣어 준 앱 키(``MINT_APP_KEY``와 같은 값의 변수)는 그 스크립트가
+    띄운 서버에 넘기지 않는다. 앱 키는 스크립트의 모델·게이트웨이 호출용이다.
+    """
+    app_key = inherited.get("MINT_APP_KEY")
+    env = {k: v for k, v in inherited.items()
+           if not ENV_DENIED.match(k) and not (app_key and v == app_key)}
     env.update({str(k): str(v) for k, v in (approved.get("env") or {}).items()})
     return env
 

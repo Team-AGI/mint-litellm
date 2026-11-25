@@ -156,3 +156,13 @@ def test_rm_never_claims_a_revoke_it_did_not_make_and_run_explains_a_missing_com
     run(kit, "run", name="bot", command=["--", "npx", "tsx", "a.ts"],
         call=lambda command, env: seen.append(command) or 0)
     assert seen == [["C:/nodejs/npx.CMD", "tsx", "a.ts"]]  # Windows .cmd 명령도 띄운다
+
+
+def test_a_server_started_from_an_app_script_never_gets_the_app_key():
+    agent = load("mint_agent")
+    env = agent.launch_env({"env": {"A": "1"}}, {
+        "MINT_APP_KEY": SECRET, "OPENAI_API_KEY": SECRET, "ANTHROPIC_API_KEY": SECRET,
+        "OPENAI_BASE_URL": "https://mint.test/v1", "GITHUB_TOKEN": "user-own", "PATH": "/bin"})
+    assert SECRET not in env.values()
+    assert env == {"OPENAI_BASE_URL": "https://mint.test/v1", "GITHUB_TOKEN": "user-own",
+                   "PATH": "/bin", "A": "1"}
