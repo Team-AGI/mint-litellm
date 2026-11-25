@@ -55,7 +55,7 @@ VALUE = {
     "signal": labels.KEY_BLOCK_SIGNAL,
     "verdict": {"widened": "확대", "narrowed": "축소", "unchanged": "변화 없음"},
     "kind": {"exec": "실행 계약", "deployment": "배포 계약", "instance_mismatch": "인스턴스 불일치",
-             "negative_state": "부정 상태 파일", "checkpoint": "체크포인트 파일",
+             "negative_state": "차단 상태 파일", "checkpoint": "체크포인트 파일",
              "setting": "보안 설정", "tool": "도구 계약"},
     "items": {"deployment": "배포 계약", "setting:guardrail_mode": "가드레일 모드",
               "setting:policy_bundle": "활성 정책 묶음"},

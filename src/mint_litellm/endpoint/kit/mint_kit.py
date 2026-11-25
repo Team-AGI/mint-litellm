@@ -3933,7 +3933,7 @@ def extract_wheel(handle, dest: Path, seen: dict[str, tuple[str, str]], budget: 
     try:
         archive = zipfile.ZipFile(handle)
     except zipfile.BadZipFile as exc:
-        raise PackError("wheel을 열 수 없습니다") from exc
+        raise PackError("묶음 안의 패키지 파일을 열 수 없습니다") from exc
     with archive:
         for info in archive.infolist():
             if info.is_dir():
@@ -4492,7 +4492,7 @@ def npm_command_spec(rest: list[str], fetch=None) -> dict:
         raise AddError("패키지 이름이 없거나 지원하지 않는 옵션입니다: npx -y 패키지@판본")
     found = NPM_REF.match(rest[0])
     if not found:
-        raise AddError("npm 패키지는 `이름` 또는 `이름@판본` 형태로 적으십시오")
+        raise AddError("npm 패키지는 이름 또는 이름@판본 형태로 적으십시오")
     name, argv = found.group(1), rest[1:]
     if len(argv) > MAX_ARGV or any(len(a) > 4096 or chr(0) in a for a in argv):
         raise AddError("인자가 너무 많거나 깁니다")
@@ -4813,7 +4813,7 @@ def run_add(
             [] if args.network == "none" else inferred_hosts(spec["argv"], env_values))
         network = args.network or ("hosts" if hosts else None)
         if network == "hosts" and not hosts:
-            out("hosts에는 허용 호스트(--host)가 필요합니다")
+            out("접속을 일부 주소로 제한하려면 허용 호스트(--host)를 적어야 합니다")
             return 2
         grade = parse_grade(args.grade or "internal")  # 등급은 내부 값이다(--grade로만 바꾼다)
         if grade is None:

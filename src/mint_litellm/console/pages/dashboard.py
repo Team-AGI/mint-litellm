@@ -157,7 +157,7 @@ def status_dots(o, workers, zone):
         verified = len(workers) - unverified
         dots.append(
             {
-                "name": "집행 워커",
+                "name": "집행 처리기",
                 "status": Status(
                     (
                         f"{verified}/{len(workers)} 정상"
