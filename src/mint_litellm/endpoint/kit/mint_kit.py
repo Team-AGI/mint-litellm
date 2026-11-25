@@ -425,10 +425,17 @@ def retire_key(kit: Kit, old_key: str) -> bool:
     new_key = kit.config.get("key")
     kit.config["key"] = old_key
     kit.replaced_by = sha256_bytes(new_key.encode()) if new_key else None  # 앱 자격을 새 키로
+    import contextlib
+    import io
+
     try:
-        done = kit.report({"mode": "none"}, "removed")
+        with contextlib.redirect_stderr(io.StringIO()):  # 옛 키 거절 안내는 여기서 뜻이 없다
+            done = kit.report({"mode": "none"}, "removed")
     finally:
         kit.config["key"], kit.replaced_by = new_key, None
+    if not done and set(last_http_error) & {401, 403, 404}:
+        return True  # 서버가 이미 모르는 키다(해제됐거나 다른 서버의 키): 할 일이 없다
+    done = done and (getattr(kit, "answer", None) or {}).get("retired") is not False
     if not done:
         print("이 PC의 옛 연결 키를 해제하지 못했습니다. 관리자 화면 「단말」에서 해제하십시오.")
     return done
