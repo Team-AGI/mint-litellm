@@ -100,7 +100,8 @@ def check_write(method: str, path: str, body: Any) -> None:
         return
     if path == "/v1/mcp/server" and method == "POST":
         fields = {"server_id", "server_name", "url", "transport", "auth_type",
-                  "allow_all_keys", "rpm", "max_concurrent_requests", "timeout", "mcp_info"}
+                  "allow_all_keys", "rpm", "max_concurrent_requests", "timeout", "mcp_info",
+                  "description"}
         if (not isinstance(body, dict) or set(body) != fields
                 or not isinstance(body["server_id"], str)
                 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", body["server_id"])
@@ -111,7 +112,9 @@ def check_write(method: str, path: str, body: Any) -> None:
                 or body["rpm"] != 600 or body["max_concurrent_requests"] != 8
                 or body["timeout"] != 30
                 or not isinstance(body["mcp_info"], dict)
-                or set(body["mcp_info"]) != {"mint_intake_id", "mint_url_sha256"}):
+                or set(body["mcp_info"]) != {"mint_intake_id", "mint_url_sha256"}
+                or body["description"] != "mint-intake:{}:{}".format(
+                    body["mcp_info"]["mint_intake_id"], body["mcp_info"]["mint_url_sha256"])):
             raise WriteRefused("직원 도입 검증용 비공개 HTTP/SSE 서버만 등록할 수 있습니다.")
         return
     if path == "/v1/mcp/server":
