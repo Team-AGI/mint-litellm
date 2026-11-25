@@ -50,5 +50,5 @@ def test_every_pack_and_inspection_code_has_a_staff_reason():
 def test_a_package_inspected_on_first_run_waits_for_approval_not_failure():
     row = {"status": "indeterminate", "decision": None, "reason_code": "INSPECT_ON_FIRST_RUN"}
     assert text.stage_of(row) == "review"
-    assert text.next_of(row) == "관리자 승인 뒤 PC에서 처음 실행할 때 검사"
+    assert text.next_of(row) == "승인 뒤 PC 첫 실행 때 검사"
     assert text.reason_of(row) is None
