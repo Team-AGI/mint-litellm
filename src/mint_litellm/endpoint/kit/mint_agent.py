@@ -123,6 +123,8 @@ DOWN_FILE = "unreachable_until"  # 결정 서버에 방금 닿지 못했다: 이
 # 기다리지 않게). 그 사이 결정 서버가 돌아와도 새 차단은 이 시간만큼 늦게 반영된다.
 DOWN_HOLD = 10.0
 PAUSED_TEXT = "관리자가 이 PC의 관리 AI 연결을 중지했습니다. 재개되면 바로 다시 호출하십시오."
+OUTAGE_TEXT = ("MINT 결정 서버에 닿지 못했고 승인 목록에서 확인되지 않은 서버라 막았습니다. "
+               "잠시 뒤 다시 호출하십시오.")
 
 
 def paused(state_dir: str) -> bool:
@@ -731,11 +733,11 @@ def decide(
             payload, state_dir=state_dir, url=url, key=key, post=post,
             http_timeout=http_timeout, on_pending=on_pending,
         )
-    except Unreachable:
+    except Unreachable as exc:
         if not offline_allowed(payload["server"], contracts, state_dir):
             if paused(state_dir):
                 raise Refuse(PAUSED_TEXT) from None
-            raise
+            raise Unreachable(f"{OUTAGE_TEXT}\n{exc}") from None  # 하네스는 앞부분만 보여 준다
         record_offline(state_dir, payload["server"], payload["tool"], harness)
         return
     # 호출 뒤 훅이 결과를 보고할 수 있게 판정 참조를 호출 식별자로 남긴다.
@@ -3219,11 +3221,11 @@ def mediator_for(
                 payload, state_dir=state_dir, url=url, key=key, post=post,
                 http_timeout=http_timeout,
             )
-        except Unreachable:
+        except Unreachable as exc:
             if not offline_allowed(server, contracts, state_dir):
                 if paused(state_dir):
                     raise Refuse(PAUSED_TEXT) from None
-                raise
+                raise Unreachable(f"{OUTAGE_TEXT}\n{exc}") from None
             record_offline(state_dir, server, tool, client)
             return None
         reference = answer.get("reference")

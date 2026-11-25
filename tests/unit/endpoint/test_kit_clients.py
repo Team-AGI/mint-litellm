@@ -291,6 +291,11 @@ def test_the_mediated_judge_follows_the_outage_contract(tmp_path):
     open(os.path.join(state, agent.PAUSED_FILE), "w").write("1")
     with pytest.raises(agent.Refuse, match="관리 AI 연결을 중지"):
         mediator.judge("search", {})
+    os.unlink(os.path.join(state, agent.PAUSED_FILE))
+    write(tmp_path / "state" / agent.RETIRED_FILE, {"servers": ["srv-1"]})
+    with pytest.raises(agent.Unreachable) as refused:  # 폐기 서버: 막고 첫 줄에 한국어 안내
+        mediator.judge("search", {})
+    assert str(refused.value).startswith(agent.OUTAGE_TEXT)
 
 
 def test_a_paused_pc_does_not_start_servers(tmp_path):
