@@ -52,3 +52,13 @@ def test_a_package_inspected_on_first_run_waits_for_approval_not_failure():
     assert text.stage_of(row) == "review"
     assert text.next_of(row) == "승인 뒤 PC 첫 실행 때 검사"
     assert text.reason_of(row) is None
+
+
+def test_an_approved_request_whose_approvals_all_ended_reads_as_ended():
+    """QA-BUG-009: 이용 종료 뒤 PC 신청 목록이 「승인」으로 남지 않는다."""
+    from mint_litellm.endpoint import intake_text
+
+    row = {"decision": "approved", "status": "decided", "ended": True}
+    assert intake_text.stage_of(row) == "ended"
+    assert intake_text.next_of(row) == intake_text.NEXT_ENDED
+    assert intake_text.stage_of({**row, "ended": False}) == "approved"

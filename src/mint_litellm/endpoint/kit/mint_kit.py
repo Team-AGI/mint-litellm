@@ -4269,6 +4269,10 @@ def parse_time(text: object) -> float | None:
 GATEWAY_TIMEOUT = 10
 ME_PATH = "/mint/v1/endpoint/me"
 INTAKES_PATH = "/mint/v1/endpoint/intakes"
+ACCESS_PATH = "/mint/v1/endpoint/access-requests"
+ACCESS_WORD = {"open": "승인 대기", "resolved": "승인됨", "rejected": "거절됨",
+               "cancelled": "취소됨"}  # fmt: skip
+ACCESS_DONE = {"lift": "차단 해제됨", "grant": "사용 허용됨", "temp": "30분 허용됨"}
 PACK_PATH = "/mint/v1/endpoint/packs"
 NO_GATEWAY = "게이트웨이에 닿지 못함"
 
@@ -4944,7 +4948,7 @@ def pad(text: str, width: int) -> str:
 STAGE_NAMES = {
     "received": "접수", "pack": "묶음 준비", "inspect": "검사 중", "passed": "검사 통과",
     "review": "승인 대기", "indeterminate": "판별 불가", "failed": "검사 실패", "approved": "승인",
-    "rejected": "거절",
+    "ended": "이용 종료", "rejected": "거절",
     "withdrawn": "철회",
 }
 STAGE_FLOW = ("received", "pack", "inspect")
@@ -5091,12 +5095,30 @@ def tab3_lines(model: dict, ui: dict) -> list[str]:
     return out
 
 
+def access_rows(me: dict | None) -> list[dict]:
+    """``me``의 권한 요청을 화면·명령이 쓰는 꼴로(상태 낱말, 사유는 처리 결과나 거절 사유)."""
+    rows = []
+    for r in (me or {}).get("access_requests", []):
+        if not isinstance(r, dict):
+            continue
+        status = str(r.get("status") or "")
+        reason = r.get("decision_note") or ACCESS_DONE.get(str(r.get("resolution"))) or r.get(
+            "reason_code")
+        rows.append({
+            "id": str(r.get("id") or ""), "server_id": r.get("server_id"), "tool": r.get("tool"),
+            "state": ACCESS_WORD.get(status, status), "status": status, "reason": reason,
+            "created_at": r.get("created_at"),
+        })  # fmt: skip
+    return rows
+
+
 def tab4_lines(model: dict, ui: dict) -> list[str]:
-    """내 요청: 보낸 권한 요청. 요청을 받아 올 곳이 생기면 ``access_requests``가 채운다."""
+    """내 요청: 보낸 권한 요청(상태·처리 결과)."""
     rows = model.get("access_requests") or []
     if not rows:
         return ["보낸 권한 요청이 없습니다",
-                "권한 요청과 승인 대기 호출은 직원 화면 「내 요청」에서 봅니다(o 키)"]  # fmt: skip
+                "요청: mint request access <서버> [도구] --reason 사유",
+                "웹 「내 요청」은 o 키"]  # fmt: skip
     out = [f"  {pad('서버·도구', 36)}{pad('상태', 14)}사유"]
     for i, row in enumerate(rows):
         target = str(row.get("server_id", "")) + (f"/{row['tool']}" if row.get("tool") else "")
@@ -5496,7 +5518,7 @@ def build_model(kit, state: dict, gateway: Gateway | None) -> dict:
         "mode": mode, "harnesses": kit.harnesses, "server_count": len(state.get("mcp_servers", [])),
         "problems": problems, "servers": servers,
         "intakes": intakes, "found": found, "inspections": inspections, "now": now,
-        "access_requests": [],  # 권한 요청을 받아 올 단말 API가 생기면 채운다
+        "access_requests": access_rows(me),
         "result": result,
     }  # fmt: skip
 
@@ -6700,7 +6722,8 @@ def print_json(doc: dict) -> None:
 
 SERVER_FIELDS = ("server_id", "kind", "state", "detail", "permit_until", "pack_sha256", "next")
 SERVER_SHOW_FIELDS = (*SERVER_FIELDS, "reason", "tools", "requests")
-REQUEST_FIELDS = ("id", "server_id", "state", "stage", "reason", "next", "created_at")
+REQUEST_FIELDS = ("id", "kind", "server_id", "tool", "state", "stage", "reason", "next",
+                  "created_at")  # fmt: skip
 APP_FIELDS = ("name", "expires_at", "state", "on_this_pc")
 CONFIG_FIELDS = ("gateway_url", "kit_folder", "mode", "kit_version", "user", "harnesses", "key")
 STATUS_FIELDS = ("mode", "user", "kit_version", "gateway", "key", "server_count",
@@ -6709,7 +6732,8 @@ STATUS_FIELDS = ("mode", "user", "kit_version", "gateway", "key", "server_count"
 # 상태(받기 필요 등)는 「세부」로 따로 둔다. 신청 상태는 웹 신청 목록과 같다(H.5).
 SERVER_WORD = {S_READY: "사용 가능", S_FAILED: "시작 실패", S_BAD: "시작 실패",
                S_NOPROG: "시작 실패", S_PYVER: "시작 실패"}  # fmt: skip
-REQUEST_WORD = {"approved": "승인됨", "rejected": "거절됨", "withdrawn": "철회됨",
+REQUEST_WORD = {"approved": "승인됨", "ended": "이용 종료됨", "rejected": "거절됨",
+                "withdrawn": "철회됨",
                 "pack": "준비 중", "review": "승인 대기"}  # fmt: skip
 LABEL_WORD = {"승인": "승인됨", "거절": "거절됨", "철회": "철회됨"}
 CLI_NEXT = {
@@ -6720,7 +6744,7 @@ CLI_NEXT = {
     S_NOPROG: "관리자에게 런타임 설치를 요청하십시오",
     S_PYVER: "승인된 Python 판본을 설치하도록 관리자에게 요청하십시오",
 }  # fmt: skip
-PENDING_DONE = ("approved", "rejected", "withdrawn", "failed")
+PENDING_DONE = ("approved", "ended", "rejected", "withdrawn", "failed")
 
 
 def short_id(row: dict) -> str:
@@ -6742,11 +6766,19 @@ def server_rows(model: dict) -> list[dict]:
 
 
 def request_rows(model: dict) -> list[dict]:
-    return [{
-        "id": str(r.get("id") or ""), "server_id": r.get("server_id"), "state": request_word(r),
-        "stage": r.get("stage"), "reason": r.get("reason"), "next": next_text(r),
-        "created_at": r.get("created_at"),
+    intakes = [{
+        "id": str(r.get("id") or ""), "kind": "서버 신청", "server_id": r.get("server_id"),
+        "tool": None, "state": request_word(r), "stage": r.get("stage"), "reason": r.get("reason"),
+        "next": next_text(r), "created_at": r.get("created_at"),
     } for r in model["intakes"]]  # fmt: skip
+    asks = [{
+        **{k: r[k] for k in ("id", "server_id", "tool", "state", "reason", "created_at")},
+        "kind": "권한 요청", "stage": "access",
+        "next": (f"승인자 처리를 기다립니다(취소: mint request cancel {r['id'][:8]})"
+                 if r["status"] == "open" else
+                 "바로 쓸 수 있습니다" if r["status"] == "resolved" else "-"),
+    } for r in model.get("access_requests") or []]  # fmt: skip
+    return intakes + asks
 
 
 def when(text: object) -> str:
@@ -6832,12 +6864,13 @@ def run_request_list(args, kit, state, gateway) -> int:
         print_json(pick_fields({"requests": rows}, args.fields, REQUEST_FIELDS, "requests"))
         return EXIT_OK
     if not rows:
-        print("신청한 서버가 없습니다. 신청: mint server add <주소>")
+        print("신청한 서버·권한 요청이 없습니다. 신청: mint server add <주소>")
         return EXIT_OK
-    print(f"{pad('번호', 10)}{pad('서버', 28)}{pad('상태', 14)}다음 할 일")
+    print(f"{pad('번호', 10)}{pad('종류', 10)}{pad('서버·도구', 28)}{pad('상태', 12)}다음 할 일")
     for row in rows:
-        print(f"{pad(short_id(row), 10)}{pad(clip(str(row['server_id']), 27), 28)}"
-              f"{pad(row['state'], 14)}{clip(row['next'], 36)}")
+        target = str(row["server_id"]) + (f"/{row['tool']}" if row.get("tool") else "")
+        print(f"{pad(short_id(row), 10)}{pad(row['kind'], 10)}{pad(clip(target, 27), 28)}"
+              f"{pad(row['state'], 12)}{clip(row['next'], 40)}")
     return EXIT_OK
 
 
@@ -6859,6 +6892,69 @@ def run_request_show(args, kit, state, gateway) -> int:
              ("진행", stage_path(row["stage"])), ("사유", row["reason"] or "-"),
              ("다음 할 일", row["next"]), ("접수", when(row["created_at"]) or "-")]  # fmt: skip
     print("\n".join(f"{pad(a, 12)}{b}" for a, b in items))
+    return EXIT_OK
+
+
+def run_request_access(args, kit, state, gateway) -> int:
+    """막힌 서버·도구의 권한 요청을 연다(같은 대상의 대기 요청이 있으면 그 번호)."""
+    reach(gateway)
+    body = {"request_id": str(uuid.uuid4()), "server": args.server, "note": args.reason.strip()}
+    if args.tool:
+        body["tool"] = args.tool
+    status, doc = gateway.json("POST", ACCESS_PATH, body)
+    if status == 404 and isinstance(doc, dict) and "server" in str(doc.get("detail", "")):
+        raise CliError(f"`{args.server}` 서버가 조직에 없습니다.", "mint server list",
+                       EXIT_FAIL, "not_found")  # fmt: skip
+    if status in (401, 403, 404):
+        raise err_key_rejected()
+    if status == 422:
+        raise CliError("요청 내용이 맞지 않습니다(사유 500자 이하, 도구 이름 256자 이하).",
+                       "mint request access --help", EXIT_USAGE, "usage")  # fmt: skip
+    if status != 201 or not isinstance(doc, dict):
+        raise err_unreachable(status)
+    target = args.server + (f"/{args.tool}" if args.tool else "")
+    if args.json:
+        print_json({"request": {"id": doc.get("id"), "kind": "권한 요청", "server_id": args.server,
+                                "tool": args.tool, "state": "승인 대기",
+                                "reused": bool(doc.get("reused"))}})  # fmt: skip
+        return EXIT_OK
+    again = " — 이미 보낸 요청이 대기 중입니다" if doc.get("reused") else ""
+    print(f"권한 요청을 보냈습니다: {target} (번호 {str(doc.get('id'))[:8]}){again}")
+    print("승인자가 처리하면 하네스를 다시 시작하지 않고 바로 씁니다. 진행: mint request list")
+    return EXIT_OK
+
+
+def run_request_cancel(args, kit, state, gateway) -> int:
+    """대기 중인 권한 요청을 취소한다. 서버 신청 철회는 웹 「서버 신청」에서 한다."""
+    model = load_model(kit, state, gateway)
+    hits = [r for r in request_rows(model) if r["id"].startswith(args.number)]
+    if not hits:
+        raise CliError(f"`{args.number}` 요청을 찾지 못했습니다.", "mint request list",
+                       EXIT_FAIL, "not_found")  # fmt: skip
+    if len(hits) > 1:
+        raise CliError(f"`{args.number}`와 맞는 요청이 {len(hits)}건입니다 — 번호가 모자랍니다.",
+                       "mint request list", EXIT_USAGE, "usage")  # fmt: skip
+    row = hits[0]
+    if row["kind"] != "권한 요청":
+        raise err_unavailable("서버 신청 철회는 직원 화면 「서버 신청」에서 하십시오.")
+    if row["state"] != "승인 대기":
+        raise CliError(f"이미 끝난 요청입니다({row['state']}).", "mint request list",
+                       EXIT_FAIL, "failed")  # fmt: skip
+    if not args.yes and sys.stdin.isatty():
+        answer = input(f"{row['server_id']} 권한 요청을 취소할까요? [y/N] ").strip().lower()
+        if answer not in ("y", "yes", "예"):
+            print("취소하지 않았습니다.")
+            return EXIT_OK
+    status, _ = gateway.json("POST", f"{ACCESS_PATH}/{row['id']}/cancel")
+    if status == 404:
+        raise CliError("이미 처리됐거나 취소된 요청입니다.", "mint request list",
+                       EXIT_FAIL, "failed")  # fmt: skip
+    if status != 200:
+        raise err_unreachable(status)
+    if args.json:
+        print_json({"request": {"id": row["id"], "state": "취소됨"}})
+    else:
+        print(f"권한 요청을 취소했습니다: {row['server_id']} (번호 {row['id'][:8]})")
     return EXIT_OK
 
 
@@ -7112,10 +7208,6 @@ def dispatch(args) -> int:
     if name == "link":
         lines: list[str] = []
         return finish(lines, run_relink(args.url, lines.append), "link")
-    if action == "access":
-        raise err_unavailable("직원 화면 「내 MCP 서버」에서 권한을 요청하십시오.")
-    if action == "cancel":
-        raise err_unavailable("직원 화면 「내 요청」에서 취소하십시오.")
     kit, state, gateway = open_installed(Path(args.kit))
     if name == "screen":
         return run_terminal(kit, state, gateway)
@@ -7128,7 +7220,8 @@ def dispatch(args) -> int:
                 "add": lambda: run_server_add(args, kit, gateway)}[action]()  # fmt: skip
     if name == "request":
         runner = {"list": run_request_list, "show": run_request_show,
-                  "inspect": run_request_inspect}[action]  # fmt: skip
+                  "inspect": run_request_inspect, "access": run_request_access,
+                  "cancel": run_request_cancel}[action]  # fmt: skip
         return runner(args, kit, state, gateway)
     lines = []
     if action in ("rm", "remove"):

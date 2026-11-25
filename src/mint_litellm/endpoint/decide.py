@@ -38,6 +38,8 @@ from pydantic import (
 from mint_litellm.compat.litellm_1_106 import HookData
 from mint_litellm.endpoint import apps, intake_text, kit_sign
 from mint_litellm.endpoint.routes import (
+    ACCESS_REQUEST_CANCEL_PATH,
+    ACCESS_REQUESTS_PATH,
     APP_PATH,
     APPS_PATH,
     DECIDE_PATH,
@@ -69,7 +71,7 @@ MAX_BODY_BYTES = 64 * 1024
 # 경로마다 정상 본문이 이보다 작다(결과 보고는 참조와 결과 종류, 설치 보고는 서버 이름 목록).
 BODY_LIMITS = {DECIDE_PATH: MAX_BODY_BYTES, RESULT_PATH: 4 * 1024, REPORT_PATH: 192 * 1024,
     OUTCOMES_PATH: 1024, INTAKES_PATH: 256 * 1024,
-    APPS_PATH: 1024}
+    APPS_PATH: 1024, ACCESS_REQUESTS_PATH: 2048}
 INSPECTION_BODY_BYTES = 256 * 1024
 MAX_INSPECTION_TOOLS = 200
 NOT_READY_CODE = "MINT-ENDPOINT-NOT-READY"
@@ -116,6 +118,18 @@ class OutcomesBody(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     since: datetime | None = None
+
+
+class AccessRequestBody(BaseModel):
+    """PC에서 여는 권한 요청. 사유 코드는 거부 응답의 코드(없으면 승인 없음으로 본다)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    request_id: UUID
+    server: str = Field(min_length=1, max_length=128)
+    tool: str | None = Field(default=None, min_length=1, max_length=256)
+    reason_code: str = Field(default="APPROVAL_ABSENT", pattern=r"^[A-Z][A-Z_]{2,63}$")
+    note: str = Field(default="", max_length=500)
 
 
 class ProcessItem(BaseModel):
@@ -867,6 +881,12 @@ def make_router(
         except Exception:
             open_checks = set()
         rows = [{**r, "inspect": str(r["id"]) in open_checks} for r in rows]
+        try:
+            asks = await runtime.database.endpoint_access_mine(who.key_id)
+            live = await runtime.database.endpoint_live_servers(who.key_id)
+            rows = [{**r, "ended": r["server_id"] not in live} for r in rows]
+        except Exception:  # 옛 DB(권한 요청 함수 전)여도 나머지는 낸다
+            asks = []
         return {
             "user": who.principal_id if who.principal_type == "user" else None,
             "servers": [
@@ -881,7 +901,57 @@ def make_router(
                  "created_at": _iso(r["created_at"])}
                 for r in rows[:20]
             ],
+            "access_requests": [
+                {"id": str(r["id"]), "server_id": r["server_id"], "tool": r["tool"],
+                 "reason_code": r["reason_code"], "status": r["status"],
+                 "resolution": r["resolution"], "decision_note": r["decision_note"],
+                 "created_at": _iso(r["created_at"]), "decided_at": _iso(r["decided_at"])}
+                for r in asks
+            ],
         }
+
+    @router.post(ACCESS_REQUESTS_PATH, status_code=201)
+    async def access_open(request: Request, auth: Any = Depends(auth_dependency)) -> dict[str, Any]:
+        """설치 키 주인의 권한 요청을 연다(직원 화면의 요청과 같은 표·같은 승인 센터 탭)."""
+        from mint_litellm.control.services.access_requests import SUGGESTED
+
+        runtime = ready()
+        body = await _body(request, AccessRequestBody)
+        if body.reason_code not in SUGGESTED:
+            raise HTTPException(status_code=422, detail="this reason cannot be requested")
+        who = principal_factory(auth, instance_id=runtime.config.instance_id)
+        if who.key_id is None:
+            raise HTTPException(status_code=404, detail="no such kit key")
+        try:
+            made = await runtime.database.endpoint_access_open(
+                who.key_id, body.request_id, body.server, body.tool, body.reason_code, body.note)
+        except Exception as exc:
+            status = _intake_status(exc)
+            if status is None:
+                log.exception("endpoint access request could not be stored")
+                raise HTTPException(status_code=503, detail="request store is not ready") from exc
+            raise HTTPException(status_code=status, detail=_intake_detail(exc)) from exc
+        return {"id": str(made), "reused": made != body.request_id}
+
+    @router.post(ACCESS_REQUEST_CANCEL_PATH)
+    async def access_cancel(
+        request_id: UUID, auth: Any = Depends(auth_dependency)
+    ) -> dict[str, Any]:
+        runtime = ready()
+        who = principal_factory(auth, instance_id=runtime.config.instance_id)
+        if who.key_id is None:
+            raise HTTPException(status_code=404, detail="no such kit key")
+        try:
+            done = await runtime.database.endpoint_access_cancel(who.key_id, request_id)
+        except Exception as exc:
+            status = _intake_status(exc)
+            if status is None:
+                log.exception("endpoint access request could not be cancelled")
+                raise HTTPException(status_code=503, detail="request store is not ready") from exc
+            raise HTTPException(status_code=status, detail=_intake_detail(exc)) from exc
+        if not done:
+            raise HTTPException(status_code=404, detail="no open request")
+        return {"id": str(request_id), "cancelled": True}
 
     @router.post(INTAKES_PATH, status_code=201)
     async def intakes(request: Request, auth: Any = Depends(auth_dependency)) -> dict[str, Any]:

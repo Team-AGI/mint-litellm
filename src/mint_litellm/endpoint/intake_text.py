@@ -44,15 +44,16 @@ NEXT_FIX = "신청 내용을 고쳐 다시 신청"
 NEXT_NONE = "없음"
 NEXT_INSPECT = "단말 검사 필요 · s로 시작"
 NEXT_FIRST_RUN = "승인 뒤 PC 첫 실행 때 검사"
+NEXT_ENDED = "다시 쓰려면 사용 요청: mint request access <서버>"
 REASON_INSPECT = "단말 검사가 필요합니다"
 UNKNOWN = "자동 검사로 판별하지 못했습니다"
 
 
 def stage_of(row: dict[str, Any]) -> str:
-    """접수·묶음 준비·검사 중·검사 통과·승인 대기·판별 불가·검사 실패·승인·거절·철회."""
+    """접수·묶음 준비·검사 중·검사 통과·승인 대기·판별 불가·검사 실패·승인·이용 종료·거절·철회."""
     decision, status = row.get("decision"), row.get("status")
     if decision in ("approved", "exception"):
-        return "approved"
+        return "ended" if row.get("ended") else "approved"
     if decision in ("rejected", "withdrawn"):
         return str(decision)
     if status == "checking":
@@ -95,4 +96,6 @@ def next_of(row: dict[str, Any]) -> str:
         return NEXT_FIX
     if stage == "rejected":
         return NEXT_VERSION
+    if stage == "ended":
+        return NEXT_ENDED
     return NEXT_NONE

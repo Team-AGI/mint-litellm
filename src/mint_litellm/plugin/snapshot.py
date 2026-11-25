@@ -1485,6 +1485,60 @@ class PluginDatabase:
 
         return await self._run(write)  # type: ignore[no-any-return]
 
+    async def endpoint_access_open(
+        self, key_token: str, request_id: UUID, server: str, tool: str | None, reason: str,
+        note: str,
+    ) -> UUID:
+        """설치 키 주인의 권한 요청(같은 대상의 대기 요청이 있으면 그 번호)."""
+
+        async def write(conn: Any) -> Any:
+            async with conn.transaction():
+                cursor = await conn.execute(
+                    "SELECT mint.endpoint_open_access_request(%s, %s, %s, %s, %s, %s)",
+                    (key_token, request_id, server, tool, reason, note),
+                )
+                return (await cursor.fetchone())[0]
+
+        return await self._run(write)  # type: ignore[no-any-return]
+
+    async def endpoint_access_cancel(self, key_token: str, request_id: UUID) -> bool:
+        """본인의 대기 중 권한 요청을 취소한다(없거나 이미 끝났으면 거짓)."""
+
+        async def write(conn: Any) -> Any:
+            async with conn.transaction():
+                cursor = await conn.execute(
+                    "SELECT mint.endpoint_cancel_access_request(%s, %s)", (key_token, request_id)
+                )
+                return (await cursor.fetchone())[0]
+
+        return bool(await self._run(write))
+
+    async def endpoint_access_mine(self, key_token: str) -> list[dict[str, Any]]:
+        """설치 키 주인의 최근 권한 요청 20건."""
+
+        async def read(conn: Any) -> Any:
+            cursor = await conn.execute(
+                "SELECT id, server_id, tool, reason_code, status, resolution, decision_note,"
+                " created_at, decided_at FROM mint.endpoint_my_access_requests(%s)",
+                (key_token,),
+            )
+            return await cursor.fetchall()
+
+        keys = ("id", "server_id", "tool", "reason_code", "status", "resolution",
+                "decision_note", "created_at", "decided_at")
+        return [dict(zip(keys, row, strict=True)) for row in await self._run(read)]
+
+    async def endpoint_live_servers(self, key_token: str) -> set[str]:
+        """승인이 하나라도 살아 있는 서버 이름(신청 이력의 이용 종료 표시에 쓴다)."""
+
+        async def read(conn: Any) -> Any:
+            cursor = await conn.execute(
+                "SELECT * FROM mint.endpoint_live_servers(%s)", (key_token,)
+            )
+            return await cursor.fetchall()
+
+        return {row[0] for row in await self._run(read)}
+
     async def endpoint_apps_list(self, instance_id: str, key_token: str) -> list[dict[str, Any]]:
         """이 설치 키 주인의 앱 목록(최근 순). 키 값은 없다."""
 
