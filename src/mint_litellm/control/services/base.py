@@ -37,6 +37,7 @@ _VERSIONED = {
     "settings": ("instance_id", "settings_version"),
     "operators": ("name", "state_version"),
     "key_block_proposals": ("id", "state_version"),
+    "access_requests": ("id", "state_version"),
 }
 
 
