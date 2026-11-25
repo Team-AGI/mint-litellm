@@ -23,28 +23,39 @@ HERE = Path(__file__).parent
 templates = Jinja2Templates(directory=HERE / "templates")
 
 # (그룹 이름, ((경로, 이름, 배지 키), ...)). 그룹 이름이 None이면 구분선 없이 맨 위에 둔다.
+# 순서·이름은 새 정보 구조(B.2)를 따른다. 「시작하기」는 필수 항목이 남았을 때만 맨 위에 보인다.
 MENU = (
     (None, (("/", "대시보드", None), ("/setup", "시작하기", "setup"))),
     ("처리할 일", (("/approvals", "승인 센터", "approvals"), ("/alerts", "경보", "alerts"))),
     ("MCP 서버", (("/servers", "MCP 서버", "servers"), ("/intakes", "도입 신청", "intakes"),
-            ("/builtin-tools", "하네스 기본 기능", None), ("/access", "접근 통제", None))),
-    ("단말", (("/endpoints", "엔드포인트", "endpoints"),)),
-    ("감사", (("/ledger", "호출 기록", None), ("/policy", "정책", None),
-            ("/reports/audit", "감사 보고서", None), ("/reports/usage", "사용량", None))),
-    ("관리", (("/people", "사람", None), ("/admin", "설정·운영자", None),
-            ("/signup-requests", "가입 요청", "signup"))),
+            ("/access", "접근 통제", None), ("/builtin-tools", "하네스 기본 기능", None))),
+    ("사람·단말", (("/people", "사람", None), ("/endpoints", "단말", "endpoints"),
+               ("/signup-requests", "가입 요청", "signup"))),
+    ("감사", (("/ledger", "호출 기록", None), ("/reports/audit", "감사 보고서", None),
+            ("/reports/usage", "사용량", None))),
+    ("설정", (("/policy", "정책", None), ("/admin", "설정·운영자", None))),
 )
+# Root 그룹. 화면이 있는 경로만 그리고(라우트가 생길 때까지 숨김), 역할은 MENU_MIN_ROLE을 따른다.
+ROOT_MENU = ("Root", (("/root", "긴급 통제", None), ("/root/actions", "강제 조치 기록", None)))
+ROLE_RANK = {"viewer": 0, "approver": 1, "admin": 2}
+# 이 역할 이상에게만 메뉴에 그린다(B.2). 적히지 않은 항목은 모든 역할에게 보인다.
+MENU_MIN_ROLE = {
+    "/setup": "admin", "/approvals": "approver", "/builtin-tools": "admin", "/people": "admin",
+    "/signup-requests": "admin", "/policy": "admin", "/admin": "admin", "/root/actions": "admin",
+}
 STAFF_MENU = (
     (None, (
         ("/staff", "내 MCP 서버", None),
-        ("/staff/intakes", "MCP 서버 도입 신청", None),
+        ("/staff/intakes", "서버 신청", None),
         ("/staff/confirmations", "내 요청", "staff_requests"),
         ("/staff/usage", "내 사용량", None),
-        ("/staff/endpoint", "내 단말", None),
+        ("/staff/endpoint", "내 PC", None),
     )),
 )
 RANGES = (("1h", "1시간"), ("24h", "24시간"), ("7d", "7일"), ("30d", "30일"))
-ICONS = {"ok": "✓", "wait": "◷", "error": "▲", "block": "⊘", "off": "–"}
+ICONS = {"ok": "✓", "wait": "◷", "error": "▲", "block": "⊘", "off": "–",
+         # 경보 심각도는 상태와 겹치지 않게 색 점으로 보인다(글자가 함께 나온다).
+         "sev-critical": "●", "sev-high": "●", "sev-medium": "●", "sev-low": "●"}
 
 
 def zone_name(request: Request | None) -> str:
@@ -152,6 +163,47 @@ def nav_active(path: str, href: str) -> bool:
 templates.env.globals["nav_active"] = nav_active
 
 
+def is_root(actor: Any) -> bool:
+    """Root 운영자인가. 운영자 표지가 생기면 WP-07이 이 함수 하나만 표지 읽기로 바꾼다."""
+    session = getattr(actor, "session", None)
+    name = getattr(session, "operator_name", None) or getattr(
+        getattr(getattr(actor, "ctx", None), "operator", None), "name", None
+    )
+    return getattr(actor, "role", None) == "admin" and name == "root"
+
+
+def has_route(request: Any, path: str) -> bool:
+    """이 앱에 그 경로의 화면이 있는가(아직 없는 화면의 메뉴를 그리지 않는 스위치)."""
+    return any(getattr(r, "path", None) == path for r in request.app.routes)
+
+
+@pass_context
+def menu_for(context: Any, actor: Any, badges: Any = None) -> list[tuple[str | None, list]]:
+    """이 운영자가 들어갈 수 있는 메뉴만 그룹째로 돌려준다(빈 그룹은 뺀다)."""
+    request = context.get("request")
+    rank = ROLE_RANK.get(getattr(actor, "role", None), 0)
+    root = is_root(actor)
+
+    def shown(href: str) -> bool:
+        need = MENU_MIN_ROLE.get(href)
+        if href == "/root":
+            return root and request is not None and has_route(request, href)
+        if href.startswith("/root/") and not (request and has_route(request, href)):
+            return False
+        return need is None or rank >= ROLE_RANK[need]
+
+    groups = [(g, [i for i in items if shown(i[0])]) for g, items in MENU]
+    if not (badges or {}).get("setup"):  # 필수 항목을 마쳤으면 「시작하기」는 설정 그룹으로
+        top = [i for i in groups[0][1] if i[0] == "/setup"]
+        groups[0] = (None, [i for i in groups[0][1] if i[0] != "/setup"])
+        groups[-1] = (groups[-1][0], groups[-1][1] + top)
+    groups.append((ROOT_MENU[0], [i for i in ROOT_MENU[1] if shown(i[0])]))
+    return [(g, items) for g, items in groups if items]
+
+
+templates.env.globals.update(menu_for=menu_for, is_root=is_root)
+
+
 def _endpoint_problems(actor: Any) -> int:
     """보고가 끊겼거나 격리 위반이 있는 단말 수."""
     from mint_litellm.console.pages.endpoints_admin import endpoint_view
@@ -176,6 +228,8 @@ def render(
         "actor": actor, "path": request.url.path, "notice": notice, "error": None,
         "zone_label": labels.pick(labels.TIME_ZONE, zone),
         "default_password": read_cookie(request, DEFAULT_PASSWORD) == "1",
+        "root_open": actor is not None and not name.startswith("staff")
+        and is_root(actor) and has_route(request, "/root"),
         "litellm_open": bool(
             getattr(getattr(request.app.state, "config", None), "litellm_ui_url", None)
         ),

@@ -198,6 +198,38 @@ function initConsole(root) {
     });
   });
 }
+// 처리 중 표시: 변경 요청(POST)을 보내면 제출 단추를 잠그고 「처리 중…」을 보인다. 응답이 없거나
+// 파일을 내려받는 요청이라 화면이 안 바뀌어도 15초 뒤에 풀린다. 잠그지 않을 폼은 data-no-busy.
+var BUSY_TEXT = "처리 중…";
+function releaseBusy(button) {
+  if (button.getAttribute("aria-busy") !== "true") return;
+  button.removeAttribute("aria-busy");
+  button.disabled = false;
+  button.innerHTML = button.dataset.idleHtml;
+}
+function lockBusy(form, submitter) {
+  var buttons = submitter ? [submitter] : Array.prototype.slice.call(form.querySelectorAll("button[type=submit], button:not([type])"));
+  buttons.forEach(function (button) {
+    if (button.disabled || button.tagName !== "BUTTON") return;
+    button.dataset.idleHtml = button.innerHTML;
+    button.setAttribute("aria-busy", "true");
+    button.disabled = true;
+    button.textContent = BUSY_TEXT;
+    setTimeout(function () { releaseBusy(button); }, 15000);
+  });
+}
+document.addEventListener("submit", function (event) {
+  var form = event.target;
+  if (!form.matches || (form.method || "").toLowerCase() !== "post" || form.hasAttribute("data-no-busy")) return;
+  // 단추를 바로 끄면 그 단추의 값이 폼에서 빠지므로, 폼 값이 만들어진 다음에 잠근다.
+  setTimeout(function () { lockBusy(form, event.submitter); }, 0);
+});
+document.addEventListener("htmx:afterRequest", function (event) {
+  document.querySelectorAll("button[aria-busy=true]").forEach(releaseBusy);
+});
+window.addEventListener("pageshow", function (event) {
+  if (event.persisted) document.querySelectorAll("button[aria-busy=true]").forEach(releaseBusy);
+});
 document.addEventListener("DOMContentLoaded", function () { initConsole(document); });
 document.addEventListener("htmx:afterSettle", function (event) { initConsole(event.target); });
 document.addEventListener("click", function (event) {
@@ -207,6 +239,7 @@ document.addEventListener("click", function (event) {
     document.querySelector(".menu-open").focus();
     return;
   }
+  if (event.target.closest("[data-history-back]")) { window.history.back(); return; }
   var copy = event.target.closest("[data-copy]");
   if (copy) {
     var text = copy.getAttribute("data-copy");

@@ -937,7 +937,7 @@ def test_the_menu_has_three_staff_screens_and_a_badge_for_requests_to_confirm(sw
     add_confirmation(sworld)
     page = logged_in(sworld).get("/staff/confirmations").text
     assert page.count('class="active"') >= 1 and 'href="/staff/confirmations"' in page
-    assert "내 MCP 서버" in page and "내 단말" in page and "내 요청" in page
+    assert "내 MCP 서버" in page and "내 PC" in page and "내 요청" in page
     assert '내 요청</span> <span class="badge error">1</span>' in page
     assert 'aria-current="page"' in page and "본인 확인 대기" in page and "내 승인 요청" in page
 

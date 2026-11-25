@@ -19,7 +19,7 @@ def form(client, **changes):
 
 def test_staff_form_and_submission_reach_the_admin_intake_queue(sworld):
     client = staff_tests.logged_in(sworld)
-    assert "MCP 서버 도입 신청" in client.get("/staff").text
+    assert "서버 신청" in client.get("/staff").text
     page = client.get("/staff/intakes/new")
     assert page.status_code == 200 and 'name="csrf"' in page.text
     values = form(client, owner_user_id="forged", requested_by="forged", org_id="other")

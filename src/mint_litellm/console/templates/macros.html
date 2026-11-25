@@ -59,7 +59,7 @@
 
 {# 위험 작업 확인 창. effect는 「무엇을·몇 건·되돌릴 수 있는지」 한 줄. confirm_name이 있으면 이름을 입력해야 한다. #}
 {% macro confirm_dialog(id, trigger, title, effect, action, actor, verb, confirm_name=none, danger=true, name_label='이름 입력', trigger_class=none, ref=none) %}
-<button type="button" class="{{ trigger_class if trigger_class is not none else ('danger' if danger else '') }}" data-dialog-open="{{ id }}">{{ trigger }}</button>
+<button type="button" class="{{ trigger_class if trigger_class is not none else ('danger-outline' if danger else '') }}" data-dialog-open="{{ id }}">{{ trigger }}</button>
 <dialog id="{{ id }}" class="confirm" aria-labelledby="{{ id }}-title">
   <form method="post" action="{{ action }}" hx-boost="false">
     {{ csrf(actor) }}{% if ref %}<input type="hidden" name="ref" value="{{ ref }}">{% endif %}
@@ -74,7 +74,7 @@
 
 {# 다른 폼(form_id)의 제출을 확인 창으로 감싼다. 입력은 그 폼에 있고 확인 단추가 그 폼을 제출한다. #}
 {% macro confirm_submit(id, trigger, title, effect, form_id, verb, action=none, danger=true, trigger_class=none) %}
-<button type="button" class="{{ trigger_class if trigger_class is not none else ('danger' if danger else '') }}" data-dialog-open="{{ id }}">{{ trigger }}</button>
+<button type="button" class="{{ trigger_class if trigger_class is not none else ('danger-outline' if danger else '') }}" data-dialog-open="{{ id }}">{{ trigger }}</button>
 <dialog id="{{ id }}" class="confirm" aria-labelledby="{{ id }}-title">
   <div class="stack">
     <h3 id="{{ id }}-title">{{ title }}</h3>
@@ -106,7 +106,10 @@
   '/policy': 'M5 5h14v14H5zM9 2v6M15 16v6M2 15h6M16 9h6',
   '/reports/audit': 'M5 3h14v18H5zM8 15l3-4 3 2 3-6',
   '/reports/usage': 'M4 20h16M7 16V9M12 16V4M17 16v-5',
-  '/admin': 'M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8M4 21v-3a5 5 0 0 1 5-5h6a5 5 0 0 1 5 5v3',
+  '/admin': 'M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6',
+  '/people': 'M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8M4 21v-3a5 5 0 0 1 5-5h6a5 5 0 0 1 5 5v3',
+  '/root': 'M12 3l8 3v6c0 5-8 9-8 9s-8-4-8-9V6zM12 8v4M12 15v1',
+  '/root/actions': 'M5 3h14v18H5zM8 8h8M8 12h8M8 16h4',
   '/signup-requests': 'M9 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8M2 21v-3a5 5 0 0 1 5-5h4M18 12v8M14 16h8'
 } %}
 {% set aliases = {'/staff': '/servers', '/staff/intakes': '/intakes', '/staff/confirmations': '/approvals', '/staff/usage': '/reports/usage', '/staff/endpoint': '/endpoints'} %}
@@ -122,3 +125,51 @@
 
 {# 긴 식별자(키 해시 등)는 앞 8자만 보이고 전체는 툴팁으로. #}
 {% macro ident(v) %}{% if v and v|length > 24 %}<span class="ident" title="{{ v }}">{{ v[:8] }}…</span>{% else %}{{ v }}{% endif %}{% endmacro %}
+
+{# --- 단추·띠·복사 ------------------------------------------------------------------------------ #}
+{# 할 수 없는 단추: 숨기지 않고 비활성으로 두고 바로 옆에 사유 한 줄을 둔다. kind는 primary·danger-outline 등. #}
+{% macro blocked_button(label, reason, kind='') %}<span class="blocked-action"><button type="button" class="{{ kind }}" disabled>{{ label }}</button><span class="reason">{{ reason }}</span></span>{% endmacro %}
+
+{# 알림 띠: level은 ok(초록)·warn(노랑)·error(빨강). 오류 띠는 「무엇이 · 왜 · 해결 단추」. #}
+{% macro banner(level, what, why=none, href=none, action=none) %}
+<div class="banner {{ level }}" role="{{ 'alert' if level == 'error' else 'status' }}"><span><strong>{{ what }}</strong>{% if why %} · {{ why }}{% endif %}</span>{% if href and action %}<a class="button" href="{{ href }}">{{ action }}</a>{% endif %}</div>
+{% endmacro %}
+
+{# 값 복사 단추. 복사는 console.js(data-copy). #}
+{% macro copy_button(value, label='복사', kind='') %}<button type="button" class="{{ kind }}" data-copy="{{ value }}">{{ label }}</button>{% endmacro %}
+
+{# --- 거부 화면·오류 화면 두 틀(error.html·error_bare.html 공용) ------------------------------------ #}
+{# 거부 화면(403): 필요 역할 / 지금 내 역할 / 막은 규칙 / 영향 범위 / 해결 / 참조 번호 / 돌아가기 #}
+{% macro denied(e) %}
+<section class="deny" role="alert">
+  <h1>{{ e.title }}</h1>
+  {% if e.message %}<p>{{ e.message }}</p>{% endif %}
+  <dl class="detail">
+    <dt>지금 내 역할</dt><dd>{{ e.role_label }}</dd>
+    <dt>막은 규칙</dt><dd>{{ e.rule }}</dd>
+    <dt>영향 범위</dt><dd>{{ e.scope }}</dd>
+    <dt>해결</dt><dd>{% if e.grantors %}{{ e.required_role }} 권한이 있는 사람: {{ e.grantors | join }}{% else %}{{ e.required_role }} 권한이 있는 사람에게 요청하십시오.{% endif %}</dd>
+    <dt>참조 번호</dt><dd><span class="ident">{{ e.reference }}</span> {{ copy_button(e.reference, '복사', 'copy') }}</dd>
+  </dl>
+  <div class="actions"><a class="button primary" href="{{ e.back_href }}">{{ e.back_name }}</a>{{ copy_button(e.request_text, '요청 문구 복사') }}</div>
+</section>
+{% endmacro %}
+
+{# 오류 화면(400·404·500 …): 정책 거부가 아님을 먼저 말하고, 하던 일·다시 시도·관련 목록·참조 번호를 준다. #}
+{% macro failed(e) %}
+<section class="fail">
+  <h1>{{ e.title }}</h1>
+  <p class="not-policy">정책 거부가 아닙니다. 권한과 관계없이 요청을 처리하지 못했습니다.</p>
+  <dl class="detail">
+    <dt>하던 일</dt><dd>{{ e.doing }}</dd>
+    {% if e.message %}<dt>이유</dt><dd>{{ e.message }}</dd>{% endif %}
+    <dt>참조 번호</dt><dd><span class="ident">{{ e.reference }}</span> {{ copy_button(e.reference, '복사', 'copy') }}</dd>
+  </dl>
+  <div class="actions">{% if e.retry_href %}<a class="button primary" href="{{ e.retry_href }}">다시 시도</a>{% else %}<button type="button" class="primary" data-history-back>이전 화면에서 다시 시도</button>{% endif %}<a class="button" href="{{ e.back_href }}">{{ e.back_name }}</a></div>
+</section>
+{% endmacro %}
+
+{# 틀 없이 제목·문장·돌아가기만 받는 옛 호출(error.html에 title·message를 직접 넘기는 화면)용 단순 틀 #}
+{% macro plain(title, message, reference, back_href, back_name) %}<section class="fail"><h1>{{ title }}</h1>{% if message and message != title %}<p>{{ message }}</p>{% endif %}<p class="muted">참조 번호 {{ reference }}</p><div class="actions"><a class="button primary" href="{{ back_href }}">{{ back_name }}</a></div></section>{% endmacro %}
+
+{% macro error_frame(e) %}{% if e.kind == 'denied' %}{{ denied(e) }}{% elif e.kind == 'failed' %}{{ failed(e) }}{% else %}<section class="fail"><h1>{{ e.title }}</h1>{% if e.message %}<p>{{ e.message }}</p>{% endif %}<p class="muted">참조 번호 {{ e.reference }}</p><div class="actions"><a class="button primary" href="{{ e.back_href }}">{{ e.back_name }}</a></div></section>{% endif %}{% endmacro %}

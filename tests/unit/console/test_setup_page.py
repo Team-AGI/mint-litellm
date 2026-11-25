@@ -185,13 +185,13 @@ def test_an_admin_saves_the_alert_address_on_screen_and_the_worker_reads_it(
 
 
 @pytest.mark.parametrize("role", ["admin", "approver", "viewer"])
-def test_every_role_can_open_the_checklist_and_the_menu_lists_it(world, role):
+def test_every_role_can_open_the_checklist_and_the_admin_menu_lists_it(world, role):
     client = world.session_client(role)
     html = client.get("/setup").text
-    assert "<h1>시작하기</h1>" in html and 'href="/setup"' in html
+    assert "<h1>시작하기</h1>" in html
     assert "mint-kit.tar.gz" not in html
     menu = re.findall(r'<nav\b[^>]*class="sidebar".*?</nav>', client.get("/").text, re.S)[0]
-    assert menu.count('href="/setup"') == 1
+    assert menu.count('href="/setup"') == (1 if role == "admin" else 0)  # 메뉴는 관리자에게만
 
 
 def test_setup_links_the_password_change_and_the_alert_request(world, admin):
