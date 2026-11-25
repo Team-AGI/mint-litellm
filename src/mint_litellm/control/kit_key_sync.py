@@ -119,7 +119,6 @@ def sync_kit_keys(conn: psycopg.Connection, instance_id: str, client: LiteLLMSyn
     ):
         rows.append({**row, "app": True})
     for row in rows:
-        row["team_id"] = current_team(client, row["user_id"], row["team_id"])
         servers, tools = desired_permission(
             conn, instance_id, row["user_id"], row["team_id"], row["mcp_key_token"]
         )
@@ -146,16 +145,6 @@ def sync_kit_keys(conn: psycopg.Connection, instance_id: str, client: LiteLLMSyn
         changed += 1
         _record_key_receipts(conn, instance_id, row, servers)
     return changed
-
-
-def current_team(client: LiteLLMSync, user_id: str, installed: str | None) -> str | None:
-    """설치 때 고정한 팀 대신 LiteLLM의 지금 소속 팀. 소속을 못 읽으면 설치 때 값을 그대로 쓴다."""
-    user = client.get_user(user_id)
-    teams = user.get("teams") if user else None
-    if not isinstance(teams, list):
-        return installed  # 읽지 못한 것은 회수 근거가 아니다
-    ids = [t.get("team_id") if isinstance(t, dict) else t for t in teams]
-    return installed if installed in ids else (sorted(map(str, ids))[0] if ids else None)
 
 
 def _record_key_receipts(conn, instance_id: str, row: dict, servers: list[str]) -> None:
