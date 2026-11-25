@@ -734,7 +734,7 @@ NOTICES = {
     "reapproval_planned": "재승인 계획을 등록했습니다.",
     "provisional_approved": "임시 계약을 승인된 도구 계약으로 바꿨습니다.",
     "operator_removed": "운영자를 삭제했습니다.",
-    "operator_added": "운영자를 지정했습니다. 그 사람은 다음 로그인부터 관리 화면을 씁니다.",
+    "operator_added": "MINT 권한을 주었습니다. 그 사람은 다음 로그인부터 관리 콘솔을 씁니다.",
     "person_blocked": "이 사람의 MCP 사용을 차단했습니다.",
     "person_unblocked": "이 사람의 MCP 차단을 해제했습니다.",
     "relation_terminating": "이용을 종료했습니다. 삭제·반환 증빙을 붙여 종료를 완료하십시오.",
@@ -769,13 +769,12 @@ def status(table: dict[str, Status], value: str | None) -> Status:
 
 
 def litellm_badge(info: dict | None) -> Status:
-    """복제본이 보고한 LiteLLM 판본과 보장 등급. 등급 A이고 검증된 판본만 정상이다."""
+    """복제본이 보고한 LiteLLM 판본. 필요한 기능이 다 있고(내부 등급 A) 검증된 판본만 정상이다."""
     if not info:
         return Status("보고 없음", "off")
-    grade = info.get("grade") or "D"
-    text = f"LiteLLM {info.get('version') or '미설치'} · 보장 등급 {grade}"
-    if grade != "A":
-        return Status(text, "error")
+    text = f"LiteLLM {info.get('version') or '미설치'}"
+    if (info.get("grade") or "D") != "A":
+        return Status(f"{text} · MINT에 필요한 기능 없음", "error")
     if not info.get("tested"):
         return Status(f"{text} · 검증되지 않은 판본", "wait")
     return Status(text, "ok")

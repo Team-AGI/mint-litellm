@@ -6,7 +6,6 @@ from mint_litellm.console import labels
 from mint_litellm.console.core import Actor, can
 from mint_litellm.console.labels import Status
 from mint_litellm.control import status as control_status
-from mint_litellm.control import webhook_store
 from mint_litellm.control.db.connection import fetchone
 from mint_litellm.control.operators import SERVICE_ACCOUNTS
 
@@ -127,32 +126,14 @@ def _approval_flow(actor: Actor) -> dict:
         "SELECT count(*) AS n FROM mint.operators WHERE instance_id = %s AND role = 'approver'"
         " AND (expires_at IS NULL OR expires_at > now())",
     )
-    urls = webhook_store.effective(actor.config.stage2, actor.conn, actor.instance).webhook_urls
-    tested = mark_time(actor, "webhook_test")
-    missing = []
-    if not approvers:
-        missing.append("승인자 없음")
-    if not urls:
-        missing.append("알림 주소 미설정")
-    elif not tested:
-        missing.append("시험 전송 전")
-    if not missing:
-        status = DONE
-    elif not approvers and not urls:
-        status = OPEN
+    # 알림(Slack 등)은 아직 완성되지 않아 화면에서 뺐다. 승인은 「승인 센터」에서 한다.
+    if approvers:
+        status, line, extra = DONE, f"승인자 {approvers}명", {}
     else:
-        status = CHECK
-    line = "승인자와 알림이 준비되었습니다." if not missing else " · ".join(missing)
-    if not approvers:
+        status, line = (
+            (OPEN, "기본 관리자가 직접 결정할 수 있습니다.") if solo else (CHECK, "승인자 없음"))
         extra = {"href": "/admin?tab=operators#operator-form", "action": "승인자 지정"}
-    elif urls and actor.role == "admin":
-        extra = {"post": "/setup/webhook-test", "action": "시험 전송"}
-    else:
-        extra = {}
-    if solo and not approvers and not urls:
-        line = "기본 관리자가 직접 결정할 수 있습니다."
-    extra["webhook_form"] = actor.role == "admin" and not actor.config.stage2.webhook_urls
-    return _item("approval", "알림·승인자", status, line, optional=solo, **extra)
+    return _item("approval", "승인자", status, line, optional=solo, **extra)
 
 
 def _endpoints(actor: Actor) -> dict:

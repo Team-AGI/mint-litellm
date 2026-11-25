@@ -3,7 +3,7 @@
 {% block page_class %}wide{% endblock %}
 {% block body %}
 <h1>하네스 기본 기능</h1>
-<p class="muted">AI 도구에 들어 있는 셸·파일 편집·웹 기능입니다. 기본은 허용하고 호출마다 기록합니다. 막으면 모든 직원 PC에서 그 기능 호출이 거부됩니다.</p>
+<ul class="muted hint"><li>AI 도구에 들어 있는 셸·파일 편집·웹 기능입니다</li><li>기본은 허용하고 호출마다 기록합니다</li><li>차단하면 모든 직원 PC에서 그 기능이 거부됩니다</li></ul>
 {% if error %}<div class="banner error" role="alert">{{ error }}</div>{% endif %}
 {% for g in groups %}
 <h2>{{ g.name }}</h2>

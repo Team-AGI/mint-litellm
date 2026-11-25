@@ -326,3 +326,4 @@ dialog.confirm .actions { justify-content: flex-end; }
 .strip .stat.wait .value { color: var(--wait); }
 .strip .stat.danger .value { color: var(--danger); }
 section > .strip { margin-bottom: var(--s3); }
+ul.hint { margin: 4px 0 0; padding-left: 18px; font-size: 12px; }

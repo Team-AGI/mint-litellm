@@ -11,17 +11,13 @@
 {{ m.tabs(([('operators', '운영자', operators | length)] if actor.role != 'viewer' else []) + [('orgs', '조직', orgs | length), ('suggestions', '연결 제안', suggestions | length)] + ([('transfer', '백업·전달', transfers | length + siem | length)] if actor.role == 'admin' else []), tab, '/admin') }}
 {% if tab == 'operators' %}
 {% if operators %}
-<table><thead><tr><th>이름</th><th>역할</th><th>사용자</th><th>Slack</th><th>만료</th><th></th></tr></thead><tbody>
-{% for o in operators %}<tr><td>{{ o.name }}</td><td>{{ L.pick(L.ROLE, o.role) }}</td><td>{{ o.user_id | blank }}</td><td>{{ o.slack_user | blank }}</td><td class="nowrap">{{ o.expires_at | when }}</td>
+<table><thead><tr><th>이름</th><th>역할</th><th>사용자</th><th>만료</th><th></th></tr></thead><tbody>
+{% for o in operators %}<tr><td>{{ o.name }}</td><td>{{ L.pick(L.ROLE, o.role) }}</td><td>{{ o.user_id | blank }}</td><td class="nowrap">{{ o.expires_at | when }}</td>
 <td>{% if actor.role == 'admin' %}<div class="row-actions">
 {% set role_choices = ['admin', 'approver', 'viewer'] | reject('equalto', o.role) | select('in', ['admin', 'approver', 'viewer'] if o.user_id else ['viewer']) | list %}{% if role_choices %}<form method="post" action="/operators/{{ o.name | urlencode }}/role" class="row-actions">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ o.state_version }}">
   <select name="role" aria-label="{{ o.name }} 역할">{% for k in role_choices %}<option value="{{ k }}">{{ L.pick(L.ROLE, k) }}</option>{% endfor %}</select>
   <button type="submit">역할 변경</button>
-</form>{% endif %}
-{% if o.role != 'viewer' %}<form method="post" action="/operators/{{ o.name | urlencode }}/chat-bind" class="row-actions">
-  {{ m.csrf(actor) }}<input name="slack_user" value="{{ o.slack_user or '' }}" placeholder="Slack 사용자" pattern="[UW][A-Z0-9]{2,31}" aria-label="{{ o.name }} Slack 사용자">
-  <button type="submit">Slack 결속</button>
 </form>{% endif %}
 {% call m.confirm_dialog('remove-' ~ loop.index, '운영자 삭제', '운영자 삭제', '토큰이 끝나고 이 사용자의 콘솔 세션이 폐기됩니다.', '/operators/' ~ (o.name | urlencode) ~ '/remove', actor, '운영자 삭제', confirm_name=o.name) %}
 <input type="hidden" name="state_version" value="{{ o.state_version }}">
@@ -30,15 +26,15 @@
 </tbody></table>
 {% else %}{{ m.empty('등록된 운영자가 없습니다', '/setup', '시작하기') }}{% endif %}
 {% if actor.role == 'admin' %}
-<h2 id="operator-form">운영자 지정</h2>
+<h2 id="operator-form">MINT 권한 주기</h2>
 {% if people %}
 <form method="post" action="/admin/operators" class="filters">
   {{ m.csrf(actor) }}
   <label>사람<select name="user_id" required>{% for p in people %}<option value="{{ p.user_id }}">{{ p.email or p.user_id }}</option>{% endfor %}</select></label>
-  <label>역할<select name="role"><option value="approver">{{ L.pick(L.ROLE, 'approver') }}</option><option value="viewer">{{ L.pick(L.ROLE, 'viewer') }}</option><option value="admin">{{ L.pick(L.ROLE, 'admin') }}</option></select></label>
-  <button type="submit" class="primary">운영자로 지정</button>
+  <label>MINT 권한<select name="role"><option value="viewer">조회자 · 화면만 보기</option><option value="approver" selected>승인자 · 신청 승인·거부</option><option value="admin">관리자 · 모든 설정</option></select></label>
+  <button type="submit" class="primary">권한 주기</button>
 </form>
-<p class="muted">승인자는 승인, 조회자는 보기만 합니다.</p>
+<p class="muted">LiteLLM 역할과 별개인 관리 콘솔 권한입니다.</p>
 {% else %}<p class="muted">한 번 로그인한 사람만 고를 수 있습니다.</p>{% endif %}
 {% endif %}
 {% if system_accounts %}<h2>시스템 계정</h2>

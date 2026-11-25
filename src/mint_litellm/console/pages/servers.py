@@ -40,7 +40,7 @@ DONUT = (
     ("awaiting_approval", "승인 대기", "approve", "waiting"),
     ("changed", "변경됨", "block", ""),
     ("suspended", "중지됨", "observe", "stopped"),
-    ("other", "그 밖", "observe", "other"),
+    ("other", "그 밖", "other", "other"),
 )
 FILTERS = {
     "changed": lambda r: r["contract"] in ("changed", "pending"),
@@ -415,12 +415,11 @@ def suspend_server(
     server_id: str,
     request: Request,
     state_version: int = Form(...),
-    confirm_name: str = Form(""),
     next: str = Form(""),
     actor: Actor = Depends(page_actor),
 ):
+    # 중지는 「재개」로 되돌릴 수 있어 확인 창 한 번이면 된다(이름 입력은 이용 종료에만)
     def action():
-        api.confirm(server_id, confirm_name, "서버")
         server_service.suspend(actor.ctx, server_id, expected_version=state_version)
 
     return act(

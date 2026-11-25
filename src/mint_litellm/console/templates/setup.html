@@ -9,12 +9,7 @@
 {% for i in items %}<tr id="step-{{ i.key }}">
 <td>{{ i.title }}{% if i.optional %} <span class="muted">(선택)</span>{% endif %}</td>
 <td>{{ m.status_badge(i.status) }}</td>
-<td>{{ i.line }}{% if i.webhook_form %}
-<form method="post" action="/setup/webhook" class="filters" hx-boost="false">{{ m.csrf(actor) }}
-  <label>알림 주소<input name="url" type="url" placeholder="https://hooks.slack.com/services/…" pattern="https://.+"></label>
-  <label>형식<select name="fmt"><option value="slack">Slack</option><option value="teams">Teams</option><option value="json">JSON(그 밖)</option></select></label>
-  <button type="submit">저장</button>
-</form><span class="muted">비워서 저장하면 알림을 끕니다. 정하지 않아도 승인은 「승인」 화면에서 할 수 있습니다.</span>{% endif %}</td>
+<td>{{ i.line }}</td>
 <td class="nowrap">{% if i.status.text == '완료' and not i.optional %}{% elif i.post %}<form method="post" action="{{ i.post }}" hx-boost="false">{{ m.csrf(actor) }}<button type="submit" class="primary">{{ i.action }}</button></form>
 {% elif i.href %}<a class="button" href="{{ i.href }}">{{ i.action }}</a>{% endif %}</td>
 </tr>{% endfor %}
