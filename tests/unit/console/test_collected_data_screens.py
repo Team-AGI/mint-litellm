@@ -125,7 +125,8 @@ def test_every_alert_kind_has_a_label_and_a_summary():
     for kind in (k.value for k in AlertKind):
         assert kind in labels.ALERT_KIND, kind
         assert kind in alert_view.SUMMARY, kind
-    assert not set(labels.ALERT_KIND) - set(alert_view.SUMMARY)
+    # 운영 자기 점검은 요약을 점검 내용에서 만든다(요약 문장 표는 화면 묶음이 채운다).
+    assert not set(labels.ALERT_KIND) - set(alert_view.SUMMARY) - {"operational_check"}
 
 
 def test_endpoint_list_shows_processes_running_outside_the_runner():

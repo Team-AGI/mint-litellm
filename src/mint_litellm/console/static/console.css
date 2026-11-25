@@ -16,6 +16,10 @@
   --danger: #b91c1c;
   --danger-soft: #fef2f2;
   --off: #4b5563;
+  --sev-critical: #7f1d1d;
+  --sev-high: #b91c1c;
+  --sev-medium: #92400e;
+  --sev-low: #4b5563;
   --chart-1: #2563eb;
   --chart-2: #60a5fa;
   --chart-3: #1e40af;
@@ -31,6 +35,8 @@
   --s3: 16px;
   --s4: 24px;
   --s5: 32px;
+  --nav-item-h: 36px;
+  --nav-group-h: 24px;
   --row-h: 48px;
   --row-h-compact: 40px;
   --pad-card: 24px;
@@ -78,23 +84,30 @@ body.shell { --sidebar-width: 220px; min-height: 100vh; padding-top: 64px; }
 .topbar .who { color: var(--muted); font-size: 12px; }
 .sidebar {
   position: fixed; inset: 64px auto 0 0; z-index: 4; width: var(--sidebar-width);
-  padding: 12px; background: var(--bg); border-right: 1px solid var(--border);
+  padding: 8px 12px; border-right: 1px solid var(--border);
   overflow-y: auto; overscroll-behavior: contain;
+  /* 위·아래로 더 스크롤할 내용이 있으면 그 쪽에 그림자가 보인다(넘칠 때만). */
+  background:
+    linear-gradient(var(--bg) 30%, rgb(255 255 255 / 0)) center top / 100% 24px no-repeat local,
+    linear-gradient(rgb(255 255 255 / 0), var(--bg) 70%) center bottom / 100% 24px no-repeat local,
+    radial-gradient(farthest-side at 50% 0, rgb(0 0 0 / .18), transparent) center top / 100% 8px no-repeat scroll,
+    radial-gradient(farthest-side at 50% 100%, rgb(0 0 0 / .18), transparent) center bottom / 100% 8px no-repeat scroll,
+    var(--bg);
 }
-.sidebar-heading { display: flex; align-items: center; justify-content: space-between; min-height: 40px; margin-bottom: 8px; padding-left: 8px; }
+.sidebar-heading { display: flex; align-items: center; justify-content: space-between; min-height: 32px; margin-bottom: 4px; padding-left: 8px; }
 .sidebar-label { color: var(--muted); font-size: 12px; font-weight: 600; }
 .sidebar a {
-  position: relative; display: flex; align-items: center; gap: 10px; min-height: 40px;
-  padding: 8px 10px; margin-bottom: 2px; color: var(--muted); border-radius: 6px;
+  position: relative; display: flex; align-items: center; gap: 10px; min-height: var(--nav-item-h);
+  padding: 6px 10px; margin: 0; color: var(--muted); border-radius: 6px;
 }
 .sidebar a:hover { background: var(--hover); color: var(--text); text-decoration: none; }
 .sidebar a.active { background: var(--accent-soft); color: var(--text); font-weight: 600; }
 .nav-icon { flex: 0 0 18px; }
 .nav-text { flex: 1; }
 .sidebar .badge { font-size: 12px; }
-.sidebar .group + .group { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 8px; }
-.sidebar .group-title { padding: 8px 10px; font-size: 12px; color: var(--muted); font-weight: 500; }
-button.icon-button { width: 36px; height: 36px; padding: 8px; justify-content: center; border-color: transparent; background: transparent; flex-shrink: 0; }
+.sidebar .group + .group { border-top: 1px solid var(--border); margin-top: 8px; }
+.sidebar .group-title { height: var(--nav-group-h); line-height: var(--nav-group-h); padding: 0 10px; font-size: 12px; color: var(--muted); font-weight: 500; }
+button.icon-button { width: 32px; height: 32px; padding: 8px; justify-content: center; border-color: transparent; background: transparent; flex-shrink: 0; }
 button.icon-button:hover { background: var(--hover); }
 button.menu-open { display: none; }
 .mobile-account { display: none; }
@@ -119,6 +132,8 @@ html[data-sidebar-collapsed="true"] .sidebar .badge { display: none; }
 }
 .banner.error { border-color: var(--danger); color: var(--danger); background: var(--danger-soft); }
 .banner.ok { border-color: var(--ok); color: var(--ok); background: var(--ok-soft); }
+.banner.warn { border-color: var(--wait); color: var(--wait); background: var(--wait-soft); }
+.banner:has(> .button) { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s2) var(--s3); }
 
 table { width: 100%; border-collapse: collapse; margin-bottom: var(--s3); }
 th, td { text-align: left; padding: 10px 16px; height: var(--row-h); border-bottom: 1px solid var(--border); }
@@ -145,6 +160,10 @@ td.num, td.num * { font-variant-numeric: tabular-nums; }
 .badge.wait { color: var(--wait); }
 .badge.error, .badge.block { color: var(--danger); }
 .badge.off { color: var(--off); }
+.badge.sev-critical { color: var(--sev-critical); font-weight: 600; }
+.badge.sev-high { color: var(--sev-high); }
+.badge.sev-medium { color: var(--sev-medium); }
+.badge.sev-low { color: var(--sev-low); }
 
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--gap); margin-bottom: var(--gap); }
 .card { border: 1px solid var(--border); border-radius: 6px; padding: var(--pad-card); background: var(--bg); }
@@ -193,7 +212,18 @@ button.primary, .button.primary { background: var(--accent); border-color: var(-
 button.primary:hover { filter: brightness(1.1); }
 button.danger { background: var(--danger); border-color: var(--danger); color: var(--on-accent); }
 button.danger:hover { filter: brightness(1.1); }
+/* 위험 테두리: 되돌릴 수 있는 차단·중지·취소를 여는 단추. 채움은 확인 창의 마지막 단추만 쓴다. */
+button.danger-outline, .button.danger-outline { background: var(--bg); border-color: var(--danger); color: var(--danger); }
+button.danger-outline:hover, .button.danger-outline:hover { background: var(--danger-soft); }
+/* 표 행에는 빨간 채움 단추를 두지 않는다(확인 창 안은 예외). */
+td button.danger, td .button.danger { background: var(--bg); border-color: var(--danger); color: var(--danger); filter: none; }
+td button.danger:hover { background: var(--danger-soft); filter: none; }
+td dialog button.danger { background: var(--danger); border-color: var(--danger); color: var(--on-accent); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
+button[aria-busy="true"] { cursor: progress; }
+/* 할 수 없는 단추: 비활성 + 사유 한 줄(본문 크기, 툴팁만 두지 않는다). */
+.blocked-action { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--s1) var(--s2); }
+.blocked-action .reason { color: var(--muted); }
 .actions { display: flex; flex-wrap: wrap; gap: var(--s2); justify-content: flex-start; }
 .actions button, .actions .button { white-space: nowrap; }
 .actions .danger { order: 99; margin-left: auto; }
@@ -280,7 +310,14 @@ dialog.confirm .actions { justify-content: flex-end; }
 
 @media (max-width: 1100px) {
   html:not([data-sidebar-collapsed]) body.shell { --sidebar-width: 72px; }
-  table { display: block; max-width: 100%; overflow-x: auto; }
+  table { display: block; max-width: 100%; overflow-x: auto;
+    /* 가로로 더 볼 내용이 있으면 끝에 그림자가 보인다. */
+    background:
+      linear-gradient(90deg, var(--bg) 30%, rgb(255 255 255 / 0)) left center / 24px 100% no-repeat local,
+      linear-gradient(90deg, rgb(255 255 255 / 0), var(--bg) 70%) right center / 24px 100% no-repeat local,
+      radial-gradient(farthest-side at 0 50%, rgb(0 0 0 / .18), transparent) left center / 8px 100% no-repeat scroll,
+      radial-gradient(farthest-side at 100% 50%, rgb(0 0 0 / .18), transparent) right center / 8px 100% no-repeat scroll;
+  }
   th { position: static; }
   .topbar .who { display: none; }
   main { padding: 24px; }
@@ -290,7 +327,8 @@ dialog.confirm .actions { justify-content: flex-end; }
   .topbar-actions > a { display: none; }
   .mobile-account { display: block; }
   th, td { min-width: 120px; }
-  th:first-child, td:first-child { min-width: 160px; }
+  th:first-child, td:first-child { min-width: 160px; position: sticky; left: 0; z-index: 1; background: var(--bg); }
+  th:first-child { background: var(--bg-subtle); }
   .topbar .brand span { font-size: 12px; margin-left: 4px; }
   .segments, .tabs { max-width: 100%; overflow-x: auto; }
   .tabs a { white-space: nowrap; }
@@ -311,7 +349,14 @@ dialog.confirm .actions { justify-content: flex-end; }
   body.menu-visible { overflow: hidden; }
   .menu-visible .sidebar { visibility: visible; transform: none; }
   .sidebar-backdrop { position: fixed; inset: 0; z-index: 7; border: 0; border-radius: 0; background: rgb(0 0 0 / .35); }
-  .cards { grid-template-columns: minmax(0, 1fr); }
+  /* 숫자 카드는 한 줄 요약 띠처럼 촘촘하게 두 줄씩 놓는다(세로로 길게 쌓지 않는다). */
+  .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s2); }
+  .card { padding: var(--s2) var(--s3); }
+  .card .value { font-size: 20px; }
+  .card.kpi svg.spark { display: none; }
+  .actions { flex-direction: column; align-items: stretch; }
+  .actions .primary { order: -1; }
+  td .actions, dialog.confirm .actions { flex-direction: row; align-items: center; }
   .login { padding: 24px; }
 }
 
@@ -327,3 +372,10 @@ dialog.confirm .actions { justify-content: flex-end; }
 .strip .stat.danger .value { color: var(--danger); }
 section > .strip { margin-bottom: var(--s3); }
 ul.hint { margin: 4px 0 0; padding-left: 18px; font-size: 12px; }
+
+/* 거부 화면과 오류 화면(두 틀) */
+.deny, .fail { max-width: 640px; }
+.deny dl.detail, .fail dl.detail { margin-top: var(--s3); }
+.fail .not-policy { color: var(--muted); }
+.login .deny, .login .fail { max-width: none; }
+.login .deny p, .login .fail p { margin: 0 0 var(--s2); line-height: 1.6; }

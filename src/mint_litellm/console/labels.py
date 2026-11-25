@@ -167,11 +167,12 @@ SIEM_STATE = {
     "wait": Status("전달 전", "wait"),
     "error": Status("전달 실패", "error"),
 }
+# 심각도는 상태 배지(✓◷▲⊘)와 겹치지 않게 색 점 + 글자로 보인다(수준 이름은 sev-로 시작).
 ALERT_SEVERITY = {
-    "low": Status("낮음", "wait"),
-    "medium": Status("보통", "wait"),
-    "high": Status("높음", "error"),
-    "critical": Status("심각", "block"),
+    "low": Status("낮음", "sev-low"),
+    "medium": Status("보통", "sev-medium"),
+    "high": Status("높음", "sev-high"),
+    "critical": Status("심각", "sev-critical"),
 }
 EVIDENCE = {
     "valid": Status("유효", "ok"),
@@ -493,8 +494,18 @@ def siem_error(code: str | None) -> str:
     return SIEM_ERROR.get(code, "기타 오류")
 
 
+class Known(dict):
+    """사전에 없는 값을 영문 그대로 내지 않고 「알 수 없는 종류(원래 값)」로 보이는 표."""
+
+    def get(self, key, default=None):
+        if key in self:
+            return self[key]
+        return f"알 수 없는 종류({key})" if default is None or default == key else default
+
+
 # 경보 종류(경보 발생·해결 사건에 함께 보인다)
-ALERT_KIND = {
+ALERT_KIND = Known({
+    "operational_check": "운영 자기 점검",
     "contract_drift": "계약 변경",
     "call_spike": "호출량 급증",
     "bulk_extraction": "대량 추출 의심",
@@ -550,13 +561,13 @@ ALERT_KIND = {
     "server_identity_conflict": "서버 신원 충돌",
     "intake_pending": "도입 신청 대기",
     "call_approval_requested": "호출 승인 요청",
-}
+})
 ALERT_STATUS = {
-    "open": Status("열림", "error"),
+    "open": Status("열림", "wait"),
     "acknowledged": Status("확인함", "wait"),
     "resolved": Status("해결", "ok"),
 }
-EVENT_KIND = {
+EVENT_KIND = Known({
     "decision_evaluated": "호출 판정",
     "discovery_evaluated": "도구 목록 판정",
     "call_response_received": "호출 응답",
@@ -586,6 +597,15 @@ EVENT_KIND = {
     "call_approval_cancelled": "호출별 승인 취소",
     "call_approval_rule_created": "상시 승인 규칙 생성",
     "call_approval_rule_disabled": "상시 승인 규칙 해제",
+    "access_request_opened": "권한 요청",
+    "access_request_cancelled": "권한 요청 취소",
+    "access_request_resolved": "권한 요청 허용",
+    "access_request_rejected": "권한 요청 거절",
+    "forced_action_recorded": "강제 조치",
+    "global_halt_set": "전역 정지",
+    "global_halt_lifted": "전역 정지 해제",
+    "person_lockout": "사람 전체 차단",
+    "person_unlocked": "사람 전체 차단 해제",
     "consent_granted": "동의 부여",
     "consent_revoked": "동의 철회",
     "allowlist_added": "허용 목록 추가",
@@ -654,7 +674,7 @@ EVENT_KIND = {
     "defense_verify_run": "방어 검증 실행",
     "event_partition_exported": "원장 월 구간 내보냄",
     "event_partition_dropped": "원장 월 구간 삭제",
-}
+})
 
 CONFIRMATION_EVENT = {
     "call_approval_approved": "본인 확인 확정",

@@ -16,7 +16,8 @@
   <div class="brand-wrap"><button type="button" class="menu-open icon-button" data-sidebar-toggle aria-controls="sidebar" aria-expanded="false" aria-label="메뉴 열기">{{ ui.nav_icon('menu') }}</button><span class="brand">MINT <span>관리자 콘솔</span></span></div>
   <span class="topbar-actions">
     <span class="who">{{ zone_label }}</span>
-    <span class="who">{{ actor.session.operator_name }} · {{ L.pick(L.ROLE, actor.role) }}</span>
+    <span class="who">{{ actor.session.operator_name }} · {{ 'Root' if is_root(actor) else L.pick(L.ROLE, actor.role) }}</span>
+    {% if root_open %}<a class="button danger-outline" href="/root">긴급 통제</a>{% endif %}
     <a class="button" href="/staff" hx-boost="false">직원 화면</a>
     {% if litellm_open %}<a class="button" href="/litellm/open" hx-boost="false">LiteLLM 콘솔</a>{% endif %}
     {% if (actor.session.key_token or "").startswith("pw:") %}<a class="button" href="/account/password">비밀번호 바꾸기</a>{% endif %}
@@ -26,7 +27,7 @@
 <button class="sidebar-backdrop" data-sidebar-close aria-label="메뉴 닫기" tabindex="-1" hidden></button>
 <nav id="sidebar" class="sidebar" aria-label="메뉴">
 <div class="sidebar-heading"><span class="sidebar-label">관리자 메뉴</span><button type="button" class="icon-button" data-sidebar-toggle aria-controls="sidebar" aria-expanded="true" aria-label="메뉴 접기">{{ ui.nav_icon('panel') }}</button></div><div class="menu">
-{{ ui.nav(MENU, path, badges, actor) }}
+{{ ui.nav(menu_for(actor, badges), path, badges, actor) }}
 {% if litellm_open or (actor.session.key_token or "").startswith("pw:") %}<div class="mobile-account group">
 {% if litellm_open %}<a href="/litellm/open" hx-boost="false" title="LiteLLM 콘솔" aria-label="LiteLLM 콘솔">{{ ui.nav_icon('/servers') }}<span class="nav-text">LiteLLM 콘솔</span></a>{% endif %}
 {% if (actor.session.key_token or "").startswith("pw:") %}<a href="/account/password" title="비밀번호 바꾸기" aria-label="비밀번호 바꾸기">{{ ui.nav_icon('/access') }}<span class="nav-text">비밀번호 바꾸기</span></a>{% endif %}
