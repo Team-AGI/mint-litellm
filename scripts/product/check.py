@@ -40,7 +40,11 @@ def read(name: str) -> list[dict]:
     if not path.exists():
         errors.append(f"{name} 없음")
         return []
-    return list(csv.DictReader(open(path, encoding="utf-8")))
+    rows = list(csv.DictReader(open(path, encoding="utf-8")))
+    for number, row in enumerate(rows, 2):
+        if None in row or None in row.values():  # 따옴표 없는 쉼표로 칸 수가 어긋남
+            errors.append(f"{name} {number}행: 칸 수가 머리글과 다름(쉼표는 따옴표로 감쌀 것)")
+    return rows
 
 
 def require_columns(name: str, rows: list[dict], cols: list[str]) -> None:
