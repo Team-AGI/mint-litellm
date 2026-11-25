@@ -76,7 +76,8 @@ def _provisional(ctx: Context, row: dict, tools: dict[str, dict]) -> None:
         name: value
         for name, value in tools.items()
         if name not in approved
-        or contract_observe.drift_kind(json.loads(approved[name]["canonical_text"]), value)
+        or contract_observe.drift_kind(
+            contract_observe.reported_view(json.loads(approved[name]["canonical_text"])), value)
         != "none"
     }
     for name, value in wanted.items():

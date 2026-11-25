@@ -552,8 +552,10 @@ def sync_server(ctx: JobContext) -> None:
             from mint_litellm.control.intake_jobs import _staff_registry
 
             contract = fetchone(
+                # 관리자 등록 신청은 계약 ID가 신청 ID와 다르다(같은 것이 없으면 최신 계약)
                 conn, "SELECT * FROM mint.deployment_contracts WHERE instance_id = %s"
-                " AND server_id = %s AND id = %s AND status IN ('candidate', 'approved')",
+                " AND server_id = %s AND status IN ('candidate', 'approved')"
+                " ORDER BY (id = %s) DESC, id DESC LIMIT 1",
                 (inst, server_id, intake["id"]),
             )
             _staff_registry(client, intake, contract)
