@@ -23,7 +23,7 @@
 </dl>
 {% if actor.role == 'admin' %}<div class="actions">
 {% if p.paused %}<form method="post" action="/endpoints/{{ r.key_alias }}/resume" hx-boost="false">{{ m.csrf(actor) }}<input type="hidden" name="client" value="{{ client }}"><button type="submit" class="primary">재개</button></form>
-{% else %}{{ m.confirm_dialog('pause-' ~ r.key_alias ~ client, '관리 AI 연결 중지', '관리 AI 연결 중지', r.user_id ~ ' 단말의 로컬 서버·내장 도구 호출이 거절되고 실행기가 띄운 서버가 멈춥니다. 원격 MCP 게이트웨이 키는 그대로입니다. 재개하면 바로 다시 사용할 수 있습니다.', '/endpoints/' ~ r.key_alias ~ '/pause', actor, '중지') }}{% endif %}
+{% else %}{{ m.confirm_dialog('pause-' ~ r.key_alias ~ client, '관리 AI 연결 중지', '관리 AI 연결 중지', (r.person or r.user_id) ~ ' 단말의 로컬 서버·내장 도구 호출이 거절되고 실행기가 띄운 서버가 멈춥니다. 원격 MCP 게이트웨이 키는 그대로입니다. 재개하면 바로 다시 사용할 수 있습니다.', '/endpoints/' ~ r.key_alias ~ '/pause', actor, '중지') }}{% endif %}
 </div>{% endif %}
 {% endmacro %}
 {% block body %}
@@ -45,9 +45,9 @@
 {% endif %}
 {% if state %}<p><a class="button" href="/endpoints?tab=installs">{{ STATES[state] }}{% if kind %} · {{ dict(VIOLATIONS)[kind] }}{% endif %} ×</a></p>{% endif %}
 {% if rows %}
-<table class="clickable"><thead><tr><th>사용자</th><th>팀</th><th>설치 상태</th><th>도구 판본</th><th>격리</th><th>마지막 보고</th></tr></thead><tbody>
+<table class="clickable"><thead><tr><th>사용자</th><th>PC</th><th>팀</th><th>설치 상태</th><th>도구 판본</th><th>격리</th><th>마지막 보고</th></tr></thead><tbody>
 {% for r in rows %}<tr>
-<td><a href="/endpoints?tab=installs{% if state %}&state={{ state }}{% endif %}{% if kind %}&kind={{ kind }}{% endif %}&open={{ r.ref | urlencode }}">{{ r.user_id }}</a></td>
+<td><a href="/endpoints?tab=installs{% if state %}&state={{ state }}{% endif %}{% if kind %}&kind={{ kind }}{% endif %}&open={{ r.ref | urlencode }}">{{ r.person or r.user_id }}</a></td><td>{{ r.host or '—' }}{% if r.os %}<br><span class="muted">{{ r.os }}</span>{% endif %}</td>
 <td>{{ r.team_id | blank }}</td>
 <td>{{ m.badge(L.INSTALL, r.state) }}</td>
 <td>{{ r.claude_version | blank }}{% if r.update_error %}<br><span class="badge error">갱신 실패 · {{ L.UPDATE_ERROR.get(r.update_error, '알 수 없는 사유') }}</span>{% endif %}</td>
@@ -57,7 +57,7 @@
 </tbody></table>
 {% elif state %}{{ m.empty('조건에 맞는 단말이 없습니다', '/endpoints?tab=installs', '조건 지우기') }}
 {% else %}{{ m.empty('발급한 설치 묶음이 없습니다', '/setup#step-endpoint', '시작하기') }}{% endif %}
-{% if selected %}{% call m.drawer(selected.user_id, '/endpoints?tab=installs' ~ ('&state=' ~ state if state) ~ ('&kind=' ~ kind if kind)) %}
+{% if selected %}{% call m.drawer((selected.person or selected.user_id) ~ (' · ' ~ selected.host if selected.host else ''), '/endpoints?tab=installs' ~ ('&state=' ~ state if state) ~ ('&kind=' ~ kind if kind)) %}
 <dl class="detail">
   <dt>팀</dt><dd>{{ selected.team_id | blank }}</dd>
   <dt>설치 상태</dt><dd>{{ m.badge(L.INSTALL, selected.state) }}</dd>
@@ -77,9 +77,9 @@
 {% if selected.state in ('managed', 'user') and selected.pause_view %}{{ pause_panel(selected, '') }}{% endif %}
 {{ apps_panel(selected, selected.apps, actor.role == 'admin', '/endpoints/apps/', selected.ref) }}
 {% if actor.role == 'admin' and selected.group %}
-<div class="actions">{% if selected.state != 'revoked' %}{% call m.confirm_dialog('revoke-device', '연결 해제', '이 PC의 연결을 해제합니다', '이 PC의 설치 묶음 키와 이 PC에 묶인 앱 자격이 지워지고 이 PC는 더 이상 판정을 받지 못합니다. ' ~ selected.user_id ~ ' 사용자의 다른 PC는 그대로입니다. 새 설치 명령으로 다시 설치해야 연결됩니다.', '/endpoints/' ~ selected.key_alias ~ '/revoke', actor, '연결 해제') %}
+<div class="actions">{% if selected.state != 'revoked' %}{% call m.confirm_dialog('revoke-device', '연결 해제', (selected.host or '이 PC') ~ '의 연결을 해제합니다', (selected.host or '이 PC') ~ '는 더 이상 MINT를 거쳐 MCP를 쓰지 못하고, 이 PC에서 만든 앱 자격도 회수됩니다. ' ~ (selected.person or selected.user_id) ~ '의 다른 PC는 그대로입니다. 새 설치 명령으로 다시 설치해야 연결됩니다.', '/endpoints/' ~ selected.key_alias ~ '/revoke', actor, '연결 해제') %}
 <label>해제 사유(선택)<input name="reason" maxlength="500" autocomplete="off"></label>
-{% endcall %}{% endif %}{% call m.confirm_dialog('revoke-endpoint', '이 사람의 PC 모두 해제', '이 사람의 PC를 모두 해제합니다', selected.user_id ~ ' 사용자의 모든 PC 설치 묶음 키와 앱 자격이 지워지고, 이 사용자의 PC는 더 이상 판정을 받지 못합니다. 새 설치 명령으로 다시 설치해야 연결됩니다.', '/endpoints/revoke', actor, '모두 해제') %}
+{% endcall %}{% endif %}{% call m.confirm_dialog('revoke-endpoint', '이 사람의 PC 모두 해제', '이 사람의 PC를 모두 해제합니다', (selected.person or selected.user_id) ~ '의 모든 PC가 MINT를 거쳐 MCP를 쓰지 못하게 되고, 앱 자격도 회수됩니다. 새 설치 명령으로 다시 설치해야 연결됩니다.', '/endpoints/revoke', actor, '모두 해제') %}
 <input type="hidden" name="user_id" value="{{ selected.user_id }}">
 <label>해제 사유(선택)<input name="reason" maxlength="500" autocomplete="off"></label>
 {% endcall %}</div>
@@ -117,7 +117,7 @@
 {% if mcp %}
 <table><thead><tr><th>사용자</th><th>설치 상태</th><th>MCP 서버 이름</th><th>도구</th><th>방식</th><th>실행 파일·호스트</th><th>마지막 확인</th><th class="num">단말</th><th></th></tr></thead><tbody>
 {% for r in mcp %}<tr>
-<td>{{ r.user_id }}</td>
+<td>{{ r.person or r.user_id }}</td>
 <td>{{ m.badge(L.INSTALL, r.state) }}</td>
 <td>{{ r.name }}{% if r.ignored %} <span class="badge off">사용자 제외</span>{% endif %}</td>
 <td>{{ L.pick(L.AI_CLIENT, r.harness) }}</td>

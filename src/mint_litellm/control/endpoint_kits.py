@@ -223,7 +223,8 @@ def installs(
         conn,
         "SELECT user_id, team_id, issued_at, revoked_at, install_mode, kit_version,"
         " claude_version, mcp_servers, processes, outside_processes, reported_at, expires_at,"
-        " update_error, key_alias, ai_clients, plaintext_keys, scan_errors, offline_calls,"
+        " update_error, key_alias, host, os, ai_clients, plaintext_keys, scan_errors,"
+        " offline_calls,"
         " paused_at, paused_by, pause_gen, paused_ack, paused_ack_at, reconnect_requested,"
         " mcp_key_alias IS NOT NULL AS gateway"
         " FROM mint.endpoint_installs"
