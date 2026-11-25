@@ -57,6 +57,10 @@ class EventKind(StrEnum):
     CALL_APPROVAL_CANCELLED = "call_approval_cancelled"
     CALL_APPROVAL_RULE_CREATED = "call_approval_rule_created"
     CALL_APPROVAL_RULE_DISABLED = "call_approval_rule_disabled"
+    ACCESS_REQUEST_OPENED = "access_request_opened"
+    ACCESS_REQUEST_CANCELLED = "access_request_cancelled"
+    ACCESS_REQUEST_RESOLVED = "access_request_resolved"
+    ACCESS_REQUEST_REJECTED = "access_request_rejected"
     CONSENT_GRANTED = "consent_granted"
     CONSENT_REVOKED = "consent_revoked"
     ALLOWLIST_ADDED = "allowlist_added"
@@ -174,6 +178,10 @@ CONTROL_ENTITY: dict[EventKind, str] = {
     EventKind.CALL_APPROVAL_CANCELLED: "call_approval",
     EventKind.CALL_APPROVAL_RULE_CREATED: "call_approval_rule",
     EventKind.CALL_APPROVAL_RULE_DISABLED: "call_approval_rule",
+    EventKind.ACCESS_REQUEST_OPENED: "access_request",
+    EventKind.ACCESS_REQUEST_CANCELLED: "access_request",
+    EventKind.ACCESS_REQUEST_RESOLVED: "access_request",
+    EventKind.ACCESS_REQUEST_REJECTED: "access_request",
     EventKind.CONSENT_GRANTED: "consent",
     EventKind.CONSENT_REVOKED: "consent",
     EventKind.ALLOWLIST_ADDED: "allowlist",
