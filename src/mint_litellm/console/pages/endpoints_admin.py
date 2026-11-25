@@ -108,6 +108,12 @@ def endpoints_page(request: Request, actor: Actor, error=None, status=200):
         endpoint_kits.local_mcp_inventory(actor.conn, actor.instance),
         datetime.now(UTC),
     )
+    people = {r["user_id"]: r["email"] for r in fetchall(  # 목록에 UUID 대신 사람 이름
+        actor.conn, "SELECT user_id, email FROM mint.directory_users WHERE instance_id = %s",
+        (actor.instance,))}
+    for r in [*view["rows"], *view.get("mcp", [])]:
+        if isinstance(r, dict):
+            r["person"] = people.get(r.get("user_id")) or r.get("user_id")
     asked = request.query_params.get("tab")
     tab = asked if asked in TABS else "installs"
     state = request.query_params.get("state", "")

@@ -3145,6 +3145,11 @@ class Kit:
         if payload.get("paused_ack") is None:
             payload.pop("paused_ack", None)
         if installed:
+            import platform
+            import socket
+
+            payload["host"] = socket.gethostname()[:255] or None  # 목록에서 PC를 알아보게
+            payload["os"] = f"{platform.system()} {platform.release()}".strip()[:64] or None
             # "clients": 사용자 권한 보고기 — 연결 복구·신청 요청을 받아 처리할 수 있다
             payload["capabilities"] = ["inspect"] + ([] if self.system_mode else ["clients"])
             if self.config.get("update_key"):

@@ -27,8 +27,9 @@
 {% endif %}
 {% if behind %}<p class="muted">한 번만 다시 설치하면 이후 자동 갱신됩니다</p>{% endif %}
 {% if rows %}
-<table><thead><tr><th>팀</th><th>설치 상태</th><th>Claude Code 판본</th><th>MCP 서버</th><th>발급</th><th>마지막 보고</th></tr></thead><tbody>
+<table><thead><tr><th>PC</th><th>팀</th><th>설치 상태</th><th>Claude Code 판본</th><th>MCP 서버</th><th>발급</th><th>마지막 보고</th></tr></thead><tbody>
 {% for r in rows %}<tr>
+<td>{{ r.host or '—' }}{% if r.os %}<br><span class="muted">{{ r.os }}</span>{% endif %}</td>
 <td>{{ r.team_id | blank }}</td>
 <td>{{ m.badge(L.INSTALL, r.state) }}</td>
 <td>{{ r.claude_version | blank }}</td>
@@ -39,8 +40,9 @@
 </tbody></table>
 {% if tools %}
 <h2>AI 도구</h2>
-<table><thead><tr><th>클라이언트</th><th>보장</th><th>상태</th></tr></thead><tbody>
+<table><thead><tr><th>PC</th><th>클라이언트</th><th>보장</th><th>상태</th></tr></thead><tbody>
 {% for t in tools %}<tr>
+<td>{{ (t.install.host if t.install and t.install.host) or '—' }}</td>
 <td>{{ L.pick(L.AI_CLIENT, t.client) }}</td>
 <td>{{ L.pick(L.AI_COVERAGE, t.coverage) }}</td>
 <td>{% if t.connection == 'failed' %}<span class="badge error">연결 실패</span>

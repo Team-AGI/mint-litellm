@@ -37,7 +37,8 @@ def test_a_managed_install_report_is_stored_for_the_calling_key(tmp_path, stored
                       "processes": None, "autostart": None, "outside_processes": None,
                       "removed": None,
                       "local_mcp": None, "tool_lists": None, "hook_trust": None,
-                      "update_error": None, "ai_clients": None, "plaintext_keys": None,
+                      "update_error": None, "host": None, "os": None, "ai_clients": None,
+                      "plaintext_keys": None,
                       "scan_errors": None, "offline_calls": None, "paused_ack": None}
 
 
@@ -366,3 +367,10 @@ def test_a_removal_report_retires_only_the_calling_pcs_key(tmp_path, stored, mon
     assert post(client, REPORT, body | {"replaced_by": heir}).status_code == 200
     assert retired[-1] == (KEY, issuer, heir)
     assert post(client, REPORT, body | {"replaced_by": "sk-raw-key"}).status_code == 422
+
+
+def test_the_pc_name_and_os_are_stored_and_control_characters_are_refused(tmp_path, stored):
+    client, _ = build(tmp_path)
+    assert post(client, REPORT, report(host="pj3", os="Windows 11")).status_code == 200
+    assert (stored[0][2]["host"], stored[0][2]["os"]) == ("pj3", "Windows 11")
+    assert post(client, REPORT, report(host="pj\n3")).status_code == 422

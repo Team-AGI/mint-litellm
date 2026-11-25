@@ -458,6 +458,9 @@ class ReportBody(BaseModel):
     # 단말이 서명된 키트 갱신을 받을 수 있는가(고정 공개 키가 있다). 직전 갱신 실패 사유(있을 때만).
     kit_update: bool | None = None
     update_error: str | None = Field(default=None, max_length=80)
+    # PC 이름과 OS(단말의 주장, 목록에서 PC를 알아보는 데만 쓴다). 옛 단말은 보내지 않는다.
+    host: str | None = Field(default=None, max_length=255, pattern=r"^[^\x00-\x1f]*$")
+    os: str | None = Field(default=None, max_length=64, pattern=r"^[^\x00-\x1f]*$")
     # AI 도구별 보장 현황·평문 키 위치·검사 실패·장애 중 통과 호출. 이전 묶음은 보내지 않는다.
     ai_clients: list[AiClientItem] | None = Field(default=None, max_length=16)
     plaintext_keys: list[PlaintextKeyItem] | None = Field(default=None, max_length=32)
@@ -725,6 +728,7 @@ def make_router(
                 tool_lists=_dump(body.tool_lists),
                 hook_trust=body.hook_trust,
                 update_error=body.update_error,
+                host=body.host, os=body.os,
                 ai_clients=_dump(body.ai_clients),
                 plaintext_keys=_dump(body.plaintext_keys),
                 scan_errors=body.scan_errors,

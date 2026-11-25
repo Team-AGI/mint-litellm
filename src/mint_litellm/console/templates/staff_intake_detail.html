@@ -8,12 +8,14 @@
 <input type="hidden" name="reason" value="신청자 취소"><input type="hidden" name="confirm" value="yes">
 {% endcall %}
 {% endif %}
+{% if i.status in ('passed', 'indeterminate') %}<p>관리자가 검사 결과를 보고 결정합니다.</p>{% elif i.status == 'failed' %}<p>사유를 확인하고 다시 신청하십시오. <a href="/staff/intakes/new">다시 신청</a></p>{% endif %}
+{% if issues %}<h2>검사에서 확인할 것</h2><ul>{% for t in issues %}<li>{{ t }}</li>{% endfor %}</ul>{% endif %}
 {% if stages %}<ol class="steps" aria-label="진행 단계">{% for level, text in stages %}<li class="{{ level }}"><span class="icon" aria-hidden="true">{{ ICONS[level] }}</span>{{ text }}</li>{% endfor %}</ol>{% endif %}
 {% if delivery %}<ol class="steps" aria-label="적용 단계">{% for level, text in delivery %}<li class="{{ level }}"><span class="icon" aria-hidden="true">{{ ICONS[level] }}</span>{{ text }}</li>{% endfor %}</ol>{% endif %}
 <dl class="detail">
 {% if i.server_url %}<dt>주소</dt><dd>{{ i.server_url }}</dd>{% endif %}
 <dt>출처</dt><dd>{{ m.source_badge(source | default('staff')) }}</dd>
-<dt>신청자</dt><dd>{{ actor.user_id }}</dd>
+<dt>신청자</dt><dd>나</dd>
 <dt>목적</dt><dd>{{ i.purpose }}</dd>
 <dt>자료 등급</dt><dd>{{ L.pick(L.DATA_GRADE, i.data_grade) }}</dd>
 <dt>취급 자원</dt><dd>{{ i.allowed_resources | join or '—' }}</dd>

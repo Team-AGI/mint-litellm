@@ -1212,6 +1212,8 @@ class PluginDatabase:
         tool_lists: Sequence[dict[str, Any]] | None = None,
         hook_trust: str | None = None,
         update_error: str | None = None,
+        host: str | None = None,
+        os: str | None = None,
         ai_clients: Sequence[dict[str, Any]] | None = None,
         plaintext_keys: Sequence[dict[str, Any]] | None = None,
         scan_errors: Sequence[str] | None = None,
@@ -1250,7 +1252,8 @@ class PluginDatabase:
                     "UPDATE mint.endpoint_installs SET install_mode = %s, kit_version = %s,"
                     " claude_version = %s, mcp_servers = %s, processes = %s, autostart = %s,"
                     " local_mcp = %s, outside_processes = %s, hook_trust = %s,"
-                    " update_error = %s, ai_clients = coalesce(%s, ai_clients),"
+                    " update_error = %s, host = coalesce(%s, host), os = coalesce(%s, os),"
+                    " ai_clients = coalesce(%s, ai_clients),"
                     " plaintext_keys = coalesce(%s, plaintext_keys),"
                     " scan_errors = coalesce(%s, scan_errors), offline_calls = %s,"
                     " paused_ack = coalesce(%s::int, paused_ack),"
@@ -1264,7 +1267,7 @@ class PluginDatabase:
                      None if autostart is None else Jsonb(list(autostart)),
                      None if seen is None else Jsonb(list(seen)),
                      None if outside_processes is None else Jsonb(list(outside_processes)),
-                     hook_trust, update_error,
+                     hook_trust, update_error, host, os,
                      None if ai_clients is None else Jsonb(list(ai_clients)),
                      None if plaintext_keys is None else Jsonb(list(plaintext_keys)),
                      None if scan_errors is None else Jsonb(list(scan_errors)),
