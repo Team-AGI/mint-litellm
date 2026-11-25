@@ -43,7 +43,7 @@ NEXT_VERSION = "판본을 바꿔 다시 신청"
 NEXT_FIX = "신청 내용을 고쳐 다시 신청"
 NEXT_NONE = "없음"
 NEXT_INSPECT = "단말 검사 필요 · s로 시작"
-NEXT_FIRST_RUN = "관리자 승인 뒤 PC에서 처음 실행할 때 검사"
+NEXT_FIRST_RUN = "승인 뒤 PC 첫 실행 때 검사"
 REASON_INSPECT = "단말 검사가 필요합니다"
 UNKNOWN = "자동 검사로 판별하지 못했습니다"
 
