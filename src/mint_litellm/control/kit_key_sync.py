@@ -26,7 +26,9 @@ FROM mint.approvals a
 JOIN mint.servers s ON s.instance_id = a.instance_id AND s.server_id = a.server_id
 WHERE a.instance_id = %(iid)s AND a.status = 'active'
   AND a.valid_from <= now() AND a.valid_until > now()
-  AND s.identity_kind = %(kind)s AND s.status = 'approved'
+  AND s.identity_kind = %(kind)s
+  -- 중지된 원격 서버는 키에 남겨 MINT 판정이 「[막힘] 중지된 서버」로 답하게 한다(D-014).
+  AND (s.status = 'approved' OR (%(kind)s = 'remote' AND s.status = 'suspended'))
   AND ((a.scope_type = 'key' AND (a.scope_id = %(key)s OR a.scope_id IN (
         SELECT key_token FROM mint.endpoint_installs WHERE instance_id = %(iid)s
           AND (%(kind)s = 'stdio' OR mcp_key_token = %(key)s)
