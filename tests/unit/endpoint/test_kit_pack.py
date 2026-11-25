@@ -1051,3 +1051,24 @@ def test_a_reinstall_retires_only_this_pcs_old_key():
     new_hash = kit_module.sha256_bytes(b"sk-new")  # 서버의 설치 키 해시와 같은 계산
     assert sent == [("sk-old", "removed", "none", new_hash)] and kit.config["key"] == "sk-new"
     assert kit.replaced_by is None
+
+
+def test_an_old_key_the_server_no_longer_knows_is_retired_quietly(capsys):
+    class FakeKit:
+        config, answer = {"key": "sk-new"}, {}
+
+        def report(self, state, action):
+            kit_module.last_http_error[:] = [404]
+            return False
+
+    assert kit_module.retire_key(FakeKit(), "sk-gone") is True
+    assert capsys.readouterr().out == ""
+
+    class Refused(FakeKit):
+        def report(self, state, action):
+            kit_module.last_http_error.clear()
+            self.answer = {"recorded": True, "retired": False}  # 서버가 해제하지 못했다
+            return True
+
+    assert kit_module.retire_key(Refused(), "sk-old") is False
+    assert "해제하지 못했습니다" in capsys.readouterr().out
