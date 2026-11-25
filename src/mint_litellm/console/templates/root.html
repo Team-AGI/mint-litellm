@@ -1,0 +1,56 @@
+{% extends "base.html" %}{% import "macros.html" as m %}
+{% block title %}긴급 통제 · MINT{% endblock %}
+{% block page_class %}wide{% endblock %}
+{% block body %}
+<h1>긴급 통제</h1>
+{% if error %}{{ m.banner('error', error) }}{% endif %}
+{% if halt %}
+{{ m.banner('error', '전역 정지 중', scopes[halt.halt_scope] ~ ' · ' ~ halt.halt_by ~ ' · ' ~ (halt.halt_at | when) ~ ' · 사유: ' ~ halt.halt_reason) }}
+<section>
+  <h2>정지 해제</h2>
+  <p class="muted">해제하면 PC는 다음 보고(약 20초)에 복귀합니다.</p>
+  {% set lift_effect %}
+  <dl class="detail">
+    <dt>영향</dt><dd>{{ scopes[halt.halt_scope] }} 정지가 풀립니다.</dd>
+    <dt>즉시</dt><dd>MINT 판정이 다음 호출부터 규칙대로 판정합니다.</dd>
+    <dt>늦게</dt><dd>LiteLLM 키 권한 최대 60초 · PC 실행기는 다음 보고(약 20초)</dd>
+    <dt>취소 불가</dt><dd>없음</dd>
+    <dt>되돌리기</dt><dd>「전역 정지」로 다시 걸 수 있습니다.</dd>
+  </dl>
+  {% endset %}
+  {% call m.confirm_dialog('lift-dialog', '정지 해제…', '정지 해제 — ' ~ scopes[halt.halt_scope], lift_effect, '/root/halt/lift', actor, '정지 해제', danger=false, trigger_class='primary') %}
+  <label>사유(필수)<textarea name="reason" required maxlength="500"></textarea></label>
+  {% endcall %}
+</section>
+{% else %}
+{{ m.banner('ok', '정상 운영', '정지된 범위가 없습니다') }}
+<section>
+  <h2>전역 정지</h2>
+  <div class="muted">활성 MCP 서버 {{ impact.servers }}개 · 연결 PC {{ impact.pcs }}대 · 최근 1시간 호출 {{ impact.calls }}건 · 진행 중 신청 {{ impact.open_intakes }}건</div>
+  {% set halt_effect %}
+  <dl class="detail">
+    <dt>영향</dt><dd>활성 서버 {{ impact.servers }}개 · 연결 PC {{ impact.pcs }}대 · 진행 중 신청 {{ impact.open_intakes }}건</dd>
+    <dt>즉시</dt><dd>MINT 판정이 다음 호출부터 고른 범위를 거부합니다.</dd>
+    <dt>늦게</dt><dd>LiteLLM 키 권한 최대 60초 · PC 실행기 정지는 다음 보고(약 20초)</dd>
+    <dt>취소 불가</dt><dd>이미 원격 서버로 보낸 호출은 끝까지 실행됩니다. 이미 받은 결과와 파일은 남습니다.</dd>
+    <dt>되돌리기</dt><dd>「정지 해제」로 즉시 복귀합니다.</dd>
+  </dl>
+  {% endset %}
+  {% call m.confirm_dialog('halt-dialog', '전역 정지…', '전역 정지', halt_effect, '/root/halt', actor, '정지', confirm_name='정지', name_label='확인을 위해 「정지」를 입력') %}
+  <fieldset><legend>범위</legend>
+  {% for key, text in scopes.items() %}<label><input type="radio" name="scope" value="{{ key }}"{% if loop.first %} checked{% endif %}> {{ text }}</label>
+  {% endfor %}</fieldset>
+  <label>사유(필수)<textarea name="reason" required maxlength="500"></textarea></label>
+  {% endcall %}
+</section>
+{% endif %}
+<section>
+  <h2>최근 강제 조치</h2>
+  {% if recent %}
+  <table class="compact"><thead><tr><th>시각</th><th>조치</th><th>대상</th><th>실행자</th><th>전파</th></tr></thead><tbody>
+  {% for r in recent %}<tr><td class="nowrap"><a href="/root/actions?open={{ r.id }}">{{ r.created_at | when }}</a></td><td>{{ r.label }}</td><td>{{ r.target | clip(60) }}</td><td>{{ r.actor | who }}</td><td>{{ r.summary }}</td></tr>{% endfor %}
+  </tbody></table>
+  <p><a href="/root/actions">전체 보기</a></p>
+  {% else %}<div class="empty slim">강제 조치 기록이 없습니다</div>{% endif %}
+</section>
+{% endblock %}
