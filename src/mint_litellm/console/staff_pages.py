@@ -1194,7 +1194,6 @@ def endpoint_page(request: Request, actor: StaffActor, error=None, status=200, c
     ctx = {
         **own_endpoint_tools(actor, rows),
         "rows": rows, "active": any(r["state"] != "revoked" for r in rows), "error": error,
-        "live": sum(r["state"] != "revoked" for r in rows),
         "apps": endpoint_apps.list_apps(actor.sctx.control, actor.sctx.instance_id, actor.user_id),
         "platform": "windows" if windows else "linux", "commands": commands,
         # 고정 공개 키가 없는 옛 설치(자동 갱신 불가)만 한 번 다시 설치해야 한다. 판본이 다르기만

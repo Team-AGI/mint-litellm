@@ -83,6 +83,6 @@
 </tr>{% endfor %}
 </tbody></table>{% endif %}
 <p class="muted">PC 터미널에서 `mint app new 이름`으로 만듭니다.</p>
-{% if live > 1 %}{{ m.confirm_dialog('revoke-endpoint', '내 PC 모두 해제', '내 PC ' ~ live ~ '대의 연결을 모두 해제합니다', '내 모든 PC의 키가 지워지고 내가 만든 앱의 자격도 함께 회수됩니다. 되돌릴 수 없고 PC마다 새 설치 명령을 실행해야 다시 연결됩니다.', '/staff/endpoint/revoke', actor, '모두 해제') }}{% endif %}
+{% set live = rows | rejectattr('state', 'equalto', 'revoked') | list | length %}{% if live > 1 %}{{ m.confirm_dialog('revoke-endpoint', '내 PC 모두 해제', '내 PC ' ~ live ~ '대의 연결을 모두 해제합니다', '내 모든 PC의 키가 지워지고 내가 만든 앱의 자격도 함께 회수됩니다. 되돌릴 수 없고 PC마다 새 설치 명령을 실행해야 다시 연결됩니다.', '/staff/endpoint/revoke', actor, '모두 해제') }}{% endif %}
 {% else %}<div class="empty"><h3>설치한 단말이 없습니다</h3></div>{% endif %}
 {% endblock %}
