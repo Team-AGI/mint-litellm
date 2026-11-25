@@ -103,6 +103,7 @@ class Worker:
         self.verdict = restore_judge.Verdict(restore_judge.SKIP)
         self._reported_blocks: set[int] = set()
         self._alerted: set[tuple] = set()
+        self._restore_clear = False  # 되돌림 경보를 정상 판정 뒤 한 번 닫았는가
         self.litellm = litellm
         self.owner = owner or f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
         self.stop = threading.Event()
@@ -191,7 +192,23 @@ class Worker:
                 pass
         if result.blocked:
             self._alert_blocked(result)
+            self._restore_clear = False
+        elif result.state == restore_judge.OK and not self._restore_clear:
+            self._close_restore_alerts()
         return result
+
+    def _close_restore_alerts(self) -> None:
+        """대조가 다시 맞으면 되돌림 경보를 닫는다(사건 원장의 차단 기록은 남는다)."""
+        assert self.conn is not None
+        with self.conn.transaction():
+            for (key,) in self.conn.execute(
+                "SELECT DISTINCT dedup_key FROM mint.alerts WHERE instance_id = %s"
+                " AND status <> 'resolved' AND (dedup_key LIKE 'enforcement_unverified:restore:%%'"
+                " OR dedup_key LIKE 'restore_blocked:%%')", (self.instance_id,),
+            ).fetchall():
+                alerts.resolve(self.conn, self.instance_id, key)
+        self._alerted.clear()
+        self._restore_clear = True
 
     def _alert_blocked(self, result: restore_judge.Verdict) -> None:
         """차단 상태가 시작될 때 경보를 연다(같은 원인·파일 세대는 한 번만 부른다)."""

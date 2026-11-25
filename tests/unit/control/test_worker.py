@@ -627,6 +627,21 @@ def test_a_restored_database_blocks_external_writes_but_not_the_rest(
     assert [a["kind"] for a in alerts(admin)] == ["enforcement_unverified"]
 
 
+def test_restore_alerts_close_once_the_check_passes_again(make_worker, admin, all_handlers):
+    state = {"restored": True}
+    worker = make_worker(restore_check=lambda conn, instance_id: state["restored"])
+    put(admin, "sync_server", "srv")
+    worker.step()
+    assert fetchone(admin, "SELECT status FROM mint.alerts")["status"] == "open"
+    state["restored"] = False
+    worker.step()
+    assert fetchone(admin, "SELECT status FROM mint.alerts")["status"] == "resolved"
+    state["restored"] = True  # 다시 어긋나면 새로 연다
+    put(admin, "sync_server", "srv2")
+    worker.step()
+    assert fetchone(admin, "SELECT count(*) AS n FROM mint.alerts WHERE status = 'open'")["n"] == 1
+
+
 def test_the_default_check_never_blocks(make_worker, admin, all_handlers):
     worker = make_worker()
     put(admin, "sync_server", "srv")
