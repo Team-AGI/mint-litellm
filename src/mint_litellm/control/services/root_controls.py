@@ -265,8 +265,9 @@ def lockout(ctx: Context, issuer: Any, user_id: str, reason: str) -> str:
         existing = fetchone(
             ctx.conn,
             "SELECT id FROM mint.denials WHERE instance_id = %s AND scope_type = 'user'"
-            " AND scope_id = %s AND server_id IS NULL AND tools IS NULL AND lifted_at IS NULL",
-            (ctx.instance_id, user_id),
+            " AND scope_id = %s AND server_id IS NULL AND tools IS NULL AND lifted_at IS NULL"
+            " AND reason LIKE %s",  # 「MCP 차단」 같은 다른 차단은 해제가 따로라 재사용하지 않는다
+            (ctx.instance_id, user_id, LOCKOUT_REASON_PREFIX + "%"),
         )
         results["denial"] = (
             str(existing["id"])
@@ -476,5 +477,6 @@ def set_root_operator(ctx: Context, name: str, on: bool, reason: str) -> str:
             row["settings_version"],
             {"name": name, "root": on, "reason": reason},
         )
+        record(ctx, "root_set" if on else "root_unset", name, reason)
         return name
 

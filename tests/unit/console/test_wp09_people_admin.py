@@ -125,6 +125,9 @@ def test_root_marks_are_given_and_taken_by_root_only(world, boss):
     assert "ops2" not in marks(world)
     count = world.query("SELECT count(*) FROM mint.events WHERE kind = 'operator_role_changed'")
     assert count[0][0] == 2
+    recorded = world.query("SELECT action FROM mint.forced_actions WHERE target = 'ops2'"
+                           " ORDER BY created_at")
+    assert [r[0] for r in recorded] == ["root_set", "root_unset"]  # 강제 조치 기록에도 남는다
 
 
 def test_non_root_admin_cannot_set_root_marks(world, admin):

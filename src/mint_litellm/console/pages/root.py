@@ -19,7 +19,7 @@ ACTION_LABEL = {
     "halt": "전역 정지", "halt_lift": "정지 해제", "intake_reject": "강제 반려",
     "server_suspend": "서버 중지", "server_resume": "서버 재개", "server_terminate": "서버 폐기",
     "person_lockout": "사람 전체 차단", "person_unlock": "전체 차단 해제",
-    "sessions_end": "세션 종료",
+    "sessions_end": "세션 종료", "root_set": "Root 지정", "root_unset": "Root 해제",
 }
 DONE = {
     "halt": "전역 정지를 걸었습니다.", "halt_lift": "정지를 해제했습니다.",
