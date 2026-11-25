@@ -264,7 +264,20 @@ def test_key_scope_needs_the_derived_org_to_match_the_relation(ctx, litellm, con
 
 def test_team_scope_without_a_relation_team_needs_a_binding_to_the_relation_org(ctx, litellm):
     relation = prepare(ctx, litellm)
-    with pytest.raises(ControlError, match="묶여 있지 않습니다"):
+    with pytest.raises(ControlError, match="속하지 않습니다"):  # 기본 조직도 없다
+        approve(ctx, litellm, relation, scope_type="team", scope_id="team-op")
+    settings_store.set_default_org(ctx, "acme")
+    # 묶임 없음=기본 조직: 조직 검사는 지나고 다음 검사(시험용 팀의 별칭 권한)에서 멈춘다
+    with pytest.raises(ControlError, match="서버 식별자가 아닌"):
+        approve(ctx, litellm, relation, scope_type="team", scope_id="team-op")
+
+
+def test_a_team_bound_to_another_org_cannot_be_approved_for_this_relation(ctx, litellm):
+    relation = prepare(ctx, litellm)
+    settings_store.set_default_org(ctx, "acme")
+    orgs.add(ctx, "other", "OTHER")
+    orgs.bind(ctx, "other", SubjectType.TEAM, "team-op")
+    with pytest.raises(ControlError, match="속하지 않습니다"):
         approve(ctx, litellm, relation, scope_type="team", scope_id="team-op")
 
 

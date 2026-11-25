@@ -241,13 +241,8 @@ def _require_scope_in_relation(
         if team:
             if scope_id != team:
                 raise ControlError("승인 범위의 팀이 이용 관계의 팀과 다릅니다.")
-        elif not fetchone(
-            ctx.conn,
-            "SELECT 1 AS x FROM mint.org_bindings WHERE instance_id = %s AND subject_type = 'team'"
-            " AND subject_id = %s AND org_id = %s",
-            (ctx.instance_id, scope_id, org),
-        ):
-            raise ControlError(f"팀 {scope_id}이(가) 조직 {org}에 묶여 있지 않습니다(org bind).")
+        elif _derive_org(ctx, scope_id, None) != org:  # 묶인 조직이 없는 팀은 기본 조직 소속
+            raise ControlError(f"팀 {scope_id}은(는) 이용 관계의 조직 {org}에 속하지 않습니다.")
     elif scope_type == "key":
         if team:
             if target.get("team_id") != team:

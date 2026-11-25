@@ -127,3 +127,39 @@ def test_a_partial_or_empty_read_never_deletes_anyone(conn):
         (0,)]
     lite.users = [user("u1")]  # 정상 목록에서 빠진 사람만 사라진 것으로 표시
     assert directory.sync(conn, INSTANCE, lite).gone_users == 1
+
+
+def test_sync_moves_a_kit_installs_team_and_queues_the_gateway_key_resync(conn):
+    def install(token, team="t1"):
+        conn.execute(
+            "INSERT INTO mint.endpoint_installs (instance_id, key_token, user_id, key_alias,"
+            " team_id, issued_by) VALUES (%s, %s, 'u1', %s, %s, 'u1')",
+            (INSTANCE, token, "a-" + token, team))
+        conn.execute(
+            "INSERT INTO mint.endpoint_apps (instance_id, user_id, team_id, install_key_token,"
+            " name, key_alias, key_token, expires_at) VALUES (%s, 'u1', %s, %s, 'app', %s, %s,"
+            " now() + interval '1 day')", (INSTANCE, team, token, "p-" + token, "app-" + token))
+
+    def teams(*ids):
+        return FakeLiteLLM([user("u1", teams=ids)],
+                           [{"team_id": t, "members_with_roles": [{"user_id": "u1"}]}
+                            for t in ids])
+
+    def state():
+        return (rows(conn, "SELECT team_id FROM mint.endpoint_installs"),
+                rows(conn, "SELECT team_id FROM mint.endpoint_apps"))
+
+    def queued():
+        return rows(conn, "SELECT count(*) FROM mint.jobs WHERE kind = 'kit_key_sync'")[0][0]
+
+    install("k1")
+    directory.sync(conn, INSTANCE, teams("t1"))  # 그대로면 아무것도 바뀌지 않는다
+    assert state() == ([("t1",)], [("t1",)]) and queued() == 0
+    directory.sync(conn, INSTANCE, teams("t0", "t1"))  # 아직 소속이면 유지
+    assert state() == ([("t1",)], [("t1",)]) and queued() == 0
+    directory.sync(conn, INSTANCE, teams("t2"))  # 팀을 옮기면 현재 팀으로
+    assert state() == ([("t2",)], [("t2",)]) and queued() == 1
+    directory.sync(conn, INSTANCE, teams())  # 팀에서 모두 빠지면 비운다
+    assert state() == ([(None,)], [(None,)])
+    directory.sync(conn, INSTANCE, teams("t3"))  # 다시 들어오면 채운다
+    assert state() == ([("t3",)], [("t3",)])
