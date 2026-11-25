@@ -460,6 +460,11 @@ def parse_ref(text: str) -> tuple[UUID, int | None]:
 
 # 호출 판정 사건은 호출한 주체를 actor가 아니라 subject에 남긴다(운영자 작업은 actor).
 LEDGER_ACTOR = "COALESCE(actor, subject->>'principal_id')"
+# 「오류」 결과: 호출 결과가 도구 오류이거나 응답이 없어 알 수 없는 사건
+ERROR_RESULT = (
+    "(kind = 'call_outcome_unknown' OR payload->>'outcome' IN ('tool_error', 'unknown')"
+    " OR (kind = 'call_response_received' AND payload->>'is_error' = 'true'))"
+)
 
 
 def _ledger_where(
@@ -497,7 +502,9 @@ def _ledger_where(
         if value is not None:
             clauses.append(clause)
             params.extend([value, value] if clause.count("%s") == 2 else [value])
-    if result is not None:  # 차단은 deny와 stop 두 값으로 기록된다
+    if result == "error":
+        clauses.append(ERROR_RESULT)
+    elif result is not None:  # 차단은 deny와 stop 두 값으로 기록된다
         clauses.append("payload->>'enforced_action' = ANY(%s)")
         params.append(["deny", "stop"] if result == "deny" else [result])
     return " AND ".join(clauses), params

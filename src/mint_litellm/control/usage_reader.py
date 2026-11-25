@@ -1,8 +1,9 @@
 """호출·차단·첫 성공 한 화면의 자료와 MINT 판정 지연. 모두 MINT 기록에서 읽는다.
 
-MINT의 판정은 모델을 부르지 않으므로 모델 비용을 만들지 않는다. 그래서 비용 칸은 없고,
-대신 판정 사건에 남은 판정 시간(``decision_us``)의 중앙값·95번째 값을 보인다. 같은 호출의
-재시도는 한 건으로 센다. 기간은 UTC 날짜 단위(끝은 지금)다.
+MINT의 판정은 모델을 부르지 않으므로 비용은 MINT가 만들지 않는다. 비용은 LiteLLM의 일별
+사용자 지출 기록에서 읽어 사람별로 붙이고(``attach_spend``), 읽지 못하면 미집계로 둔다. 판정
+사건에 남은 판정 시간(``decision_us``)의 중앙값·95번째 값도 보인다. 같은 호출의 재시도는 한
+건으로 센다. 기간은 UTC 날짜 단위(끝은 지금)다.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -135,12 +136,31 @@ def combine(ledger: list[dict], first: list[dict], names: dict, *, scoped: bool)
     }
 
 
-def build(conn, instance, names: dict, period: str, user: str | None = None) -> dict:
+def attach_spend(report: dict, admin, start: datetime, end: datetime, user: str | None) -> None:
+    """LiteLLM 지출 기록의 비용을 붙인다. 읽지 못하면 ``report["spend"]``는 None(미집계).
+
+    사람 줄의 ``spend``는 기록이 있으면 숫자(0 포함), 지출 기록에 없으면 None이다.
+    """
+    got = None
+    if admin is not None:
+        try:
+            got = admin.user_spend(start.date().isoformat(), end.date().isoformat(), user)
+        except Exception:  # 화면은 비용 없이도 열려야 한다(오류·시간 초과·경로 막힘 모두)
+            got = None
+    report["spend"] = None if got is None else got["total"]
+    for r in report["users"]:
+        r["spend"] = None if got is None else got["by_user"].get(r["id"])
+
+
+def build(conn, instance, names: dict, period: str, user: str | None = None, admin=None) -> dict:
     """사용량 화면의 자료. ``user``가 있으면 그 사람의 것만 읽고 센다."""
     start, end = window(period)
     ledger = read_ledger(conn, instance, start, end, user)
     first = read_first_success(conn, instance, user)
     report = combine(ledger, first, names, scoped=user is not None)
+    for r in report["users"]:
+        r["id"] = r["name"]
+    attach_spend(report, admin, start, end, user)
     report["latency"] = decision_latency(conn, instance, start, end, user)
     emails = {r["user_id"]: r["email"] for r in fetchall(
         conn, "SELECT user_id, email FROM mint.directory_users"
