@@ -4869,6 +4869,24 @@ TABS = ("상태", "내 서버", "도입 신청")
 HELP = "1-3 탭  위/아래 선택  Enter 상세  n 신청  s 받기  c 점검  r 새로고침  o 웹  q 끝"
 
 
+def next_step(model: dict) -> str:
+    """화면에 이미 있는 값만으로 지금 가장 쓸모 있는 한 가지를 고른다."""
+    if not model["connected"]:
+        return "한 줄 설치 명령을 다시 붙여 넣으십시오"
+    failed = next((r for r in model["servers"] if r["state"] == S_FAILED), None)
+    if failed:
+        why = f" ({clip(str(failed['reason']), 30)})" if failed.get("reason") else ""
+        return f"{clip(failed['name'], 20)} 받기 실패{why}: 2 탭에서 s 키"
+    if model.get("inspections"):
+        return "3 탭에서 단말 검사를 제출하십시오"
+    if model["intakes"] and model["intakes"][0].get("stage") == "failed":
+        return "3 탭에서 검사 실패 사유를 확인하십시오"
+    todo = next((r for r in model["servers"] if r["state"] in NEXT_BY_STATE), None)
+    if todo:
+        return f"{clip(todo['name'], 20)}: {NEXT_BY_STATE[todo['state']]}"
+    return "할 일 없음"
+
+
 def tab1_lines(model: dict) -> list[str]:
     key = {"ok": "유효", "rejected": "거절됨"}.get(model["key"], "확인하지 못함")
     lines = [
@@ -4881,6 +4899,7 @@ def tab1_lines(model: dict) -> list[str]:
     problems = model["problems"]
     out.append(f"{pad('점검', 12)}{'이상 없음' if not problems else f'문제 {len(problems)}건'}")
     out += [f"  - {p}" for p in problems]
+    out.append(f"{pad('다음 할 일', 12)}{next_step(model)}")
     return out
 
 
@@ -4974,7 +4993,10 @@ def render_screen(model: dict, ui: dict, width: int = 80, height: int = 24,
     head += screen_color(state, "32" if model["connected"] else "31", color)
     # 상태 탭은 건수가 없다. 서버·신청 탭에만 건수를 붙인다.
     counts = (None, len(model["servers"]), len(model["intakes"]))
-    names = [f"{i + 1} {t}" + (f" {counts[i]}" if counts[i] is not None else "")
+    bad = sum(1 for r in model["servers"] if r["state"] in (S_FAILED, S_BAD))
+    waits = len(model.get("inspections") or {})
+    extra = ("", f" 실패 {bad}" if bad else "", f" 검사 {waits}" if waits else "")
+    names = [f"{i + 1} {t}" + (f" {counts[i]}{extra[i]}" if counts[i] is not None else "")
              for i, t in enumerate(TABS)]
     tabs = "  ".join(screen_color(f" {n} ", "7", color) if i == ui["tab"] else f" {n} "
                      for i, n in enumerate(names))
