@@ -1108,7 +1108,7 @@ def verify_pack(
     """묶음 계약을 시작 직전에 검증해 실제로 띄울 계약(argv·준비 폴더 반영)을 돌려준다."""
     pack = approved["pack"]
     if not isinstance(pack, Mapping) or not PACK_PLATFORM:
-        raise Refuse("pack servers are not supported on this platform")
+        raise Refuse("이 서버(PyPI·저장소 묶음)는 아직 Windows PC에서 쓸 수 없습니다")
     digest, entry, python = pack.get("sha256"), pack.get("entry"), pack.get("python")
     match = PACK_ENTRY.match(entry) if isinstance(entry, str) else None
     if not (isinstance(digest, str) and SHA256_TEXT.match(digest) and match and python):
