@@ -3276,7 +3276,8 @@ def run_server(
             managed=bool(sandbox and sandbox.managed),
         )  # fmt: skip
     elif approved.get("npm") is not None:
-        approved = verify_npm(approved, folder=os.path.join(state_dir or KIT_DIR, NPM_DIR))
+        approved = verify_npm(
+            approved, folder=os.path.join(os.path.expanduser(state_dir or KIT_DIR), NPM_DIR))
     executable = approved["executable"]
     try:
         fd = os.open(executable, os.O_RDONLY | getattr(os, "O_BINARY", 0))
