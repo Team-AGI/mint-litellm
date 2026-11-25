@@ -65,6 +65,17 @@ def normalize_tools(body: Any) -> dict[str, dict]:
     return result
 
 
+REPORTED_DESCRIPTION = 500  # 단말 보고의 설명 상한(endpoint.decide.ToolItem과 같다)
+
+
+def reported_view(approved: dict) -> dict:
+    """단말이 보고할 수 있는 필드만 남긴 승인본(이름·설명 앞부분·입력 정의). 단말 보고에는
+    annotations·output_schema가 없으므로 그대로 비교하면 늘 「설명 변경」으로 잘못 판정한다."""
+    return {"name": approved.get("name"),
+            "description": (approved.get("description") or "")[:REPORTED_DESCRIPTION],
+            "input_schema": approved.get("input_schema")}
+
+
 def drift_kind(approved: dict, observed: dict | None) -> str:
     if observed is None:
         return "removed"
@@ -167,9 +178,10 @@ def record_tools(
             )
             if contract is None and previous:
                 entity = previous["entity_id"]
-            drift = (
-                drift_kind(json.loads(contract["canonical_text"]), value) if contract else "added"
-            )
+            known = json.loads(contract["canonical_text"]) if contract else None
+            if known is not None and local and value is not None:
+                known = reported_view(known)  # 단말 보고와 같은 필드만 비교한다
+            drift = drift_kind(known, value) if contract else "added"
             observation, changed = _observe(
                 ctx, server_id, "tool", scope, name, entity, value, is_drift=drift != "none",
                 summary=(
