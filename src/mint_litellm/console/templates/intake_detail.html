@@ -108,7 +108,7 @@
   <div class="row">
     <label>대상 구분<select name="scope_type"><option value="user"{% if decision_form.scope_type == "user" %} selected{% endif %}>사용자</option><option value="key"{% if decision_form.scope_type == "key" %} selected{% endif %}>키</option><option value="team"{% if decision_form.scope_type == "team" %} selected{% endif %}>팀</option></select></label>
     <label>대상{% if requester_name %} <small class="muted">{{ requester_name }}</small>{% endif %}<input name="scope_id" list="people" placeholder="사람 또는 팀을 고르십시오"{% if pick %} required{% endif %} value="{{ decision_form.scope_id if decision_form.scope_id is defined else default_target }}"></label>
-    <datalist id="people">{% for p in people %}<option value="{{ p.user_id }}">{{ p.email }}</option>{% endfor %}</datalist>
+    <datalist id="people">{% for p in people %}<option value="{{ p.user_id }}">{{ p.email }}</option>{% endfor %}{% for t in teams %}<option value="{{ t.team_id }}">팀 · {{ t.members }}</option>{% endfor %}</datalist>
     <label>유효 기간(일)<input type="number" name="valid_days" value="{{ decision_form.valid_days if decision_form.valid_days is not none and decision_form.valid_days is defined else '' }}" placeholder="기한 없음" min="1" max="365"></label>
   </div>
   {% if pack and pack.ready %}

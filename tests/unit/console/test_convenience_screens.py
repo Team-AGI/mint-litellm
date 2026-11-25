@@ -76,6 +76,18 @@ def test_decision_scope_and_optional_reason_are_collapsed(world, admin):
     assert done.status_code == 303
 
 
+def test_decision_targets_list_teams_and_never_show_none(world, admin):
+    identifier = add_intake(world)
+    world.query(
+        "INSERT INTO mint.directory_users (instance_id, user_id, email, litellm_role, team_ids)"
+        " VALUES (%s, 'u-a', 'a@acme.test', 'internal_user', '[\"team-1\"]'),"
+        " (%s, 'default_user_id', NULL, 'proxy_admin', '[]')", INSTANCE, INSTANCE)
+    form = admin.get(f"/intakes/{identifier}").text.split('id="decision"')[1]
+    targets = form.split('<datalist id="people">')[1].split("</datalist>")[0]
+    assert '<option value="team-1">팀 · a@acme.test</option>' in targets
+    assert ">None<" not in targets and ">default_user_id<" in targets
+
+
 def test_revocation_and_denial_accept_an_empty_reason(world, admin):
     approval = add_approval(world)
     version = world.query("SELECT state_version FROM mint.approvals WHERE id=%s", approval)[0][0]

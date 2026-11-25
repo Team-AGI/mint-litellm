@@ -29,7 +29,8 @@ EXPORT_CONFIG_MISSING = "export_config_missing"
 # - 판본이 같으면 행 내용이 파일 스냅숏과 같아야 한다(다르면 ``content``). 두 쪽에 모두 있는
 #   열만 비교한다(스키마 변경으로 열이 늘거나 줄어도 오탐하지 않는다). 시각은 UTC 문자열로 맞춘다.
 # - 판본이 더 높으면 그 행이 여전히 부정 상태이거나, 원장에 같은 id(사건 키의 개체 id: 서버는
-#   ``servers.id``)의 해제 사건(``denial_lifted``·``server_resumed``)이 있어야 한다. 사건의 판본은
+#   ``servers.id``)의 해제 사건(``denial_lifted``·``server_resumed``, 거부된 서버는 다시 등록한
+#   ``server_registered``)이 있어야 한다. 사건의 판본은
 #   파일 판본보다 크고 행의 현재 판본 이하여야 한다(파일 이후의 그 전이에 결속). 봉인 여부는
 #   묻지 않는다(미봉인 사건 때문에 보류가 풀리지 않는 교착을 없앤다). 아니면 ``reapply``.
 #   해제 전이가 있는 것은 거부 해제와 서버 재개뿐이다(나머지 종류의 상태 기계는 종결 상태로만
@@ -124,8 +125,10 @@ f AS (
     WHEN r.state_version > f.state_version AND NOT r.neg AND NOT EXISTS (
          SELECT 1 FROM mint.events e
          WHERE e.instance_id = %(i)s
-           AND e.kind = CASE f.kind WHEN 'denial' THEN 'denial_lifted'
-                                    WHEN 'server' THEN 'server_resumed' END
+           AND (e.kind = CASE f.kind WHEN 'denial' THEN 'denial_lifted'
+                                     WHEN 'server' THEN 'server_resumed' END
+                -- 거부된 서버는 새 신청 승인으로 다시 등록되어 부정 상태를 벗어난다
+                OR (f.kind = 'server' AND f.state = 'rejected' AND e.kind = 'server_registered'))
            AND split_part(e.source_key, ':', 1) = f.kind
            AND split_part(e.source_key, ':', 2) = r.ev
            AND (CASE WHEN split_part(e.source_key, ':', 3) ~ '^[0-9]{1,18}$'

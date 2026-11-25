@@ -256,6 +256,30 @@ def test_a_resumed_server_is_matched_by_the_servers_uuid_in_the_event_key(world,
         assert first.state == judge.HOLD and second.blocked
 
 
+@pytest.mark.parametrize("negative", ["rejected", "suspended"])
+def test_a_rejected_server_registered_again_by_a_new_intake_is_not_a_rollback(world, negative):
+    with psycopg.connect(world["live"], autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO mint.servers (id, instance_id, server_id, status, url_sha256, transport,"
+            " auth_type, registered_by) VALUES (gen_random_uuid(), %s, 'srv-1',"
+            " 'awaiting_approval', repeat('a', 64), 'http', 'none', 'x')", (INSTANCE,))
+        for status in (["rejected"] if negative == "rejected" else ["approved", "suspended"]):
+            conn.execute("UPDATE mint.servers SET status = %s", (status,))
+        exports.write_export(conn, INSTANCE, world["settings"], "negative_state")
+        exports.write_export(conn, INSTANCE, world["settings"], "checkpoint")
+        assert _verdicts(world["live"], world["settings"], 1)[0].state == judge.OK
+        for status in (["validating", "awaiting_approval"] if negative == "rejected" else []):
+            conn.execute("UPDATE mint.servers SET status = %s", (status,))
+        row = fetchone(conn, "SELECT id, state_version FROM mint.servers")
+        _release_event(conn, "server_registered", row["id"], row["state_version"] + 1)
+        conn.execute("UPDATE mint.servers SET status = 'approved'")
+    first, second = _verdicts(world["live"], world["settings"])
+    if negative == "rejected":
+        assert first.state == judge.OK and second.state == judge.OK
+    else:  # 중지된 서버는 재개 사건으로만 풀린다
+        assert first.state == judge.HOLD and second.blocked
+
+
 def test_an_old_archived_request_is_rejected_after_another_restore_finished(
     world, monkeypatch
 ):
