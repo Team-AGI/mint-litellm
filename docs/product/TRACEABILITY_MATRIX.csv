@@ -138,10 +138,10 @@ REQ-25,FM-19,에이전트 재시도 안내,BACKEND_VERIFIED,이전 독립 GUI �
 REQ-25,FM-60,막힌 도구 권한 요청,DISCOVERED,미구현,E2E-08 E2E-09 E2E-10,,,,,,화면 동작 시험 독립 GUI 증거
 REQ-26,FM-26,웹 콘솔 LiteLLM 테마·접히는 메뉴,IMPLEMENTED,재검증 필요,,,,,,"로그인 화면은 기기 확인, 로그인 뒤 화면은 픽스처 캡처 48장.",시나리오 화면 동작 시험 독립 GUI 증거
 REQ-27,FM-27,직원 PC mint 화면,IMPLEMENTED,재검증 필요,T1,,,,,렌더 시험·캡처만.,화면 동작 시험 독립 GUI 증거
-REQ-27,FM-63,CLI 정비,DISCOVERED,미구현,,,,,,,시나리오 화면 동작 시험 독립 GUI 증거
-REQ-28,FM-63,CLI 정비,DISCOVERED,미구현,,,,,,,시나리오 화면 동작 시험 독립 GUI 증거
+REQ-27,FM-63,CLI 정비,SPECIFIED,미구현,,,,,,,시나리오 화면 동작 시험 독립 GUI 증거
+REQ-28,FM-63,CLI 정비,SPECIFIED,미구현,,,,,,,시나리오 화면 동작 시험 독립 GUI 증거
 REQ-29,FM-26,웹 콘솔 LiteLLM 테마·접히는 메뉴,IMPLEMENTED,재검증 필요,,,,,,"로그인 화면은 기기 확인, 로그인 뒤 화면은 픽스처 캡처 48장.",시나리오 화면 동작 시험 독립 GUI 증거
-REQ-29,FM-63,CLI 정비,DISCOVERED,미구현,,,,,,,시나리오 화면 동작 시험 독립 GUI 증거
+REQ-29,FM-63,CLI 정비,SPECIFIED,미구현,,,,,,,시나리오 화면 동작 시험 독립 GUI 증거
 REQ-30,FM-53,한 사이클(도입→승인→사용→폐기),BACKEND_VERIFIED,재검증 필요,E2E-04 E2E-12 E2E-13,,,,,"PyPI·npm·원격 세 종류를 Linux PC·Windows PC에서 도입→사용→폐기, 폐기 차단 10초~2분(구현자).",화면 동작 시험 독립 GUI 증거
 REQ-30,FM-56,Root 강제 상태 변경,DISCOVERED,미구현,E2E-11,,,,,,화면 동작 시험 독립 GUI 증거
 REQ-30,FM-60,막힌 도구 권한 요청,DISCOVERED,미구현,E2E-08 E2E-09 E2E-10,,,,,,화면 동작 시험 독립 GUI 증거
