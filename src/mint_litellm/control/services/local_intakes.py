@@ -11,7 +11,7 @@ import shlex
 import tomllib
 import urllib.error
 import urllib.request
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 from uuid import UUID
 
 import psycopg
@@ -84,6 +84,34 @@ def _commands(owner: str, repo: str, sha: str, files: dict) -> tuple[str, str]:
     return "", "실행 명령을 찾지 못했습니다. 실행 명령을 직접 입력하십시오."
 
 
+def published_package(owner: str, repo: str, sha: str, fetch) -> tuple[str, str] | None:
+    """저장소(루트 또는 두 단계 아래 폴더)의 실행 파일이 있는 npm 패키지 중 레지스트리에 이 저장소로
+    올라간 것: (이름, 경로). 루트에 실행 정의가 없는 저장소(예: bridge/ 아래 서버)를 위한 것이다."""
+    tree = fetch(f"https://api.github.com/repos/{owner}/{repo}/git/trees/{sha}?recursive=1")
+    paths = [e["path"] for e in json.loads(tree or b"{}").get("tree", [])
+             if e.get("type") == "blob" and e["path"].rsplit("/", 1)[-1] == "package.json"
+             and e["path"].count("/") <= 2 and "node_modules/" not in e["path"]]
+    raw = f"https://raw.githubusercontent.com/{owner}/{repo}/{sha}/"
+    found = []
+    for path in sorted(paths, key=lambda p: p.count("/"))[:10]:
+        try:
+            doc = json.loads(fetch(raw + path) or b"{}")
+        except ValueError:
+            continue
+        name = doc.get("name")
+        if doc.get("bin") and not doc.get("private") and isinstance(name, str):
+            found.append((name, path))
+    # 여러 패키지면 MCP 서버(이름·경로에 mcp)를 먼저, 그다음 얕은 폴더를 고른다
+    found.sort(key=lambda f: ("mcp" not in (f[0] + f[1]).lower(), f[1].count("/")))
+    for name, path in found:
+        meta = fetch(f"https://registry.npmjs.org/{quote(name, safe='@/')}")
+        source = (json.loads(meta or b"{}").get("repository") or {})
+        url = source.get("url", "") if isinstance(source, dict) else str(source)
+        if f"github.com/{owner}/{repo}/".lower() in url.lower().removesuffix(".git") + "/":
+            return name, path
+    return None
+
+
 def resolve(url: str, fetch=None) -> dict:
     """주소의 저장소·커밋·실행 명령을 알아낸다. 실패는 ``note``에 사유를 담는다."""
     fetch = fetch or _fetch
@@ -115,6 +143,11 @@ def resolve(url: str, fetch=None) -> dict:
         raw = f"https://raw.githubusercontent.com/{owner}/{repo}/{sha}/"
         out["command"], out["note"] = _commands(owner, repo, sha, {
             n: fetch(raw + n) for n in ("pyproject.toml", "package.json")})
+        if not out["command"] and (pkg := published_package(owner, repo, sha, fetch)):
+            found = package_refs.resolve(("npm", pkg[0], None, []), fetch)
+            if found and found.get("command"):
+                return found | {"note": f"저장소의 {pkg[1]} 패키지를 npm 판본과 무결성 해시로 "
+                                        "고정합니다."}
     except urllib.error.HTTPError as error:
         limited = error.code in (403, 429)
         why = "GitHub 호출 한도에 걸렸습니다" if limited else "GitHub가 응답하지 않습니다"
