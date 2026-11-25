@@ -10,7 +10,7 @@ from typing import Any
 import psycopg
 
 from mint_litellm.control.db.connection import fetchall, fetchone
-from mint_litellm.control.services.reads import LEDGER_ACTOR
+from mint_litellm.control.services.reads import ERROR_RESULT, LEDGER_ACTOR
 
 # 기간 이름 → 시간 수
 HOURS = {"1h": 1, "24h": 24, "7d": 168, "30d": 720}
@@ -36,7 +36,9 @@ def _filter_sql(actor=None, server_id=None, result=None, invocation_id=None) -> 
     if server_id:
         sql += " AND (payload->>'resolved_server_id' = %s OR payload->>'server_id' = %s)"
         params += [server_id, server_id]
-    if result:  # 차단은 deny와 stop 두 값으로 기록된다
+    if result == "error":
+        sql += f" AND {ERROR_RESULT}"
+    elif result:  # 차단은 deny와 stop 두 값으로 기록된다
         sql += " AND payload->>'enforced_action' = ANY(%s)"
         params.append(["deny", "stop"] if result == "deny" else [result])
     if invocation_id:

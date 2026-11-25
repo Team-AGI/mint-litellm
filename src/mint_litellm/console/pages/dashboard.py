@@ -634,7 +634,7 @@ def ledger(
             "/ledger", params, "result",
             [("deny", "차단"), ("", "전체"), *(
                 (k, v) for k, v in labels.RESULT_FILTER.items() if k != "deny"
-            )],
+            ), ("error", "오류")],
             result,
         ),
         "cards": ledger_cards(series, previous),

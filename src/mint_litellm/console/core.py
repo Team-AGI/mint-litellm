@@ -128,6 +128,7 @@ class ReadOnlyLiteLLM:
         self.list_servers = admin.list_servers
         self.spend_guardrail = admin.spend_guardrail
         self.daily_activity = admin.daily_activity
+        self.user_spend = admin.user_spend
 
 
 class Unauthenticated(AdminError):

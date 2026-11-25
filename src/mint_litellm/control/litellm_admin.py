@@ -16,6 +16,7 @@ from mint_litellm.types.cli_commands import LITELLM_CREDENTIAL_FIELDS
 
 _CREDENTIALS = frozenset(LITELLM_CREDENTIAL_FIELDS)
 PAGE_SIZE = 100
+SPEND_PAGE_LIMIT = 20
 
 
 class LiteLLMError(ControlError):
@@ -184,6 +185,34 @@ class LiteLLMAdmin:
     def daily_activity(self, path: str, params: dict[str, Any]) -> dict:
         """일별 활동(``/team/daily/activity``·``/user/daily/activity``)의 한 쪽."""
         return self._ok(path, params, key="results", shape=list)
+
+    def user_spend(self, start: str, end: str, user_id: str | None = None) -> dict:
+        """기간(YYYY-MM-DD, 끝 포함) 안 사용자별 지출 합계: ``{"total", "by_user"}``.
+
+        LiteLLM 일별 사용자 지출(``/user/daily/activity``)의 일자별 사용자 항목을 더한다. 지출이
+        기록된 사용자만 ``by_user``에 들어가므로 기록이 없는 사용자는 키가 없다.
+        """
+        by_user: dict[str, float] = {}
+        total, page = 0.0, 1
+        while page <= SPEND_PAGE_LIMIT:
+            params = {"start_date": start, "end_date": end, "page": page, "page_size": 1000}
+            if user_id:
+                params["user_id"] = user_id
+            body = self.daily_activity("/user/daily/activity", params)
+            for day in body["results"]:
+                if not isinstance(day, dict):
+                    continue
+                entities = (day.get("breakdown") or {}).get("entities") or {}
+                for uid, entry in entities.items():
+                    spend = ((entry or {}).get("metrics") or {}).get("spend")
+                    if isinstance(spend, (int, float)):
+                        by_user[uid] = by_user.get(uid, 0.0) + float(spend)
+                        total += float(spend)
+            meta = body.get("metadata") or {}
+            if not meta.get("has_more"):
+                return {"total": total, "by_user": by_user}
+            page += 1
+        raise LiteLLMError("LiteLLM 지출 기록이 너무 많아 모두 읽지 못했습니다.")
 
     def list_keys(self) -> list[dict]:
         """메타데이터와 객체 권한을 포함한 전체 객체. ``return_full_object``가 필요하다."""

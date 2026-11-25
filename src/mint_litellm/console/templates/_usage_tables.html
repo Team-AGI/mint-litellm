@@ -1,20 +1,22 @@
 {% import "macros.html" as m %}{% import "audit_macros.html" as a %}
+{% macro money(v) %}{% if v is none %}미집계{% elif v == 0 %}0{% else %}${{ '%.4f' | format(v) }}{% endif %}{% endmacro %}
 <div class="cards">
   {{ m.kpi('호출', report.calls) }}
   {{ m.kpi('차단', report.blocked, level='danger' if report.blocked) }}
+  {{ m.kpi('비용(LiteLLM 기록)', money(report.spend), note=none if report.spend is not none else 'LiteLLM 지출 기록을 읽지 못했습니다') }}
   {% if not scoped %}{{ m.kpi('MINT 판정 지연(중앙값)', (report.latency.p50 ~ ' ms') if report.latency.count else '기록 없음') }}
   {{ m.kpi('MINT 판정 지연(95번째)', (report.latency.p95 ~ ' ms') if report.latency.count else '기록 없음') }}{% endif %}
 </div>
 {{ a.panel('서버별 호출', bars, report.bars['values'] | length) }}
-{% macro table(title, rows, first=false) %}
+{% macro table(title, rows, first=false, cost=false) %}
 <section><h2>{{ title }}</h2>
 {% if rows %}
-<table><thead><tr><th>이름</th><th class="num">호출(건)</th><th class="num">차단(건)</th>{% if first %}<th>첫 성공</th>{% endif %}</tr></thead><tbody>
-{% for r in rows %}<tr><td>{{ r.name }}</td><td class="num">{{ r.calls }}</td><td class="num">{{ r.blocked }}</td>{% if first %}<td class="nowrap">{{ (r.first | when) if r.first else '없음' }}</td>{% endif %}</tr>{% endfor %}
+<table><thead><tr><th>이름</th><th class="num">호출(건)</th><th class="num">차단(건)</th>{% if cost %}<th class="num">비용(LiteLLM 기록)</th>{% endif %}{% if first %}<th>첫 성공</th>{% endif %}</tr></thead><tbody>
+{% for r in rows %}<tr><td>{{ r.name }}</td><td class="num">{{ r.calls }}</td><td class="num">{{ r.blocked }}</td>{% if cost %}<td class="num">{{ money(r.spend) }}</td>{% endif %}{% if first %}<td class="nowrap">{{ (r.first | when) if r.first else '없음' }}</td>{% endif %}</tr>{% endfor %}
 </tbody></table>
 {% else %}<div class="empty slim">이 기간에 기록이 없습니다</div>{% endif %}
 </section>
 {% endmacro %}
 {% if report.teams or not scoped %}{{ table('팀별', report.teams) }}{% endif %}
-{{ table('사람별' if not scoped else '내 사용', report.users, true) }}
+{{ table('사람별' if not scoped else '내 사용', report.users, true, true) }}
 {{ table('서버별', report.servers, true) }}
