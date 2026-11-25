@@ -1,0 +1,23 @@
+$ python src/mint_litellm/endpoint/kit/mint_kit.py add --help
+usage: mint add [-h] [--from SOURCE] [--purpose PURPOSE] [--grade GRADE]
+                [--network {none,hosts}] [--host HOST] [--env ENV] [--ro RO]
+                [--rw RW] [--yes] [--request-id REQUEST_ID]
+                [name] [command ...]
+
+positional arguments:
+  name
+  command
+
+options:
+  -h, --help            show this help message and exit
+  --from SOURCE
+  --purpose PURPOSE
+  --grade GRADE
+  --network {none,hosts}
+  --host HOST
+  --env ENV
+  --ro RO
+  --rw RW
+  --yes
+  --request-id REQUEST_ID
+[exit=0]

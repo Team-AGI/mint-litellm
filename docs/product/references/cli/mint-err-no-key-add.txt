@@ -1,0 +1,7 @@
+$ python src/mint_litellm/endpoint/kit/mint_kit.py --kit C:/nonexistent add foo -- echo hi
+usage: mint_kit.py [-h] [--json] [--if-due] [--tick] [--jitter JITTER]
+                   [--user-level] [--dry-run] [--user USER] [--home HOME]
+                   [--root ROOT] [--kit KIT]
+                   [{install,uninstall,status,check,sync,report}]
+mint_kit.py: error: argument action: invalid choice: 'add' (choose from install, uninstall, status, check, sync, report)
+[exit=2]

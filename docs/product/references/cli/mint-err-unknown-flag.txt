@@ -1,0 +1,4 @@
+$ python src/mint_litellm/endpoint/kit/mint_kit.py add --bogus
+usage: mint [-h] [--kit KIT] {screen,requests,relink,get,inspect,add,app} ...
+mint: error: unrecognized arguments: --bogus
+[exit=2]
