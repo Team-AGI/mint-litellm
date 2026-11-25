@@ -869,6 +869,28 @@ def test_found_items_with_a_request_are_left_out_and_managed_codex_items_are_mar
     assert not any(i["blocked"] for i in user_level["found"])
 
 
+def test_a_server_approved_before_its_contract_arrives_has_no_steps_of_its_own(tmp_path):
+    """승인 직후(계약 수신 전) 서버가 목록 첫 줄이어도 화면·조회가 깨지지 않는다."""
+
+    class Kit:
+        home, programs, harnesses = tmp_path, None, []
+
+        def check(self, state):
+            return {}, []
+
+        def local_contracts(self):
+            return {}
+
+        def local_permits(self):
+            return {}
+
+    me = {"user": "u", "servers": [{"server_id": "fresh", "pack_sha256": None}], "intakes": []}
+    built = kit_module.build_model(Kit(), {"mode": "managed"}, FakeGateway(me=me))
+    assert [(s["name"], s["state"], s["steps"]) for s in built["servers"]] == [
+        ("fresh", kit_module.S_WAIT, [False, False, False])]
+    assert kit_module.render_screen(built, ui(tab=1), 80, 24)
+
+
 def test_the_decision_version_is_kept_and_sent_back_in_the_report(tmp_path, folder, reports):
     kit = make_kit(folder, tmp_path, managed=True)
     state = kit.install()
