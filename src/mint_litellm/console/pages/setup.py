@@ -14,6 +14,7 @@ from mint_litellm.console.core import Actor, page_actor, require_csrf, screen_me
 from mint_litellm.console.templating import render
 from mint_litellm.control import webhook, webhook_store
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
+from mint_litellm.control.stage2_config import WEBHOOK_FORMATS
 
 router = APIRouter(dependencies=[Depends(require_csrf)])
 
@@ -40,10 +41,23 @@ def send_test(settings) -> bool:
     return True
 
 
-def setup_page(request: Request, actor: Actor, error=None, status=200):
+def alerts_view(actor: Actor, field_error=None) -> dict:
+    """알림 줄: 주소는 비밀이 들어 있어 호스트만 보인다. 설치 설정의 주소는 화면에서 못 바꾼다."""
+    settings = webhook_store.effective(actor.config.stage2, actor.conn, actor.instance)
+    return {
+        "fixed": bool(actor.config.stage2.webhook_urls),
+        "hosts": [urlsplit(u).hostname for u in settings.webhook_urls],
+        "format": settings.webhook_formats[0] if settings.webhook_formats else "slack",
+        "formats": WEBHOOK_FORMATS,
+        "tested_at": setup_state.mark_time(actor, "webhook_test"),
+        "field_error": field_error,
+    }
+
+
+def setup_page(request: Request, actor: Actor, error=None, status=200, field_error=None):
     items = setup_state.steps(actor, read_cookie(request, DEFAULT_PASSWORD) is not None)
     ctx = {
-        "items": items,
+        "items": items, "alerts": alerts_view(actor, field_error),
         "pending": setup_state.pending(items),
         "error": error,
         "litellm_ui_url": os.getenv("MINT_LITELLM_UI_URL", ""),
@@ -72,8 +86,8 @@ def webhook_save(
         webhook_store.save(actor.conn, actor.instance, url, fmt, actor.ctx.operator.name)
     except ControlError as error:
         actor.conn.rollback()
-        return setup_page(request, actor, screen_message(str(error)), 400)
-    return RedirectResponse("/setup?ok=webhook_saved#step-approval", status_code=303)
+        return setup_page(request, actor, status=400, field_error=screen_message(str(error)))
+    return RedirectResponse("/setup?ok=webhook_saved#step-alerts", status_code=303)
 
 
 @router.post("/setup/webhook-test")

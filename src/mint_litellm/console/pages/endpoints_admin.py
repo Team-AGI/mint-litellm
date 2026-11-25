@@ -30,6 +30,7 @@ from mint_litellm.control.operators import SERVICE_ACCOUNTS
 from mint_litellm.control.services import operators as operator_service
 from mint_litellm.control.services import orgs as org_service
 from mint_litellm.control.services import reads
+from mint_litellm.control.services import root_controls as root
 from mint_litellm.control.services.base import transact
 from mint_litellm.types.cli_commands import OperatorRole
 from mint_litellm.types.events import EventKind
@@ -292,10 +293,13 @@ def admin_page(request: Request, actor: Actor, error=None, status=200, tab=None)
     tab = tab or request.query_params.get("tab")
     listed = [] if actor.role == "viewer" else reads.operators(actor.conn, actor.instance)
     operators = [o for o in listed if o["name"] not in SERVICE_ACCOUNTS]
+    marks = root.root_names(actor.conn, actor.instance)
+    for o in operators:
+        o["root"] = o["name"] == "root" or o["name"] in marks
     system_accounts = [o for o in listed if o["name"] in SERVICE_ACCOUNTS]
     soon = datetime.now(UTC) + timedelta(days=7)
     ctx = {
-        "operators": operators,
+        "operators": operators, "me": actor.ctx.operator.name,
         "system_accounts": system_accounts,
         "expiring": sum(1 for o in operators if o["expires_at"] and o["expires_at"] < soon),
         "orgs": reads.orgs(actor.conn, actor.instance),
@@ -338,6 +342,19 @@ def set_operator_role(
             actor.ctx, name, OperatorRole(role), expected_version=state_version
         ),
         "operator_role", "/admin?tab=operators",
+        tabbed(request, actor, "operators"),
+    )
+
+
+@router.post("/admin/operators/{name}/root")
+def set_root(
+    name: str, request: Request, on: str = Form(...), reason: str = Form(""),
+    actor: Actor = Depends(page_actor),
+):
+    """Root 표지를 주거나 푼다(Root만, 서비스가 판정한다)."""
+    return act(
+        actor, lambda: root.set_root_operator(actor.ctx, name, on == "1", reason),
+        "root_set" if on == "1" else "root_unset", "/admin?tab=operators",
         tabbed(request, actor, "operators"),
     )
 

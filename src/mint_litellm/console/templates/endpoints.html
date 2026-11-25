@@ -1,6 +1,7 @@
 {% extends "base.html" %}{% import "macros.html" as m %}
-{% block title %}엔드포인트 · MINT{% endblock %}
+{% block title %}단말 · MINT{% endblock %}
 {% block page_class %}wide{% endblock %}
+{% macro four(impact, now, later, cannot, undo) %}<dl class="detail"><dt>영향</dt><dd>{{ impact }}</dd><dt>즉시</dt><dd>{{ now }}</dd><dt>늦게</dt><dd>{{ later }}</dd><dt>취소 불가</dt><dd>{{ cannot }}</dd><dt>되돌리기</dt><dd>{{ undo }}</dd></dl>{% endmacro %}
 {% macro apps_panel(r, apps, with_revoke, action_base, ref='') %}
 <h3>앱</h3>
 {% if apps %}<table><thead><tr><th>이름</th><th>만든 날</th><th>만료</th><th>상태</th>{% if with_revoke %}<th></th>{% endif %}</tr></thead><tbody>
@@ -28,7 +29,7 @@
 {% endmacro %}
 {% block body %}
 {% set total = count.applied + count.unapplied + count.stale %}
-<h1>엔드포인트</h1>
+<h1>단말</h1>
 <div class="cards">
   {{ m.kpi('적용률', '—' if not total else (((count.applied * 100 / total) | round | int) ~ '%' if total >= 5 else count.applied ~ '/' ~ total), href='/endpoints?tab=installs&state=applied' if total else none) }}
   {{ m.kpi('격리 위반', count.violation, href='/endpoints?tab=installs&state=violation', level='danger' if count.violation) }}
@@ -77,9 +78,9 @@
 {% if selected.state in ('managed', 'user') and selected.pause_view %}{{ pause_panel(selected, '') }}{% endif %}
 {{ apps_panel(selected, selected.apps, actor.role == 'admin', '/endpoints/apps/', selected.ref) }}
 {% if actor.role == 'admin' and selected.group %}
-<div class="actions">{% if selected.state != 'revoked' %}{% call m.confirm_dialog('revoke-device', '연결 해제', (selected.host or '이 PC') ~ '의 연결을 해제합니다', (selected.host or '이 PC') ~ '는 더 이상 MINT를 거쳐 MCP를 쓰지 못하고, 이 PC에서 만든 앱 자격도 회수됩니다. ' ~ (selected.person or selected.user_id) ~ '의 다른 PC는 그대로입니다. 새 설치 명령으로 다시 설치해야 연결됩니다.', '/endpoints/' ~ selected.key_alias ~ '/revoke', actor, '연결 해제') %}
+<div class="actions">{% if selected.state != 'revoked' %}{% call m.confirm_dialog('revoke-device', '연결 해제', (selected.host or '이 PC') ~ '의 연결을 해제합니다', four('PC 1대 · 이 PC에서 만든 앱 자격 · ' ~ (selected.person or selected.user_id) ~ '의 다른 PC는 그대로', '이 PC는 다음 호출부터 MINT를 거쳐 MCP를 쓰지 못합니다.', 'PC 실행기는 다음 보고(약 20초)에 멈춥니다.', '이미 원격 서버로 보낸 호출은 끝까지 실행됩니다.', '되돌릴 수 없습니다. 새 설치 명령으로 다시 설치해야 합니다.'), '/endpoints/' ~ selected.key_alias ~ '/revoke', actor, '연결 해제') %}
 <label>해제 사유(선택)<input name="reason" maxlength="500" autocomplete="off"></label>
-{% endcall %}{% endif %}{% call m.confirm_dialog('revoke-endpoint', '이 사람의 PC 모두 해제', '이 사람의 PC를 모두 해제합니다', (selected.person or selected.user_id) ~ '의 모든 PC가 MINT를 거쳐 MCP를 쓰지 못하게 되고, 앱 자격도 회수됩니다. 새 설치 명령으로 다시 설치해야 연결됩니다.', '/endpoints/revoke', actor, '모두 해제') %}
+{% endcall %}{% endif %}{% call m.confirm_dialog('revoke-endpoint', '이 사람의 PC 모두 해제', '이 사람의 PC를 모두 해제합니다', four((selected.person or selected.user_id) ~ '의 모든 PC와 앱 자격', '모든 PC가 다음 호출부터 MINT를 거쳐 MCP를 쓰지 못합니다.', 'PC 실행기는 다음 보고(약 20초)에 멈춥니다.', '이미 원격 서버로 보낸 호출은 끝까지 실행됩니다.', '되돌릴 수 없습니다. 새 설치 명령으로 다시 설치해야 합니다.'), '/endpoints/revoke', actor, '모두 해제') %}
 <input type="hidden" name="user_id" value="{{ selected.user_id }}">
 <label>해제 사유(선택)<input name="reason" maxlength="500" autocomplete="off"></label>
 {% endcall %}</div>
@@ -104,12 +105,12 @@
 {% else %}{{ m.empty('AI 도구 현황을 보고한 단말이 없습니다', '/endpoints?tab=installs', '단말 목록 보기') }}{% endif %}
 {% if client %}{% call m.drawer(L.pick(L.AI_CLIENT, client.client), '/endpoints?tab=ai-tools') %}
 {% for d in client.devices %}<div class="card">
-<p><strong>{{ d.install.user_id }}</strong> · {{ L.pick(L.AI_COVERAGE, d.coverage) }}{% if d.install.paused_at %} · 연결 중지{% endif %}</p>
-<p class="stats-line"><span>단말 {{ d.install.key_alias }}</span><span>마지막 보고 {{ d.install.reported_at | when }}</span></p>
+<p><strong>{{ d.install.person or d.install.user_id }}</strong> · {{ d.install.host or '이름 없는 PC' }} · {{ L.pick(L.AI_COVERAGE, d.coverage) }}{% if d.install.paused_at %} · 연결 중지{% endif %}</p>
+<p class="stats-line"><span>마지막 보고 {{ d.install.reported_at | when }}</span></p>
 {% if actor.role == 'admin' %}<div class="row-actions">
 <form method="post" action="/endpoints/{{ d.install.key_alias }}/reconnect" hx-boost="false">{{ m.csrf(actor) }}<input type="hidden" name="client" value="{{ client.client }}"><button type="submit">연결 복구</button></form>
 {% if d.install.paused_at %}<form method="post" action="/endpoints/{{ d.install.key_alias }}/resume" hx-boost="false">{{ m.csrf(actor) }}<input type="hidden" name="client" value="{{ client.client }}"><button type="submit" class="primary">재개</button></form>
-{% else %}{{ m.confirm_dialog('pause-' ~ d.install.key_alias, '관리 AI 연결 중지', '관리 AI 연결 중지', d.install.user_id ~ ' 단말의 로컬 서버·내장 도구 호출이 거절되고 실행기가 띄운 서버가 멈춥니다. 원격 MCP 게이트웨이 키는 그대로입니다. 재개하면 바로 다시 사용할 수 있습니다.', '/endpoints/' ~ d.install.key_alias ~ '/pause', actor, '중지') }}{% endif %}
+{% else %}{{ m.confirm_dialog('pause-' ~ d.install.key_alias, '관리 AI 연결 중지', '관리 AI 연결 중지', (d.install.host or d.install.person or d.install.user_id) ~ ' 단말의 로컬 서버·내장 도구 호출이 거절되고 실행기가 띄운 서버가 멈춥니다. 원격 MCP 게이트웨이 키는 그대로입니다. 재개하면 바로 다시 사용할 수 있습니다.', '/endpoints/' ~ d.install.key_alias ~ '/pause', actor, '중지') }}{% endif %}
 </div>{% endif %}
 </div>{% endfor %}
 {% endcall %}{% endif %}

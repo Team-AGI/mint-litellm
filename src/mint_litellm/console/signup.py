@@ -6,7 +6,6 @@ import secrets
 
 import psycopg
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import RedirectResponse
 
 from mint_litellm.console.cookies import is_https
 from mint_litellm.console.core import (
@@ -17,6 +16,7 @@ from mint_litellm.console.core import (
     require_origin,
     too_many_attempts,
 )
+from mint_litellm.console.pages.common import act
 from mint_litellm.console.staff_pages import staff_connection
 from mint_litellm.console.templating import render
 from mint_litellm.control import signup
@@ -83,8 +83,7 @@ def require_admin(actor):
         raise AdminError(AdminCode.FORBIDDEN, "관리자만 가입 요청을 처리할 수 있습니다.")
 
 
-@admin.get("/signup-requests")
-def requests_page(request: Request, actor: Actor = Depends(page_actor)):
+def requests_view(request: Request, actor: Actor, error=None, status=200):
     require_admin(actor)
     rows = fetchall(actor.conn, "SELECT * FROM mint.signup_requests WHERE instance_id = %s"
                     " ORDER BY (status = 'pending' AND decided_at IS NULL) DESC, requested_at DESC",
@@ -105,28 +104,38 @@ def requests_page(request: Request, actor: Actor = Depends(page_actor)):
         }
         row["error_text"] = (errors.get(code) or "게이트웨이 요청을 처리하지 못했습니다.") \
             if code else None
-    return render(request, "signup_requests.html", {"rows": rows}, actor=actor)
+    return render(request, "signup_requests.html", {"rows": rows, "error": error},
+                  actor=actor, status=status)
+
+
+@admin.get("/signup-requests")
+def requests_page(request: Request, actor: Actor = Depends(page_actor)):
+    return requests_view(request, actor)
 
 
 @admin.post("/signup-requests/{request_id}/{decision}")
-def decide(request_id: str, decision: str, reason: str = Form(""),
+def decide(request: Request, request_id: str, decision: str, reason: str = Form(""),
            actor: Actor = Depends(page_actor)):
     require_admin(actor)
-    if decision not in ("approve", "reject") or len(reason) > 1000:
-        raise ValueError("입력 값을 확인하십시오.")
-    with actor.conn.transaction():
-        row = fetchone(actor.conn, "UPDATE mint.signup_requests SET decided_at = now(),"
-                       " decided_by = %s, reason = %s, status = %s,"
-                       " password_sealed = CASE WHEN %s = 'reject' THEN NULL"
-                       " ELSE password_sealed END"
-                       " WHERE instance_id = %s AND id = %s AND status = 'pending'"
-                       " AND decided_at IS NULL RETURNING id",
-                       (actor.ctx.operator.name, reason.strip() or None,
-                        "pending" if decision == "approve" else "rejected", decision,
-                        actor.instance,
-                        request_id))
-        if not row:
-            raise AdminError(AdminCode.NOT_FOUND, "처리할 가입 요청이 없습니다.")
-        if decision == "approve":
-            enqueue_job(actor.ctx, "staff_signup", str(row["id"]), f"staff_signup:{row['id']}")
-    return RedirectResponse("/signup-requests", status_code=303)
+
+    def work():
+        if decision not in ("approve", "reject") or len(reason) > 1000:
+            raise ValueError("입력 값을 확인하십시오.")
+        with actor.conn.transaction():
+            row = fetchone(actor.conn, "UPDATE mint.signup_requests SET decided_at = now(),"
+                           " decided_by = %s, reason = %s, status = %s,"
+                           " password_sealed = CASE WHEN %s = 'reject' THEN NULL"
+                           " ELSE password_sealed END"
+                           " WHERE instance_id = %s AND id = %s AND status = 'pending'"
+                           " AND decided_at IS NULL RETURNING id",
+                           (actor.ctx.operator.name, reason.strip() or None,
+                            "pending" if decision == "approve" else "rejected", decision,
+                            actor.instance, request_id))
+            if not row:
+                raise AdminError(AdminCode.NOT_FOUND, "처리할 가입 요청이 없습니다.")
+            if decision == "approve":
+                enqueue_job(actor.ctx, "staff_signup", str(row["id"]),
+                            f"staff_signup:{row['id']}")
+
+    return act(actor, work, "signup_approved" if decision == "approve" else "signup_rejected",
+               "/signup-requests", lambda **kw: requests_view(request, actor, **kw))

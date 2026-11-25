@@ -3,9 +3,11 @@
 {% block body %}<h1>가입 요청</h1>
 <table><thead><tr><th>아이디</th><th>이름</th><th>요청 시각</th><th>상태와 처리</th></tr></thead><tbody>
 {% for row in rows %}<tr><td>{{ row.email }}</td><td>{{ row.display_name }}</td><td>{{ row.requested_at | when }}</td><td>
-{% if row.status == 'pending' and not row.decided_at %}
-<form method="post" action="/signup-requests/{{ row.id }}/approve">{{ m.csrf(actor) }}<button type="submit">승인</button></form>
-<form method="post" action="/signup-requests/{{ row.id }}/reject">{{ m.csrf(actor) }}<label>거절 사유 (선택)<input name="reason" maxlength="1000"></label><button type="submit">거절</button></form>
+{% if row.status == 'pending' and not row.decided_at %}<div class="row-actions">
+{% call m.confirm_dialog('approve-' ~ loop.index, '승인', '가입 승인 — ' ~ row.email, row.display_name ~ ' 님의 계정을 만듭니다. 승인하면 이 아이디와 요청한 비밀번호로 로그인할 수 있습니다.', '/signup-requests/' ~ row.id ~ '/approve', actor, '승인', danger=false, trigger_class='primary') %}{% endcall %}
+{% call m.confirm_dialog('reject-' ~ loop.index, '거절', '가입 거절 — ' ~ row.email, '요청한 비밀번호 정보가 지워집니다. 다시 가입 요청을 받아야 합니다.', '/signup-requests/' ~ row.id ~ '/reject', actor, '거절') %}
+<label>거절 사유(선택)<input name="reason" maxlength="1000" autocomplete="off"></label>
+{% endcall %}</div>
 {% elif row.status == 'pending' %}계정 만들기 대기{% if row.error_text %} · {{ row.error_text }} 다시 시도합니다.{% endif %}
 {% elif row.status == 'failed' %}계정 만들기 실패 · {{ row.error_text }}
 {% elif row.status == 'rejected' %}거절됨{% if row.reason %} · {{ row.reason }}{% endif %}

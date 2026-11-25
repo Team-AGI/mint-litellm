@@ -422,3 +422,59 @@ def verify(ctx: Context, action_id: str) -> list[dict]:
             (json.dumps(points, ensure_ascii=False, default=str), ctx.instance_id, action_id),
         )
         return points
+
+
+# --- Root 표지 ------------------------------------------------------------------------------
+
+
+def set_root_operator(ctx: Context, name: str, on: bool, reason: str) -> str:
+    """운영자에게 Root 표지를 주거나 푼다. Root만 할 수 있다(감사 사건은 운영자 역할 변경 사건)."""
+    require_root(ctx)
+    reason = _reason(reason)
+    with transact(ctx):
+        target = fetchone(
+            ctx.conn,
+            "SELECT role FROM mint.operators WHERE instance_id = %s AND name = %s"
+            " AND (expires_at IS NULL OR expires_at > now())",
+            (ctx.instance_id, name),
+        )
+        if target is None:
+            raise not_found(f"운영자 {name}이(가) 없습니다.")
+        settings = fetchone(
+            ctx.conn,
+            "SELECT root_operators, settings_version FROM mint.settings"
+            " WHERE instance_id = %s FOR UPDATE",
+            (ctx.instance_id,),
+        )
+        marked = list(settings["root_operators"])
+        is_marked = name == "root" or name in marked
+        if on:
+            if target["role"] != "admin":
+                raise ControlError("관리자 역할인 운영자만 Root로 지정할 수 있습니다.")
+            if is_marked:
+                raise conflict(f"{name}은(는) 이미 Root입니다.")
+            marked.append(name)
+        else:
+            if name == "root":
+                raise ControlError("기본 계정 root는 항상 Root이고 마지막 Root입니다.")
+            if name == ctx.operator.name:
+                raise ControlError("본인의 Root 표지는 풀 수 없습니다.")
+            if not is_marked:
+                raise conflict(f"{name}은(는) Root가 아닙니다.")
+            marked.remove(name)
+        row = fetchone(
+            ctx.conn,
+            "UPDATE mint.settings SET root_operators = %s WHERE instance_id = %s"
+            " AND settings_version = %s RETURNING settings_version",
+            (marked, ctx.instance_id, settings["settings_version"]),
+        )
+        if row is None:
+            raise conflict("그 사이 설정이 바뀌었습니다. 새로 고침한 뒤 다시 시도하십시오.")
+        ctx.emit(
+            EventKind.OPERATOR_ROLE_CHANGED,
+            f"root.{name}",
+            row["settings_version"],
+            {"name": name, "root": on, "reason": reason},
+        )
+        return name
+

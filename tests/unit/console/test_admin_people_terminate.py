@@ -21,8 +21,8 @@ def test_the_people_screen_lists_blocks_and_designates(world, admin):
     assert form_post(world, admin, "/people/block", user_id="u-1", reason="점검").status_code == 303
     sql = "SELECT scope_id, server_id FROM mint.denials WHERE lifted_at IS NULL"
     assert world.query(sql) == [("u-1", None)]
-    html = admin.get("/people").text
-    assert "전체 차단" in html and "MCP 차단 해제" in html
+    assert "일부 차단" in admin.get("/people").text
+    assert "MCP 차단 해제" in admin.get("/people?open=u-1").text
     assert form_post(world, admin, "/people/unblock", user_id="u-1").status_code == 303
     assert world.query(sql) == []
     assert form_post(world, admin, "/people/block", user_id="nobody").status_code == 404

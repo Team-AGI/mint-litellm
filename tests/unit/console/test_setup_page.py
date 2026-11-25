@@ -67,7 +67,7 @@ def test_a_fresh_install_shows_what_is_missing(world, admin):
     assert state(html, "policy") == "미완료"
     assert state(html, "servers") == "완료" and state(html, "password") == "완료"
     assert state(html, "accounts") == "미완료"
-    assert state(html, "approval") == "완료" and "알림 주소" not in html  # 알림은 화면에서 뺐다
+    assert state(html, "approval") == "완료" and state(html, "alerts") == "미완료"
     assert state(html, "rule") == state(html, "report") == "미완료"
     # 설치 명령에 필요한 서버 설정이 빠졌으면 관리자에게 정확한 원인을 보인다.
     endpoint = row_of(html, "endpoint")
@@ -130,7 +130,8 @@ def test_the_test_send_marks_the_approval_item_only_when_every_address_answers(w
     client = world.client_with(webhook_urls=(HOOK,), webhook_hmac_key=b"k" * 32)
     login = client.post("/login", data={"key": "sk-admin"})
     assert login.status_code == 303
-    assert "/setup/webhook-test" not in client.get("/setup").text  # 화면에는 없고 경로만 남는다
+    shown = client.get("/setup").text  # 설치 설정의 주소는 바꿀 수 없고 시험 전송만 있다
+    assert 'action="/setup/webhook-test"' in shown and 'action="/setup/webhook"' not in shown
     calls = []
 
     def fake_post(http, url, key, delivery, body, deadline=5.0):
@@ -163,7 +164,7 @@ def test_an_admin_saves_the_alert_address_on_screen_and_the_worker_reads_it(
     from mint_litellm.control import webhook_store
 
     monkeypatch.setenv("MINT_EXPORT_HMAC_KEY", "k" * 32)
-    assert 'action="/setup/webhook"' not in admin.get("/setup").text
+    assert 'action="/setup/webhook"' in admin.get("/setup").text
     bad = form_post(world, admin, "/setup/webhook", url="http://hooks.example.com/x", fmt="slack")
     assert bad.status_code == 400
     ok = form_post(world, admin, "/setup/webhook", url=HOOK, fmt="slack")
@@ -177,7 +178,7 @@ def test_an_admin_saves_the_alert_address_on_screen_and_the_worker_reads_it(
         settings = webhook_store.effective(world.config.stage2, conn, INSTANCE)
     assert settings.webhook_urls == (HOOK,) and settings.webhook_format(HOOK) == "slack"
     html = admin.get("/setup").text
-    assert "/setup/webhook-test" not in html
+    assert 'action="/setup/webhook-test"' in html
     assert form_post(world, admin, "/setup/webhook", url="").status_code == 303
     assert world.query("SELECT count(*) FROM mint.webhook_settings")[0][0] == 0
     approver = world.session_client("approver")
@@ -201,7 +202,7 @@ def test_setup_links_the_password_change_and_the_alert_request(world, admin):
     assert item["href"] == "/account/password" and item["status"] is setup_state.OPEN
     assert setup_state._password(False)["status"] is setup_state.DONE
     html = admin.get("/setup").text
-    assert "알림 주소" not in html
+    assert "알림 주소" in html and "시험 전송" in html
 
 
 def test_setup_steps_follow_the_onboarding_order(world, admin):

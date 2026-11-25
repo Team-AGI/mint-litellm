@@ -9,9 +9,21 @@
 {% for i in items %}<tr id="step-{{ i.key }}">
 <td>{{ i.title }}{% if i.optional %} <span class="muted">(선택)</span>{% endif %}</td>
 <td>{{ m.status_badge(i.status) }}</td>
-<td>{{ i.line }}</td>
-<td class="nowrap">{% if i.status.text == '완료' and not i.optional %}{% elif i.post %}<form method="post" action="{{ i.post }}" hx-boost="false">{{ m.csrf(actor) }}<button type="submit" class="primary">{{ i.action }}</button></form>
+<td>{{ i.line }}{% if i.key == 'alerts' and alerts.tested_at %}<div class="muted">마지막 시험 전송 {{ alerts.tested_at | when }}</div>{% endif %}</td>
+<td class="nowrap">{% if i.key == 'alerts' %}{% elif i.status.text == '완료' and not i.optional %}{% elif i.post %}<form method="post" action="{{ i.post }}" hx-boost="false">{{ m.csrf(actor) }}<button type="submit" class="primary">{{ i.action }}</button></form>
 {% elif i.href %}<a class="button" href="{{ i.href }}">{{ i.action }}</a>{% endif %}</td>
-</tr>{% endfor %}
+</tr>
+{% if i.key == 'alerts' and actor.role == 'admin' %}<tr><td colspan="4">
+{% if alerts.fixed %}<p class="muted">알림 주소는 설치 설정에서 정해져 있어 여기서 바꿀 수 없습니다{% if alerts.hosts %} · {{ alerts.hosts | join }}{% endif %}.</p>
+{% else %}<form method="post" action="/setup/webhook" class="filters" hx-boost="false">{{ m.csrf(actor) }}
+  <label>알림 주소<input type="url" name="url" placeholder="https://hooks.example.com/…" maxlength="2000" autocomplete="off"{% if alerts.field_error %} aria-invalid="true" aria-describedby="alerts-error"{% endif %}>{% if alerts.field_error %}<span id="alerts-error" class="badge error">{{ alerts.field_error }}</span>{% endif %}</label>
+  <label>형식<select name="fmt">{% for f in alerts.formats %}<option value="{{ f }}"{% if f == alerts.format %} selected{% endif %}>{{ {'json': 'JSON', 'slack': 'Slack', 'teams': 'Teams'}[f] }}</option>{% endfor %}</select></label>
+  <button type="submit" class="primary">저장</button>
+</form>
+{% if alerts.hosts %}<p class="muted">저장된 주소: {{ alerts.hosts | join }} · 비우고 저장하면 지웁니다.</p>{% endif %}{% endif %}
+{% if alerts.hosts %}<form method="post" action="/setup/webhook-test" hx-boost="false">{{ m.csrf(actor) }}<button type="submit">시험 전송</button></form>
+{% else %}{{ m.blocked_button('시험 전송', '알림 주소를 먼저 저장하십시오') }}{% endif %}
+</td></tr>{% endif %}
+{% endfor %}
 </tbody></table>
 {% endblock %}
