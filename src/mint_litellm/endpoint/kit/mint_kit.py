@@ -61,6 +61,7 @@ import zipfile
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NoReturn
 from xml.sax.saxutils import escape
 
 KIT = Path(__file__).resolve().parent
@@ -1881,7 +1882,10 @@ class Kit:
         strict: bool | None = None,
         dry_run: bool = False,
     ) -> None:
-        self.config = json.loads((folder / "kit.json").read_text(encoding="utf-8"))
+        try:
+            self.config = json.loads((folder / "kit.json").read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            raise KitMissing(folder) from None
         self.folder, self.root, self.managed, self.account = folder, root, managed, account
         self.windows = sys.platform == "win32" if windows is None else windows
         self.strict = chown if strict is None else strict  # 실제 시스템에 설치할 때의 점검
@@ -5927,6 +5931,66 @@ def run_inspect(
 
 # --- 대화형 명령(screen·add·requests·get) ------------------------------------------------------
 CLI_COMMANDS = ("screen", "add", "requests", "get", "inspect", "relink", "app")
+VALUE_FLAGS = ("--kit", "--jitter", "--user", "--home", "--root")  # 값을 받는 전역 옵션
+NO_KIT_TEXT = (
+    "이 PC에 MINT 키트가 없습니다. 직원 화면 「내 단말」에서 설치 명령을 만들어 붙여 넣으십시오"
+)
+HELP_TEXT = """사용법: mint [명령] [옵션]
+
+직원이 쓰는 명령
+  (명령 없음)            터미널 화면을 엽니다(신청·내 서버·진행 상황)
+  add <주소>             원격 MCP 서버(https 주소)·GitHub 저장소·패키지를 신청합니다
+  add <이름> -- <명령>    실행 명령(uvx 패키지==판본, npx 패키지@판본)으로 신청합니다
+  requests               내 신청과 진행 상황을 봅니다
+  get <서버>             승인된 서버를 이 PC에 받아 준비합니다
+  inspect <신청>         검사가 열린 신청을 이 PC에서 검사합니다
+  app new|list|run|env|mcp|rm   자체 스크립트용 앱 자격을 다룹니다
+  relink <설치 주소>      키가 거절될 때 이 PC를 다시 연결합니다
+  status [--json]        설치 상태를 봅니다
+
+관리·설치(관리자 권한)
+  install | uninstall | check [--json] | sync | report
+
+명령마다 자세한 도움말: mint <명령> --help
+"""
+ARGPARSE_KO = (
+    (r"the following arguments are required: ", "필요한 값이 빠졌습니다: "),
+    (r"unrecognized arguments: ", "알 수 없는 인자입니다: "),
+    (
+        r"argument (\S+): invalid choice: '([^']*)' \(choose from (.*)\)",
+        r"\1: 「\2」은 쓸 수 없는 값입니다(쓸 수 있는 값: \3)",
+    ),
+    (r"argument (\S+): expected one argument", r"\1 뒤에 값이 필요합니다"),
+    (r"argument (\S+): invalid int value: '([^']*)'", r"\1: 「\2」은 숫자가 아닙니다"),
+)
+
+
+class KitMissing(Exception):
+    """키트 폴더에 kit.json이 없다(설치되지 않았거나 다른 폴더를 가리킴)."""
+
+
+class Parser(argparse.ArgumentParser):
+    """인자 오류를 한국어로 내고 다음에 볼 도움말을 붙인다."""
+
+    def error(self, message: str) -> NoReturn:
+        for pattern, text in ARGPARSE_KO:
+            message = re.sub(pattern, text, message)
+        self.exit(2, f"{self.prog}: {message}\n도움말: {self.prog} --help\n")
+
+
+def first_word(argv: list[str]) -> str | None:
+    """옵션과 그 값을 건너뛴 첫 낱말(명령 이름)."""
+    skip = False
+    for arg in argv:
+        if skip:
+            skip = False
+        elif arg in VALUE_FLAGS:
+            skip = True
+        elif arg == "--":
+            return None
+        elif not arg.startswith("-"):
+            return arg
+    return None
 
 
 def open_installed(folder: Path):
@@ -6351,42 +6415,56 @@ def remove_app(name: str, home: Path, gateway: Gateway, out) -> int:
 
 
 def cli_main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="mint")
-    parser.add_argument("--kit", default=str(KIT))
-    sub = parser.add_subparsers(dest="command_name", required=True)
-    sub.add_parser("screen")
-    sub.add_parser("requests")
-    sub.add_parser("relink").add_argument("url")
-    get = sub.add_parser("get")
-    get.add_argument("server")
-    inspect = sub.add_parser("inspect")
-    inspect.add_argument("target")
-    add = sub.add_parser("add")
-    add.add_argument("name", nargs="?")
-    add.add_argument("command", nargs="*")
-    add.add_argument("--from", dest="source")
-    add.add_argument("--purpose")
-    add.add_argument("--grade")
-    add.add_argument("--network", choices=["none", "hosts"])
-    add.add_argument("--host", action="append")
-    add.add_argument("--env", action="append")
-    add.add_argument("--ro", action="append")
-    add.add_argument("--rw", action="append")
-    add.add_argument("--yes", action="store_true")
-    add.add_argument("--request-id")
-    app = sub.add_parser("app").add_subparsers(dest="app_action", required=True)
-    new = app.add_parser("new")
-    new.add_argument("name")
-    new.add_argument("--days", type=int, choices=range(1, 91), metavar="1-90")
-    app.add_parser("list")
-    app.add_parser("rm").add_argument("name")
-    run = app.add_parser("run")
-    run.add_argument("name")
-    run.add_argument("command", nargs=argparse.REMAINDER)
-    env = app.add_parser("env")
-    env.add_argument("name")
-    env.add_argument("--shell", choices=["sh", "powershell"])
-    app.add_parser("mcp").add_argument("name")
+    parser = Parser(prog="mint", description="MINT 직원 PC 명령. 전체 목록: mint --help")
+    parser.add_argument("--kit", default=str(KIT), help="키트 폴더(기본: 설치된 위치)")
+    sub = parser.add_subparsers(dest="command_name", required=True, metavar="명령")
+    sub.add_parser("screen", help="터미널 화면을 엽니다")
+    sub.add_parser("requests", help="내 신청과 진행 상황을 봅니다")
+    sub.add_parser("relink", help="키가 거절될 때 이 PC를 다시 연결합니다").add_argument(
+        "url", help="직원 화면 「내 단말」에서 받은 설치 주소"
+    )
+    get = sub.add_parser("get", help="승인된 서버를 이 PC에 받아 준비합니다")
+    get.add_argument("server", help="서버 이름")
+    inspect = sub.add_parser("inspect", help="검사가 열린 신청을 이 PC에서 검사합니다")
+    inspect.add_argument("target", help="신청 번호 또는 서버 이름")
+    add = sub.add_parser(
+        "add",
+        help="MCP 서버를 신청합니다",
+        description="예) mint add https://example.com/mcp · "
+        "mint add https://github.com/소유자/저장소 · "
+        "mint add fetch -- uvx mcp-server-fetch==2025.4.7",
+    )
+    add.add_argument("name", nargs="?", help="원격·저장소 주소나 패키지, 또는 실행 명령 앞의 이름")
+    add.add_argument("command", nargs="*", help="-- 뒤의 실행 명령")
+    add.add_argument("--from", dest="source", help="저장소 주소(이름과 따로 줄 때)")
+    add.add_argument("--purpose", help="사용 목적(없으면 물어봅니다)")
+    add.add_argument("--grade", help="자료 등급(없으면 기본값)")
+    add.add_argument("--network", choices=["none", "hosts"], help="네트워크: 막음 또는 --host만")
+    add.add_argument("--host", action="append", help="허용할 호스트(여러 번)")
+    add.add_argument("--env", action="append", help="서버에 넘길 환경 변수 이름(여러 번)")
+    add.add_argument("--ro", action="append", help="읽기만 허용할 경로(여러 번)")
+    add.add_argument("--rw", action="append", help="읽기·쓰기를 허용할 경로(여러 번)")
+    add.add_argument("--yes", action="store_true", help="확인 화면 없이 바로 제출")
+    add.add_argument("--request-id", help="웹에서 만든 신청 번호로 이어서 제출")
+    app = sub.add_parser("app", help="자체 스크립트용 앱 자격을 다룹니다").add_subparsers(
+        dest="app_action", required=True, metavar="동작"
+    )
+    new = app.add_parser("new", help="앱 자격을 만듭니다(키는 이 PC에만 둡니다)")
+    new.add_argument("name", help="앱 이름")
+    new.add_argument("--days", type=int, choices=range(1, 91), metavar="1-90", help="유효 기간(일)")
+    app.add_parser("list", help="앱 자격 목록과 상태")
+    app.add_parser("rm", help="앱 자격을 회수하고 이 PC의 키를 지웁니다").add_argument(
+        "name", help="앱 이름"
+    )
+    run = app.add_parser("run", help="앱 자격을 넣어 명령을 실행합니다")
+    run.add_argument("name", help="앱 이름")
+    run.add_argument("command", nargs=argparse.REMAINDER, help="-- 뒤의 실행 명령")
+    env = app.add_parser("env", help="앱 자격을 셸 환경 변수 줄로 냅니다")
+    env.add_argument("name", help="앱 이름")
+    env.add_argument("--shell", choices=["sh", "powershell"], help="셸 종류")
+    app.add_parser("mcp", help="MCP 클라이언트 설정 항목을 냅니다").add_argument(
+        "name", help="앱 이름"
+    )
     args = parser.parse_args(argv)
     if args.command_name == "relink":
         return run_relink(args.url)
@@ -6737,23 +6815,44 @@ def codex_version(home: Path) -> str | None:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv and argv[0] in CLI_COMMANDS:
+    try:
+        return run_main(argv)
+    except KitMissing:
+        if "--json" in argv:
+            doc = {"mode": "none", "error": "kit_missing", "message": NO_KIT_TEXT}
+            print(json.dumps(doc, ensure_ascii=False))
+        else:
+            print(NO_KIT_TEXT, file=sys.stderr)
+        return 2
+
+
+def run_main(argv: list[str]) -> int:
+    word = first_word(argv)
+    if word in CLI_COMMANDS:
         return cli_main(argv)
-    parser = argparse.ArgumentParser(description="MINT endpoint kit")
+    if word is None and any(a in ("-h", "--help") for a in argv):
+        print(HELP_TEXT, end="")
+        return 0
+    parser = Parser(prog="mint", description="MINT 키트 설치·상태. 전체 명령: mint --help")
     parser.add_argument(
-        "action", nargs="?", default="install",
+        "action",
+        nargs="?",
+        default="install",
         choices=["install", "uninstall", "status", "check", "sync", "report"],
+        help="install 설치 · uninstall 제거 · status 상태 · check 점검 · sync 설정 · report 보고",
     )
-    parser.add_argument("--json", action="store_true")
-    parser.add_argument("--if-due", action="store_true")
-    parser.add_argument("--tick", action="store_true")
-    parser.add_argument("--jitter", type=int, default=0)
-    parser.add_argument("--user-level", action="store_true")
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--user")
-    parser.add_argument("--home")
-    parser.add_argument("--root")
-    parser.add_argument("--kit", default=str(KIT))
+    parser.add_argument("--json", action="store_true", help="JSON으로 출력(status·check)")
+    parser.add_argument("--if-due", action="store_true", help="보고 주기가 됐을 때만 보고")
+    parser.add_argument("--tick", action="store_true", help="예약 작업에서 부를 때")
+    parser.add_argument("--jitter", type=int, default=0, help="보고 전 무작위 대기(초)")
+    parser.add_argument(
+        "--user-level", action="store_true", help="관리자 권한 없이 이 사용자에게만 설치"
+    )
+    parser.add_argument("--dry-run", action="store_true", help="임시 폴더에 설치해 결과만 확인")
+    parser.add_argument("--user", help="대상 사용자 이름")
+    parser.add_argument("--home", help="대상 사용자 홈 폴더")
+    parser.add_argument("--root", help="시험용: 시스템 경로를 이 폴더 아래로 옮김")
+    parser.add_argument("--kit", default=str(KIT), help="키트 폴더(기본: 설치된 위치)")
     args = parser.parse_args(argv)
     if args.action == "report":
         def once() -> int:
