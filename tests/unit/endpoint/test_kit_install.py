@@ -213,6 +213,23 @@ def test_a_managed_codex_install_limits_servers_and_hooks_every_call(tmp_path, r
     assert not codex.exists()
 
 
+def test_a_foreign_codex_requirements_file_is_reported_and_left_alone(tmp_path, reports):
+    kit = make_kit(codex_folder(tmp_path), tmp_path, managed=True, windows=False)
+    state = kit.install()
+    path = tmp_path / "root/etc/codex/requirements.toml"
+    assert not [p for p in kit.check(state)[1] if "Codex 관리 파일" in p]
+    path.write_text("# other product\n", encoding="utf-8")
+    problems = kit.check(state)[1]
+    assert any("다른 관리 도구가 Codex 관리 파일을 바꿔" in p and "requirements.toml" in p
+               for p in problems)  # fmt: skip
+    assert path.read_text(encoding="utf-8") == "# other product\n"  # 덮어쓰지 않는다
+    lines = "\n".join(kit_module.status_lines(kit, state))
+    assert "Codex 관리 파일" in lines and "codex: 연결 실패" in lines
+    assert "sha" not in lines and "backup" not in lines
+    clients = {r["client"]: r for r in kit.read_inventory().get("ai_clients", [])}
+    assert clients["codex"]["connection"] == "failed"
+
+
 def test_a_managed_codex_install_without_servers_still_writes_the_empty_table(tmp_path, reports):
     """표가 없으면 Codex는 서버를 제한하지 않는다. 비어 있는 표가 모두 끈다."""
     kit = make_kit(codex_folder(tmp_path, servers=()), tmp_path, managed=True, windows=False)

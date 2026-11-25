@@ -2821,7 +2821,23 @@ class Kit:
             path = self.physical(logical)
             if not path.exists() or sha256_file(path) != digest:
                 found.append(f"{label} 훅 파일이 없거나 바뀌었습니다: {logical}")
+        foreign = self.codex_requirements_foreign(state)
+        if foreign:
+            found.append(
+                f"다른 관리 도구가 Codex 관리 파일을 바꿔 MINT 서버가 막힙니다({foreign})"
+            )
         return found
+
+    def codex_requirements_foreign(self, state: dict) -> str | None:
+        """우리가 쓴 Codex 요구 파일이 다른 관리 도구에 의해 바뀌었으면 그 경로(고치지는 않는다)."""
+        if "codex" not in self.harnesses or state.get("mode") != "managed":
+            return None
+        logical = f"{self.codex_dir}/requirements.toml"
+        digest = state.get("files", {}).get(logical)
+        path = self.physical(logical)
+        if not digest or not path.exists() or sha256_file(path) == digest:
+            return None
+        return str(path)
 
     # -- 제거 -------------------------------------------------------------------------------------
 
@@ -3109,14 +3125,20 @@ class Kit:
             return {}
         found: dict = {}
         if not self.system_mode:  # SYSTEM 보고기는 사용자 프로필을 읽지 않는다(사용자 작업 몫)
-            scan = scan_mcp(self.home, managed_names(self.load_state() or {}), self.windows)
+            state = self.load_state() or {}
+            scan = scan_mcp(self.home, managed_names(state), self.windows)
+            clients = ai_client_rows(
+                self.home, self.windows, self.harnesses, scan, read_client_record(self.home)
+            )
+            if self.codex_requirements_foreign(state):  # 서버가 막힌 Codex는 보장이 없다
+                for row in clients:
+                    if row["client"] == "codex":
+                        row.update(connection="failed", coverage="unmanaged")
             found = {
                 "local_mcp": scan["local_mcp"],
                 "tool_lists": scan_tool_lists(self.home),
                 "start_failures": scan_start_failures(self.home),
-                "ai_clients": ai_client_rows(
-                    self.home, self.windows, self.harnesses, scan, read_client_record(self.home)
-                ),
+                "ai_clients": clients,
                 "plaintext_keys": scan["plaintext_keys"],
                 "scan_errors": scan["scan_errors"],
                 "offline_calls": read_offline(self.home),
@@ -5789,6 +5811,52 @@ def check_lines(result: dict, problems: list[str]) -> list[str]:
     return [f"{pad(a, 12)}{b}" for a, b in rows] + [f"  - {p}" for p in problems]
 
 
+CLIENT_CONNECTION = {"hook": "연결됨", "mediated": "연결됨", "config": "연결됨",
+                     "none": "연결 안 됨", "failed": "연결 실패"}  # fmt: skip
+CLIENT_COVERAGE = {"pre_call": "호출 전 판정", "local_only": "로컬 서버만 판정",
+                   "unmanaged": "관리되지 않음", "unknown": "확인되지 않음",
+                   "scan_failed": "검사 실패"}  # fmt: skip
+
+
+def status_lines(kit, state: dict) -> list[str]:
+    """``mint status``의 짧은 요약(네트워크 없이 로컬 값만; 키·해시는 싣지 않는다)."""
+    model = build_model(kit, state, None)
+    rejected = any((d / KEY_REJECTED).exists() for d in (kit.home / STATE_REL, kit.programs))
+    last = None
+    for folder in (kit.home / STATE_REL, kit.programs):
+        try:
+            last = float((folder / LAST_REPORT).read_text())
+            break
+        except (OSError, ValueError):
+            continue
+    stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(last)) if last else None
+    link = "키 거부됨" if rejected else f"마지막 보고 {stamp}" if stamp else "아직 보고 없음"
+    model["connected"] = bool(stamp) and not rejected  # 화면과 같은 「다음 할 일」 문장을 쓴다
+    names = [str(n) for n in state.get("mcp_servers", [])]
+    rows = [("설치 방식", model["mode"]), ("연결", link),
+            ("승인 서버", ", ".join(names) or "없음")]  # fmt: skip
+    out = [f"{pad(a, 12)}{b}" for a, b in rows]
+    try:
+        scan = scan_mcp(kit.home, managed_names(state), kit.windows)
+        tools = ai_client_rows(
+            kit.home, kit.windows, kit.harnesses, scan, read_client_record(kit.home))
+    except Exception:
+        tools = []
+    foreign = kit.codex_requirements_foreign(state)
+    for row in tools:
+        conn, cover = row["connection"], row["coverage"]
+        if foreign and row["client"] == "codex":
+            conn, cover = "failed", "unmanaged"
+        out.append(f"{pad('AI 도구', 12)}{row['client']}: "
+                   f"{CLIENT_CONNECTION.get(conn, conn)} / {CLIENT_COVERAGE.get(cover, cover)}")
+    problems = list(model["problems"])
+    problems += [f"{i['server']} 시작 실패: {i['reason']}" for i in scan_start_failures(kit.home)]
+    out.append(f"{pad('알려진 문제', 12)}{'없음' if not problems else f'{len(problems)}건'}")
+    out += [f"  - {p}" for p in problems]
+    out.append(f"{pad('다음 할 일', 12)}{next_step(model)}")
+    return out
+
+
 def interactive_add(kit, gateway, home: Path, source: str | None, read=input, key=None) -> str:
     """화면에서 고른 신청: 대상 하나와 목적만 묻는다. 결과의 마지막 줄을 돌려준다."""
     lines: list[str] = []
@@ -6509,7 +6577,12 @@ def main(argv: list[str] | None = None) -> int:
             if state:
                 kit = managed
         if args.action == "status":
-            print(json.dumps(state or {"mode": "none"}, indent=1))
+            if args.json:
+                print(json.dumps(state or {"mode": "none"}, indent=1))
+            elif state:
+                print(NL.join(status_lines(kit, state)))
+            else:
+                print("MINT가 설치되어 있지 않습니다.")
             return 0
         if args.action == "sync":
             result = kit.sync_codex_block(state) if state else {}
