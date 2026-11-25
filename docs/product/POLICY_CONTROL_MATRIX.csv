@@ -152,4 +152,4 @@ REASON-ENFORCEMENT_UNVERIFIED,deny_reason,MINT-ENFORCEMENT-UNVERIFIED,,,src/mint
 REASON-CANCELLED,deny_reason,MINT-CANCELLED,,,src/mint_litellm/plugin,관리자·호출자가 취소한 호출,,호출이 취소되었습니다,system,필요하면 다시 요청,없음,누가 취소했는지 표시,,IMPLEMENTED
 REASON-CONFIRMATION_REQUIRED,deny_reason,MINT-CONFIRMATION-REQUIRED,,,src/mint_litellm/plugin,본인 확인이 필요한 도구,,본인 확인이 필요합니다,policy,직원 본인: 확인 링크에서 확인 뒤 재요청,없음(본인만),링크 양호·다른 로그인 방법 안내(FC-03),,IMPLEMENTED
 REASON-CONFIRMATION_STALE,deny_reason,MINT-CONFIRMATION-STALE,,,src/mint_litellm/plugin,확인 뒤 내용이 달라진 호출,,본인 확인을 다시 해야 합니다,policy,직원 본인: 다시 확인,없음,「확인한 내용과 다릅니다」로 구체화,,IMPLEMENTED
-REASON-GLOBAL_HALT,deny_reason,MINT-GLOBAL-HALT,,,src/mint_litellm/plugin,전역 정지 범위의 모든 호출,,[막힘] 전역 정지 중입니다(사유). 해제되면 자동으로 다시 됩니다. 다시 시도하지 마십시오.,policy,Root의 정지 해제를 기다린다,Root만 해제,,,SPECIFIED
+REASON-GLOBAL_HALT,deny_reason,MINT-GLOBAL-HALT,,,src/mint_litellm/plugin/pipeline.py,전역 정지 범위의 호출(all=모든 MCP 호출·local=PC 로컬 서버),,[막힘] 관리자가 전역 정지를 걸었습니다. 해제되면 자동으로 다시 됩니다.,policy,Root의 정지 해제를 기다린다,Root만 해제,도구 목록은 막지 않음(정지 중에도 무엇이 있는지 보임),tests/unit/test_denial_wording.py,IMPLEMENTED

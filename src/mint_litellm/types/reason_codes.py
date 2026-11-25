@@ -56,7 +56,22 @@ class Reason(StrEnum):
     CANCELLED = "CANCELLED"
     CONFIRMATION_REQUIRED = "CONFIRMATION_REQUIRED"
     CONFIRMATION_STALE = "CONFIRMATION_STALE"
+    GLOBAL_HALT = "GLOBAL_HALT"  # Root의 전역 정지(D-012, FM-55)
 
+
+
+# 직원이 권한 요청으로 풀 수 있는 거부 사유와 승인자에게 먼저 보일 처리
+# (lift 차단 해제, grant 이 사람에게 허용, temp 30분만 허용).
+# 거부 응답의 요청 링크도 이 사유에만 단다.
+REQUESTABLE: dict[str, str] = {
+    "DENIED": "lift",
+    "TOOL_NOT_IN_APPROVAL": "grant",
+    "APPROVAL_ABSENT": "grant",
+    "APPROVAL_EXPIRED": "grant",
+    "APPROVAL_REVOKED": "grant",
+    "CALL_APPROVAL_REQUIRED": "temp",
+    "CALL_APPROVAL_DENIED": "temp",
+}
 
 class ContractDriftKind(StrEnum):
     """``CONTRACT_DRIFT_<kind>``의 한정자. 경보형 변경(출력 스키마)은 사유가 되지 않는다."""

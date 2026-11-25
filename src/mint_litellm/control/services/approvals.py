@@ -8,6 +8,7 @@ from mint_litellm.control.litellm_admin import LiteLLMAdmin
 from mint_litellm.control.services.base import (
     Prefetched,
     lock_version,
+    require_not_frozen,
     require_role,
     service,
     transact,
@@ -36,6 +37,7 @@ def approve(
 ) -> tuple[str, list[str]]:
     """승인을 만든다. ``expected_version``은 이용 관계의 ``state_version``이다."""
     require_role(ctx, "approve")
+    require_not_frozen(ctx)
     facts = Prefetched(litellm)
     if scope_type in _LITELLM_READ:
         facts.prefetch(_LITELLM_READ[scope_type], scope_id).prefetch("list_servers")

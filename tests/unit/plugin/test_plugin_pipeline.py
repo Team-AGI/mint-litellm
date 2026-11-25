@@ -1817,3 +1817,21 @@ class TestUnregisteredServer:
         assert outcome.snapshot.stop.detail == "server_without_url"
         assert h.snapshots.queries == []
         assert len(h.store.of_kind("decision_evaluated")) == 1
+
+
+def test_a_requestable_refusal_carries_a_link_to_ask_for_access(tmp_path):
+    """승인 없음·관리자 차단은 직원 화면 권한 요청 링크를 단다. 콘솔 주소가 없으면 달지 않는다."""
+    from urllib.parse import parse_qs, urlsplit
+
+    cfg = config(tmp_path, console_url="https://mint.example/")
+    body = json.loads(decide(harness(tmp_path, snapshot(approvals=()), cfg=cfg)).error.detail())
+    link = urlsplit(body["request_link"])
+    assert (link.netloc, link.path) == ("mint.example", "/staff")
+    query = parse_qs(link.query)
+    assert query["reason"] == ["APPROVAL_ABSENT"] and query["request"] and query["tool"]
+    denied = decide(harness(tmp_path, snapshot(denials=(denial(),)), cfg=cfg))
+    assert "reason=DENIED" in json.loads(denied.error.detail())["request_link"]
+    plain = decide(harness(tmp_path, snapshot(approvals=())))
+    assert "request_link" not in json.loads(plain.error.detail())
+    unregistered = decide(harness(tmp_path, snapshot(server=None), cfg=cfg))
+    assert "request_link" not in json.loads(unregistered.error.detail())

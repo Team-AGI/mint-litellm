@@ -26,6 +26,7 @@ from mint_litellm.control.services import evidence
 from mint_litellm.control.services.base import (
     Prefetched,
     enqueue_job,
+    require_not_frozen,
     require_role,
     transact,
 )
@@ -1008,6 +1009,8 @@ def decide(
     require_role(ctx, f"intake {decision}")
     if decision not in ("approve", "except", "reject"):
         raise ValueError(decision)
+    if decision != "reject":
+        require_not_frozen(ctx)
     reason = (reason or "").strip() or None
     if narrow_network not in (None, "none"):
         raise ControlError("네트워크는 none으로만 좁힐 수 있습니다.")

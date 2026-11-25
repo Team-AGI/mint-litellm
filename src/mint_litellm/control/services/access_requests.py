@@ -17,20 +17,18 @@ from mint_litellm.control.errors import ControlError, conflict, not_found
 from mint_litellm.control.litellm_admin import LiteLLMAdmin
 from mint_litellm.control.services import approvals as approval_service
 from mint_litellm.control.services import staff
-from mint_litellm.control.services.base import lock_version, require_role, transact
+from mint_litellm.control.services.base import (
+    lock_version,
+    require_not_frozen,
+    require_role,
+    transact,
+)
 from mint_litellm.types.contracts import ALL_TOOLS
 from mint_litellm.types.events import EventKind
+from mint_litellm.types.reason_codes import REQUESTABLE
 
 # 거부 사유 → 기본 처리. 화면은 이 값을 주 단추로 보인다.
-SUGGESTED = {
-    "DENIED": "lift",
-    "TOOL_NOT_IN_APPROVAL": "grant",
-    "APPROVAL_ABSENT": "grant",
-    "APPROVAL_EXPIRED": "grant",
-    "APPROVAL_REVOKED": "grant",
-    "CALL_APPROVAL_REQUIRED": "temp",
-    "CALL_APPROVAL_DENIED": "temp",
-}
+SUGGESTED = REQUESTABLE
 TEMP_MINUTES = 30
 GRANT_DAYS = (7, 30, 90)
 _COLUMNS = (
@@ -280,6 +278,7 @@ def resolve_grant(
 def resolve_temp(ctx: Context, request_id: str, *, expected_version: int | None = None) -> str:
     """호출별 승인이 필요한 도구를 요청자에게 30분 동안 허용한다(상시 승인 규칙)."""
     require_role(ctx, "call-approval-rule add")
+    require_not_frozen(ctx)
     with transact(ctx):
         row = _load(ctx, request_id, expected_version)
         org = fetchone(

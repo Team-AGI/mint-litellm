@@ -19,7 +19,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Protocol
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 from uuid import UUID
 
 from mint_litellm.compat.litellm_1_106 import HookData, ServerResolutionError
@@ -86,7 +86,7 @@ from mint_litellm.types.identity import (
 from mint_litellm.types.ids import new_uuid7
 from mint_litellm.types.outcome import Outcome as DecisionOutcome
 from mint_litellm.types.outcome import decision_outcome
-from mint_litellm.types.reason_codes import ContractDriftKind, Reason
+from mint_litellm.types.reason_codes import REQUESTABLE, ContractDriftKind, Reason
 from mint_litellm.types.reuse_policy import (
     ALLOW_INTERNAL_ADDRESS,
     ALLOW_TOKEN_FORWARD,
@@ -283,6 +283,16 @@ def _approval_expired(approval: ApprovalRow, now: datetime) -> bool:
     )
 
 
+def halted(snapshot: Snapshot) -> bool:
+    """Root 전역 정지가 이 호출에 걸리는가. 「로컬만」은 PC에서 실행하는 stdio 서버만 막는다."""
+    scope = snapshot.settings.halt_scope if snapshot.settings is not None else None
+    if scope == "all":
+        return True
+    return scope == "local" and snapshot.server is not None and (
+        snapshot.server.identity_kind == "stdio"
+    )
+
+
 def denial_and_approval(
     snapshot: Snapshot, principal: Principal, resolved: ResolvedServer, tool: str,
     action_type: str | None = None, listing: bool = False,
@@ -301,6 +311,9 @@ def denial_and_approval(
 
     if is_builtin_server(resolved.server_id):
         return ApprovalSelection([], None)  # 승인 없이 기본 허용(관측), 거부만 막는다
+
+    if not listing and halted(snapshot):
+        return ApprovalSelection([StageResult.stop(Reason.GLOBAL_HALT)], None)
 
     matched = [
         a
@@ -1980,6 +1993,11 @@ async def _evaluate(run: _Run, deps: PipelineDeps) -> Outcome:
             link = _confirmation_link(deps.config, request_id)
             if link is not None:
                 error = error.model_copy(update={"confirm_link": link})
+        if str(reason) in REQUESTABLE and run.req.resolved is not None:
+            link = _request_link(deps.config, run.req.resolved.server_id, run.req.hook.tool_name,
+                                 str(reason))  # fmt: skip
+            if link is not None:
+                error = error.model_copy(update={"request_link": link})
     return Outcome(
         allowed=allowed,
         snapshot=snapshot_doc,
@@ -1998,6 +2016,14 @@ def _confirmation_link(config: PluginConfig, confirmation_id: str) -> str | None
         return None
     token = links.make(config.link_key, "confirm", confirmation_id, ttl=CONFIRMATION_LINK_TTL)
     return f"{config.console_url.rstrip('/')}/staff/link/{token}"
+
+
+def _request_link(config: PluginConfig, server: str, tool: str | None, reason: str) -> str | None:
+    """직원 화면에서 이 서버·도구의 권한 요청을 채워 여는 링크. 콘솔 주소가 없으면 None."""
+    if config.console_url is None or is_builtin_server(server):
+        return None
+    query = {"request": server, **({"tool": tool} if tool else {}), "reason": reason}
+    return f"{config.console_url.rstrip('/')}/staff?{urlencode(query)}"
 
 
 def _list_dedup_key(run: _Run, conclusion: Conclusion, deps: PipelineDeps) -> tuple | None:
