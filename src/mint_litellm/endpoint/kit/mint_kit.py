@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import functools
 import hashlib
 import io
 import json
@@ -3889,6 +3890,7 @@ SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 S_NEED, S_WORK, S_READY = "받기 필요", "준비 중", "사용 가능"
 S_EXPIRED, S_NOPROG = "실행 허가 만료", "필요한 프로그램 없음"
 S_BAD, S_WAIT = "묶음 불일치", "반영 대기"
+S_PYVER = "Python 판본 다름"  # 승인 묶음은 조직 런타임 한 판본용이다
 S_FAILED, S_START = "받기 실패", "시작 대기"
 STEP_NAMES = ("시작 검증 통과", "도구 목록 받음", "첫 호출 성공")
 
@@ -4174,6 +4176,19 @@ def read_staged(
     return sinks if code == 0 else None
 
 
+@functools.lru_cache(maxsize=16)
+def runtime_version(executable: str) -> str:
+    """실행 파일의 Python 주·부 판본(예: 3.12). 알 수 없으면 빈 값(판정을 막지 않는다)."""
+    try:
+        done = subprocess.run(
+            [executable, "-I", "-c", "import sys;print('%d.%d' % sys.version_info[:2])"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return done.stdout.strip()
+
+
 def pack_state(
     name: str, contract: dict, programs: Path, staged: Path, permits: dict, now: float
 ) -> str:
@@ -4184,6 +4199,9 @@ def pack_state(
     digest = str(pack.get("sha256", ""))
     if not os.path.exists(str(contract.get("executable", ""))):
         return S_NOPROG
+    wanted = str(pack.get("python") or "")
+    if wanted and runtime_version(str(contract["executable"])) not in (wanted, ""):
+        return S_PYVER
     found = ready_cached(programs / PACKS / digest[:16], digest, programs / PACK_VERIFIED)
     if found == "bad":
         return S_BAD
@@ -4953,6 +4971,7 @@ NEXT_BY_STATE = {
     S_WORK: "관리자 단계가 마칠 때까지 기다리십시오",
     S_EXPIRED: "r 키로 다시 보고하십시오",
     S_NOPROG: "관리자에게 런타임 설치를 요청하십시오",
+    S_PYVER: "승인된 Python 판본을 설치하도록 관리자에게 요청하십시오",
     S_BAD: "s 키로 다시 받으십시오",
     S_WAIT: "r 키로 다시 보고하십시오",
 }
@@ -5473,6 +5492,15 @@ def run_screen(kit, state: dict, gateway: Gateway | None, actions, read=read_key
     enable_vt()
     ui = {"tab": 0, "cursor": 0, "detail": False, "message": ""}
     model = build_model(kit, state, gateway)
+    try:
+        return screen_loop(kit, state, gateway, actions, read, out, ui, model)
+    except KeyboardInterrupt:  # Ctrl+C: 트레이스백 없이 화면을 지우고 끝낸다
+        out.write("\x1b[2J\x1b[H중단했습니다\n")
+        out.flush()
+        return 130
+
+
+def screen_loop(kit, state, gateway, actions, read, out, ui, model) -> int:
     while True:
         size = shutil.get_terminal_size((80, 24))
         width, height = max(size.columns, 40), max(size.lines, 12)
@@ -6660,7 +6688,7 @@ STATUS_FIELDS = ("mode", "user", "kit_version", "gateway", "key", "server_count"
 # 서버 상태는 웹 「내 MCP 서버」와 같은 낱말(준비 중·사용 가능·시작 실패)로 보이고, 키트의 세부
 # 상태(받기 필요 등)는 「세부」로 따로 둔다. 신청 상태는 웹 신청 목록과 같다(H.5).
 SERVER_WORD = {S_READY: "사용 가능", S_FAILED: "시작 실패", S_BAD: "시작 실패",
-               S_NOPROG: "시작 실패"}  # fmt: skip
+               S_NOPROG: "시작 실패", S_PYVER: "시작 실패"}  # fmt: skip
 REQUEST_WORD = {"approved": "승인됨", "rejected": "거절됨", "withdrawn": "철회됨",
                 "pack": "준비 중", "review": "승인 대기"}  # fmt: skip
 LABEL_WORD = {"승인": "승인됨", "거절": "거절됨", "철회": "철회됨"}
@@ -6670,6 +6698,7 @@ CLI_NEXT = {
     S_START: "하네스에서 서버를 시작하면 확인됩니다",
     S_WORK: "관리자 단계가 마칠 때까지 기다리십시오",
     S_NOPROG: "관리자에게 런타임 설치를 요청하십시오",
+    S_PYVER: "승인된 Python 판본을 설치하도록 관리자에게 요청하십시오",
 }  # fmt: skip
 PENDING_DONE = ("approved", "rejected", "withdrawn", "failed")
 
