@@ -1354,21 +1354,21 @@ class TestSnapshotRetry:
 
 
 class TestRecording:
-    def test_a_database_failure_on_the_allow_path_blocks_with_audit_failure(self, tmp_path):
+    def test_a_database_failure_on_the_allow_path_keeps_the_allow_and_buffers_the_event(
+        self, tmp_path
+    ):
+        # 가용성 우선(1ce2263): DB에 못 써도 승인된 호출은 통과시키고 같은 사건을 버퍼에 남긴다.
         h = harness(tmp_path)
         h.store.fail = RuntimeError("write failed")
         outcome = decide(h)
-        assert code(outcome) == "MINT-AUDIT-FAILURE"
+        assert outcome.allowed and outcome.error is None
         assert outcome.evidence.value == "buffer"
         events = buffered(h)
         assert len(events) == 1
         recorded = events[0].payload
-        assert (
-            recorded["enforced_action"] == "block"
-            and recorded["stop"]["reason_code"] == "AUDIT_FAILURE"
-        )
+        assert recorded["enforced_action"] == "allow" and "stop" not in recorded
 
-    def test_allow_path_with_no_database_and_no_buffer_is_blocked_and_logged_to_stderr(
+    def test_allow_path_with_no_database_and_no_buffer_stays_allowed_and_logs_to_stderr(
         self, tmp_path
     ):
         h = harness(tmp_path)
@@ -1377,9 +1377,9 @@ class TestRecording:
         blocker.write_text("x")
         h.buffer._dir = blocker / "inner"
         outcome = decide(h)
-        assert code(outcome) == "MINT-AUDIT-FAILURE" and outcome.evidence.value == "stderr"
+        assert outcome.allowed and outcome.error is None and outcome.evidence.value == "stderr"
         lines = h.stderr.getvalue().strip().splitlines()
-        assert len(lines) == 1 and json.loads(lines[0])["payload"]["enforced_action"] == "block"
+        assert len(lines) == 1 and json.loads(lines[0])["payload"]["enforced_action"] == "allow"
 
     def test_a_block_path_database_failure_keeps_the_original_reason(self, tmp_path):
         h = harness(tmp_path, snapshot(denials=(denial(),)))

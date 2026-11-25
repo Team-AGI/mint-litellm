@@ -139,6 +139,8 @@ def test_off_marks_forwarding_calls_unchecked_with_the_reason(tmp_path):
 
 
 def test_probe_passes_on_the_installed_litellm_and_the_argument_witness_is_independent():
+    # 프로브는 설치된 litellm 안의 ProxyLogging을 직접 호출한다. litellm이 없는 환경은 건너뛴다.
+    pytest.importorskip("litellm.proxy.utils", reason="litellm이 설치되지 않은 환경(로컬 venv)")
     from mint_litellm.compat.litellm_1_106 import (
         arguments_witness_problem,
         bearer_passthrough_problem,
