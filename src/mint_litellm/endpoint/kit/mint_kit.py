@@ -40,6 +40,7 @@ import csv
 import hashlib
 import io
 import json
+import ntpath
 import os
 import random
 import re
@@ -390,6 +391,33 @@ def parse_schtasks(text: str) -> list[tuple[str, str]]:
         if name and command:
             rows.append((name, command))
     return rows
+
+
+def open_node_to_sandbox(home: Path, which=shutil.which, run=lambda c: capture(c)) -> str | None:
+    """Windows에서 격리(AppContainer)된 npm 서버가 돌 수 있게 한다. SYSTEM 보고기만 부른다.
+
+    - Node 설치 프로그램은 ``Program Files\\nodejs``의 상속을 끊어 격리가 node_modules를 못 읽는다:
+      Program Files의 기본값(모든 응용 프로그램 패키지 읽기·실행)을 되돌린다.
+    - Node·npm은 경로의 상위 폴더를 하나씩 lstat한다: 드라이브 루트부터 사용자 폴더·캐시 폴더까지
+      「속성 읽기」만 준다(내용 읽기·목록은 아니다). 격리마다 새로 생기는 폴더(Packages 아래)와
+      상태 폴더 아래는 상속으로 준다. 고친 Node 폴더를 돌려준다(Node가 없으면 None).
+    """
+    node = which("node")
+    if not node:
+        return None
+    folder = os.path.dirname(os.path.realpath(node))
+    run(["icacls", folder, "/grant", "*S-1-15-2-1:(OI)(CI)(RX)", "/Q"])
+    base = ntpath.normpath(str(home))
+    chain = [base]
+    while ntpath.dirname(chain[-1]) != chain[-1]:
+        chain.append(ntpath.dirname(chain[-1]))
+    chain += [ntpath.join(base, rel) for rel in ("AppData", r"AppData\Local", r"AppData\Roaming",
+                                                 ".cache")]
+    for path in chain:
+        run(["icacls", path, "/grant", "*S-1-15-2-1:(RA)", "/Q"])
+    for rel in (r"AppData\Local\Packages", r".cache\mint"):
+        run(["icacls", ntpath.join(base, rel), "/grant", "*S-1-15-2-1:(CI)(RA)", "/Q"])
+    return folder
 
 
 def capture(command: list[str]) -> str:
@@ -6178,6 +6206,10 @@ def report_installed(
         changed = kit.apply_permits(state, desired, set(names)) or changed
         changed = kit.apply_versions(state, desired, set(names)) or changed
         changed = bool(kit.auto_fetch(state, desired, set(names))) or changed
+        if system and kit.windows and any(
+                isinstance(i, dict) and isinstance(i.get("contract"), dict)
+                and i["contract"].get("npm") for i in desired):
+            open_node_to_sandbox(kit.home)
         changed = bool(kit.promote_packs()) or changed
     changed = kit.refresh_approvals(state) or changed
     changed = apply_user_answer(kit, run, home, folder, target is not None or system) or changed

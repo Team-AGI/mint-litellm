@@ -677,11 +677,15 @@ def delivery_progress(
     done = {r["stage"] for r in receipts if r["decision_version"] == latest}
     if not failure and "start_failed" in done and not called and not done & {
         "discovered", "first_response"
-    }:  # 단말이 알린 시작 실패는 시작 단계의 실패로 보인다(잠깐 뜬 프로세스의 「시작」은 무시)
-        broken = [r.get("reason") for r in receipts if r["decision_version"] == latest
-                  and r["stage"] == "start_failed" and r.get("reason")]
-        failure = ("started", broken[-1] if broken else "사유 없음")
-        done.discard("started")
+    }:  # 단말이 알린 시작 실패는 시작 단계의 실패로 보인다. 실패한 PC의 「시작」(잠깐 뜬
+        # 프로세스)은 세지 않고, 실패를 알리지 않은 다른 PC가 돌고 있으면 실패로 보지 않는다.
+        rows = [r for r in receipts if r["decision_version"] == latest]
+        failed = {r.get("target") for r in rows if r["stage"] == "start_failed"}
+        if not {r.get("target") for r in rows if r["stage"] == "started"} - failed:
+            broken = [r.get("reason") for r in rows
+                      if r["stage"] == "start_failed" and r.get("reason")]
+            failure = ("started", broken[-1] if broken else "사유 없음")
+            done.discard("started")
     order = [stage for stage, _ in DELIVERY_STAGES]
     reached = max((order.index(x) for x in done if x in order), default=-1)
     if called:

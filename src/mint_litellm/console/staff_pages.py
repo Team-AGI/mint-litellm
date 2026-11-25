@@ -362,7 +362,7 @@ def intake_detail(intake_id: str, request: Request, actor: StaffActor = Depends(
         seen = usage_reader.read_tools(actor.sctx.control, actor.sctx.instance_id, row["server_id"])
         delivery = delivery_progress(fetchall(
             actor.sctx.control,
-            "SELECT decision_version, stage, reason FROM mint.delivery_receipts"
+            "SELECT decision_version, stage, target, reason FROM mint.delivery_receipts"
             " WHERE instance_id = %s AND intake_id = %s",
             (actor.sctx.instance_id, row["id"])),
             local=source == "endpoint", called=any(t["calls"] for t in seen))
