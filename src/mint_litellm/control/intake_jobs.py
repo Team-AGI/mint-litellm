@@ -425,8 +425,10 @@ def _run_local_checks(job: JobContext, ctx: Context, row: dict, attempt: int) ->
             except packs.PackError as error:
                 out = checks.pack_build_failed(error.code)
         elif name == "inspection":
-            if pack is None:
-                out = checks.Outcome("indeterminate", "PACK_UNAVAILABLE", "inspector:tools_list")
+            if pack is None:  # npm은 묶음이 없다: PC가 처음 띄울 때 도구를 받는다(재시도 안 함)
+                out = checks.Outcome(
+                    "indeterminate", "INSPECT_ON_FIRST_RUN" if npm else "PACK_UNAVAILABLE",
+                    "inspector:tools_list")
             else:
                 out = checks.inspection_outcome(
                     inspection.inspect_pack(pack[0], pack[1]["entry"], spec.get("argv", [])))
@@ -629,7 +631,8 @@ _START_FAILED = (
     " SELECT max(m.attempt) FROM mint.intake_checks m WHERE m.instance_id = i.instance_id"
     " AND m.intake_id = i.id AND m.\"check\" = 'inspection'))"
 )
-_UNAPPROVED_FAILED = _START_FAILED.format(reason="c.reason_code <> 'ENDPOINT_INSPECTED'")
+_UNAPPROVED_FAILED = _START_FAILED.format(
+    reason="c.reason_code NOT IN ('ENDPOINT_INSPECTED', 'INSPECT_ON_FIRST_RUN')")
 _APPROVED_FAILED = _START_FAILED.format(
     reason="(c.reason_code = ANY(%s) OR (c.reason_code = 'INSPECTION_FAILED'"
     " AND coalesce(c.inputs #>> '{detail,stage}', c.inputs ->> 'stage') = 'start'))")
@@ -649,7 +652,8 @@ def local_pack_retry(job: JobContext) -> None:
         " WHERE i.instance_id = %s AND i.source = 'endpoint'"
         " AND ((i.status IN ('indeterminate', 'failed', 'passed') AND ((NOT EXISTS ("
         " SELECT 1 FROM mint.deployment_contracts d WHERE d.instance_id = i.instance_id"
-        " AND d.server_id = i.server_id AND d.status = 'candidate' AND d.pack_sha256 IS NOT NULL)"
+        " AND d.server_id = i.server_id AND d.status = 'candidate'"
+        " AND (d.pack_sha256 IS NOT NULL OR d.exec_contract ? 'npm'))"  # npm은 묶음이 없다
         " AND (i.approve_when_ready IS NOT NULL OR EXISTS ("
         " SELECT 1 FROM mint.intake_checks c WHERE c.instance_id = i.instance_id"
         " AND c.intake_id = i.id AND c.\"check\" = 'pack_build'"

@@ -213,7 +213,8 @@ def test_an_npm_request_gets_a_pack_less_contract_and_registry_based_supply_chai
             "pass", None, "sca:osv"))
     result = {name: (r, why) for name, r, why in fake.run()}
     assert result["exec_shape"] == ("pass", None) and result["pack_build"] == ("pass", None)
-    assert result["inspection"] == ("indeterminate", "PACK_UNAVAILABLE")
+    # npm은 묶음이 없어 도구 목록은 PC가 처음 띄울 때 받는다(재시도 대상이 아니다)
+    assert result["inspection"] == ("indeterminate", "INSPECT_ON_FIRST_RUN")
     assert result["sbom"] == ("pass", None) and result["dependency_vulns"] == ("pass", None)
     assert asked[0]["kind"] == "npm" and asked[0]["integrity"] == NPM_SPEC["integrity"]
     assert asked[1] is inventory

@@ -130,7 +130,8 @@ def retry_state(conn: Any, instance_id: str, intake: dict) -> dict | None:
         c["result"] == "indeterminate" and (
             start_failed(c) if approved and c["check"] == "inspection"
             else not approved and (c["check"] == "pack_build" or (
-                c["check"] == "inspection" and c["reason_code"] != "ENDPOINT_INSPECTED")))
+                c["check"] == "inspection"
+                and c["reason_code"] not in ("ENDPOINT_INSPECTED", "INSPECT_ON_FIRST_RUN"))))
         for c in latest_checks(conn, instance_id, intake["id"])
     )
     last = fetchone(conn, "SELECT max(ran_at) AS at FROM mint.intake_checks"
