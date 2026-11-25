@@ -5475,8 +5475,9 @@ def build_model(kit, state: dict, gateway: Gateway | None) -> dict:
     for name in names:
         contract = contracts.get(name)
         info = remote.get(name, {})
-        if contract is None:
+        if contract is None:  # 승인됐지만 이 PC가 아직 계약을 받지 않았다: 단계 근거가 없다
             row_state, kind = S_WAIT, "묶음" if info.get("pack_sha256") else "로컬"
+            steps = [False, False, False]
         else:
             row_state = pack_state(name, contract, kit.programs, staged, permits, now)
             kind = "묶음" if contract.get("pack") else "로컬"
