@@ -1,7 +1,4 @@
-$ python src/mint_litellm/endpoint/kit/mint_kit.py --kit C:/nonexistent requests
-usage: mint_kit.py [-h] [--json] [--if-due] [--tick] [--jitter JITTER]
-                   [--user-level] [--dry-run] [--user USER] [--home HOME]
-                   [--root ROOT] [--kit KIT]
-                   [{install,uninstall,status,check,sync,report}]
-mint_kit.py: error: argument action: invalid choice: 'requests' (choose from install, uninstall, status, check, sync, report)
-[exit=2]
+$ python src/mint_litellm/endpoint/kit/mint_kit.py --kit <빈 폴더> requests
+오류: MINT가 이 PC에 설치돼 있지 않습니다.
+다음: 직원 화면 「내 PC」에서 설치 명령을 만들어 붙여 넣으십시오.
+[exit=3]

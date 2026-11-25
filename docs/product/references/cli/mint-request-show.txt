@@ -1,0 +1,10 @@
+$ python src/mint_litellm/endpoint/kit/mint_kit.py request show 3f2a
+(시험용 가짜 게이트웨이 응답: 서버 2·신청 2)
+번호        3f2a9c1b
+서버        docs_mcp
+상태        검사 중
+진행        접수 > 묶음 준비 > 검사 중
+사유        -
+다음 할 일  검사가 끝나기를 기다림
+접수        연-월-일 01:00
+[exit=0]

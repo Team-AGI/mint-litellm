@@ -1,0 +1,11 @@
+$ python src/mint_litellm/endpoint/kit/mint_kit.py server show github_mcp
+(시험용 가짜 게이트웨이 응답: 서버 2·신청 2)
+서버        github_mcp
+종류        묶음
+상태        사용 가능
+실행 허가   연-월-일 09:00
+묶음        abababababababab
+다음 할 일  없음
+도구  아직 확인된 도구가 없습니다
+신청  9d8e7f60  승인됨
+[exit=0]

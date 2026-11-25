@@ -424,3 +424,54 @@ HMAC 키를 교체하려면 새 키를 `MINT_EXPORT_HMAC_KEY`, 옛 키를 `MINT_
 ## 설정 조각과 기동 전 검사
 
 `init`이 만드는 설정 조각에는 `litellm_settings.callbacks`가 없다. MINT 로거는 MINT 가드레일이 등록하므로 `callbacks`에 로거가 적혀 있으면 기동 전 검사와 `check`가 거부한다. 기동 전 검사와 `check`는 주 설정 파일이 아니라 LiteLLM의 설정 로더가 `include`까지 병합한 설정을 검사한다. 이 로더를 쓸 수 없으면 `include`가 있는 설정을 거부하고, 파생 이미지의 기동 전 검사는 로더가 없으면 통과시키지 않는다.
+
+## PC `mint` 명령
+
+직원 PC에 깔리는 `mint`(운영자 CLI `mint-litellm`과 다른 도구)의 명령이다. 이름은 명사 → 동사이고, 옛 단독 동사는 같은 결과를 내는 별칭으로 남는다. 웹 직원 화면과 같은 낱말(준비 중·사용 가능·시작 실패, 접수·검사 중·승인됨·거절됨)을 쓴다. 명령 없이 `mint`만 치면 터미널 화면(탭 1 상태 · 2 내 서버 · 3 도입 신청 · 4 내 요청)이 열리고, 입력이 터미널이 아니면 `mint status --json`과 같은 값을 낸다.
+
+| 명령 | 하는 일 | 옛 이름(별칭) |
+| --- | --- | --- |
+| `mint status` | 계정, 게이트웨이, 키 상태, 설치 방식, 서버 수, 대기 신청 수 | 그대로 |
+| `mint server list` | 내가 쓸 수 있는 서버와 상태(웹 「내 MCP 서버」와 같은 낱말) | 신규 |
+| `mint server show <서버>` | 서버 하나의 상태·실행 허가 만료·확인된 도구·관련 신청 | 신규 |
+| `mint server add <주소\|이름 -- 명령> --purpose …` | 서버 신청(서버는 실행하지 않음) | `mint add` |
+| `mint server get <서버>` | 승인된 묶음 받기 | `mint get` |
+| `mint request list` | 내 신청과 진행 | `mint requests` |
+| `mint request show <번호>` | 한 건의 단계·사유·다음 할 일(번호는 앞 글자만 써도 됨) | 신규 |
+| `mint request access <서버> [도구] --reason …` | 막힌 도구 권한 요청(서버 API 연결 전에는 「아직 이 기능을 쓸 수 없습니다」, 종료 코드 1) | 신규 |
+| `mint request cancel <번호>` | 신청·요청 취소(위와 같음) | 신규 |
+| `mint request inspect <신청>` | 관리자가 요청한 도구 목록 확인을 이 PC에서 실행 | `mint inspect` |
+| `mint app new\|list\|remove\|run\|env\|mcp` | 앱 자격 | `mint app rm` |
+| `mint doctor` | 설치 점검과 고칠 명령 | `mint check` |
+| `mint config list` | 게이트웨이 주소·설치 폴더·판본(키 값은 보이지 않음) | 신규 |
+| `mint link <주소>` | 설치 주소로 이 PC를 다시 연결 | `mint relink` |
+| `mint install\|uninstall\|sync\|report` | 설치·유지(관리자 권한) | 그대로 |
+
+### 도움말과 오류
+
+`mint --help`는 묶음(자주 쓰는 일·앱 자격·설치·유지)과 예시 3개를 보이고, `mint <명령> --help`는 설명 → 사용법 → 옵션 → 예시 순서이다. 오류는 두 줄이다.
+
+```
+오류: 서버 이름이 필요합니다.
+예: mint server show github_mcp
+```
+
+정책 거부(종료 코드 4)는 `[막힘] <무엇이> — <왜>.` 한 줄과 `해결: mint request access …` 한 줄이다. 트레이스백은 `--debug`를 줄 때만 보인다.
+
+### `--json`, `--fields`, 비대화형
+
+`status`, `server list|show`, `request list|show`, `app list`, `doctor`, `config list`와 `server add`(신청 결과)는 `--json`을 받는다. 출력은 한 객체이고, 목록은 `{"servers": […]}`·`{"requests": […]}`·`{"apps": […]}` 모양이다. `--fields 이름,이름`은 항목의 필드를 고르며, 없는 이름이면 쓸 수 있는 필드를 알려 주고 종료 코드 2로 끝난다. JSON 모드에서 오류는 stdout을 비우고 stderr에 `{"error":{"code","message","next"}}` 한 줄을 낸다. `code`는 `usage`, `not_installed`, `link_required`, `unreachable`, `denied`, `not_found`, `unavailable`, `failed`, `internal` 중 하나이다.
+
+`--non-interactive`를 주거나 입력이 터미널이 아니면 묻지 않는다. 필요한 값이 없으면 사용법 오류(2)이며, `server add`는 `--purpose`가 필수가 된다. `--yes`는 확인만 건너뛴다. `NO_COLOR`를 지원하고, 비밀을 받는 옵션은 없다. `--kit <폴더>`는 명령 앞뒤 어디에 와도 받는다.
+
+### PC 명령 종료 코드
+
+| 코드 | 의미 |
+| --- | --- |
+| 0 | 성공, 도움말 |
+| 1 | 실행 실패(네트워크, 서버 오류, 아직 쓸 수 없는 기능) |
+| 2 | 사용법 오류 |
+| 3 | 연결 필요(설치 안 됨, 키 없음·거절). mint link로 해결 |
+| 4 | 정책 거부·권한 없음. mint request access로 해결 |
+
+그 밖의 값: `mint app run`은 실행한 명령의 종료 코드를 그대로 돌려주며, 명령을 찾지 못하면 127이다. 3과 4는 정책 거부와 시스템 오류를 스크립트가 가르도록 더했다.

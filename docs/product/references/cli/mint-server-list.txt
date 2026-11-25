@@ -1,0 +1,6 @@
+$ python src/mint_litellm/endpoint/kit/mint_kit.py server list
+(시험용 가짜 게이트웨이 응답: 서버 2·신청 2)
+서버                      종류  상태        실행 허가         다음 할 일
+github_mcp                묶음  사용 가능   연-월-일 09:00  -
+fetch                     로컬  준비 중     -                 mint server get fetch
+[exit=0]

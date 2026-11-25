@@ -1,10 +1,20 @@
 $ python src/mint_litellm/endpoint/kit/mint_kit.py app new --help
-usage: mint app new [-h] [--days 1-90] name
+앱 자격을 만듭니다(키는 이 PC에만 둡니다)
 
-positional arguments:
-  name
+사용법: mint app new [--kit KIT] [--debug] [--non-interactive] [-h]
+                    [--days 1-90]
+                    name
 
-options:
-  -h, --help   show this help message and exit
-  --days 1-90
+인자:
+  name  앱 이름(영문 소문자·숫자·하이픈)
+
+옵션:
+  --kit KIT          키트 폴더(기본: 설치된 위치)
+  --debug            오류 때 자세한 흔적도 보입니다
+  --non-interactive  묻지 않고 실패합니다(입력이 터미널이 아니면 자동으로 켜집니다)
+  -h, --help         이 도움말을 보입니다
+  --days 1-90        유효 기간(일, 기본: 30)
+
+예시:
+  mint app new my-bot
 [exit=0]

@@ -687,7 +687,10 @@ def test_keys_switch_tabs_move_the_cursor_and_ask_for_actions():
     kit_module.handle_key("left", state, data)
     kit_module.handle_key("left", state, data)
     kit_module.handle_key("left", state, data)
-    assert state["tab"] == 2  # 순환
+    kit_module.handle_key("left", state, data)
+    assert state["tab"] == 2  # 4개 탭을 순환
+    kit_module.handle_key("4", state, data)
+    assert state["tab"] == 3 and state["cursor"] == 0  # 내 요청
     assert [kit_module.handle_key(k, ui(), data) for k in "ncroq"] == [
         "new",
         "check",
