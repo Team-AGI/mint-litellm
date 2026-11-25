@@ -5828,7 +5828,8 @@ def status_lines(kit, state: dict) -> list[str]:
     try:
         return _status_lines(kit, state)
     except (OSError, ValueError, KeyError, TypeError) as exc:  # 요약이 실패해도 상태는 보인다
-        return [f"상태 요약을 만들지 못했습니다({type(exc).__name__}). mint status --json으로 보십시오."]
+        name = type(exc).__name__
+        return [f"상태 요약을 만들지 못했습니다({name}). mint status --json으로 보십시오."]
 
 
 def _status_lines(kit, state: dict) -> list[str]:
