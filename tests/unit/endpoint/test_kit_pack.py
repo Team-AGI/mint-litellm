@@ -937,13 +937,57 @@ def test_an_npm_server_needing_a_newer_node_is_refused_with_the_versions(tmp_pat
     data = npm_tarball({"node": ">=20.18.1"})
     contract = npm_contract(integrity=agent.npm_integrity(data))
     start = dict(folder=str(tmp_path), which=lambda n: "npx", download=lambda *a: data)
-    with pytest.raises(agent.Refuse, match=r"20\.18\.1 .*18\.19\.1"):
-        agent.verify_npm(contract, node_version=lambda: (18, 19, 1), **start)
-    assert agent.verify_npm(contract, node_version=lambda: (22, 1, 0), **start)["argv"]
+    with pytest.raises(agent.Refuse, match=r"Node.js 20 이상이 필요합니다\(이 PC 18\)"):
+        agent.verify_npm(contract, node_version=lambda: 18, **start)
+    assert agent.verify_npm(contract, node_version=lambda: 20, **start)["argv"]  # 주 판본만 본다
     assert agent.verify_npm(contract, node_version=lambda: None, **start)  # 판본을 모르면 시도
-    assert agent.npm_node_floor(npm_tarball({"node": "^18 || >=20"})) == (18, 0, 0)
-    assert agent.npm_node_floor(npm_tarball({})) is None
-    assert agent.npm_node_floor(b"not a tarball") is None
+    floor = agent.npm_node_floor
+    assert floor(npm_tarball({"node": "^22.12 || ^20.19"})) == 20  # 갈래 중 가장 낮은 하한
+    assert floor(npm_tarball({"node": ">=18 <19"})) == 18
+    for loose in ("*", ">18", "<=22", "18 || *"):
+        assert floor(npm_tarball({"node": loose})) is None
+    assert floor(npm_tarball({})) is None and floor(b"not a tarball") is None
+    assert floor(npm_tarball({"node": "1" * 5000})) is not None  # 긴 숫자도 예외 없이
+
+
+def test_on_windows_npx_runs_through_node_exe_with_the_tarball_readable(tmp_path):
+    # AppContainer 안의 cmd.exe는 npx.cmd를 돌리지 못한다(pj3 실측): node.exe로 npx-cli.js를 돌린다.
+    nodejs = tmp_path / "nodejs"
+    (nodejs / "node_modules" / "npm" / "bin").mkdir(parents=True)
+    for name in ("npx.cmd", "node.exe", "node_modules/npm/bin/npx-cli.js"):
+        (nodejs / name).write_text("x")
+    got = agent.verify_npm(npm_contract(), folder=str(tmp_path / "c"), node_version=lambda: None,
+                           which=lambda n: str(nodejs / "npx.cmd"), download=lambda *a: b"tarball")
+    assert got["executable"] == str(nodejs / "node.exe")
+    assert got["argv"][0] == str(nodejs / "node_modules" / "npm" / "bin" / "npx-cli.js")
+    assert got["argv"][1:3] == ["-y", f"--package={os.path.join(got['_pack_dir'], 'package.tgz')}"]
+    made = []
+    pack, cache = r"C:\Users\u\.cache\mint\npm\ab", r"C:\Users\u\AppData\Local\npm-cache"
+
+    def no_cfg(path):
+        raise OSError(path)
+
+    grants = agent.win_grants(
+        {**got, "executable": r"C:\Program Files\nodejs\node.exe", "_pack_dir": pack},
+        r"C:\Users\u", {"ProgramFiles": r"C:\Program Files"},
+        exists=lambda p: p in made or p == pack, real=lambda p: p, read_text=no_cfg,
+        make=made.append)
+    assert (pack, "R", False) in grants
+    assert cache in made  # 첫 실행 전에 캐시를 만든다(없으면 권한을 못 준다)
+    assert (cache, "M", False) in grants
+
+
+def test_windows_system_reporter_reopens_the_node_folder_to_appcontainers():
+    ran = []
+    folder = kit_module.open_node_to_sandbox(
+        Path(r"C:\Users\u"), which=lambda n: "/opt/nodejs/node.exe", run=ran.append)
+    assert folder == os.path.dirname(os.path.realpath("/opt/nodejs/node.exe"))
+    assert ran[0] == ["icacls", folder, "/grant", "*S-1-15-2-1:(OI)(CI)(RX)", "/Q"]
+    granted = {c[1]: c[3] for c in ran[1:]}
+    assert granted["C:\\"] == granted[r"C:\Users"] == "*S-1-15-2-1:(RA)"  # 속성 읽기만
+    assert granted[r"C:\Users\u\AppData\Local\Packages"] == "*S-1-15-2-1:(CI)(RA)"
+    assert all("(RA)" in g and "RX" not in g for g in granted.values())  # 내용 읽기는 주지 않는다
+    assert kit_module.open_node_to_sandbox(Path("x"), which=lambda n: None, run=ran.append) is None
 
 
 def test_a_refused_start_is_recorded_so_the_screens_show_the_reason(tmp_path, monkeypatch):
@@ -960,6 +1004,8 @@ def test_a_refused_start_is_recorded_so_the_screens_show_the_reason(tmp_path, mo
                     "--state-dir", str(tmp_path)])
     path = tmp_path / agent.FAILED_DIR / "s.json"
     assert json.loads(path.read_text(encoding="utf-8"))["reason"].startswith("이 PC에 Node.js")
+    assert agent.plain_reason(r"cannot open C:\Users\a\x.py (OSError)") == "cannot open … (OSError)"
+    assert agent.plain_reason("missing /home/a/.cache/x, stop") == "missing …, stop"
 
 
 def test_an_npm_tarball_that_differs_from_the_approved_hash_is_refused(tmp_path):
