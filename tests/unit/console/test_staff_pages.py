@@ -712,15 +712,15 @@ def test_a_kit_carries_only_the_local_servers_approved_for_that_staff_member(kit
     assert list(unpack(download(logged_in(kits, OTHER_KEY)))["servers"]) == []
 
 
-def test_a_second_download_replaces_the_first_key_and_other_users_are_untouched(kits):
+def test_a_second_download_is_another_pc_and_the_first_stays_connected(kits):
     first = download(logged_in(kits))
     other = download(logged_in(kits, OTHER_KEY))
     second = download(logged_in(kits))
     assert first.status_code == other.status_code == second.status_code == 200
-    assert kits.issuer.deleted == [[kits.issuer.made[0][2], kits.issuer.made[1][2]]]
+    assert kits.issuer.deleted == []  # 같은 PC 재설치는 설치 묶음이 옛 키로 제거를 알린다
     rows = kits.query(
         "SELECT user_id, revoked_at IS NOT NULL FROM mint.endpoint_installs ORDER BY issued_at")
-    assert rows == [(STAFFER, True), (OTHER, False), (STAFFER, False)]
+    assert rows == [(STAFFER, False), (OTHER, False), (STAFFER, False)]
 
 
 def test_a_one_line_command_is_redeemed_once_and_swaps_the_key(kits):

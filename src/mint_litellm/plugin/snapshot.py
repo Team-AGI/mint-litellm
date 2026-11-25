@@ -1591,6 +1591,62 @@ class PluginDatabase:
             ))
         return True
 
+    async def retire_install(
+        self, instance_id: str, key_token: str, issuer: Any, successor: str | None = None
+    ) -> bool:
+        """설치 묶음이 제거·재설치를 알린 PC 한 대의 키만 해제한다(같은 사람의 다른 PC는 그대로).
+
+        LiteLLM 키(설치·게이트웨이·이 PC의 앱)를 먼저 지우고 MINT 기록을 해제한다. 지우지 못하면
+        해제하지 않는다(키가 살아 있는데 해제된 것처럼 보이지 않게). 재설치(``successor``가 같은
+        사람의 활성 설치 키)이면 이 PC의 앱 자격은 지우지 않고 새 키로 옮긴다. 해제했으면 참."""
+        from mint_litellm.endpoint.apps import ACTOR
+
+        async def find(conn: Any) -> Any:
+            cursor = await conn.execute(
+                "SELECT i.user_id, i.key_alias, i.mcp_key_alias, coalesce(array_agg(a.key_alias)"
+                " FILTER (WHERE a.key_alias IS NOT NULL), '{}')"
+                " FROM mint.endpoint_installs i LEFT JOIN mint.endpoint_apps a"
+                " ON a.instance_id = i.instance_id AND a.install_key_token = i.key_token"
+                " AND a.revoked_at IS NULL"
+                " WHERE i.instance_id = %s AND i.key_token = %s AND i.revoked_at IS NULL"
+                " GROUP BY i.user_id, i.key_alias, i.mcp_key_alias",
+                (instance_id, key_token),
+            )
+            return await cursor.fetchone()
+
+        row = await self._run(find)
+        if row is None or issuer is None:
+            return False
+        user_id, alias, mcp_alias, apps = row
+
+        async def heir(conn: Any) -> Any:
+            cursor = await conn.execute(
+                "SELECT 1 FROM mint.endpoint_installs WHERE instance_id = %s AND key_token = %s"
+                " AND user_id = %s AND revoked_at IS NULL", (instance_id, successor, user_id))
+            return await cursor.fetchone()
+
+        moved = bool(successor and successor != key_token and await self._run(heir))
+        doomed = [alias, mcp_alias, *([] if moved else apps)]
+        await asyncio.to_thread(issuer.delete_kit_keys, [a for a in doomed if a])
+
+        async def retire(conn: Any) -> Any:
+            cursor = await conn.execute(
+                "SELECT mint.endpoint_retire_install(%s, %s, %s)",
+                (instance_id, key_token, successor if moved else None))
+            return (await cursor.fetchone())[0]
+
+        if not await self._run(retire):
+            return False
+        await self.insert_event(Event(
+            instance_id=instance_id, inserted_at=datetime.now(UTC),
+            kind=EventKind.ENDPOINT_REVOKED,
+            source_key=control_source_key(EventKind.ENDPOINT_REVOKED, key_token, 2),
+            actor=ACTOR, subject={"user_id": user_id, "key_alias": alias},
+            payload={"user_id": user_id, "installs": 1, "key_alias": alias,
+                     "reason": "PC에서 제거·재설치"},
+        ))
+        return True
+
     async def endpoint_inspections(self, instance_id: str, key_token: str) -> list[dict[str, Any]]:
         """이 설치 키에 유효한(발급·소비) 검사용 승인."""
 

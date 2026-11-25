@@ -64,23 +64,23 @@ def test_only_approved_local_servers_are_packed_with_their_current_contract(ctx,
     assert endpoint_kits.approved_contracts(conn, INSTANCE) == {"local-1": newer.document()}
 
 
-def test_a_key_is_recorded_by_its_hash_and_the_next_download_replaces_it(conn):
+def test_a_key_is_recorded_by_its_hash_and_another_pc_keeps_its_key(conn):
     issuer = Issuer()
     first = issue(conn, issuer)
     issue(conn, issuer, user="u2")
     ((_, _, first_alias),) = issuer.made[:1]
     assert first == f"sk-{first_alias}" and issuer.deleted == []
     second = issue(conn, issuer)
-    assert issuer.deleted == [[first_alias]]  # 같은 사용자의 이전 키만 지워진다.
+    assert issuer.deleted == []  # PC마다 키 하나: 같은 사람의 다른 PC 키는 그대로다
     rows = conn.execute(
         "SELECT key_token, revoked_at IS NOT NULL FROM mint.endpoint_installs"
         " WHERE user_id = 'u1' ORDER BY issued_at"
     ).fetchall()
-    assert rows == [(token(first), True), (token(second), False)]
+    assert rows == [(token(first), False), (token(second), False)]
     assert [r["state"] for r in endpoint_kits.installs(conn, INSTANCE, "u2")] == ["pending"]
 
 
-def test_two_downloads_at_once_leave_one_active_key(fresh_db):
+def test_two_downloads_at_once_are_issued_one_after_the_other(fresh_db):
     """첫 연결이 잠금을 쥐고 둘째 연결이 그 잠금을 기다리는 것을 확인한 뒤 진행한다."""
     issuer = Issuer()
     with psycopg.connect(fresh_db) as first, psycopg.connect(fresh_db) as second:
@@ -109,7 +109,7 @@ def test_two_downloads_at_once_leave_one_active_key(fresh_db):
         active = first.execute(
             "SELECT count(*) FROM mint.endpoint_installs WHERE revoked_at IS NULL"
         ).fetchone()[0]
-        assert active == 1 and len(issuer.deleted) == 1
+        assert active == 2 and issuer.deleted == []  # 두 PC 모두 연결된다
 
 
 def test_revoking_deletes_the_keys_and_a_second_revoke_has_nothing_to_do(conn):

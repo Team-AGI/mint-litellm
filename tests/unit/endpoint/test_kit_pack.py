@@ -961,6 +961,8 @@ def test_on_windows_npx_runs_through_node_exe_with_the_tarball_readable(tmp_path
     assert got["executable"] == str(nodejs / "node.exe")
     assert got["argv"][0] == str(nodejs / "node_modules" / "npm" / "bin" / "npx-cli.js")
     assert got["argv"][1:3] == ["-y", f"--package={os.path.join(got['_pack_dir'], 'package.tgz')}"]
+    # 격리 폴더가 아닌 사용자 npm 캐시를 써 두 번째 시작부터 빠르다(pj3 14초 -> 5.6초)
+    assert got["env"]["npm_config_cache"].endswith("npm-cache")
     made = []
     pack, cache = r"C:\Users\u\.cache\mint\npm\ab", r"C:\Users\u\AppData\Local\npm-cache"
 
@@ -1032,3 +1034,41 @@ def test_a_malformed_npm_contract_or_a_missing_npx_is_refused(tmp_path):
 def test_an_npm_contract_is_observed_without_an_executable_hash():
     seen = agent.observed_contract(npm_contract())
     assert "executable_sha256" not in seen and seen["npm"]["bin"] == "srv-bin"
+
+
+def test_a_reinstall_retires_only_this_pcs_old_key():
+    sent = []
+
+    class FakeKit:
+        config = {"key": "sk-new"}
+
+        def report(self, state, action):
+            sent.append((self.config["key"], action, state.get("mode"), self.replaced_by))
+            return True
+
+    kit = FakeKit()
+    assert kit_module.retire_key(kit, "sk-old") is True
+    new_hash = kit_module.sha256_bytes(b"sk-new")  # 서버의 설치 키 해시와 같은 계산
+    assert sent == [("sk-old", "removed", "none", new_hash)] and kit.config["key"] == "sk-new"
+    assert kit.replaced_by is None
+
+
+def test_an_old_key_the_server_no_longer_knows_is_retired_quietly(capsys):
+    class FakeKit:
+        config, answer = {"key": "sk-new"}, {}
+
+        def report(self, state, action):
+            kit_module.last_http_error[:] = [404]
+            return False
+
+    assert kit_module.retire_key(FakeKit(), "sk-gone") is True
+    assert capsys.readouterr().out == ""
+
+    class Refused(FakeKit):
+        def report(self, state, action):
+            kit_module.last_http_error.clear()
+            self.answer = {"recorded": True, "retired": False}  # 서버가 해제하지 못했다
+            return True
+
+    assert kit_module.retire_key(Refused(), "sk-old") is False
+    assert "해제하지 못했습니다" in capsys.readouterr().out

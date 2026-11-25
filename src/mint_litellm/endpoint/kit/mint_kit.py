@@ -421,6 +421,27 @@ def open_node_to_sandbox(home: Path, which=shutil.which, run=lambda c: capture(c
     return folder
 
 
+def retire_key(kit: Kit, old_key: str) -> bool:
+    """이 PC의 옛 설치 키로 제거를 알려 그 키만 해제한다(같은 사람의 다른 PC는 그대로)."""
+    new_key = kit.config.get("key")
+    kit.config["key"] = old_key
+    kit.replaced_by = sha256_bytes(new_key.encode()) if new_key else None  # 앱 자격을 새 키로
+    import contextlib
+    import io
+
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):  # 옛 키 거절 안내는 여기서 뜻이 없다
+            done = kit.report({"mode": "none"}, "removed")
+    finally:
+        kit.config["key"], kit.replaced_by = new_key, None
+    if not done and set(last_http_error) & {401, 403, 404}:
+        return True  # 서버가 이미 모르는 키다(해제됐거나 다른 서버의 키): 할 일이 없다
+    done = done and (getattr(kit, "answer", None) or {}).get("retired") is not False
+    if not done:
+        print("이 PC의 옛 연결 키를 해제하지 못했습니다. 관리자 화면 「단말」에서 해제하십시오.")
+    return done
+
+
 def capture(command: list[str]) -> str:
     try:
         done = subprocess.run(command, capture_output=True, text=True, timeout=20, errors="replace")
@@ -3135,6 +3156,8 @@ class Kit:
                 payload["decision_versions"] = versions
         if pending:
             payload["removed"] = pending
+        if not installed and getattr(self, "replaced_by", None):
+            payload["replaced_by"] = self.replaced_by
         trust = self.hook_trust(state) if installed else None
         if trust:
             payload["hook_trust"] = trust
@@ -6478,6 +6501,10 @@ def main(argv: list[str] | None = None) -> int:
             print(NL.join(check_lines(result, problems)))
         return 1 if problems else 0
     if args.action == "install":
+        try:  # 같은 PC에 다시 설치: 새 키로 보고한 뒤 이 PC의 옛 키만 해제한다
+            old_key = (kit.home / KEY_REL).read_text(encoding="utf-8").strip()
+        except OSError:
+            old_key = ""
         state = kit.install()
         label = "관리형" if state["mode"] == "managed" else "사용자 수준(관리되지 않음)"
         if sandbox is not None:
@@ -6495,6 +6522,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         reported = kit.report(state, "installed")
         print(f"설치 완료: {label}. MINT 보고 {'성공' if reported else '실패(설치는 유지됨)'}")
+        if reported and old_key and old_key != kit.config.get("key"):
+            retire_key(kit, old_key)
         if state.get("gateway"):
             print(f"게이트웨이 MCP 서버 {state['gateway']}을(를) 하네스 설정에 넣었습니다.")
         if state["mode"] == "user" and "codex" in kit.harnesses:

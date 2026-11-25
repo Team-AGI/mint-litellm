@@ -1,7 +1,8 @@
 """단말 설치 묶음: 승인된 로컬 서버 계약 읽기, 사용자별 키 발급·해제, 설치 상태 조회.
 
-키는 사용자마다 하나가 활성이다. 새 묶음을 내려받으면 같은 사용자의 이전 키는 지워지고 해제
-시각이 남는다. 키 값은 묶음 안에만 있고 이 표에는 키의 해시와 별칭만 남는다.
+키는 PC마다 하나다. 새 묶음은 같은 사람의 다른 PC 키를 지우지 않고, 같은 PC에 다시 설치하거나
+제거하면 설치 묶음이 그 PC의 옛 키로 제거를 알려 그 키만 해제된다.
+키 값은 묶음 안에만 있고 이 표에는 키의 해시와 별칭만 남는다.
 """
 
 import hashlib
@@ -81,22 +82,17 @@ def issue_key(
     issued_by: str,
     ttl_days: int = KEY_DAYS,
 ) -> str:
-    """사용자의 이전 설치 묶음 키를 지우고 새 키를 발급해 기록한다. 키 값을 돌려준다.
+    """새 설치 묶음 키를 발급해 기록한다. 키 값을 돌려준다.
 
+    같은 사람의 다른 PC 키는 그대로 둔다(PC마다 키 하나). 같은 PC에 다시 설치하면 설치 묶음이
+    새 키로 보고한 뒤 옛 키로 제거를 알려 그 키만 해제된다. 분실 PC는 관리자 화면에서 해제한다.
     키는 ``ttl_days`` 뒤에 만료된다(만료 전 보고가 늘려 준다).
-
-    같은 사용자의 발급은 한 번에 하나씩이다(트랜잭션이 끝날 때까지 잠금을 쥔다). 동시에 두 번
-    내려받아도 활성 키는 하나만 남는다.
     """
     conn.execute(
         "SELECT pg_advisory_xact_lock(hashtext(%s))", (f"endpoint-kit:{instance_id}:{user_id}",)
     )
-    old = _active_aliases(conn, instance_id, user_id)
-    if old:
-        issuer.delete_kit_keys(old)
     alias = KIT_ALIAS_PREFIX + secrets.token_hex(8)
     key = issuer.generate_kit_key(user_id=user_id, team_id=team_id, alias=alias)
-    _mark_revoked(conn, instance_id, user_id)
     conn.execute(
         "INSERT INTO mint.endpoint_installs (instance_id, key_token, user_id, team_id, key_alias,"
         " issued_by, expires_at, ttl_days)"
