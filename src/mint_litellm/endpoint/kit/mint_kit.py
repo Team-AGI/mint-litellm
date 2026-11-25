@@ -4543,7 +4543,8 @@ def parse_command(tokens: list[str], home: Path, fetch=None) -> dict:
             raise AddError("모듈 이름이 올바르지 않습니다")
         return finish_spec(dist_for_module(module), [], None, module, rest[2:], home)
     else:
-        raise AddError("P1은 PyPI 패키지만 신청할 수 있습니다")
+        raise AddError(
+            "실행 명령은 uvx 패키지==판본, npx 패키지@판본 또는 저장소 주소로 적으십시오")
     origin = None
     while rest and rest[0].startswith("-"):
         flag = rest.pop(0)
@@ -5229,6 +5230,9 @@ def intake_preview(form: dict, gateway: Gateway, home: Path, submit: bool) -> No
     form["step"] = 2
 
 
+TEXT_KEYS = {"enter", "esc", "tab", "backspace", "up", "down", "left", "right", "q"}
+
+
 def intake_screen(model: dict, gateway: Gateway, home: Path, read=None, out=None) -> str:
     """새 도입 신청: 입력 → 확인 → 결과. 돌려주는 글은 목록 화면 맨 아래 줄에 보인다."""
     out, read = out or sys.stdout, read or read_key
@@ -5270,9 +5274,11 @@ def intake_screen(model: dict, gateway: Gateway, home: Path, read=None, out=None
                 out.write("\x1b[2J\x1b[H확인하는 중입니다...\n")
                 out.flush()
                 intake_preview(form, gateway, home, False)
-        elif len(key) == 1 and key.isprintable():
-            form["values"][form["focus"]] += key
-            form["error"] = ""
+        elif key and key not in TEXT_KEYS:
+            typed = "".join(c for c in key if c.isprintable())  # 붙여넣은 줄바꿈·제어 문자는 뺀다
+            if typed:
+                form["values"][form["focus"]] += typed
+                form["error"] = ""
 
 
 def handle_key(key: str, ui: dict, model: dict) -> str | None:
@@ -5336,10 +5342,15 @@ def read_key(text: bool = False) -> str:
                     b"\x1b[D": "left"}.get(raw, "esc")  # fmt: skip
         named = {b"\n": "enter", b"\r": "enter", b"\x03": "q"}
         if text:
-            named |= {b"\t": "tab", b"\x7f": "backspace", b"\x08": "backspace"}
-            extra = 3 if raw[0] >= 0xF0 else 2 if raw[0] >= 0xE0 else 1 if raw[0] >= 0xC0 else 0
-            for _ in range(extra):
-                raw += os.read(fd, 1)  # 여러 바이트 글자(한글)를 이어 읽는다
+            named |= {b"\t": "tab", b"\x7f": "backspace", b"\x08": "backspace", b"\x03": "esc"}
+            # 붙여넣기·한글은 여러 바이트가 한꺼번에 온다: 지금 와 있는 것을 모두 한 번에 읽는다
+            while select.select([fd], [], [], 0.02)[0]:
+                more = os.read(fd, 4096)
+                if not more:
+                    break
+                raw += more
+            if raw not in named:
+                return raw.decode(errors="ignore")
         return named.get(raw, fold(raw.decode(errors="ignore")))
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
