@@ -1,0 +1,49 @@
+{% import "macros.html" as m %}
+{% if access_open %}
+<table class="clickable"><thead><tr><th>요청자</th><th>MCP 서버</th><th>도구</th><th>막힌 이유</th><th>걸린 차단</th><th>요청한 지</th></tr></thead><tbody>
+{% for r in access_open %}<tr{% if focus == r.id | string %} class="selected"{% endif %}>
+<td><a href="/approvals?tab=access&amp;focus={{ r.id }}">{{ r.requester | who }}</a></td>
+<td>{{ r.server_id }}</td><td>{{ r.tool or '모든 도구' }}</td>
+<td>{{ L.pick(access_reasons, r.reason_code) }}</td>
+<td>{{ r.denials | length }}건</td>
+<td class="nowrap">{{ r.created_at | when }}</td>
+</tr>{% endfor %}
+</tbody></table>
+{% else %}{{ m.empty('처리할 권한 요청이 없습니다', '/approvals?tab=calls', '호출 승인 보기') }}{% endif %}
+{% if access_selected %}{% set r = access_selected %}{% set how = r.suggested %}
+{% call m.drawer('권한 요청', '/approvals?tab=access', true) %}
+<dl class="detail">
+  <dt>요청자</dt><dd>{{ r.requester | who }}</dd>
+  <dt>MCP 서버</dt><dd>{{ r.server_id }}</dd>
+  <dt>도구</dt><dd>{{ r.tool or '모든 도구' }}</dd>
+  <dt>막힌 이유</dt><dd>{{ L.pick(access_reasons, r.reason_code) }} <span class="muted">({{ r.reason_code }})</span></dd>
+  <dt>직원이 쓴 사유</dt><dd>{{ (r.note | masked) if r.note else '적지 않았습니다' }}</dd>
+  <dt>요청 시각</dt><dd>{{ r.created_at | when }}</dd>
+  <dt>걸린 차단</dt><dd>{% if r.denials %}<ul>{% for d in r.denials %}<li>{{ L.pick(L.SCOPE, d.scope_type) }} {{ m.ident(d.scope_id) }} · {{ d.reason }}</li>{% endfor %}</ul>{% else %}없음{% endif %}</dd>
+  <dt>제안 처리</dt><dd>{{ {'lift': '차단 해제', 'grant': '이 사람에게 허용', 'temp': '30분만 허용'}[how] }}</dd>
+</dl>
+{% set no = '이 역할은 처리할 수 없습니다' %}
+<form method="post" action="/access-requests/{{ r.id }}/resolve" class="form">
+  {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ r.state_version }}">
+  {% if r.denials and can(actor, 'denial lift') %}<fieldset><legend>풀 차단(고르지 않으면 모두 풉니다)</legend>
+    {% for d in r.denials %}<label><input type="checkbox" name="denial_ids" value="{{ d.id }}" checked> {{ L.pick(L.SCOPE, d.scope_type) }} {{ m.ident(d.scope_id) }} · {{ d.reason }}</label>{% endfor %}</fieldset>{% endif %}
+  <label>허용 기간<select name="valid_days" {% if not can(actor, 'approve') %}disabled{% endif %}>{% for d in grant_days %}<option value="{{ d }}"{% if d == 30 %} selected{% endif %}>{{ d }}일</option>{% endfor %}</select></label>
+  <div class="actions">
+  {% for key, name in (('lift', '차단 해제'), ('grant', '이 사람에게 허용'), ('temp', '30분만 허용')) %}
+    {% if key == 'lift' %}{% set perm = can(actor, 'denial lift') %}{% set why = no if not perm else ('' if r.denials else '걸린 차단이 없습니다') %}
+    {% elif key == 'grant' %}{% set perm = can(actor, 'approve') %}{% set why = no if not perm else ('' if can_grant else 'LiteLLM 관리 키가 없어 허용을 반영할 수 없습니다') %}
+    {% else %}{% set perm = can(actor, 'call-approval-rule add') %}{% set why = no if not perm else '' %}{% endif %}
+    {% if why %}{{ m.blocked_button(name, why, 'primary' if key == how else '') }}
+    {% else %}<button type="submit" name="how" value="{{ key }}"{% if key == how %} class="primary" autofocus{% endif %}>{{ name }}</button>{% endif %}
+  {% endfor %}
+  </div>
+</form>
+{% if can(actor, 'approve') %}
+<form method="post" action="/access-requests/{{ r.id }}/reject" class="form">
+  {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ r.state_version }}">
+  <label>거절 사유(요청자에게 보입니다)<textarea name="note" maxlength="500" required{% if error %} aria-invalid="true"{% endif %}></textarea></label>
+  <div class="actions"><button type="submit" class="danger-outline">거절</button></div>
+</form>
+{% else %}<div class="actions">{{ m.blocked_button('거절', '이 역할은 처리할 수 없습니다', 'danger-outline') }}</div>{% endif %}
+{% endcall %}
+{% endif %}

@@ -58,7 +58,9 @@ def alert_detail(alert_id: str, request: Request):
 
 
 @router.get("/approvals/new", include_in_schema=False)
-def approval_form(request: Request, relation_id: str):
+def approval_form(request: Request, relation_id: str = ""):
+    if not relation_id:  # 막다른 길 대신 고르는 곳을 안내하는 화면으로
+        return RedirectResponse("/approvals/review", status_code=303)
     rest = {k: v for k, v in request.query_params.items() if k != "relation_id"}
     query = "&".join(f"{k}={quote(v)}" for k, v in rest.items())
     target = f"/approvals/review/{quote(relation_id)}"

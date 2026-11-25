@@ -35,6 +35,7 @@
     <button type="submit" formaction="/key-blocks/{{ b.id }}/reject">거절</button>
   </div>
 </form>
+{% elif b.status == 'proposed' %}<div class="actions">{{ m.blocked_button('키 차단 승인', '조회자는 처리할 수 없습니다', 'primary') }}</div>
 {% endif %}
 {% if actor.role == 'admin' and b.status == 'applied' and b.mint_blocked %}
 <form method="post" action="/key-blocks/{{ b.id }}/unblock" class="form">

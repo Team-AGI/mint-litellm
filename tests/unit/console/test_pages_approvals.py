@@ -20,7 +20,7 @@ def test_a_stale_screen_is_refused_with_a_conflict_message(world, admin):
     version = world.query("SELECT state_version FROM mint.servers WHERE server_id = 'srv-ok'")[0][0]
     response = form_post(world, admin, "/servers/srv-ok/suspend", state_version=version + 5,
                          confirm_name="srv-ok")
-    assert response.status_code == 409 and "상태 버전" in response.text
+    assert response.status_code == 409 and "화면을 연 뒤 상태가 바뀌었습니다" in response.text
 
 
 def test_an_approval_whose_key_was_deleted_in_litellm_is_marked_missing(world, admin):
@@ -95,7 +95,7 @@ def test_only_an_admin_can_confirm_from_the_screen(world):
     version = world.query("SELECT state_version FROM mint.approvals")[0][0]
     for role in ("approver", "viewer"):
         client = world.session_client(role)
-        assert not re.search(r"<button[^>]*>재확인</button>", client.get("/access").text)
+        assert not re.search(r"<button(?![^>]*disabled)[^>]*>재확인</button>", client.get("/access").text)
         response = form_post(world, client, f"/approvals/{approval_id}/recertify",
                              state_version=version)
         assert response.status_code == 403
@@ -230,7 +230,7 @@ def test_an_active_window_near_its_end_shows_an_extend_button_that_works_once(wo
 
 def test_the_approval_center_has_four_tabs_with_counts_and_old_paths_redirect(world, admin):
     _pending_calls(world)
-    html = admin.get("/approvals").text  # 기본은 호출 탭
+    html = admin.get("/approvals?tab=calls").text
     for name in ("호출", "서버 도입", "갱신", "규칙"):
         assert f">{name}" in html
     assert 'aria-current="page" class="active">호출 <span class="count">2</span>' in html
@@ -290,7 +290,7 @@ def test_the_access_screen_splits_approvals_dormant_denials_and_allowlists(world
     for tab in ("approvals", "dormant", "denials", "allowlists"):
         assert admin.get(f"/access?tab={tab}").status_code == 200
     html = admin.get("/access").text
-    for name in ("승인", "미사용", "거부", "허용 목록"):
+    for name in ("승인", "미사용", "차단", "허용 목록"):
         assert f">{name}" in html
     assert "human-5" in html and 'data-dialog-open="revoke-' in html
     assert "허용 추가" in admin.get("/access?tab=allowlists").text
