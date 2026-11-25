@@ -413,3 +413,23 @@ def test_the_runner_ends_with_the_server_exit_code_even_if_the_server_quits_firs
         agent.main(["run", "--contracts", str(tmp_path / "c.json"), "--server", "s",
                     "--state-dir", str(tmp_path)])
     assert exits == [3]
+
+
+def test_a_windows_style_unsigned_exit_code_does_not_crash_the_runner(tmp_path, monkeypatch):
+    """Windows는 종료 코드를 부호 없이 준다(node ENOENT -4058 → 4294963238). 그대로 넘기면
+    ``os._exit``가 OverflowError로 죽었다(pj3 실측)."""
+    exits = []
+
+    class Exited(Exception):
+        pass
+
+    def fake_exit(code):
+        exits.append(code)
+        raise Exited
+
+    monkeypatch.setattr(agent, "run_server", lambda *a, **k: sys.exit(4294963238))
+    monkeypatch.setattr(agent.os, "_exit", fake_exit)
+    with pytest.raises(Exited):
+        agent.main(["run", "--contracts", str(tmp_path / "c.json"), "--server", "s",
+                    "--state-dir", str(tmp_path)])
+    assert exits == [-4058]
