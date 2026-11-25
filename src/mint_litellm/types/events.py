@@ -61,6 +61,11 @@ class EventKind(StrEnum):
     ACCESS_REQUEST_CANCELLED = "access_request_cancelled"
     ACCESS_REQUEST_RESOLVED = "access_request_resolved"
     ACCESS_REQUEST_REJECTED = "access_request_rejected"
+    FORCED_ACTION_RECORDED = "forced_action_recorded"
+    GLOBAL_HALT_SET = "global_halt_set"
+    GLOBAL_HALT_LIFTED = "global_halt_lifted"
+    PERSON_LOCKOUT = "person_lockout"
+    PERSON_UNLOCKED = "person_unlocked"
     CONSENT_GRANTED = "consent_granted"
     CONSENT_REVOKED = "consent_revoked"
     ALLOWLIST_ADDED = "allowlist_added"
@@ -182,6 +187,11 @@ CONTROL_ENTITY: dict[EventKind, str] = {
     EventKind.ACCESS_REQUEST_CANCELLED: "access_request",
     EventKind.ACCESS_REQUEST_RESOLVED: "access_request",
     EventKind.ACCESS_REQUEST_REJECTED: "access_request",
+    EventKind.FORCED_ACTION_RECORDED: "forced_action",
+    EventKind.GLOBAL_HALT_SET: "global_halt",
+    EventKind.GLOBAL_HALT_LIFTED: "global_halt",
+    EventKind.PERSON_LOCKOUT: "person",
+    EventKind.PERSON_UNLOCKED: "person",
     EventKind.CONSENT_GRANTED: "consent",
     EventKind.CONSENT_REVOKED: "consent",
     EventKind.ALLOWLIST_ADDED: "allowlist",
