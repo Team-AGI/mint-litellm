@@ -1,9 +1,11 @@
 {% import "macros.html" as m %}
 {% if applications %}
-<table><thead><tr><th>MCP 서버</th><th>목적</th><th>진행</th><th>결정</th><th>접수 시각</th><th></th></tr></thead><tbody>
+<table><thead><tr><th>MCP 서버</th><th>목적</th><th>진행</th><th>결정</th><th>다음</th><th>접수 시각</th><th></th></tr></thead><tbody>
 {% for r in applications %}<tr>
 <td><a href="/staff/intakes/{{ r.id }}">{{ r.server_name }}</a>{% if r.server_url %}<br><span class="muted">{{ r.server_url }}</span>{% endif %} {{ m.source_badge(r.source) }}</td><td>{{ r.purpose }}</td>
-<td>{{ m.badge(L.INTAKE, r.status) }}</td><td>{{ L.pick(L.DECISION, r.decision) if r.decision else '—' }}</td><td>{{ r.created_at | when }}</td>
+<td>{{ m.badge(L.INTAKE, r.status) }}</td><td>{{ L.pick(L.DECISION, r.decision) if r.decision else '—' }}</td>
+<td><a href="/staff/intakes/{{ r.id }}">{% if r.status in ('received', 'checking') %}검사 기다리기{% elif r.status in ('passed', 'indeterminate') %}관리자 결정 기다리기{% elif r.decision in ('approved', 'exception') %}진행 상황 보기{% elif r.status == 'failed' or r.decision == 'rejected' %}사유 보기{% else %}보기{% endif %}</a></td>
+<td>{{ r.created_at | when }}</td>
 <td>{% if r.status in ('received', 'checking', 'passed', 'indeterminate') %}
 {% call m.confirm_dialog('cancel-' ~ r.id, '대기 취소', '신청 취소', r.server_name, '/staff/intakes/' ~ r.id ~ '/withdraw', actor, '신청 취소') %}
 <input type="hidden" name="state_version" value="{{ r.state_version }}"><input type="hidden" name="reason" value="신청자 취소"><input type="hidden" name="confirm" value="yes">

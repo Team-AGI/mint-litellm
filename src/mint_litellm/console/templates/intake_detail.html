@@ -99,6 +99,8 @@
 <h2>결정</h2>
 <form method="post" action="/intakes/{{ i.id }}/decision" class="form" id="decision">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ i.state_version }}">
+  {% set target = decision_form.scope_id if decision_form.scope_id is defined else (i.requested_by or i.owner_user_id or '') %}
+  <p class="muted">승인하면: {{ requester_name or target or '—' }} · {{ (decision_form.valid_days ~ '일') if decision_form.valid_days else '기한 없음' }}</p>
   <details{% if error %} open{% endif %}><summary>추가 설정</summary>
   <div class="row">
     <label>대상 구분<select name="scope_type"><option value="user"{% if decision_form.scope_type == "user" %} selected{% endif %}>사용자</option><option value="key"{% if decision_form.scope_type == "key" %} selected{% endif %}>키</option><option value="team"{% if decision_form.scope_type == "team" %} selected{% endif %}>팀</option></select></label>
@@ -114,7 +116,7 @@
   <label>사유(선택)<textarea name="reason" maxlength="500">{{ decision_form.reason or "" }}</textarea></label>
   </details>
   <div class="actions">
-    <button type="submit" name="decision" value="approve" class="primary">승인</button>
+    <button type="submit" name="decision" value="approve" class="primary"{% if provider_blocked %} disabled title="제공자를 먼저 허용하십시오"{% endif %}>승인</button>
     <button type="submit" name="decision" value="reject">거부</button>
   </div>
 </form>

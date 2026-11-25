@@ -10,6 +10,7 @@
 <h1>내 MCP 서버</h1>
 <div class="actions"><a class="button primary" href="/staff/intakes/new">MCP 서버 신청</a></div>
 <div class="cards">
+  {{ m.kpi('내 PC 연결', pcs, href='/staff/endpoint', note=none if pcs else '설치 명령 받기', level=none if pcs else 'wait') }}
   {{ m.kpi('승인됨', rows | rejectattr('stopped') | rejectattr('preparing') | list | length) }}
   {{ m.kpi('도구 발견', rows | selectattr('seen') | list | length) }}
   {{ m.kpi('동의 필요', need, level='wait' if need) }}

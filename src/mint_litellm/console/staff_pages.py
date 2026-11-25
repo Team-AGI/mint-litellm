@@ -676,6 +676,8 @@ def servers_page(request: Request, actor: StaffActor, error=None, status=200, fo
         if not rows
         else 0,
         "need": sum(r["state"] == "none" and not r["stopped"] and not r["preparing"] for r in rows),
+        "pcs": sum(i["state"] in ("managed", "user") for i in endpoint_kits.installs(
+            actor.sctx.control, actor.sctx.instance_id, actor.user_id)),
         "expiring": sum(r["expiring"] for r in rows),
         "selected": selected,
         "guide": server_guide(actor, selected) if selected else None,

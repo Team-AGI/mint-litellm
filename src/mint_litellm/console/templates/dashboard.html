@@ -3,6 +3,10 @@
 {% block page_class %}wide{% endblock %}
 {% block body %}
 <h1>대시보드</h1>
+{% set todo = namespace(n=0) %}
+<section class="todo" aria-label="지금 처리할 일"><h2>지금 처리할 일</h2><div class="cards">
+{% for _, items in MENU %}{% for href, text, key in items %}{% if key and badges and badges.get(key) and (href != '/signup-requests' or actor.role == 'admin') %}{% set todo.n = todo.n + 1 %}{{ m.kpi(text, badges[key], href=href, level='wait') }}{% endif %}{% endfor %}{% endfor %}
+</div>{% if not todo.n %}<p class="muted">처리할 일이 없습니다</p>{% endif %}</section>
 <div class="filterbar">{{ a.choices('시간 범위', ranges) }}<a class="button" href="/?range={{ range }}">새로고침</a><a class="button" href="/reports/audit" hx-boost="false">감사 보고서</a></div>
 {{ m.strip(cards) }}
 <div class="grid">
