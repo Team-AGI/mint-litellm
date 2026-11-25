@@ -124,7 +124,9 @@ def test_expired_pending_and_revoked_approvals_and_non_approved_servers_grant_no
     ]
     assert kit_key_sync.local_servers_for(conn, INSTANCE, "u1", "t1") == set()
     conn.execute("UPDATE mint.servers SET status = 'approved' WHERE server_id = 'ctl-everything'")
-    conn.execute("UPDATE mint.servers SET status = 'terminating' WHERE server_id = 'ctl-everything'")
+    conn.execute(
+        "UPDATE mint.servers SET status = 'terminating' WHERE server_id = 'ctl-everything'"
+    )
     assert kit_key_sync.desired_permission(conn, INSTANCE, "u1", "t1", token) == ([], {})
 
 

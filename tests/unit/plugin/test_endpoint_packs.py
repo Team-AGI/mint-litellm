@@ -42,6 +42,11 @@ def scope(monkeypatch, tmp_path):
         calls["scope"].append(key_token)
         return [ROW] if key_token == KEY else []
 
+    async def remote_servers(self, instance_id, key_token):
+        if isinstance(calls.get("remote_raise"), Exception):
+            raise calls["remote_raise"]
+        return ["ms_learn"] if key_token == KEY else []
+
     async def my_intakes(self, instance_id, key_token):
         return [{"id": UUID(int=1), "server_id": "demo", "status": "received", "decision": None,
                  "reason": None, "created_at": UNTIL}]
@@ -71,6 +76,7 @@ def scope(monkeypatch, tmp_path):
             raise calls["raise"]
 
     for name, fn in (("endpoint_scope", endpoint_scope), ("endpoint_my_intakes", my_intakes),
+                     ("endpoint_remote_servers", remote_servers),
                      ("endpoint_submit_intake", submit),
                      ("endpoint_inspection_pack", inspection_pack),
                      ("endpoint_inspections", inspections),
@@ -97,8 +103,17 @@ def test_me_lists_scope_and_recent_intakes_for_the_calling_key(tmp_path, scope):
     assert answer["intakes"][0]["id"] == str(UUID(int=1))
     assert answer["intakes"][0]["stage"] == "received"
     assert answer["intakes"][0]["next"] == "검사가 끝나기를 기다림"
+    assert answer["remote_servers"] == ["ms_learn"]
     assert client.get(ME).status_code == 401
     assert client.get(ME, headers=HEADERS).json()["servers"] == []
+    assert client.get(ME, headers=HEADERS).json()["remote_servers"] == []
+
+
+def test_me_still_answers_when_the_remote_approvals_cannot_be_read(tmp_path, scope):
+    scope["remote_raise"] = RuntimeError("down")
+    client, _ = build(tmp_path)
+    answer = client.get(ME, headers=KEY_HEADER).json()
+    assert answer["remote_servers"] == [] and len(answer["servers"]) == 1
 
 
 def test_an_intake_is_passed_to_the_db_function_without_identity(tmp_path, scope):

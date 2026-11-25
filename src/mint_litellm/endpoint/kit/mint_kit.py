@@ -3706,12 +3706,12 @@ class Kit:
 
     def drop_contracts(self, state: dict, names: list[str]) -> list[str]:
         """범위를 잃은 서버를 계약 파일(과 허가)에서 뺀다. 이 묶음이 쓴 그대로인 파일만 고친다."""
-        if not self.writable() or not names:
-            return []
+        if not names or not os.access(self.programs, os.W_OK):
+            return []  # 관리형·사용자 수준 모두: 쓸 수 있는 자기 계약 파일만 고친다
         logical = f"{self.logical_programs}/contracts.json"
         path = self.programs / "contracts.json"
         try:
-            raw = read_trusted(path, self.root_owned())
+            raw = read_trusted(path, self.managed and self.root_owned())
             listing = json.loads(raw)
             current = listing.get("servers", {})
         except (OSError, ValueError, AttributeError):
@@ -3723,15 +3723,18 @@ class Kit:
             {**listing, "servers": {k: v for k, v in current.items() if k not in gone}}, indent=1
         ).encode()
         try:
-            write_atomic(path, data, 0o644)
+            write_atomic(path, data, 0o644, None if self.managed else self.owner)
         except OSError:
             return []
         state["files"][logical] = sha256_bytes(data)
-        permits = {k: v for k, v in self.local_permits().items() if k not in gone}
+        old = self.local_permits()
+        permits = {k: v for k, v in old.items() if k not in gone}
         try:
-            body = json.dumps({"permits": permits}, indent=1, sort_keys=True).encode()
-            write_atomic(self.programs / PERMITS, body, 0o644)
-            state["files"][f"{self.logical_programs}/{PERMITS}"] = sha256_bytes(body)
+            if permits != old:  # 허가가 없던 사용자 수준 설치는 허가 파일을 새로 만들지 않는다
+                body = json.dumps({"permits": permits}, indent=1, sort_keys=True).encode()
+                write_atomic(
+                    self.programs / PERMITS, body, 0o644, None if self.managed else self.owner)
+                state["files"][f"{self.logical_programs}/{PERMITS}"] = sha256_bytes(body)
         except OSError:
             pass
         self.save_state(state)
@@ -3910,6 +3913,8 @@ SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 S_NEED, S_WORK, S_READY = "받기 필요", "준비 중", "사용 가능"
 S_EXPIRED, S_NOPROG = "실행 허가 만료", "필요한 프로그램 없음"
 S_BAD, S_WAIT = "묶음 불일치", "반영 대기"
+S_ENDED = "이용 종료"  # 승인이 끝나 폐기 목록에 오른 서버(계약 파일이 정리되기 전)
+REMOTE_NEXT = "하네스의 게이트웨이 연결(litellm_gateway)로 씁니다"
 S_PYVER = "Python 판본 다름"  # 승인 묶음은 조직 런타임 한 판본용이다
 S_FAILED, S_START = "받기 실패", "시작 대기"
 STEP_NAMES = ("시작 검증 통과", "도구 목록 받음", "첫 호출 성공")
@@ -4997,6 +5002,7 @@ NEXT_BY_STATE = {
     S_NOPROG: "관리자에게 런타임 설치를 요청하십시오",
     S_PYVER: "승인된 Python 판본을 설치하도록 관리자에게 요청하십시오",
     S_BAD: "s 키로 다시 받으십시오",
+    S_ENDED: "이용이 끝났습니다. 다시 쓰려면 신청 탭에서 신청하십시오",
     S_WAIT: "r 키로 다시 보고하십시오",
 }
 TABS = ("상태", "내 서버", "도입 신청", "내 요청")
@@ -5058,6 +5064,8 @@ def tab2_lines(model: dict, ui: dict) -> list[str]:
             out.append("  사유 " + clip(str(row["reason"]), 70))
         if row["state"] in NEXT_BY_STATE:
             out.append("  " + NEXT_BY_STATE[row["state"]])
+        if row.get("kind") == "원격":
+            out.append("  " + REMOTE_NEXT)
         if row.get("kind") == "묶음" and row.get("steps"):
             steps = zip(STEP_NAMES, row["steps"], strict=False)
             out += [f"  {n} {'예' if ok else '-'}" for n, ok in steps]
@@ -5456,6 +5464,19 @@ def read_key(text: bool = False) -> str:
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
 
 
+def retired_here(kit) -> set[str]:
+    """마지막 보고 응답의 폐기 서버 이름(없거나 못 읽으면 빈 집합)."""
+    names: set[str] = set()
+    for folder in (kit.home / STATE_REL, kit.programs):
+        try:
+            text = (Path(folder) / RETIRED_FILE).read_text(encoding="utf-8")
+            listed = json.loads(text)["servers"]
+            names |= {n for n in listed if isinstance(n, str)}
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return names
+
+
 def build_model(kit, state: dict, gateway: Gateway | None) -> dict:
     """화면이 그릴 값: 로컬 상태와 ``me`` 응답(닿지 못하면 로컬 정보만)."""
     result, problems = kit.check(state) if state else ({}, ["설치되어 있지 않습니다"])
@@ -5467,6 +5488,7 @@ def build_model(kit, state: dict, gateway: Gateway | None) -> dict:
     now = time.time()
     servers = []
     names = list(contracts)
+    ended = retired_here(kit)
     for item in (me or {}).get("servers", []):
         if isinstance(item, dict) and isinstance(item.get("server_id"), str):
             if item["server_id"] not in names:
@@ -5475,6 +5497,12 @@ def build_model(kit, state: dict, gateway: Gateway | None) -> dict:
     for name in names:
         contract = contracts.get(name)
         info = remote.get(name, {})
+        if me is not None and name in ended and name not in remote:
+            kind = "묶음" if (contract or {}).get("pack") else "로컬"
+            servers.append({"name": name, "kind": kind,
+                            "state": S_ENDED, "steps": [False, False, False], "reason": "",
+                            "pack_sha256": None, "permit_until": None})  # fmt: skip
+            continue
         if contract is None:  # 승인됐지만 이 PC가 아직 계약을 받지 않았다: 단계 근거가 없다
             row_state, kind = S_WAIT, "묶음" if info.get("pack_sha256") else "로컬"
             steps = [False, False, False]
@@ -5499,6 +5527,12 @@ def build_model(kit, state: dict, gateway: Gateway | None) -> dict:
         })  # fmt: skip
     mode = {"managed": "관리형", "user": "사용자 수준(관리되지 않음)"}.get(
         state.get("mode"), "설치 안 됨")
+    servers += [
+        {"name": n, "kind": "원격", "state": S_READY, "steps": [False, False, False],
+         "reason": "", "pack_sha256": None, "permit_until": None}
+        for n in dict.fromkeys((me or {}).get("remote_servers") or [])
+        if isinstance(n, str) and n not in names
+    ]  # 원격은 이 PC에 받을 것이 없다: 게이트웨이 키 권한이 있으면 쓸 수 있다
     intakes = [i for i in (me or {}).get("intakes", []) if isinstance(i, dict)]
     inspections: dict = {}  # 승인이 한 번이라 단말 검사 안내는 기본 흐름에 없다
     applied = {  # 진행 중이거나 승인된 신청은 다시 신청할 항목이 아니다
@@ -6301,6 +6335,9 @@ def run_get(kit, gateway: Gateway | None, server: str, out=print, progress=None)
         None,
     )
     digest = entry.get("pack_sha256") if entry else None
+    if entry is None and server in (me.get("remote_servers") or []):
+        out(f"원격 서버라 받을 것이 없습니다 — {REMOTE_NEXT}")
+        return 0
     if entry is None:
         out("나에게 승인된 서버가 아닙니다")
         return 1
@@ -6731,7 +6768,8 @@ STATUS_FIELDS = ("mode", "user", "kit_version", "gateway", "key", "server_count"
                  "pending_requests", "mcp_servers")  # fmt: skip
 # 서버 상태는 웹 「내 MCP 서버」와 같은 낱말(준비 중·사용 가능·시작 실패)로 보이고, 키트의 세부
 # 상태(받기 필요 등)는 「세부」로 따로 둔다. 신청 상태는 웹 신청 목록과 같다(H.5).
-SERVER_WORD = {S_READY: "사용 가능", S_FAILED: "시작 실패", S_BAD: "시작 실패",
+SERVER_WORD = {S_READY: "사용 가능", S_ENDED: "이용 종료", S_FAILED: "시작 실패",
+               S_BAD: "시작 실패",
                S_NOPROG: "시작 실패", S_PYVER: "시작 실패"}  # fmt: skip
 REQUEST_WORD = {"approved": "승인됨", "ended": "이용 종료됨", "rejected": "거절됨",
                 "withdrawn": "철회됨",
@@ -6744,6 +6782,7 @@ CLI_NEXT = {
     S_WORK: "관리자 단계가 마칠 때까지 기다리십시오",
     S_NOPROG: "관리자에게 런타임 설치를 요청하십시오",
     S_PYVER: "승인된 Python 판본을 설치하도록 관리자에게 요청하십시오",
+    S_ENDED: "이용이 끝났습니다. 다시 쓰려면 mint server add로 신청하십시오",
 }  # fmt: skip
 PENDING_DONE = ("approved", "ended", "rejected", "withdrawn", "failed")
 
@@ -6762,7 +6801,8 @@ def server_rows(model: dict) -> list[dict]:
         "server_id": r["name"], "kind": r["kind"], "state": SERVER_WORD.get(r["state"], "준비 중"),
         "detail": r["state"], "permit_until": r.get("permit_until"),
         "pack_sha256": r.get("pack_sha256"),
-        "next": CLI_NEXT.get(r["state"], "").format(name=r["name"]),
+        "next": REMOTE_NEXT if r["kind"] == "원격" else
+        CLI_NEXT.get(r["state"], "").format(name=r["name"]),
     } for r in model["servers"]]  # fmt: skip
 
 
@@ -6962,6 +7002,9 @@ def run_request_cancel(args, kit, state, gateway) -> int:
 def run_server_get(args, kit, gateway) -> int:
     _, me = reach(gateway)
     approved = {s.get("server_id") for s in me.get("servers", []) if isinstance(s, dict)}
+    if args.server in (me.get("remote_servers") or []) and args.server not in approved:
+        print(f"{args.server}은(는) 원격 서버라 받을 것이 없습니다 — {REMOTE_NEXT}.")
+        return EXIT_OK
     if args.server not in approved:
         mine = [i for i in me.get("intakes", []) if isinstance(i, dict)
                 and i.get("server_id") == args.server and i.get("stage") not in PENDING_DONE]
@@ -7384,6 +7427,7 @@ def report_installed(
         names = [n for n in retired if isinstance(n, str)][:MAX_PENDING]
         run(lambda: save_retired(home, names, now(), folder if system else None))
         changed = bool(kit.remediate(state, names))
+        changed = bool(kit.drop_contracts(state, names)) or changed
     revoke = kit.answer.get("revoke")
     if isinstance(revoke, list):
         gone = [n for n in revoke if isinstance(n, str) and SERVER_NAME.match(n)][:MAX_PENDING]

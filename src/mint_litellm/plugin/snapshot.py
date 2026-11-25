@@ -1440,6 +1440,38 @@ class PluginDatabase:
         keys = ("server_id", "pack_sha256", "pack_manifest", "exec_contract", "permit_until")
         return [dict(zip(keys, row, strict=True)) for row in await self._run(read)]
 
+    async def endpoint_remote_servers(self, instance_id: str, key_token: str) -> list[str]:
+        """이 설치 키 주인에게 적용되는 승인된 원격 서버(게이트웨이 키 권한과 같은 질의)."""
+        from psycopg.rows import dict_row
+
+        from mint_litellm.control import kit_key_sync
+
+        async def read(conn: Any) -> list[str]:
+            cursor = await conn.execute(
+                "SELECT user_id, team_id FROM mint.endpoint_installs"
+                " WHERE instance_id = %s AND key_token = %s AND revoked_at IS NULL",
+                (instance_id, key_token),
+            )
+            install = await cursor.fetchone()
+            if install is None:
+                return []
+            async with conn.cursor(row_factory=dict_row) as rows:
+                await rows.execute(
+                    kit_key_sync.APPLICABLE_SQL,
+                    kit_key_sync.applicable_params(instance_id, install[0], install[1], ""),
+                )
+                names = kit_key_sync.fold_permission(await rows.fetchall())[0]
+            # 중지된 원격 서버도 키 권한에는 남지만(D-014) 쓸 수 없으니 PC 목록에는 내지 않는다
+            cursor = await conn.execute(
+                "SELECT server_id FROM mint.servers WHERE instance_id = %s"
+                " AND server_id = ANY(%s) AND status = 'approved'",
+                (instance_id, names),
+            )
+            usable = {row[0] for row in await cursor.fetchall()}
+            return [n for n in names if n in usable]
+
+        return await self._run(read)  # type: ignore[no-any-return]
+
     async def endpoint_my_intakes(self, instance_id: str, key_token: str) -> list[dict[str, Any]]:
         """이 설치 키로 낸 신청 최근 20건."""
 
