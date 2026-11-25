@@ -1173,12 +1173,42 @@ def npm_download(name: str, version: str) -> bytes:
     return data
 
 
+NODE_FLOOR = re.compile(r"^\s*(?:>=|\^|~)?\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?")
+
+
+def npm_node_floor(tarball: bytes) -> tuple[int, ...] | None:
+    """패키지가 적은 ``engines.node``의 최소 판본(첫 조건의 하한만). 없거나 못 읽으면 None."""
+    import io
+    import tarfile
+
+    try:
+        with tarfile.open(fileobj=io.BytesIO(tarball), mode="r:gz") as archive:
+            member = archive.extractfile("package/package.json")
+            spec = json.loads(member.read(1024 * 1024)).get("engines", {}).get("node")
+    except (OSError, KeyError, ValueError, AttributeError, tarfile.TarError):
+        return None
+    found = NODE_FLOOR.match(spec) if isinstance(spec, str) else None
+    return tuple(int(x or 0) for x in found.groups()) if found else None
+
+
+def installed_node_version() -> tuple[int, ...] | None:
+    node = shutil.which("node")
+    try:
+        out = subprocess.run([node, "--version"], capture_output=True, text=True, timeout=10,
+                             check=False).stdout if node else ""
+    except (OSError, subprocess.SubprocessError):
+        return None
+    found = NODE_FLOOR.match(out)
+    return tuple(int(x or 0) for x in found.groups()) if found else None
+
+
 def verify_npm(
     approved: Mapping[str, Any],
     *,
     folder: str,
     download: Callable[[str, str], bytes] = npm_download,
     which: Callable[[str], str | None] = shutil.which,
+    node_version: Callable[[], tuple[int, ...] | None] = installed_node_version,
 ) -> dict[str, Any]:
     """npm 계약을 시작 직전에 검증해 실제로 띄울 계약(받아 둔 tarball로 ``npx -y``)을 돌려준다."""
     ref = approved["npm"]
@@ -1195,7 +1225,7 @@ def verify_npm(
         raise Refuse("npm contract does not run the approved package")
     runtime = which("npx")
     if not runtime:
-        raise Refuse("npx is not installed on this machine")
+        raise Refuse("이 PC에 Node.js(npx)가 설치되어 있지 않습니다")
     directory = os.path.join(folder, hashlib.sha256(integrity.encode()).hexdigest()[:16])
     path = os.path.join(directory, "package.tgz")
     try:
@@ -1216,6 +1246,10 @@ def verify_npm(
             os.chmod(path, 0o444)
         except OSError as exc:
             raise Refuse(f"npm package cannot be stored ({type(exc).__name__})") from exc
+    need, have = npm_node_floor(data), node_version()
+    if need and have and have < need:
+        raise Refuse(f"Node.js {'.'.join(map(str, need))} 이상이 필요합니다"
+                     f"(이 PC {'.'.join(map(str, have))})")
     launch = ["-y", f"--package={path}", bin_name, *argv[2:]]
     return {**approved, "executable": runtime, "argv": launch, "_pack_dir": directory}
 
@@ -3541,6 +3575,8 @@ def main(argv: list[str] | None = None) -> None:
         except SystemExit:
             raise  # 격리·Windows 실행은 서버의 종료 코드로 끝난다.
         except Refuse as exc:
+            if args.server and not isinstance(exc, Paused):  # 화면에 「시작 실패 · 사유」로 보인다
+                record_start_failure(state_dir, args.server, str(exc))
             _give_up(REFUSED, f"MINT refused to start the server: {exc}")
         except BaseException as exc:  # 어떤 예외도 시작으로 새지 않는다.
             _give_up(REFUSED, f"MINT launcher failed: {type(exc).__name__}")

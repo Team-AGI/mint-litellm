@@ -922,6 +922,46 @@ def test_an_npm_server_keeps_its_tarball_under_the_expanded_state_folder(tmp_pat
     assert seen["folder"] == os.path.join(os.path.expanduser("~/.cache/mint"), agent.NPM_DIR)
 
 
+def npm_tarball(engines):
+    import tarfile
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w:gz") as archive:
+        body = json.dumps({"name": "@o/srv", "engines": engines}).encode()
+        info = tarfile.TarInfo("package/package.json")
+        info.size = len(body)
+        archive.addfile(info, io.BytesIO(body))
+    return raw.getvalue()
+
+
+def test_an_npm_server_needing_a_newer_node_is_refused_with_the_versions(tmp_path):
+    data = npm_tarball({"node": ">=20.18.1"})
+    contract = npm_contract(integrity=agent.npm_integrity(data))
+    start = dict(folder=str(tmp_path), which=lambda n: "npx", download=lambda *a: data)
+    with pytest.raises(agent.Refuse, match=r"20\.18\.1 .*18\.19\.1"):
+        agent.verify_npm(contract, node_version=lambda: (18, 19, 1), **start)
+    assert agent.verify_npm(contract, node_version=lambda: (22, 1, 0), **start)["argv"]
+    assert agent.verify_npm(contract, node_version=lambda: None, **start)  # 판본을 모르면 시도
+    assert agent.npm_node_floor(npm_tarball({"node": "^18 || >=20"})) == (18, 0, 0)
+    assert agent.npm_node_floor(npm_tarball({})) is None
+    assert agent.npm_node_floor(b"not a tarball") is None
+
+
+def test_a_refused_start_is_recorded_so_the_screens_show_the_reason(tmp_path, monkeypatch):
+    def refuse(*a, **k):
+        raise agent.Refuse("이 PC에 Node.js(npx)가 설치되어 있지 않습니다")
+
+    def give_up(code, message):
+        raise SystemExit(code)
+
+    monkeypatch.setattr(agent, "run_server", refuse)
+    monkeypatch.setattr(agent, "_give_up", give_up)
+    with pytest.raises(SystemExit):
+        agent.main(["run", "--contracts", str(tmp_path / "c.json"), "--server", "s",
+                    "--state-dir", str(tmp_path)])
+    path = tmp_path / agent.FAILED_DIR / "s.json"
+    assert json.loads(path.read_text(encoding="utf-8"))["reason"].startswith("이 PC에 Node.js")
+
+
 def test_an_npm_tarball_that_differs_from_the_approved_hash_is_refused(tmp_path):
     with pytest.raises(agent.Refuse, match="integrity"):
         agent.verify_npm(npm_contract(integrity="sha512-" + "B" * 86 + "=="),
