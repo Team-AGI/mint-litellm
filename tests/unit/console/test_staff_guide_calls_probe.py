@@ -67,7 +67,7 @@ def test_my_calls_lists_only_my_decisions_with_the_block_reason(sworld):
     page = logged_in(sworld).get("/staff?tab=calls").text
     assert "mine_ok" in page and "mine_blocked" in page and "승인 없음" in page
     assert "theirs" not in page
-    assert "APPROVAL_ABSENT" not in page.replace('value="APPROVAL_ABSENT"', "")  # 코드는 양식 값으로만
+    assert "APPROVAL_ABSENT" not in page.replace('value="APPROVAL_ABSENT"', "")
 
 
 @pytest.fixture
