@@ -961,6 +961,8 @@ def test_on_windows_npx_runs_through_node_exe_with_the_tarball_readable(tmp_path
     assert got["executable"] == str(nodejs / "node.exe")
     assert got["argv"][0] == str(nodejs / "node_modules" / "npm" / "bin" / "npx-cli.js")
     assert got["argv"][1:3] == ["-y", f"--package={os.path.join(got['_pack_dir'], 'package.tgz')}"]
+    # 격리 폴더가 아닌 사용자 npm 캐시를 써 두 번째 시작부터 빠르다(pj3 14초 -> 5.6초)
+    assert got["env"]["npm_config_cache"].endswith("npm-cache")
     made = []
     pack, cache = r"C:\Users\u\.cache\mint\npm\ab", r"C:\Users\u\AppData\Local\npm-cache"
 
