@@ -375,7 +375,7 @@ def get_approval_metrics(
     range: str = approval_metrics.DEFAULT_RANGE, actor: Actor = Depends(api_actor)
 ):
     if range not in approval_metrics.RANGES:
-        raise ControlError(f"range는 {', '.join(approval_metrics.RANGES)} 중 하나여야 합니다.")
+        raise ControlError(f"기간은 {', '.join(approval_metrics.RANGES)} 중 하나여야 합니다.")
     return approval_metrics.collect(actor.conn, actor.instance, range, actor.config.time_zone)
 
 

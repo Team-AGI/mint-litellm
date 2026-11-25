@@ -312,12 +312,12 @@ def test_the_status_list_has_one_litellm_row_and_one_worker_row_without_raw_ids(
     }
     dots = status_dots(o, workers, None)
     names = [d["name"] for d in dots]
-    assert names.count("LiteLLM") == 1 and names.count("집행 워커") == 1
-    worker = next(d for d in dots if d["name"] == "집행 워커")
+    assert names.count("LiteLLM") == 1 and names.count("집행 처리기") == 1
+    worker = next(d for d in dots if d["name"] == "집행 처리기")
     assert worker["status"].text == "2/2 정상"
     assert not any("7f1e" in d["name"] or "7f1e" in d["title"] for d in dots)
     workers[1]["passed"] = False
-    worker = next(d for d in status_dots(o, workers, None) if d["name"] == "집행 워커")
+    worker = next(d for d in status_dots(o, workers, None) if d["name"] == "집행 처리기")
     assert worker["status"].level == "error" and worker["status"].text == "1개 확인 불가"
 
 
@@ -341,7 +341,7 @@ def test_workers_from_before_a_restart_are_not_counted_as_running():
         "last_seal": None, "last_export": None, "unhandled_jobs": 0, "jobs_failed": 0,
         "jobs_pending": 0, "unhandled_oldest_seconds": 0,
     }
-    worker = next(d for d in status_dots(o, workers, None) if d["name"] == "집행 워커")
+    worker = next(d for d in status_dots(o, workers, None) if d["name"] == "집행 처리기")
     assert worker["status"].text == "2/2 정상 · 이전 실행 2개"
 
 

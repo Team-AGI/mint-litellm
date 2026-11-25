@@ -61,7 +61,7 @@ def oidc_login(request: Request, target: str = "auto") -> Response:
 def human_user(config, user_id: str) -> dict:
     """제어 평면 키로 LiteLLM 사용자를 읽는다. 없거나 사람 역할이 아니면 거부한다."""
     if config.litellm_admin is None:
-        raise LoginRefused("로그인에는 제어 평면 키(MINT_LITELLM_KEY)가 필요합니다.")
+        raise LoginRefused("로그인 설정이 끝나지 않았습니다. 관리자에게 문의하십시오.")
     try:
         user = config.litellm_admin.get_user(user_id)
     except LiteLLMError:
