@@ -2835,8 +2835,13 @@ class Kit:
         logical = f"{self.codex_dir}/requirements.toml"
         digest = state.get("files", {}).get(logical)
         path = self.physical(logical)
-        if not digest or not path.exists() or sha256_file(path) == digest:
+        if not digest:
             return None
+        try:  # 지워졌어도(Codex 제한이 풀린다) 바뀐 것으로 본다
+            if path.exists() and sha256_file(path) == digest:
+                return None
+        except OSError:
+            pass
         return str(path)
 
     # -- 제거 -------------------------------------------------------------------------------------
@@ -5820,6 +5825,13 @@ CLIENT_COVERAGE = {"pre_call": "호출 전 판정", "local_only": "로컬 서버
 
 def status_lines(kit, state: dict) -> list[str]:
     """``mint status``의 짧은 요약(네트워크 없이 로컬 값만; 키·해시는 싣지 않는다)."""
+    try:
+        return _status_lines(kit, state)
+    except (OSError, ValueError, KeyError, TypeError) as exc:  # 요약이 실패해도 상태는 보인다
+        return [f"상태 요약을 만들지 못했습니다({type(exc).__name__}). mint status --json으로 보십시오."]
+
+
+def _status_lines(kit, state: dict) -> list[str]:
     model = build_model(kit, state, None)
     rejected = any((d / KEY_REJECTED).exists() for d in (kit.home / STATE_REL, kit.programs))
     last = None
