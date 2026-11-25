@@ -270,7 +270,8 @@ def test_an_operator_intake_runs_all_eight_checks_and_passes(world):
     assert deadlines["supply_chain"] == 90 and deadlines["url_guard"] == 365
 
 
-def test_url_guard_failure_stops_the_rest_and_waits_for_the_administrator(world):
+def test_url_guard_failure_stops_the_rest_and_waits_for_the_administrator(world, monkeypatch):
+    monkeypatch.setenv("MINT_REQUIRE_PROVIDER_ALLOWLIST", "1")  # 제공자 제한은 기본 꺼짐
     world.conn.execute("UPDATE mint.allowlists SET status = 'lifted' WHERE kind = 'provider'")
     intake_id = world.create()
     world.drain()
@@ -429,7 +430,8 @@ def test_create_fills_the_submission_intake_and_starts_the_checks(world):
     )
 
 
-def test_a_stdio_or_openapi_submission_fails_url_guard_and_is_rejected_at_litellm(world):
+def test_a_stdio_or_openapi_submission_skips_url_guard_and_can_be_rejected_at_litellm(world):
+    """OpenAPI 제출은 주소 검사 「해당 없음」, 주소 없는 제출은 미지원. 반려하면 LiteLLM도 거절."""
     world.stub.submissions = [
         submission("sub-1", spec_path="/spec.json"),
         submission("sub-2", url=None, transport="stdio"),
@@ -439,7 +441,11 @@ def test_a_stdio_or_openapi_submission_fails_url_guard_and_is_rejected_at_litell
         world.call(lambda ctx, s=server_id: svc.create(ctx, world.admin_client, s, **INPUTS))
     world.drain()
     rows = fetchall(world.conn, "SELECT * FROM mint.intakes ORDER BY server_id")
-    assert [(r["status"], r["decision"]) for r in rows] == [("failed", None)] * 2
+    assert [r["decision"] for r in rows] == [None, None]  # 검사 결과로 자동 종결하지 않는다
+    guards = {g["server_id"]: g["reason_code"] for g in fetchall(
+        world.conn, "SELECT i.server_id, c.reason_code FROM mint.intake_checks c"
+        " JOIN mint.intakes i ON i.id = c.intake_id WHERE c.\"check\" = 'url_guard'")}
+    assert guards == {"sub-1": "NOT_APPLICABLE", "sub-2": "UNSUPPORTED"}
     assert world.stub.writes() == []
     for r in rows:
         world.decide(str(r["id"]), "reject", reason="지원하지 않는 형식")
@@ -798,7 +804,10 @@ def passed(world, **extra):
     return intake_id
 
 
-def test_approve_is_one_transaction_with_contracts_server_relation_and_pending_approval(world):
+def test_approve_is_one_transaction_with_contracts_server_relation_and_pending_approval(
+    world, monkeypatch
+):
+    monkeypatch.setenv("MINT_REQUIRE_PROVIDER_ALLOWLIST", "1")  # 제공자 제한은 기본 꺼짐
     provider_id = fetchone(world.conn, "SELECT id FROM mint.allowlists WHERE kind = 'provider'")[
         "id"
     ]
