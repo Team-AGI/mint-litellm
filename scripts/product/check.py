@@ -144,11 +144,18 @@ def main() -> int:
             by_feature[f].append(row)
             if fm and f not in fm:
                 errors.append(f"{aid}: 등록부에 없는 기능 {f}")
+        planned_status = row.get("status") in ("DISCOVERED", "SPECIFIED")
         for method, path in API.findall(row.get("api") or ""):
-            key = inventory.norm(path)
+            planned = "(신규" in path  # 설계만 된 새 경로
+            key = inventory.norm(re.sub(r"\(.*$", "", path))
             covered_api.append((method, key))
-            if not any(r["method"] == method and inventory.matches(key, r["key"]) for r in routes):
-                errors.append(f"{aid}: 코드에 없는 라우트 {method} {path}")
+            exists = any(r["method"] == method and inventory.matches(key, r["key"]) for r in routes)
+            if planned and not planned_status and not exists:
+                errors.append(f"{aid}: {row['status']}인데 새 라우트가 코드에 없음 {method} {key}")
+            elif planned and exists and planned_status:
+                warnings.append(f"{aid}: 새 라우트가 생겼으니 api의 (신규)와 상태를 고칠 것")
+            elif not planned and not exists:
+                errors.append(f"{aid}: 코드에 없는 라우트 {method} {key}")
         if row.get("status") in GUI_OR_ABOVE and not row.get("test_id", "").startswith("QA-"):
             errors.append(f"{aid}: {row['status']}인데 독립 QA 시험 ID가 없음")
 

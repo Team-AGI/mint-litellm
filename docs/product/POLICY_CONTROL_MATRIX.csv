@@ -108,47 +108,48 @@ CHECK-endpoint_egress_unfiltered,check,alert,Windows 단말에서 로컬 서버�
 CHECK-endpoint_silent,check,alert,설치 보고가 정해진 시간(기본 24시간) 넘게 끊김,참조 정책: POL-D-04 POL-E-06,src/mint_litellm/control,,,,,,,,,IMPLEMENTED
 CHECK-endpoint_key_expiring,check,alert,단말 설치 묶음 키가 만료 7일 안인데 갱신되지 않음,참조 정책: POL-E-06,src/mint_litellm/control,,,,,,,,,IMPLEMENTED
 CHECK-endpoint_update_failed,check,alert,단말의 키트 자동 갱신이 실패해 옛 프로그램이 도는 중,참조 정책: POL-E-06,src/mint_litellm/control,,,,,,,,,IMPLEMENTED
-REASON-SERVER_UNREGISTERED,deny_reason,MINT-SERVER-UNREGISTERED,,,src/mint_litellm/plugin,,,등록되지 않은 서버의 호출이 막혔습니다,policy,,,,,IMPLEMENTED
-REASON-SERVER_NOT_APPROVED,deny_reason,MINT-SERVER-NOT-APPROVED,,,src/mint_litellm/plugin,,,승인되지 않은 서버의 호출이 막혔습니다,policy,,,,,IMPLEMENTED
-REASON-APPROVAL_ABSENT,deny_reason,MINT-APPROVAL-ABSENT,,,src/mint_litellm/plugin,,,이 서버에 대한 승인이 없어 호출이 막혔습니다,policy,,,,,IMPLEMENTED
-REASON-TOOL_NOT_IN_APPROVAL,deny_reason,MINT-TOOL-NOT-IN-APPROVAL,,,src/mint_litellm/plugin,,,승인 범위에 없는 도구의 호출이 막혔습니다,policy,,,,,IMPLEMENTED
-REASON-POLICY_DETECT,deny_reason,MINT-POLICY-DETECT,,,src/mint_litellm/plugin,,,호출이 정책에 막혔습니다,policy,,,,,IMPLEMENTED
-REASON-CONTRACT_DRIFT,deny_reason,MINT-CONTRACT-DRIFT,,,src/mint_litellm/plugin,,,서버 계약과 실제 상태가 달라 호출이 막혔습니다,policy,,,,,IMPLEMENTED
-REASON-OUTPUT_SCAN,deny_reason,MINT-OUTPUT-SCAN,,,src/mint_litellm/plugin,,,결과 검사 정책에 따라 호출이 막혔습니다,policy,,,,,IMPLEMENTED
-REASON-SERVER_REJECTED,deny_reason,MINT-SERVER-REJECTED,,,src/mint_litellm/plugin,,,거부된 서버의 호출이 막혔습니다,policy,,,,,IMPLEMENTED
-REASON-SERVER_SUSPENDED,deny_reason,MINT-SERVER-SUSPENDED,,,src/mint_litellm/plugin,,,중지된 서버의 호출이 막혔습니다,policy,,,,,IMPLEMENTED
-REASON-SERVER_TERMINATED,deny_reason,MINT-SERVER-TERMINATED,,,src/mint_litellm/plugin,,,폐기된 서버의 호출이 막혔습니다,policy,,,,,IMPLEMENTED
-REASON-RELATION_TERMINATED,deny_reason,MINT-RELATION-TERMINATED,,,src/mint_litellm/plugin,,,종료된 이용 관계의 호출이 막혔습니다,policy,,,,,IMPLEMENTED
-REASON-DENIED,deny_reason,MINT-DENIED,,,src/mint_litellm/plugin,,,관리자가 이 도구를 막았습니다,policy,,,,,IMPLEMENTED
-REASON-APPROVAL_REVOKED,deny_reason,MINT-APPROVAL-REVOKED,,,src/mint_litellm/plugin,,,철회된 승인에 따른 호출이 막혔습니다,policy,,,,,IMPLEMENTED
-REASON-APPROVAL_EXPIRED,deny_reason,MINT-APPROVAL-EXPIRED,,,src/mint_litellm/plugin,,,승인이 만료되어 호출이 막혔습니다,policy,,,,,IMPLEMENTED
-REASON-APPROVAL_RECERT_REQUIRED,deny_reason,MINT-APPROVAL-RECERT-REQUIRED,,,src/mint_litellm/plugin,,,승인 재확인이 필요해 호출이 막혔습니다,policy,,,,,IMPLEMENTED
-REASON-CALL_APPROVAL_REQUIRED,deny_reason,MINT-CALL-APPROVAL-REQUIRED,,,src/mint_litellm/plugin,,,호출별 승인이 필요합니다,policy,,,,,IMPLEMENTED
-REASON-CALL_APPROVAL_STALE,deny_reason,MINT-CALL-APPROVAL-STALE,,,src/mint_litellm/plugin,,,호출별 승인을 다시 확인해야 합니다,policy,,,,,IMPLEMENTED
-REASON-CALL_APPROVAL_DENIED,deny_reason,MINT-CALL-APPROVAL-DENIED,,,src/mint_litellm/plugin,,,호출별 승인이 거부되었습니다,policy,,,,,IMPLEMENTED
-REASON-CONSENT_REQUIRED,deny_reason,MINT-CONSENT-REQUIRED,,,src/mint_litellm/plugin,,,동의가 필요해 호출이 막혔습니다,policy,,,,,IMPLEMENTED
-REASON-CONSENT_EXPIRED,deny_reason,MINT-CONSENT-EXPIRED,,,src/mint_litellm/plugin,,,동의가 만료되어 호출이 막혔습니다,policy,,,,,IMPLEMENTED
-REASON-CONSENT_REVOKED,deny_reason,MINT-CONSENT-REVOKED,,,src/mint_litellm/plugin,,,동의가 철회되어 호출이 막혔습니다,policy,,,,,IMPLEMENTED
-REASON-ALLOWLIST_EXPIRED,deny_reason,MINT-ALLOWLIST-EXPIRED,,,src/mint_litellm/plugin,,,허용 목록이 만료되어 호출이 막혔습니다,policy,,,,,IMPLEMENTED
-REASON-SERVER_IDENTITY_MISMATCH,deny_reason,MINT-SERVER-IDENTITY-MISMATCH,,,src/mint_litellm/plugin,,,서버 식별 정보가 달라 호출이 막혔습니다,policy,,,,,IMPLEMENTED
-REASON-SERVER_IDENTITY_AMBIGUOUS,deny_reason,MINT-SERVER-IDENTITY-AMBIGUOUS,,,src/mint_litellm/plugin,,,서버 식별 정보가 모호해 호출이 막혔습니다,system,,,,,IMPLEMENTED
-REASON-SERVER_UNRESOLVED,deny_reason,MINT-SERVER-UNRESOLVED,,,src/mint_litellm/plugin,,,서버를 식별하지 못해 호출이 막혔습니다,system,,,,,IMPLEMENTED
-REASON-MASTER_KEY_FORBIDDEN,deny_reason,MINT-MASTER-KEY-FORBIDDEN,,,src/mint_litellm/plugin,,,마스터 키로 도구 호출을 할 수 없습니다,policy,,,,,IMPLEMENTED
-REASON-EXTERNAL_MCP_FORBIDDEN,deny_reason,MINT-EXTERNAL-MCP-FORBIDDEN,,,src/mint_litellm/plugin,,,외부 MCP 호출이 허용되지 않습니다,policy,,,,,IMPLEMENTED
-REASON-REALTIME_FORBIDDEN,deny_reason,MINT-REALTIME-FORBIDDEN,,,src/mint_litellm/plugin,,,실시간 호출이 허용되지 않습니다,policy,,,,,IMPLEMENTED
-REASON-CODE_EXECUTION_FORBIDDEN,deny_reason,MINT-CODE-EXECUTION-FORBIDDEN,,,src/mint_litellm/plugin,,,코드 실행이 허용되지 않습니다,policy,,,,,IMPLEMENTED
-REASON-TOKEN_FORWARD_FORBIDDEN,deny_reason,MINT-TOKEN-FORWARD-FORBIDDEN,,,src/mint_litellm/plugin,,,토큰 전달이 허용되지 않습니다,policy,,,,,IMPLEMENTED
-REASON-RESOLVED_ADDRESS_FORBIDDEN,deny_reason,MINT-RESOLVED-ADDRESS-FORBIDDEN,,,src/mint_litellm/plugin,,,서버 주소가 허용되지 않습니다,policy,,,,,IMPLEMENTED
-REASON-TOKEN_AUDIENCE_MISMATCH,deny_reason,MINT-TOKEN-AUDIENCE-MISMATCH,,,src/mint_litellm/plugin,,,토큰의 대상이 맞지 않습니다,policy,,,,,IMPLEMENTED
-REASON-TOKEN_SCOPE_EXCEEDED,deny_reason,MINT-TOKEN-SCOPE-EXCEEDED,,,src/mint_litellm/plugin,,,토큰의 권한 범위가 허용 범위를 넘었습니다,policy,,,,,IMPLEMENTED
-REASON-UNSUPPORTED,deny_reason,MINT-UNSUPPORTED,,,src/mint_litellm/plugin,,,지원하지 않는 호출이 막혔습니다,system,,,,,IMPLEMENTED
-REASON-SCHEMA_ERROR,deny_reason,MINT-SCHEMA-ERROR,,,src/mint_litellm/plugin,,,요청 형식 오류로 호출이 막혔습니다,system,,,,,IMPLEMENTED
-REASON-POLICY_VERSION_MISMATCH,deny_reason,MINT-POLICY-VERSION-MISMATCH,,,src/mint_litellm/plugin,,,정책 버전이 달라 호출이 막혔습니다,system,,,,,IMPLEMENTED
-REASON-DEPENDENCY_FAILURE,deny_reason,MINT-DEPENDENCY-FAILURE,,,src/mint_litellm/plugin,,,필요한 서비스에 연결하지 못했습니다,system,,,,,IMPLEMENTED
-REASON-AUDIT_FAILURE,deny_reason,MINT-AUDIT-FAILURE,,,src/mint_litellm/plugin,,,감사 기록을 남기지 못해 호출이 막혔습니다,system,,,,,IMPLEMENTED
-REASON-ORG_BOUNDARY,deny_reason,MINT-ORG-BOUNDARY,,,src/mint_litellm/plugin,,,조직 경계를 벗어난 호출이 막혔습니다,policy,,,,,IMPLEMENTED
-REASON-ANONYMOUS,deny_reason,MINT-ANONYMOUS,,,src/mint_litellm/plugin,,,사용자를 식별하지 못해 호출이 막혔습니다,policy,,,,,IMPLEMENTED
-REASON-ENFORCEMENT_UNVERIFIED,deny_reason,MINT-ENFORCEMENT-UNVERIFIED,,,src/mint_litellm/plugin,,,정책 적용 상태가 확인되지 않아 호출이 막혔습니다,system,,,,,IMPLEMENTED
-REASON-CANCELLED,deny_reason,MINT-CANCELLED,,,src/mint_litellm/plugin,,,호출이 취소되었습니다,system,,,,,IMPLEMENTED
-REASON-CONFIRMATION_REQUIRED,deny_reason,MINT-CONFIRMATION-REQUIRED,,,src/mint_litellm/plugin,,,본인 확인이 필요합니다,policy,,,,,IMPLEMENTED
-REASON-CONFIRMATION_STALE,deny_reason,MINT-CONFIRMATION-STALE,,,src/mint_litellm/plugin,,,본인 확인을 다시 해야 합니다,policy,,,,,IMPLEMENTED
+REASON-SERVER_UNREGISTERED,deny_reason,MINT-SERVER-UNREGISTERED,,,src/mint_litellm/plugin,게이트웨이·PC의 등록 안 된 서버 호출,,등록되지 않은 서버의 호출이 막혔습니다,policy,직원: 서버 신청(mint server add 주소),없음(결정 6: 처음 보는 서버는 막음),문구에 신청 명령 추가,,IMPLEMENTED
+REASON-SERVER_NOT_APPROVED,deny_reason,MINT-SERVER-NOT-APPROVED,,,src/mint_litellm/plugin,심사 중인 서버 호출,,승인되지 않은 서버의 호출이 막혔습니다,policy,직원: 서버 신청 진행 보기 / 관리자: 신청 상세 승인,Root 검사 생략 승인(사유 필수),「승인되면 자동으로 쓸 수 있음」 한 줄 추가,,IMPLEMENTED
+REASON-APPROVAL_ABSENT,deny_reason,MINT-APPROVAL-ABSENT,,,src/mint_litellm/plugin,승인된 서버·내 범위 승인 없음,,이 서버에 대한 승인이 없어 호출이 막혔습니다,policy,직원: 권한 요청 → 관리자: 이 사람에게 허용,승인 부여,가장 흔한 막힘(A1)·요청 명령과 링크 필수,,IMPLEMENTED
+REASON-TOOL_NOT_IN_APPROVAL,deny_reason,MINT-TOOL-NOT-IN-APPROVAL,,,src/mint_litellm/plugin,도구를 명시한 승인의 범위 밖 도구,,승인 범위에 없는 도구의 호출이 막혔습니다,policy,직원: 권한 요청 → 관리자: 승인 범위에 도구 추가,승인 범위 수정,결정 4와 어긋나 보이므로 관리자 화면에 「도구 명시 승인」 표시,,IMPLEMENTED
+REASON-POLICY_DETECT,deny_reason,MINT-POLICY-DETECT,,,src/mint_litellm/plugin,인자 정책(경로·주소·내부 주소·정의 안 된 인자),,호출이 정책에 막혔습니다,policy,인자를 고쳐 재호출 / 정당하면 권한 요청(허용 호스트·경로 추가),승인 조건 수정(허용 호스트·경로·인자),정책 이름은 이미 표시됨·걸린 인자 이름(값 제외) 추가,,IMPLEMENTED
+REASON-CONTRACT_DRIFT,deny_reason,MINT-CONTRACT-DRIFT,,,src/mint_litellm/plugin,승인 때와 달라진 서버 계약,,서버 계약과 실제 상태가 달라 호출이 막혔습니다,policy,관리자: 서버 상세 계약 탭 재승인,재승인 계획 등록,직원에게 「관리자 재확인 중」과 경보 연결,,IMPLEMENTED
+REASON-OUTPUT_SCAN,deny_reason,MINT-OUTPUT-SCAN,,,src/mint_litellm/plugin,결과 검사(도구는 이미 실행됨),,결과 검사 정책에 따라 호출이 막혔습니다,policy,다시 시도하지 않음·참조 번호를 관리자에게 전달,없음,「이미 실행됨」 문구 양호·유지,,IMPLEMENTED
+REASON-SERVER_REJECTED,deny_reason,MINT-SERVER-REJECTED,,,src/mint_litellm/plugin,거절된 서버,,거부된 서버의 호출이 막혔습니다,policy,직원: 새 판본으로 재신청,재신청 뒤 승인,거절 사유 보기 링크 추가,,IMPLEMENTED
+REASON-SERVER_SUSPENDED,deny_reason,MINT-SERVER-SUSPENDED,,,src/mint_litellm/plugin,중지된 서버,,중지된 서버의 호출이 막혔습니다,policy,기다림(재개되면 자동 복귀),재개,중지 사유·실행자 표시 추가·재시도 금지 안내,,IMPLEMENTED
+REASON-SERVER_TERMINATED,deny_reason,MINT-SERVER-TERMINATED,,,src/mint_litellm/plugin,폐기된 서버,,폐기된 서버의 호출이 막혔습니다,policy,직원: 재신청,없음(폐기는 되돌릴 수 없음),PC에서 항목이 제거됨을 안내,,IMPLEMENTED
+REASON-RELATION_TERMINATED,deny_reason,MINT-RELATION-TERMINATED,,,src/mint_litellm/plugin,종료된 이용 관계,,종료된 이용 관계의 호출이 막혔습니다,policy,직원: 권한 요청(사용 요청),새 승인,「이용 종료」를 직원 말로 풀어 씀,,IMPLEMENTED
+REASON-DENIED,deny_reason,MINT-DENIED,,,src/mint_litellm/plugin,관리자 차단(도구·사용자·서버),,관리자가 이 도구를 막았습니다,policy,직원: 권한 요청 → 관리자: 해제 1클릭,해제,사유 표시 추가·「해제되면 바로」 안내 양호,,IMPLEMENTED
+REASON-APPROVAL_REVOKED,deny_reason,MINT-APPROVAL-REVOKED,,,src/mint_litellm/plugin,철회된 승인,,철회된 승인에 따른 호출이 막혔습니다,policy,직원: 권한 요청,승인 재부여,철회 사유 표시,,IMPLEMENTED
+REASON-APPROVAL_EXPIRED,deny_reason,MINT-APPROVAL-EXPIRED,,,src/mint_litellm/plugin,만료된 승인,,승인이 만료되어 호출이 막혔습니다,policy,직원: 권한 요청(갱신) / 관리자: 승인 센터 갱신 탭,일괄 갱신,만료 7일 전 직원 카드에 갱신 요청 단추,,IMPLEMENTED
+REASON-APPROVAL_RECERT_REQUIRED,deny_reason,MINT-APPROVAL-RECERT-REQUIRED,,,src/mint_litellm/plugin,재확인 기한이 지난 승인,,승인 재확인이 필요해 호출이 막혔습니다,policy,관리자: 접근 통제 재확인(직원 조치 없음),재확인,직원 책임 아님을 명시·FC-06,,IMPLEMENTED
+REASON-CALL_APPROVAL_REQUIRED,deny_reason,MINT-CALL-APPROVAL-REQUIRED,,,src/mint_litellm/plugin,관리자가 호출별 검토로 지정한 도구,,호출별 승인이 필요합니다,policy,자동 요청됨·약 30초 뒤 같은 호출 재시도,승인(1회·10분·30분) 또는 상시 규칙,양호·「내 요청」 위치 추가,,IMPLEMENTED
+REASON-CALL_APPROVAL_STALE,deny_reason,MINT-CALL-APPROVAL-STALE,,,src/mint_litellm/plugin,승인 뒤 인자가 달라진 호출,,호출별 승인을 다시 확인해야 합니다,policy,같은 호출을 다시 보내 새 승인 요청,승인,「다시 확인」이 모호함 → 「승인받은 내용과 인자가 다릅니다」,,IMPLEMENTED
+REASON-CALL_APPROVAL_DENIED,deny_reason,MINT-CALL-APPROVAL-DENIED,,,src/mint_litellm/plugin,거부된 호출 승인,,호출별 승인이 거부되었습니다,policy,거부 사유 확인·반복 금지·이의는 권한 요청,새 요청 승인,양호,,IMPLEMENTED
+REASON-CONSENT_REQUIRED,deny_reason,MINT-CONSENT-REQUIRED,,,src/mint_litellm/plugin,동의가 필요한 서버,,동의가 필요해 호출이 막혔습니다,policy,직원 본인: 내 MCP 서버에서 동의,없음(본인 동의는 대신할 수 없음),동의 링크를 첫 줄에,,IMPLEMENTED
+REASON-CONSENT_EXPIRED,deny_reason,MINT-CONSENT-EXPIRED,,,src/mint_litellm/plugin,만료된 동의,,동의가 만료되어 호출이 막혔습니다,policy,직원 본인: 다시 동의,없음,만료 7일 전 직원 화면 알림,,IMPLEMENTED
+REASON-CONSENT_REVOKED,deny_reason,MINT-CONSENT-REVOKED,,,src/mint_litellm/plugin,철회한 동의,,동의가 철회되어 호출이 막혔습니다,policy,직원 본인: 다시 사용하기 또는 동의,없음,본인이 그만둔 것임을 명시,,IMPLEMENTED
+REASON-ALLOWLIST_EXPIRED,deny_reason,MINT-ALLOWLIST-EXPIRED,,,src/mint_litellm/plugin,만료된 제공자·주소 허용 목록,,허용 목록이 만료되어 호출이 막혔습니다,policy,관리자: 허용 목록 연장(직원 조치 없음),허용 목록 추가,직원 책임 아님 명시·FC-07,,IMPLEMENTED
+REASON-SERVER_IDENTITY_MISMATCH,deny_reason,MINT-SERVER-IDENTITY-MISMATCH,,,src/mint_litellm/plugin,등록과 다른 서버 식별 정보,,서버 식별 정보가 달라 호출이 막혔습니다,policy,관리자: 서버 상세 재검사·재승인,재승인,직원에게 「관리자 확인 중」,,IMPLEMENTED
+REASON-SERVER_IDENTITY_AMBIGUOUS,deny_reason,MINT-SERVER-IDENTITY-AMBIGUOUS,,,src/mint_litellm/plugin,같은 이름이 여러 서버로 풀림(시스템),,서버 식별 정보가 모호해 호출이 막혔습니다,system,관리자: LiteLLM 등록 중복 정리,없음,오류 화면 틀·경보 연결,,IMPLEMENTED
+REASON-SERVER_UNRESOLVED,deny_reason,MINT-SERVER-UNRESOLVED,,,src/mint_litellm/plugin,서버를 식별하지 못함(시스템),,서버를 식별하지 못해 호출이 막혔습니다,system,잠시 뒤 재시도·계속되면 참조 번호 전달,없음,「정책 거부가 아닙니다」 명시,,IMPLEMENTED
+REASON-MASTER_KEY_FORBIDDEN,deny_reason,MINT-MASTER-KEY-FORBIDDEN,,,src/mint_litellm/plugin,마스터 키로 한 도구 호출,,마스터 키로 도구 호출을 할 수 없습니다,policy,본인 키 사용(PC 설치 키),없음(무조건),현재 문구 양호,,IMPLEMENTED
+REASON-EXTERNAL_MCP_FORBIDDEN,deny_reason,MINT-EXTERNAL-MCP-FORBIDDEN,,,src/mint_litellm/plugin,게이트웨이 밖 외부 MCP 호출,,외부 MCP 호출이 허용되지 않습니다,policy,직원: 그 서버를 신청,없음,신청 명령 추가,,IMPLEMENTED
+REASON-REALTIME_FORBIDDEN,deny_reason,MINT-REALTIME-FORBIDDEN,,,src/mint_litellm/plugin,실시간 호출 경로,,실시간 호출이 허용되지 않습니다,policy,지원하지 않음·일반 호출 사용,없음,대안 한 줄 추가,,IMPLEMENTED
+REASON-CODE_EXECUTION_FORBIDDEN,deny_reason,MINT-CODE-EXECUTION-FORBIDDEN,,,src/mint_litellm/plugin,제공자 코드 실행 도구,,코드 실행이 허용되지 않습니다,policy,지원하지 않음,없음(추정),대안 한 줄 추가,,IMPLEMENTED
+REASON-TOKEN_FORWARD_FORBIDDEN,deny_reason,MINT-TOKEN-FORWARD-FORBIDDEN,,,src/mint_litellm/plugin,호출자 토큰 전달이 필요한 서버,,토큰 전달이 허용되지 않습니다,policy,관리자: 승인 조건에 토큰 전달 허용,승인 조건 수정,관리자용 문구로 분리,,IMPLEMENTED
+REASON-RESOLVED_ADDRESS_FORBIDDEN,deny_reason,MINT-RESOLVED-ADDRESS-FORBIDDEN,,,src/mint_litellm/plugin,이름 풀이 결과가 금지 주소,,서버 주소가 허용되지 않습니다,policy,관리자: 주소 허용 목록 검토,허용 목록 추가,직원에게 「관리자 확인 필요」,,IMPLEMENTED
+REASON-TOKEN_AUDIENCE_MISMATCH,deny_reason,MINT-TOKEN-AUDIENCE-MISMATCH,,,src/mint_litellm/plugin,다른 서버용 토큰,,토큰의 대상이 맞지 않습니다,policy,직원: 그 서버에 다시 인증,없음,재인증 방법 한 줄,,IMPLEMENTED
+REASON-TOKEN_SCOPE_EXCEEDED,deny_reason,MINT-TOKEN-SCOPE-EXCEEDED,,,src/mint_litellm/plugin,승인보다 넓은 토큰 범위,,토큰의 권한 범위가 허용 범위를 넘었습니다,policy,관리자: 재승인,재승인,직원에게 「관리자 확인 필요」,,IMPLEMENTED
+REASON-UNSUPPORTED,deny_reason,MINT-UNSUPPORTED,,,src/mint_litellm/plugin,지원하지 않는 호출 형태(시스템),,지원하지 않는 호출이 막혔습니다,system,하네스·키트 판본 확인,없음,오류 화면 틀,,IMPLEMENTED
+REASON-SCHEMA_ERROR,deny_reason,MINT-SCHEMA-ERROR,,,src/mint_litellm/plugin,요청 형식 오류(시스템),,요청 형식 오류로 호출이 막혔습니다,system,하네스·키트 갱신(mint doctor),없음,오류 화면 틀,,IMPLEMENTED
+REASON-POLICY_VERSION_MISMATCH,deny_reason,MINT-POLICY-VERSION-MISMATCH,,,src/mint_litellm/plugin,정책 판본 전환 중(시스템),,정책 버전이 달라 호출이 막혔습니다,system,자동 복구·잠시 뒤 재시도,없음,「일시 오류」로 표시,,IMPLEMENTED
+REASON-DEPENDENCY_FAILURE,deny_reason,MINT-DEPENDENCY-FAILURE,,,src/mint_litellm/plugin,판정 서비스·DB 불통(시스템),,필요한 서비스에 연결하지 못했습니다,system,약 5초 뒤 재시도(승인된 호출은 통과),없음,「일시 오류」 문구 양호,,IMPLEMENTED
+REASON-AUDIT_FAILURE,deny_reason,MINT-AUDIT-FAILURE,,,src/mint_litellm/plugin,감사 기록을 남기지 못함(시스템),,감사 기록을 남기지 못해 호출이 막혔습니다,system,잠시 뒤 재시도·참조 번호,없음,결정 6과의 경계 확인 필요·FC-12,,IMPLEMENTED
+REASON-ORG_BOUNDARY,deny_reason,MINT-ORG-BOUNDARY,,,src/mint_litellm/plugin,조직에 묶이지 않았거나 다른 조직의 서버,,조직 경계를 벗어난 호출이 막혔습니다,policy,관리자: 조직 연결,조직 연결·기본 조직 지정,직원에게 「관리자에게 조직 연결 요청」,,IMPLEMENTED
+REASON-ANONYMOUS,deny_reason,MINT-ANONYMOUS,,,src/mint_litellm/plugin,사용자를 식별하지 못한 키,,사용자를 식별하지 못해 호출이 막혔습니다,policy,직원: 설치 명령 다시 붙여 넣기(mint relink),없음,재연결 명령 추가,,IMPLEMENTED
+REASON-ENFORCEMENT_UNVERIFIED,deny_reason,MINT-ENFORCEMENT-UNVERIFIED,,,src/mint_litellm/plugin,정책 적용 상태 미확인(시스템),,정책 적용 상태가 확인되지 않아 호출이 막혔습니다,system,자동 복구 대기,없음,「일시 오류」·대시보드 집행 상태와 연결·FC-12,,IMPLEMENTED
+REASON-CANCELLED,deny_reason,MINT-CANCELLED,,,src/mint_litellm/plugin,관리자·호출자가 취소한 호출,,호출이 취소되었습니다,system,필요하면 다시 요청,없음,누가 취소했는지 표시,,IMPLEMENTED
+REASON-CONFIRMATION_REQUIRED,deny_reason,MINT-CONFIRMATION-REQUIRED,,,src/mint_litellm/plugin,본인 확인이 필요한 도구,,본인 확인이 필요합니다,policy,직원 본인: 확인 링크에서 확인 뒤 재요청,없음(본인만),링크 양호·다른 로그인 방법 안내(FC-03),,IMPLEMENTED
+REASON-CONFIRMATION_STALE,deny_reason,MINT-CONFIRMATION-STALE,,,src/mint_litellm/plugin,확인 뒤 내용이 달라진 호출,,본인 확인을 다시 해야 합니다,policy,직원 본인: 다시 확인,없음,「확인한 내용과 다릅니다」로 구체화,,IMPLEMENTED
+REASON-GLOBAL_HALT,deny_reason,MINT-GLOBAL-HALT,,,src/mint_litellm/plugin,전역 정지 범위의 모든 호출,,[막힘] 전역 정지 중입니다(사유). 해제되면 자동으로 다시 됩니다. 다시 시도하지 마십시오.,policy,Root의 정지 해제를 기다린다,Root만 해제,,,SPECIFIED
