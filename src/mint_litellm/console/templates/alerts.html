@@ -18,7 +18,7 @@
 <table class="clickable compact"><thead><tr><th>시각</th><th>심각도</th><th>상태</th><th>종류</th><th>MCP 서버</th><th>요약</th></tr></thead><tbody>
 {% for r in rows %}<tr>
 <td class="nowrap"><a href="/alerts?{{ qs ~ '&' if qs }}open={{ r.id }}">{{ r.last_at | when }}</a></td><td>{{ m.badge(L.ALERT_SEVERITY, r.severity) }}</td><td>{{ m.badge(L.ALERT_STATUS, r.status) }}</td>
-<td>{{ L.pick(L.ALERT_KIND, r.kind) }}</td><td>{{ r.server_id | blank }}</td><td>{{ r.summary }}</td>
+<td>{{ L.pick(L.ALERT_KIND, r.kind) }}{% if r.operational %} {{ m.status_badge(L.Status('운영 점검', 'off')) }}{% endif %}</td><td>{{ r.server_id | blank }}</td><td>{{ r.summary }}</td>
 </tr>{% endfor %}
 </tbody></table>
 {{ m.pager('/alerts?' ~ qs, page, rows | length) }}
@@ -28,6 +28,7 @@
 <dl class="detail">
   <dt>상태</dt><dd>{{ m.badge(L.ALERT_STATUS, a.status) }}</dd>
   <dt>심각도</dt><dd>{{ m.badge(L.ALERT_SEVERITY, a.severity) }}</dd>
+  {% if operational %}<dt>분류</dt><dd>{{ m.status_badge(L.Status('운영 점검', 'off')) }}</dd>{% endif %}
   <dt>요약</dt><dd>{{ summary }}</dd>
   <dt>MCP 서버</dt><dd>{{ a.server_id | blank }}</dd>
   <dt>처음 발생</dt><dd>{{ a.first_at | when }}</dd>
@@ -41,6 +42,7 @@
   {% if link %}<a class="button" href="{{ link[0] }}"{% if link[0].startswith('http') %} target="_blank" rel="noopener" hx-boost="false"{% endif %}>{{ link[1] }}</a>{% endif %}
   {% if a.status == 'open' and actor.role == 'admin' %}
   <form method="post" action="/alerts/{{ a.id }}/acknowledge">{{ m.csrf(actor) }}<button type="submit" class="primary">확인함</button></form>
+  {% elif a.status == 'open' %}{{ m.blocked_button('확인함', '관리자만 확인 처리할 수 있습니다') }}
   {% endif %}
 </div>
 {% endcall %}

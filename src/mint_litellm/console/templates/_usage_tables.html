@@ -9,7 +9,7 @@
 {% macro table(title, rows, first=false) %}
 <section><h2>{{ title }}</h2>
 {% if rows %}
-<table><thead><tr><th>이름</th><th>호출</th><th>차단</th>{% if first %}<th>첫 성공</th>{% endif %}</tr></thead><tbody>
+<table><thead><tr><th>이름</th><th class="num">호출(건)</th><th class="num">차단(건)</th>{% if first %}<th>첫 성공</th>{% endif %}</tr></thead><tbody>
 {% for r in rows %}<tr><td>{{ r.name }}</td><td class="num">{{ r.calls }}</td><td class="num">{{ r.blocked }}</td>{% if first %}<td class="nowrap">{{ (r.first | when) if r.first else '없음' }}</td>{% endif %}</tr>{% endfor %}
 </tbody></table>
 {% else %}<div class="empty slim">이 기간에 기록이 없습니다</div>{% endif %}

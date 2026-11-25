@@ -3,8 +3,11 @@
 {% block page_class %}wide{% endblock %}
 {% block body %}
 <h1>호출 기록</h1>
+{% if undo %}<div class="banner ok" role="status"><span><strong>차단했습니다</strong> · {{ undo.server_id }}{% if undo.tools %} · {{ undo.tools | join }}{% endif %}</span>
+<form method="post" action="/ledger/denials/{{ undo.id }}/undo" class="inline" hx-boost="false">{{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ undo.state_version }}"><input type="hidden" name="back" value="{{ back }}"><button type="submit">되돌리기</button></form></div>{% endif %}
+<div class="filterbar">{{ a.choices('보기', views) }}{{ a.choices('결과', results) }}</div>
 {% if cards %}
-<div class="filterbar">{{ a.choices('시간 범위', ranges) }}{{ a.choices('결과', results) }}</div>
+<div class="filterbar">{{ a.choices('시간 범위', ranges) }}</div>
 <div class="cards">{% for c in cards %}{{ m.kpi(c.label, c.value, c.href, c.note, c.level, c.trend) }}{% endfor %}</div>
 <div class="grid">
 {{ a.panel('결정 추이', trend, trend_has_data) }}
@@ -32,10 +35,17 @@
 {% for e in rows %}<tr>
 <td class="nowrap"><a href="/ledger?{{ qs ~ '&' if qs }}open={{ e.event_id }}">{{ e.inserted_at | when }}</a></td><td class="nowrap">{{ L.pick(L.EVENT_KIND, e.kind) }}{% if e.kind in ('alert_opened', 'alert_resolved') and (e.get('payload') or {}).get('kind') in L.ALERT_KIND %} · {{ L.ALERT_KIND[e.payload.kind] }}{% endif %}</td><td>{{ e.actor | who }}</td>
 <td>{{ e.server_id | blank }}</td><td>{{ L.pick(L.OUTCOME, e.outcome) if e.outcome else L.pick(L.RESULT, e.result) }}</td>
-<td>{% if e.kind == 'call_response_received' %}{% for line in L.response_notes(e.get('payload')) %}<div>{{ line }}</div>{% else %}—{% endfor %}{% else %}—{% endif %}</td>
+<td>{% if e.kind == 'call_response_received' %}{% for line in L.response_notes(e.get('payload')) %}<div>{{ line }}</div>{% else %}—{% endfor %}{% elif e.reason_text %}{{ e.reason_text }}{% else %}—{% endif %}</td>
 <td class="actions">{% if can(actor, 'deny') and e.targets %}
 {% for target, name in [('tool', '이 도구 차단'), ('user', '이 사용자 차단')] %}{% if e.targets[target] %}
-<form method="post" action="/ledger/{{ e.event_id }}/block" class="inline" hx-boost="false">{{ m.csrf(actor) }}<input type="hidden" name="target" value="{{ target }}"><button type="submit" class="danger" title="{{ e.server_id }} · {{ e.targets[target] }}">{{ name }}</button></form>{% endif %}{% endfor %}
+{% set effect %}<dl class="detail">
+<dt>영향</dt><dd>{% if target == 'tool' %}{{ e.server_id }}의 {{ e.targets.tool }} 도구가 모든 직원에게 막힙니다.{% else %}{{ e.actor | who }}이(가) {{ e.server_id }}의 모든 도구를 호출할 수 없습니다.{% endif %}</dd>
+<dt>즉시</dt><dd>MINT 판정이 다음 호출부터 거부합니다.</dd>
+<dt>늦게</dt><dd>LiteLLM 반영 최대 60초</dd>
+<dt>취소 불가</dt><dd>이미 원격 서버로 보낸 호출은 끝까지 실행됩니다.</dd>
+<dt>되돌리기</dt><dd>차단 직후 「되돌리기」 또는 접근 통제의 「해제」로 즉시 복귀합니다.</dd>
+</dl>{% endset %}
+{% call m.confirm_dialog('block-' ~ e.event_id ~ '-' ~ target, name, name ~ ' — ' ~ (e.targets.tool if target == 'tool' else (e.actor | who)), effect, '/ledger/' ~ e.event_id ~ '/block', actor, '차단', danger=false, trigger_class='danger-outline') %}<input type="hidden" name="target" value="{{ target }}"><input type="hidden" name="back" value="{{ back }}">{% endcall %}{% endif %}{% endfor %}
 {% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>

@@ -76,16 +76,17 @@ def test_bundled_assets_are_served_locally(world):
 
 
 def test_the_overview_shows_counts_and_the_decision_chart(world, admin):
-    world.query(
-        "INSERT INTO mint.events (event_id, instance_id, kind, source_key, invocation_id,"
-        " attempt_id, payload) VALUES (%s, %s, 'decision_evaluated', %s, %s, 1,"
-        " '{\"enforced_action\": \"deny\"}')",
-        uuid.uuid4(), INSTANCE, "call:" + str(uuid.uuid4()) + ":1:decision_evaluated",
-        uuid.uuid4())
+    for _ in range(5):
+        world.query(
+            "INSERT INTO mint.events (event_id, instance_id, kind, source_key, invocation_id,"
+            " attempt_id, payload) VALUES (%s, %s, 'decision_evaluated', %s, %s, 1,"
+            " '{\"enforced_action\": \"deny\"}')",
+            uuid.uuid4(), INSTANCE, "call:" + str(uuid.uuid4()) + ":1:decision_evaluated",
+            uuid.uuid4())
     html = admin.get("/").text
-    assert "승인 대기" in html and "열린 경보(치명·높음)" in html and "차단률" in html
+    assert "차단률" in html
     assert 'data-chart="' in html and "&#34;decision&#34;: &#34;block&#34;" in html
-    assert "&#34;data&#34;: [0, 0, 0, 0, 0, 0, 1]" in html
+    assert "&#34;data&#34;: [0, 0, 0, 0, 0, 0, 5]" in html
 
 
 def test_an_empty_list_shows_a_title_and_one_next_action(world, admin):

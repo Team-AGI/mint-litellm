@@ -3,7 +3,6 @@
 {% block page_class %}wide{% endblock %}
 {% block body %}
 <h1>하네스 기본 기능</h1>
-<ul class="muted hint"><li>AI 도구에 들어 있는 셸·파일 편집·웹 기능입니다</li><li>기본은 허용하고 호출마다 기록합니다</li><li>차단하면 모든 직원 PC에서 그 기능이 거부됩니다</li></ul>
 {% if error %}<div class="banner error" role="alert">{{ error }}</div>{% endif %}
 {% for g in groups %}
 <h2>{{ g.name }}</h2>
@@ -11,7 +10,15 @@
 {% for r in g.rows %}<tr>
 <td class="nowrap">{{ r.tool }}</td><td>{{ r.what }}</td><td class="num">{{ r.calls }}</td><td class="num">{{ r.blocked }}</td>
 <td>{% if r.denial %}{{ m.status_badge(L.Status('차단', 'block')) }}{% else %}{{ m.status_badge(L.Status('허용', 'ok')) }}{% endif %}</td>
-<td class="nowrap">{% if can_manage %}{% if r.denial %}<form method="post" action="/builtin-tools/allow" class="inline" hx-boost="false">{{ m.csrf(actor) }}<input type="hidden" name="denial_id" value="{{ r.denial.id }}"><input type="hidden" name="state_version" value="{{ r.denial.state_version }}"><button type="submit">허용</button></form>{% else %}<form method="post" action="/builtin-tools/block" class="inline" hx-boost="false">{{ m.csrf(actor) }}<input type="hidden" name="harness" value="{{ g.harness }}"><input type="hidden" name="tool" value="{{ r.tool }}"><button type="submit" class="danger">차단</button></form>{% endif %}{% endif %}</td>
+<td class="nowrap">{% if can_manage %}{% if r.denial %}<form method="post" action="/builtin-tools/allow" class="inline" hx-boost="false">{{ m.csrf(actor) }}<input type="hidden" name="denial_id" value="{{ r.denial.id }}"><input type="hidden" name="state_version" value="{{ r.denial.state_version }}"><button type="submit">허용</button></form>{% else %}
+{% set effect %}<dl class="detail">
+<dt>영향</dt><dd>{{ g.name }}의 {{ r.tool }}({{ r.what }})이 모든 직원 PC에서 거부됩니다. 최근 7일 호출 {{ r.calls }}건.</dd>
+<dt>즉시</dt><dd>MINT 판정이 다음 호출부터 거부합니다.</dd>
+<dt>늦게</dt><dd>PC 실행기는 다음 보고(약 20초)</dd>
+<dt>취소 불가</dt><dd>이미 실행 중인 작업은 끝까지 실행됩니다.</dd>
+<dt>되돌리기</dt><dd>「허용」으로 즉시 복귀합니다.</dd>
+</dl>{% endset %}
+{% call m.confirm_dialog('block-' ~ g.harness ~ '-' ~ r.tool, '차단', '기본 기능 차단 — ' ~ g.name ~ ' ' ~ r.tool, effect, '/builtin-tools/block', actor, '차단', danger=false, trigger_class='danger-outline') %}<input type="hidden" name="harness" value="{{ g.harness }}"><input type="hidden" name="tool" value="{{ r.tool }}">{% endcall %}{% endif %}{% else %}{{ m.blocked_button('차단' if not r.denial else '허용', '관리자만 바꿀 수 있습니다') }}{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
 {% endfor %}
