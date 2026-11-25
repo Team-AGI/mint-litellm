@@ -1034,3 +1034,20 @@ def test_a_malformed_npm_contract_or_a_missing_npx_is_refused(tmp_path):
 def test_an_npm_contract_is_observed_without_an_executable_hash():
     seen = agent.observed_contract(npm_contract())
     assert "executable_sha256" not in seen and seen["npm"]["bin"] == "srv-bin"
+
+
+def test_a_reinstall_retires_only_this_pcs_old_key():
+    sent = []
+
+    class FakeKit:
+        config = {"key": "sk-new"}
+
+        def report(self, state, action):
+            sent.append((self.config["key"], action, state.get("mode"), self.replaced_by))
+            return True
+
+    kit = FakeKit()
+    assert kit_module.retire_key(kit, "sk-old") is True
+    new_hash = kit_module.sha256_bytes(b"sk-new")  # 서버의 설치 키 해시와 같은 계산
+    assert sent == [("sk-old", "removed", "none", new_hash)] and kit.config["key"] == "sk-new"
+    assert kit.replaced_by is None

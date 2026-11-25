@@ -146,6 +146,10 @@ ensure_kit_issuer_key() {
     MINT_KIT_ISSUER_KEY="$(head -n 1 "$file")"
     export MINT_KIT_ISSUER_KEY
     write_service_env
+    # 처음 만든 키는 이미 뜬 LiteLLM에 없다: 바뀐 값으로 다시 만든다(같으면 compose가 그대로 둔다).
+    if [ -n "$("${COMPOSE[@]}" ps -q litellm 2>/dev/null < /dev/null)" ]; then
+        "${COMPOSE[@]}" up -d --wait litellm < /dev/null >/dev/null 2>&1 || true
+    fi
 }
 
 # 제어 평면 키는 .env의 MINT_LITELLM_KEY가 우선이고, 없으면 비밀 폴더의 control.key를 쓴다.
@@ -609,7 +613,21 @@ cmd_password() {
     [ "$#" -ge 1 ] || fail "사용법: ./mint.sh password <LiteLLM 사용자> [--email <이메일>]"
     local user="$1"
     shift
-    case "${1:-}" in
+    # LiteLLM 컨테이너는 compose 값 치환으로 설치 묶음 키 발급 키를 받는다(앱 자격·PC 키 해제가 쓴다).
+# 키는 LiteLLM이 뜬 뒤 만들어지므로 이미 있는 키를 먼저 내보내 두어야 다음 기동에 실린다.
+load_kit_issuer_key() {
+    local dir
+    [ -f .env ] || return 0
+    [ -z "$(env_value MINT_KIT_ISSUER_KEY)" ] || return 0
+    dir="$(env_value MINT_SECRETS_DIR)"
+    if [ -n "$dir" ] && [ -s "$dir/kit_issuer.key" ]; then
+        MINT_KIT_ISSUER_KEY="$(head -n 1 "$dir/kit_issuer.key")"
+        export MINT_KIT_ISSUER_KEY
+    fi
+}
+load_kit_issuer_key
+
+case "${1:-}" in
         "") issue_ui_password "$user" ;;
         --email) [ -n "${2:-}" ] || fail "--email에는 이메일이 필요합니다."; issue_ui_password "$user" "$2" ;;
         *) fail "사용법: ./mint.sh password <LiteLLM 사용자> [--email <이메일>]" ;;
