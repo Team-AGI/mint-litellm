@@ -1,5 +1,6 @@
 """입력 최소 신청(대상+목적)과 승인 즉시 사용(자동 받기·단계 표시)."""
 
+import io
 import json
 import types
 import uuid
@@ -208,3 +209,36 @@ def test_a_pinned_git_command_is_accepted_and_an_unpinned_one_is_not(tmp_path):
     with pytest.raises(ValueError):
         IntakeRequest.model_validate({"request_id": RID, "server_id": "x", "spec": spec,
                                       "purpose": "p", "data_grade": "internal"})
+
+
+def test_new_request_is_a_three_step_screen_that_previews_then_submits_and_esc_cancels(tmp_path):
+    model = {"connected": True, "servers": [], "intakes": [], "found": []}
+    form = {"step": 1, "focus": 0, "values": ["https://mcp.example.com/mcp", "문서 조회"],
+            "error": "", "ok": False, "preview": [], "result": [], "request_id": RID}
+    first = "\n".join(kit_module.render_intake(model, form, 80, 24))
+    for text in ("새 도입 신청", "주소 또는 실행 명령", "목적", "예)", "Enter  다음", "Esc  취소"):
+        assert text in first
+    gateway = FakeGateway()
+    kit_module.intake_preview(form, gateway, tmp_path, submit=False)
+    assert gateway.sent == [] and form["step"] == 2
+    second = "\n".join(kit_module.render_intake(model, form, 80, 24))
+    shown = ("2/3 확인", "종류", "원격", "이름", "주소", "Enter  제출", "e  고치기", "Esc  취소")
+    for text in shown:
+        assert text in second
+    print(first, second, sep="\n")
+
+    def keys(typed):
+        it = iter(typed)
+        return lambda text=False: next(it)
+
+    out = io.StringIO()
+    typed = [*"https://mcp.example.com/mcp", "enter", *"문서", "enter", "esc"]
+    assert "취소" in kit_module.intake_screen(model, gateway, tmp_path, keys(typed), out)
+    assert gateway.sent == []  # Esc는 보내지 않는다
+    typed = [*"https://mcp.example.com/mcp", "enter", *"문서", "enter", "enter", "x"]
+    assert "신청 번호" in kit_module.intake_screen(model, gateway, tmp_path, keys(typed), out)
+    assert gateway.sent[0]["url"] == "https://mcp.example.com/mcp"
+    assert gateway.sent[0]["purpose"] == "문서"
+    bad = [*"http://a.example.com/x", "enter", *"p", "enter", "esc"]  # 잘못된 주소
+    kit_module.intake_screen(model, gateway, tmp_path, keys(bad), out)
+    assert "https" in out.getvalue() and len(gateway.sent) == 1
