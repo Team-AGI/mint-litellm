@@ -424,10 +424,14 @@ def retire_key(kit: Kit, old_key: str) -> bool:
     """이 PC의 옛 설치 키로 제거를 알려 그 키만 해제한다(같은 사람의 다른 PC는 그대로)."""
     new_key = kit.config.get("key")
     kit.config["key"] = old_key
+    kit.replaced_by = sha256_bytes(new_key.encode()) if new_key else None  # 앱 자격을 새 키로
     try:
-        return kit.report({"mode": "none"}, "removed")
+        done = kit.report({"mode": "none"}, "removed")
     finally:
-        kit.config["key"] = new_key
+        kit.config["key"], kit.replaced_by = new_key, None
+    if not done:
+        print("이 PC의 옛 연결 키를 해제하지 못했습니다. 관리자 화면 「단말」에서 해제하십시오.")
+    return done
 
 
 def capture(command: list[str]) -> str:
@@ -3144,6 +3148,8 @@ class Kit:
                 payload["decision_versions"] = versions
         if pending:
             payload["removed"] = pending
+        if not installed and getattr(self, "replaced_by", None):
+            payload["replaced_by"] = self.replaced_by
         trust = self.hook_trust(state) if installed else None
         if trust:
             payload["hook_trust"] = trust

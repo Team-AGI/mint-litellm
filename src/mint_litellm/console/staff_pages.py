@@ -943,7 +943,7 @@ def issue_kit(
     config: ConsoleConfig, control: psycopg.Connection, user_id: str, team_id: str | None,
     platform: str, harness: str,
 ) -> bytes:
-    """본인 키를 새로 발급해 담은 설치 묶음을 만든다(이전 묶음의 키는 지워진다)."""
+    """본인 키를 새로 발급해 담은 설치 묶음을 만든다(다른 PC의 키는 그대로다)."""
     if platform not in labels.KIT_PLATFORM or harness not in labels.KIT_HARNESS:
         raise KitRefused("설치 묶음의 종류가 올바르지 않습니다.", 400)
     if config.kit_gap:

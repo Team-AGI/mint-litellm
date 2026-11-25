@@ -1591,11 +1591,14 @@ class PluginDatabase:
             ))
         return True
 
-    async def retire_install(self, instance_id: str, key_token: str, issuer: Any) -> bool:
+    async def retire_install(
+        self, instance_id: str, key_token: str, issuer: Any, successor: str | None = None
+    ) -> bool:
         """설치 묶음이 제거·재설치를 알린 PC 한 대의 키만 해제한다(같은 사람의 다른 PC는 그대로).
 
         LiteLLM 키(설치·게이트웨이·이 PC의 앱)를 먼저 지우고 MINT 기록을 해제한다. 지우지 못하면
-        해제하지 않는다(키가 살아 있는데 해제된 것처럼 보이지 않게). 해제했으면 참."""
+        해제하지 않는다(키가 살아 있는데 해제된 것처럼 보이지 않게). 재설치(``successor``가 같은
+        사람의 활성 설치 키)이면 이 PC의 앱 자격은 지우지 않고 새 키로 옮긴다. 해제했으면 참."""
         from mint_litellm.endpoint.apps import ACTOR
 
         async def find(conn: Any) -> Any:
@@ -1615,11 +1618,21 @@ class PluginDatabase:
         if row is None or issuer is None:
             return False
         user_id, alias, mcp_alias, apps = row
-        await asyncio.to_thread(issuer.delete_kit_keys, [a for a in (alias, mcp_alias, *apps) if a])
+
+        async def heir(conn: Any) -> Any:
+            cursor = await conn.execute(
+                "SELECT 1 FROM mint.endpoint_installs WHERE instance_id = %s AND key_token = %s"
+                " AND user_id = %s AND revoked_at IS NULL", (instance_id, successor, user_id))
+            return await cursor.fetchone()
+
+        moved = bool(successor and successor != key_token and await self._run(heir))
+        doomed = [alias, mcp_alias, *([] if moved else apps)]
+        await asyncio.to_thread(issuer.delete_kit_keys, [a for a in doomed if a])
 
         async def retire(conn: Any) -> Any:
             cursor = await conn.execute(
-                "SELECT mint.endpoint_retire_install(%s, %s)", (instance_id, key_token))
+                "SELECT mint.endpoint_retire_install(%s, %s, %s)",
+                (instance_id, key_token, successor if moved else None))
             return (await cursor.fetchone())[0]
 
         if not await self._run(retire):

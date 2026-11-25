@@ -351,8 +351,8 @@ def test_a_removal_report_retires_only_the_calling_pcs_key(tmp_path, stored, mon
 
     retired, issuer = [], object()
 
-    async def retire_install(self, instance_id, key_token, given):
-        retired.append((key_token, given))
+    async def retire_install(self, instance_id, key_token, given, successor=None):
+        retired.append((key_token, given, successor))
         return True
 
     monkeypatch.setattr(FakeDatabase, "retire_install", retire_install, raising=False)
@@ -360,5 +360,9 @@ def test_a_removal_report_retires_only_the_calling_pcs_key(tmp_path, stored, mon
     client, _ = build(tmp_path)
     body = report(action="removed", mode="none", mcp_servers=[])
     assert post(client, REPORT, body).json() == {"recorded": True, "retired": True}
-    assert retired == [(KEY, issuer)]  # 같은 사람의 다른 PC 키는 건드리지 않는다
+    assert retired == [(KEY, issuer, None)]  # 같은 사람의 다른 PC 키는 건드리지 않는다
     assert post(client, REPORT, report()).status_code == 200 and len(retired) == 1
+    heir = "a" * 64  # 같은 PC 재설치: 새 키 해시를 함께 알려 앱 자격을 옮긴다
+    assert post(client, REPORT, body | {"replaced_by": heir}).status_code == 200
+    assert retired[-1] == (KEY, issuer, heir)
+    assert post(client, REPORT, body | {"replaced_by": "sk-raw-key"}).status_code == 422

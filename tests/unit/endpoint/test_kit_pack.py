@@ -1043,9 +1043,11 @@ def test_a_reinstall_retires_only_this_pcs_old_key():
         config = {"key": "sk-new"}
 
         def report(self, state, action):
-            sent.append((self.config["key"], action, state.get("mode")))
+            sent.append((self.config["key"], action, state.get("mode"), self.replaced_by))
             return True
 
     kit = FakeKit()
     assert kit_module.retire_key(kit, "sk-old") is True
-    assert sent == [("sk-old", "removed", "none")] and kit.config["key"] == "sk-new"
+    new_hash = kit_module.sha256_bytes(b"sk-new")  # 서버의 설치 키 해시와 같은 계산
+    assert sent == [("sk-old", "removed", "none", new_hash)] and kit.config["key"] == "sk-new"
+    assert kit.replaced_by is None

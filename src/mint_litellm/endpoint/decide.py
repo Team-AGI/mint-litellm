@@ -445,6 +445,8 @@ class ReportBody(BaseModel):
     start_failures: list[StartFailureItem] | None = Field(default=None, max_length=8)
     # 사용자 수준 Codex 훅을 Codex가 신뢰했는가(단말 설정에서 읽은 값). 이전 묶음은 보내지 않는다.
     hook_trust: Literal["trusted", "untrusted"] | None = None
+    # 제거 보고에만: 같은 PC에 새로 설치한 키의 해시(앱 자격을 그 키로 옮긴다). 단말의 주장이다.
+    replaced_by: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
     # 서버 이름 -> 단말이 받아 둔 결정 버전. 옛 단말은 보내지 않는다(최신 버전으로 본다).
     decision_versions: dict[str, Annotated[int, Field(ge=1, le=2**31)]] | None = Field(
         default=None, max_length=256
@@ -742,9 +744,10 @@ def make_router(
                 issuer = apps.issuer()
             except apps.AppRefused:
                 issuer = None
+                log.warning("kit issuer key is missing; a removed install keeps its key")
             try:
                 retired = await runtime.database.retire_install(
-                    runtime.config.instance_id, who.key_id, issuer)
+                    runtime.config.instance_id, who.key_id, issuer, body.replaced_by)
             except Exception:
                 log.exception("removed install could not be retired")
                 retired = False
