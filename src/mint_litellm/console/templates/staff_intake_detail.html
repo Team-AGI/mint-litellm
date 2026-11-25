@@ -11,6 +11,7 @@
 {% if i.status in ('passed', 'indeterminate') %}<p>관리자가 검사 결과를 보고 결정합니다.</p>{% elif i.status == 'failed' %}<p>사유를 확인하고 다시 신청하십시오. <a href="/staff/intakes/new">다시 신청</a></p>{% endif %}
 {% if issues %}<h2>검사에서 확인할 것</h2><ul>{% for t in issues %}<li>{{ t }}</li>{% endfor %}</ul>{% endif %}
 {% if stages %}<ol class="steps" aria-label="진행 단계">{% for level, text in stages %}<li class="{{ level }}"><span class="icon" aria-hidden="true">{{ ICONS[level] }}</span>{{ text }}</li>{% endfor %}</ol>{% endif %}
+{% if delivery and delivery | selectattr('1', 'equalto', 'PC 수신 대기') | list %}<p class="muted">PC에서 mint를 열고 r을 누르면 바로 받습니다.</p>{% endif %}
 {% if delivery %}<ol class="steps" aria-label="적용 단계">{% for level, text in delivery %}<li class="{{ level }}"><span class="icon" aria-hidden="true">{{ ICONS[level] }}</span>{{ text }}</li>{% endfor %}</ol>{% endif %}
 <dl class="detail">
 {% if i.server_url %}<dt>주소</dt><dd>{{ i.server_url }}</dd>{% endif %}
