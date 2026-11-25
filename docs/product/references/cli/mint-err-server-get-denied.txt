@@ -1,0 +1,5 @@
+$ python src/mint_litellm/endpoint/kit/mint_kit.py server get other_mcp
+(시험용 가짜 게이트웨이 응답: 서버 2·신청 2)
+[막힘] other_mcp — 이 서버를 쓸 승인이 없습니다.
+해결: mint request access other_mcp --reason "사유"
+[exit=4]

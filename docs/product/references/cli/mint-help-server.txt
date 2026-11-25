@@ -1,0 +1,23 @@
+$ python src/mint_litellm/endpoint/kit/mint_kit.py server --help
+내가 쓸 수 있는 서버를 봅니다·신청합니다·받습니다
+
+사용법: mint server [--kit KIT] [--debug] [--non-interactive] [-h] 동작 ...
+
+인자:
+  동작
+    list  내가 쓸 수 있는 서버와 상태
+    show  서버 하나의 상태·실행 허가·도구
+    get   승인된 서버를 이 PC에 받아 준비합니다
+    add   서버를 신청합니다(서버는 실행하지 않고 검사 뒤 관리자가 결정합니다)
+
+옵션:
+  --kit KIT          키트 폴더(기본: 설치된 위치)
+  --debug            오류 때 자세한 흔적도 보입니다
+  --non-interactive  묻지 않고 실패합니다(입력이 터미널이 아니면 자동으로 켜집니다)
+  -h, --help         이 도움말을 보입니다
+
+예시:
+  mint server list
+  mint server show github_mcp
+  mint server add https://example.com/mcp --purpose "사내 문서 검색"
+[exit=0]

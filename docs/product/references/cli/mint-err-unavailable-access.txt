@@ -1,0 +1,4 @@
+$ python src/mint_litellm/endpoint/kit/mint_kit.py request access github_mcp delete_repo --reason "저장소 정리"
+오류: 아직 이 기능을 쓸 수 없습니다.
+다음: 직원 화면 「내 MCP 서버」에서 권한을 요청하십시오.
+[exit=1]

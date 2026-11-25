@@ -1,0 +1,15 @@
+$ python src/mint_litellm/endpoint/kit/mint_kit.py server list --json --fields server_id,state
+(시험용 가짜 게이트웨이 응답: 서버 2·신청 2)
+{
+  "servers": [
+    {
+      "server_id": "github_mcp",
+      "state": "사용 가능"
+    },
+    {
+      "server_id": "fetch",
+      "state": "준비 중"
+    }
+  ]
+}
+[exit=0]

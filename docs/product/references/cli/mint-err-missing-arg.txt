@@ -1,4 +1,4 @@
-$ python src/mint_litellm/endpoint/kit/mint_kit.py app new
-usage: mint app new [-h] [--days 1-90] name
-mint app new: error: the following arguments are required: name
+$ python src/mint_litellm/endpoint/kit/mint_kit.py server show
+오류: 서버 이름이 필요합니다.
+예: mint server show github_mcp
 [exit=2]

@@ -1,23 +1,36 @@
-$ python src/mint_litellm/endpoint/kit/mint_kit.py add --help
-usage: mint add [-h] [--from SOURCE] [--purpose PURPOSE] [--grade GRADE]
-                [--network {none,hosts}] [--host HOST] [--env ENV] [--ro RO]
-                [--rw RW] [--yes] [--request-id REQUEST_ID]
-                [name] [command ...]
+$ python src/mint_litellm/endpoint/kit/mint_kit.py server add --help
+서버를 신청합니다(서버는 실행하지 않고 검사 뒤 관리자가 결정합니다)
 
-positional arguments:
-  name
-  command
+사용법: mint server add [--kit KIT] [--debug] [--non-interactive] [-h]
+                       [--from 주소] [--purpose 목적] [--grade 등급]
+                       [--network {none,hosts}] [--host 호스트] [--env 이름[=값]]
+                       [--ro 경로] [--rw 경로] [--yes] [--request-id 번호] [--json]
+                       [name] [command ...]
 
-options:
-  -h, --help            show this help message and exit
-  --from SOURCE
-  --purpose PURPOSE
-  --grade GRADE
+인자:
+  name     원격·저장소 주소나 패키지, 또는 실행 명령 앞의 이름
+  command  -- 뒤의 실행 명령(uvx 패키지==판본 등)
+
+옵션:
+  --kit KIT             키트 폴더(기본: 설치된 위치)
+  --debug               오류 때 자세한 흔적도 보입니다
+  --non-interactive     묻지 않고 실패합니다(입력이 터미널이 아니면 자동으로 켜집니다)
+  -h, --help            이 도움말을 보입니다
+  --from 주소             저장소 주소(이름과 따로 줄 때)
+  --purpose 목적          사용 목적(필수. 터미널에서 --yes 없이 부르면 물어봅니다)
+  --grade 등급            자료 등급 공개·내부·기밀·제한(기본: 내부)
   --network {none,hosts}
-  --host HOST
-  --env ENV
-  --ro RO
-  --rw RW
-  --yes
-  --request-id REQUEST_ID
+                        네트워크: none 막음, hosts는 --host만 허용(기본: 자동)
+  --host 호스트            허용할 호스트(여러 번)
+  --env 이름[=값]          서버에 넘길 환경 변수 이름(여러 번, 비밀은 받지 않습니다)
+  --ro 경로               읽기만 허용할 경로(여러 번)
+  --rw 경로               읽기·쓰기 허용 경로(여러 번)
+  --yes                 묻지 않고 바로 제출(--purpose 필수)
+  --request-id 번호       웹에서 만든 신청 번호로 이어서 제출
+  --json                신청 결과를 JSON 한 객체로 냅니다
+
+예시:
+  mint server add https://example.com/mcp --purpose "사내 문서 검색"
+  mint server add https://github.com/소유자/저장소 --purpose "코드 검색"
+  mint server add fetch --purpose "웹 읽기" -- uvx mcp-server-fetch==2025.4.7
 [exit=0]

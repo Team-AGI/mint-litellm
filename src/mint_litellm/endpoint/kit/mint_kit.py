@@ -93,7 +93,7 @@ OFFLINE_FILE = "offline.jsonl"  # 결정 서버에 닿지 못해 단말이 스�
 FAILED_DIR = "start-failed"  # 실행기가 남긴 서버별 시작 실패 사유
 TOOLS_DIR = "tools"  # 실행기가 본 서버별 도구 목록(이름·설명·입력 정의)
 KEY_REJECTED = "key_rejected"  # 서버가 키를 거절(401·403)했다는 표시. check가 문제로 보인다.
-KEY_REJECTED_TEXT = "한 줄 설치 명령을 다시 붙여 넣으십시오 (mint relink 주소)"
+KEY_REJECTED_TEXT = "한 줄 설치 명령을 다시 붙여 넣으십시오 (mint link 주소)"
 UPDATE_NOTE = "update_note"  # 자체 갱신 표시: 「needed」(고정 공개 키 없음) 또는 실패 사유
 UPDATE_NEEDED_TEXT = "한 번만 다시 설치하면 이후 자동 갱신됩니다"
 UPDATE_FILES = (("mint_agent.py", 0o755), ("mint_kit.py", 0o644))  # 이름 -> 설치 권한
@@ -4780,11 +4780,12 @@ def key_refused(gateway: Gateway, out=print) -> bool:
 
 def run_add(
     args, home: Path, gateway: Gateway, out=print, read=input, tty: bool = False, key=None,
-    preview: list | None = None,
+    preview: list | None = None, result: dict | None = None,
 ) -> int:
     """``mint add``. 대상(명령 또는 원격 주소)과 목적만 받는다. 서버는 실행하지 않는다.
 
-    ``preview``(리스트)를 주면 보낼 내용(항목, 값)만 거기에 채우고 보내지 않는다."""
+    ``preview``(리스트)를 주면 보낼 내용(항목, 값)만 거기에 채우고 보내지 않는다.
+    ``result``(딕셔너리)를 주면 제출이 받아들여졌을 때 신청 번호와 서버 이름을 거기에 채운다."""
     if key_refused(gateway, out):
         return 1
     mark_fast(home / STATE_REL, time.time())  # 승인이 곧 올 테니 보고기가 짧은 주기로 돈다
@@ -4869,7 +4870,11 @@ def run_add(
     status, doc = gateway.json("POST", INTAKES_PATH, body)
     out(submit_text(status, doc))
     if status == 201:
-        out(f"신청 번호 {doc.get('id') if isinstance(doc, dict) else ''}".strip())
+        number = doc.get("id") if isinstance(doc, dict) else ""
+        out(f"신청 번호 {number}".strip())
+        if result is not None:
+            result.update(id=number, request_id=body["request_id"], server_id=server_id,
+                          state="접수")  # fmt: skip
         return 0
     return 1
 
@@ -4951,8 +4956,8 @@ NEXT_BY_STATE = {
     S_BAD: "s 키로 다시 받으십시오",
     S_WAIT: "r 키로 다시 보고하십시오",
 }
-TABS = ("상태", "내 서버", "도입 신청")
-HELP = "1-3 탭  위/아래 선택  Enter 상세  n 신청  s 받기  c 점검  r 새로고침  o 웹  q 끝"
+TABS = ("상태", "내 서버", "도입 신청", "내 요청")
+HELP = "1-4 탭  위/아래 선택  Enter 상세  n 신청  s 받기  c 점검  r 새로고침  o 웹  q 끝"
 
 
 def next_step(model: dict) -> str:
@@ -5047,6 +5052,21 @@ def tab3_lines(model: dict, ui: dict) -> list[str]:
     return out
 
 
+def tab4_lines(model: dict, ui: dict) -> list[str]:
+    """내 요청: 보낸 권한 요청. 요청을 받아 올 곳이 생기면 ``access_requests``가 채운다."""
+    rows = model.get("access_requests") or []
+    if not rows:
+        return ["보낸 권한 요청이 없습니다",
+                "권한 요청과 승인 대기 호출은 직원 화면 「내 요청」에서 봅니다(o 키)"]  # fmt: skip
+    out = [f"  {pad('서버·도구', 36)}{pad('상태', 14)}사유"]
+    for i, row in enumerate(rows):
+        target = str(row.get("server_id", "")) + (f"/{row['tool']}" if row.get("tool") else "")
+        out.append(f"{'>' if i == ui['cursor'] else ' '} {pad(clip(target, 35), 36)}"
+                   f"{pad(str(row.get('state') or '-'), 14)}"
+                   f"{clip(str(row.get('reason') or ''), 20)}")
+    return out
+
+
 def screen_color(text: str, code: str, color: bool) -> str:
     return f"\x1b[{code}m{text}\x1b[0m" if color else text
 
@@ -5076,10 +5096,11 @@ def screen_head(model: dict, ui: dict, width: int, color: bool) -> tuple[list[st
     head = mark + title + " " * max(1, width - 6 - cell_width(title) - cell_width(state))
     head += screen_color(state, "32" if model["connected"] else "31", color)
     # 상태 탭은 건수가 없다. 서버·신청 탭에만 건수를 붙인다.
-    counts = (None, len(model["servers"]), len(model["intakes"]))
+    counts = (None, len(model["servers"]), len(model["intakes"]),
+              len(model.get("access_requests") or []) or None)  # fmt: skip
     bad = sum(1 for r in model["servers"] if r["state"] in (S_FAILED, S_BAD))
     waits = len(model.get("inspections") or {})
-    extra = ("", f" 실패 {bad}" if bad else "", f" 검사 {waits}" if waits else "")
+    extra = ("", f" 실패 {bad}" if bad else "", f" 검사 {waits}" if waits else "", "")
     names = [f"{i + 1} {t}" + (f" {counts[i]}{extra[i]}" if counts[i] is not None else "")
              for i, t in enumerate(TABS)]
     tabs = "  ".join(screen_color(f" {n} ", "7", color) if i == ui["tab"] else f" {n} "
@@ -5114,14 +5135,15 @@ def render_screen(model: dict, ui: dict, width: int = 80, height: int = 24,
     width, height = max(width, 40), max(height, 12)
     top, counts = screen_head(model, ui, width, color)
     tab = ui["tab"]
-    body = (tab1_lines(model), tab2_lines(model, ui), tab3_lines(model, ui))[tab]
+    body = (tab1_lines(model), tab2_lines(model, ui), tab3_lines(model, ui),
+            tab4_lines(model, ui))[tab]  # fmt: skip
     sections = []
     if tab == 2 and model["found"]:
         cut = next(i for i, line in enumerate(body) if line.startswith("이 PC의 관리되지"))
         sections = [(f"도입 신청 · {len(model['intakes'])}", body[:cut]),
                     (f"이 PC의 관리되지 않는 로컬 MCP · {len(model['found'])}", body[cut + 1:])]
     else:
-        titles = ("연결 상태", "승인된 MCP 서버", "도입 신청")
+        titles = ("연결 상태", "승인된 MCP 서버", "도입 신청", "내 요청")
         sections = [(titles[tab] if counts[tab] is None else f"{titles[tab]} · {counts[tab]}",
                      body)]
     available = height - 7
@@ -5143,7 +5165,7 @@ def render_screen(model: dict, ui: dict, width: int = 80, height: int = 24,
         if content:
             content.append("")
         content.extend(screen_box(title, rows, width, color))
-    keys = [("1-3", "화면"), ("↑↓", "선택"), ("Enter", "상세"), ("n", "신청"),
+    keys = [("1-4", "화면"), ("↑↓", "선택"), ("Enter", "상세"), ("n", "신청"),
             ("s", "받기"), ("c", "점검"), ("r", "새로고침"), ("o", "웹"), ("q", "끝")]
     bars = key_bar(keys, width, color)
     if ui.get("message"):
@@ -5298,11 +5320,13 @@ def intake_screen(model: dict, gateway: Gateway, home: Path, read=None, out=None
 
 def handle_key(key: str, ui: dict, model: dict) -> str | None:
     """키 하나를 화면 상태에 반영하고, 밖에서 해야 할 일 이름(없으면 None)을 돌려준다."""
-    count = (0, len(model["servers"]), len(model["intakes"]) + len(model["found"]))[ui["tab"]]
-    if key in ("1", "2", "3"):
+    count = (0, len(model["servers"]), len(model["intakes"]) + len(model["found"]),
+             len(model.get("access_requests") or []))[ui["tab"]]  # fmt: skip
+    if key in ("1", "2", "3", "4"):
         ui.update(tab=int(key) - 1, cursor=0, detail=False)
     elif key in ("left", "right"):
-        ui.update(tab=(ui["tab"] + (1 if key == "right" else -1)) % 3, cursor=0, detail=False)
+        ui.update(tab=(ui["tab"] + (1 if key == "right" else -1)) % len(TABS), cursor=0,
+                  detail=False)  # fmt: skip
     elif key == "up":
         ui["cursor"] = max(ui["cursor"] - 1, 0)
     elif key == "down":
@@ -5433,6 +5457,7 @@ def build_model(kit, state: dict, gateway: Gateway | None) -> dict:
         "mode": mode, "harnesses": kit.harnesses, "server_count": len(state.get("mcp_servers", [])),
         "problems": problems, "servers": servers,
         "intakes": intakes, "found": found, "inspections": inspections, "now": now,
+        "access_requests": [],  # 권한 요청을 받아 올 단말 API가 생기면 채운다
         "result": result,
     }  # fmt: skip
 
@@ -5929,59 +5954,198 @@ def run_inspect(
     return 1
 
 
-# --- 대화형 명령(screen·add·requests·get) ------------------------------------------------------
-CLI_COMMANDS = ("screen", "add", "requests", "get", "inspect", "relink", "app")
-VALUE_FLAGS = ("--kit", "--jitter", "--user", "--home", "--root")  # 값을 받는 전역 옵션
-NO_KIT_TEXT = (
-    "이 PC에 MINT 키트가 없습니다. 직원 화면 「내 단말」에서 설치 명령을 만들어 붙여 넣으십시오"
+# --- 명령 계층(명사 → 동사) -----------------------------------------------------------------------
+# 종료 코드는 docs/CLI.md의 표와 같다. 스크립트가 정책 거부와 시스템 오류를 가른다(3·4는 H.4).
+EXIT_OK, EXIT_FAIL, EXIT_USAGE, EXIT_LINK, EXIT_DENIED = 0, 1, 2, 3, 4
+EXIT_TABLE = (
+    (EXIT_OK, "성공, 도움말"),
+    (EXIT_FAIL, "실행 실패(네트워크, 서버 오류, 아직 쓸 수 없는 기능)"),
+    (EXIT_USAGE, "사용법 오류"),
+    (EXIT_LINK, "연결 필요(설치 안 됨, 키 없음·거절). mint link로 해결"),
+    (EXIT_DENIED, "정책 거부·권한 없음. mint request access로 해결"),
 )
-HELP_TEXT = """사용법: mint [명령] [옵션]
+CLI_COMMANDS = ("screen", "server", "request", "app", "config", "link",
+                "add", "get", "requests", "inspect", "relink")  # fmt: skip
+# 옛 단독 동사는 별칭으로만 남긴다(같은 결과). app rm은 argparse 별칭이다.
+LEGACY = {"add": ["server", "add"], "get": ["server", "get"], "requests": ["request", "list"],
+          "inspect": ["request", "inspect"], "relink": ["link"]}  # fmt: skip
+VALUE_FLAGS = ("--kit", "--jitter", "--user", "--home", "--root")  # 값을 받는 전역 옵션
+NO_KEY_TEXT = "키가 없습니다. 한 줄 설치 명령을 붙여 넣으십시오"
+HELP_TEXT = """MINT 직원 PC 명령. 명령 없이 mint만 치면 터미널 화면이 열립니다.
 
-직원이 쓰는 명령
-  (명령 없음)            터미널 화면을 엽니다(신청·내 서버·진행 상황)
-  add <주소>             원격 MCP 서버(https 주소)·GitHub 저장소·패키지를 신청합니다
-  add <이름> -- <명령>    실행 명령(uvx 패키지==판본, npx 패키지@판본)으로 신청합니다
-  requests               내 신청과 진행 상황을 봅니다
-  get <서버>             승인된 서버를 이 PC에 받아 준비합니다
-  inspect <신청>         검사가 열린 신청을 이 PC에서 검사합니다
-  app new|list|run|env|mcp|rm   자체 스크립트용 앱 자격을 다룹니다
-  relink <설치 주소>      키가 거절될 때 이 PC를 다시 연결합니다
-  status [--json]        설치 상태를 봅니다
+사용법: mint <명령> [옵션]
 
-관리·설치(관리자 권한)
-  install | uninstall | check [--json] | sync | report
+자주 쓰는 일
+  status                       계정·게이트웨이·키·서버 수·대기 신청 수를 봅니다
+  server list|show <서버>      내가 쓸 수 있는 서버와 도구, 상태를 봅니다
+  server add <주소>            서버를 신청합니다(실행 명령은 server add <이름> -- <명령>)
+  server get <서버>            승인된 서버를 이 PC에 받아 준비합니다
+  request list|show <번호>     신청의 진행 단계와 다음 할 일을 봅니다
+  request access <서버> [도구]  막힌 서버·도구의 권한을 요청합니다
+  request cancel <번호>        신청·요청을 취소합니다
+  request inspect <신청>       검사가 열린 신청을 이 PC에서 검사합니다
 
+앱 자격
+  app new|list|remove|run|env|mcp   자체 스크립트용 앱 자격을 다룹니다
+
+설치·유지
+  doctor                       설치를 점검하고 고칠 명령을 알려 줍니다
+  link <설치 주소>             키가 거절될 때 이 PC를 다시 연결합니다
+  config list                  게이트웨이 주소·설치 폴더·판본을 봅니다(키 값은 보이지 않습니다)
+  install | uninstall | sync | report   설치·제거·설정 반영·보고(관리자 권한)
+
+예시
+  mint server add https://example.com/mcp --purpose "사내 문서 검색"
+  mint request list
+  mint app run my-bot -- python bot.py
+
+옛 명령(add, get, requests, inspect, relink, check, app rm)도 같은 결과로 쓸 수 있습니다.
+목록·조회 명령은 --json(한 객체)과 --fields 이름,이름을 받습니다.
+입력이 터미널이 아니면 묻지 않고, 필요한 값이 없으면 사용법 오류로 끝납니다.
+종료 코드: 0 성공 · 1 실행 실패 · 2 사용법 오류 · 3 연결 필요 · 4 정책 거부
 명령마다 자세한 도움말: mint <명령> --help
 """
 ARGPARSE_KO = (
-    (r"the following arguments are required: ", "필요한 값이 빠졌습니다: "),
-    (r"unrecognized arguments: ", "알 수 없는 인자입니다: "),
+    (r"argument (\S+): expected one argument", r"\1 뒤에 값이 필요합니다"),
+    (r"argument (\S+): invalid int value: '([^']*)'", r"\1: 「\2」은 숫자가 아닙니다"),
     (
         r"argument (\S+): invalid choice: '([^']*)' \(choose from (.*)\)",
         r"\1: 「\2」은 쓸 수 없는 값입니다(쓸 수 있는 값: \3)",
     ),
-    (r"argument (\S+): expected one argument", r"\1 뒤에 값이 필요합니다"),
-    (r"argument (\S+): invalid int value: '([^']*)'", r"\1: 「\2」은 숫자가 아닙니다"),
 )
+ARG_NEED = {
+    "name": "이름이", "server": "서버 이름이", "target": "신청 번호나 서버 이름이",
+    "number": "신청 번호가", "url": "설치 주소가", "동작": "동작이", "명령": "명령이",
+    "--reason": "사유(--reason)가",
+}  # fmt: skip
+NON_INTERACTIVE = "묻지 않고 실패합니다(입력이 터미널이 아니면 자동으로 켜집니다)"
+EXAMPLES: dict[str, str] = {}  # 명령 이름 -> 예 한 줄(만들 때 채운다)
+KNOWN_PROGS: set[str] = set()
+ERROR_NEXT = {
+    "add": "mint server add --help", "get": "mint server list", "inspect": "mint request list",
+    "link": "직원 화면 「내 PC」에서 새 설치 명령을 만드십시오", "app": "mint app --help",
+}  # fmt: skip
 
 
 class KitMissing(Exception):
     """키트 폴더에 kit.json이 없다(설치되지 않았거나 다른 폴더를 가리킴)."""
 
 
+class CliError(Exception):
+    """사람에게 두 줄(무슨 일 + 다음에 할 일)로 보이는 실패. ``--json``이면 stderr에 한 객체."""
+
+    def __init__(self, message: str, next_step: str = "", code: int = EXIT_FAIL,
+                 name: str = "failed", label: str = "다음") -> None:  # fmt: skip
+        super().__init__(message)
+        self.message, self.next_step, self.code, self.name, self.label = (
+            message, next_step, code, name, label)  # fmt: skip
+
+
+def report_error(err: CliError, as_json: bool = False) -> None:
+    if as_json:
+        doc = {"error": {"code": err.name, "message": err.message, "next": err.next_step}}
+        print(json.dumps(doc, ensure_ascii=False), file=sys.stderr)
+        return
+    lines = [err.message if err.name == "denied" else f"오류: {err.message}"]
+    if err.next_step:
+        lines.append(f"{err.label}: {err.next_step}")
+    print("\n".join(lines), file=sys.stderr)
+
+
+def err_not_installed() -> CliError:
+    return CliError("MINT가 이 PC에 설치돼 있지 않습니다.",
+                    "직원 화면 「내 PC」에서 설치 명령을 만들어 붙여 넣으십시오.",
+                    EXIT_LINK, "not_installed")  # fmt: skip
+
+
+def err_no_key() -> CliError:
+    return CliError("이 PC에 MINT 키가 없습니다 — 설치가 끝나지 않았습니다.",
+                    "mint link <설치 주소>", EXIT_LINK, "link_required")  # fmt: skip
+
+
+def err_key_rejected() -> CliError:
+    return CliError("게이트웨이가 이 PC의 키를 받지 않습니다 — 키가 해제됐거나 만료됐습니다.",
+                    "mint link <설치 주소>", EXIT_LINK, "link_required")  # fmt: skip
+
+
+def err_unreachable(status: int = 0) -> CliError:
+    why = ("게이트웨이에 닿지 못했습니다" if status <= 0
+           else f"게이트웨이가 오류로 답했습니다(HTTP {status})")  # fmt: skip
+    return CliError(f"{why} — 정책 거부가 아닙니다.", "mint doctor", EXIT_FAIL, "unreachable")
+
+
+def err_unavailable(next_step: str) -> CliError:
+    return CliError("아직 이 기능을 쓸 수 없습니다.", next_step, EXIT_FAIL, "unavailable")
+
+
+def josa(word: str, with_batchim: str = "은", without: str = "는") -> str:
+    """영문·숫자로 끝나는 이름 뒤 조사(읽었을 때 받침이 있는 글자만 가린다)."""
+    last = word[-1:]
+    if last and "가" <= last <= "힣":
+        return with_batchim if (ord(last) - 0xAC00) % 28 else without
+    return with_batchim if last and last in "lmnrLMNR136780" else without
+
+
+def usage_error(prog: str, message: str) -> CliError:
+    """argparse의 영문 오류를 「오류 + 다음」 두 줄로. 인자 부족은 예를 보인다."""
+    follow = f"{prog} --help"
+    found = re.match(r"the following arguments are required: (.+)", message)
+    if found:
+        first = found.group(1).split(", ")[0]
+        need = ARG_NEED.get(first, f"{first} 값이")
+        example = None if first in ("동작", "명령") else EXAMPLES.get(prog)
+        return CliError(f"{need} 필요합니다.", example or follow, EXIT_USAGE, "usage",
+                        "예" if example else "다음")  # fmt: skip
+    found = re.match(r"unrecognized arguments: (.+)", message)
+    if found:
+        word = found.group(1).split()[0]
+        kind = "없는 옵션입니다" if word.startswith("-") else "알 수 없는 인자입니다"
+        return CliError(f"`{word}`{josa(word)} {kind}.", follow, EXIT_USAGE, "usage")
+    found = re.match(r"argument (\S+): invalid choice: '([^']*)'", message)
+    if found and found.group(1) in ("명령", "동작", "action"):
+        word = found.group(2)
+        return CliError(f"`{word}`{josa(word)} 없는 명령입니다.", follow, EXIT_USAGE, "usage")
+    for pattern, text in ARGPARSE_KO:
+        message = re.sub(pattern, text, message)
+    return CliError(message, follow, EXIT_USAGE, "usage")
+
+
 class Parser(argparse.ArgumentParser):
-    """인자 오류를 한국어로 내고 다음에 볼 도움말을 붙인다."""
+    """한국어 도움말(설명 → 사용법 → 옵션 → 예시)과 두 줄 오류."""
+
+    json_errors = False  # main이 --json이 있으면 켠다(오류를 stderr JSON으로)
+
+    def __init__(self, *args, **kwargs) -> None:
+        kwargs.setdefault("add_help", False)
+        super().__init__(*args, **kwargs)
+        self._positionals.title, self._optionals.title = "인자", "옵션"
+        self.add_argument("-h", "--help", action="help", default=argparse.SUPPRESS,
+                          help="이 도움말을 보입니다")  # fmt: skip
+
+    def format_help(self) -> str:
+        parts = [self.description] if self.description else []
+        parts.append(self.format_usage().replace("usage:", "사용법:", 1).rstrip())
+        for group in self._action_groups:
+            fmt = self._get_formatter()
+            fmt.start_section(group.title)
+            fmt.add_arguments(group._group_actions)
+            fmt.end_section()
+            text = fmt.format_help().strip("\n")
+            if text:
+                parts.append(text)
+        if self.epilog:
+            parts.append("예시:\n" + self.epilog)
+        return "\n\n".join(parts) + "\n"
 
     def error(self, message: str) -> NoReturn:
-        for pattern, text in ARGPARSE_KO:
-            message = re.sub(pattern, text, message)
-        self.exit(2, f"{self.prog}: {message}\n도움말: {self.prog} --help\n")
+        report_error(usage_error(self.prog, message), self.json_errors)
+        sys.exit(EXIT_USAGE)
 
 
-def first_word(argv: list[str]) -> str | None:
-    """옵션과 그 값을 건너뛴 첫 낱말(명령 이름)."""
+def first_index(argv: list[str]) -> int | None:
+    """옵션과 그 값을 건너뛴 첫 낱말(명령 이름)의 위치."""
     skip = False
-    for arg in argv:
+    for i, arg in enumerate(argv):
         if skip:
             skip = False
         elif arg in VALUE_FLAGS:
@@ -5989,9 +6153,41 @@ def first_word(argv: list[str]) -> str | None:
         elif arg == "--":
             return None
         elif not arg.startswith("-"):
-            return arg
+            return i
     return None
 
+
+def first_word(argv: list[str]) -> str | None:
+    i = first_index(argv)
+    return None if i is None else argv[i]
+
+
+def canonical(argv: list[str]) -> list[str]:
+    """옛 명령 이름을 새 명사 → 동사 명령으로 바꾼다(그 뒤 인자는 그대로)."""
+    i = first_index(argv)
+    if i is not None and argv[i] in LEGACY:
+        return argv[:i] + LEGACY[argv[i]] + argv[i + 1:]
+    return argv
+
+
+def help_prog(argv: list[str]) -> str:
+    """오류 뒤에 안내할 도움말 대상: 가장 긴 아는 명령 이름(예: mint server add)."""
+    words: list[str] = []
+    skip = False
+    for arg in argv:
+        if skip:
+            skip = False
+        elif arg in VALUE_FLAGS:
+            skip = True
+        elif arg == "--":
+            break
+        elif not arg.startswith("-") and len(words) < 2:
+            words.append(arg)
+    for size in (2, 1):
+        prog = " ".join(["mint", *words[:size]])
+        if prog in KNOWN_PROGS:
+            return prog
+    return "mint"
 
 def open_installed(folder: Path):
     """(Kit, 상태, Gateway 또는 None). 설치 기록을 못 찾으면 상태는 빈 값."""
@@ -6010,14 +6206,7 @@ def open_installed(folder: Path):
         other = Kit(folder, None, not privileged, account, False, strict=False)
         state = other.load_state()
         kit = other if state else kit
-    if not kit.config.get("key"):
-        try:
-            kit.config["key"] = (kit.home / KEY_REL).read_text(encoding="utf-8").strip()
-        except OSError:
-            pass
-    key, url = kit.config.get("key"), kit.config.get("decide_url")
-    gateway = Gateway(url, key, kit.config.get("ca_pem")) if key and url else None
-    return kit, state, gateway
+    return kit, state, gateway_of(kit)
 
 
 def can_write(path: Path) -> bool:
@@ -6294,7 +6483,7 @@ def app_error(what: str, status: int, doc: object) -> str:
 
 
 def run_app(args, kit: Kit, state: dict, gateway: Gateway | None, out=print, call=None) -> int:
-    """``mint app new|list|rm|run|env|mcp``."""
+    """``mint app new|list|remove(rm)|run|env|mcp``."""
     action, home = args.app_action, kit.home
     name = getattr(args, "name", None)
     if name is not None and not APP_NAME.fullmatch(name):
@@ -6303,13 +6492,12 @@ def run_app(args, kit: Kit, state: dict, gateway: Gateway | None, out=print, cal
     if action in ("run", "env", "mcp"):
         return use_app(args, kit, state, out, call)
     if gateway is None:
-        out("키가 없습니다. 한 줄 설치 명령을 붙여 넣으십시오")
-        return 1
+        raise err_no_key()
     if action == "new":
         return new_app(args, kit, gateway, out)
     if action == "list":
-        return list_apps(home, gateway, out)
-    if action == "rm":
+        return list_apps(home, gateway, out, args)
+    if action in ("rm", "remove"):
         return remove_app(name, home, gateway, out)
     return 2
 
@@ -6321,7 +6509,7 @@ def use_app(args, kit: Kit, state: dict, out, call) -> int:
         out(f"이 PC에 「{name}」 앱 자격이 없습니다. mint app new {name} 으로 만드십시오")
         return 1
     if app_expired(app):
-        out(f"「{name}」 자격이 만료되었습니다. mint app rm {name} 뒤 다시 만드십시오")
+        out(f"「{name}」 자격이 만료되었습니다. mint app remove {name} 뒤 다시 만드십시오")
         return 1
     if args.app_action == "env":
         powershell = args.shell == "powershell" or (args.shell is None and kit.windows)
@@ -6370,22 +6558,30 @@ def new_app(args, kit: Kit, gateway: Gateway, out) -> int:
     return 0
 
 
-def list_apps(home: Path, gateway: Gateway, out) -> int:
+def list_apps(home: Path, gateway: Gateway, out, args=None) -> int:
     status, doc = gateway.json("GET", APPS_PATH)
     apps = doc.get("apps") if status == 200 and isinstance(doc, dict) else None
     if not isinstance(apps, list):
         out(app_error("읽지", status, doc))
         return 1
+    rows = []
+    for item in apps:
+        name = str(item.get("name", ""))
+        text = "회수됨" if item.get("revoked_at") else ("만료" if app_expired(item) else "사용 중")
+        rows.append({"name": name, "expires_at": str(item.get("expires_at") or "")[:10],
+                     "state": text, "on_this_pc": read_app(home, name) is not None})  # fmt: skip
+    if getattr(args, "json", False):
+        out(json.dumps(pick_fields({"apps": rows}, getattr(args, "fields", None), APP_FIELDS,
+                                   "apps"), ensure_ascii=False, indent=2))  # fmt: skip
+        return 0
     if not apps:
         out("앱 자격이 없습니다. mint app new 이름 으로 만드십시오")
         return 0
     out(f"{pad('앱', 24)}{pad('만료', 12)}{pad('상태', 10)}이 PC")
-    for item in apps:
-        name = str(item.get("name", ""))
-        text = "회수됨" if item.get("revoked_at") else ("만료" if app_expired(item) else "사용 중")
-        here = "키 있음" if read_app(home, name) else "—"
-        out(f"{pad(clip(name, 23), 24)}{pad(str(item.get('expires_at') or '')[:10], 12)}"
-            f"{pad(text, 10)}{here}")
+    for row in rows:
+        here = "키 있음" if row["on_this_pc"] else "—"
+        out(f"{pad(clip(row['name'], 23), 24)}{pad(row['expires_at'], 12)}"
+            f"{pad(row['state'], 10)}{here}")
     return 0
 
 
@@ -6414,80 +6610,491 @@ def remove_app(name: str, home: Path, gateway: Gateway, out) -> int:
     return 0
 
 
-def cli_main(argv: list[str]) -> int:
+class Replay:
+    """이미 받은 ``me`` 응답을 한 번 더 돌려주는 게이트웨이(목록·조회 명령이 두 번 묻지 않게)."""
+
+    def __init__(self, status: int, doc: object) -> None:
+        self.status, self.doc = status, doc
+
+    def json(self, method: str, path: str, body: object = None) -> tuple[int, object]:
+        return self.status, self.doc
+
+
+def reach(gateway: Gateway | None) -> tuple[int, dict]:
+    """키가 있고 게이트웨이가 받아 주는지 확인한다. 아니면 H.3 두 줄 오류(종료 코드 3 또는 1)."""
+    if gateway is None:
+        raise err_no_key()
+    status, me = gateway.json("GET", ME_PATH)
+    if status in (401, 403, 404):
+        raise err_key_rejected()
+    if status != 200 or not isinstance(me, dict):
+        raise err_unreachable(status)
+    return status, me
+
+
+def pick_fields(doc: dict, spec: str | None, available: tuple[str, ...], key: str | None = None):
+    """``--fields a,b``: 목록이면 항목마다, 아니면 최상위 키를 고른다. 없는 이름은 목록을 보인다."""
+    if not spec:
+        return doc
+    wanted = [f.strip() for f in spec.split(",") if f.strip()]
+    for field in wanted:
+        if field not in available:
+            raise CliError(f"`{field}`{josa(field)} 없는 필드입니다.",
+                           "쓸 수 있는 필드: " + ", ".join(available), EXIT_USAGE, "usage")
+    if key:
+        return {**doc, key: [{f: item.get(f) for f in wanted} for item in doc[key]]}
+    return {f: doc.get(f) for f in wanted}
+
+
+def print_json(doc: dict) -> None:
+    print(json.dumps(doc, ensure_ascii=False, indent=2))
+
+
+SERVER_FIELDS = ("server_id", "kind", "state", "detail", "permit_until", "pack_sha256", "next")
+SERVER_SHOW_FIELDS = (*SERVER_FIELDS, "reason", "tools", "requests")
+REQUEST_FIELDS = ("id", "server_id", "state", "stage", "reason", "next", "created_at")
+APP_FIELDS = ("name", "expires_at", "state", "on_this_pc")
+CONFIG_FIELDS = ("gateway_url", "kit_folder", "mode", "kit_version", "user", "harnesses", "key")
+STATUS_FIELDS = ("mode", "user", "kit_version", "gateway", "key", "server_count",
+                 "pending_requests", "mcp_servers")  # fmt: skip
+# 서버 상태는 웹 「내 MCP 서버」와 같은 낱말(준비 중·사용 가능·시작 실패)로 보이고, 키트의 세부
+# 상태(받기 필요 등)는 「세부」로 따로 둔다. 신청 상태는 웹 신청 목록과 같다(H.5).
+SERVER_WORD = {S_READY: "사용 가능", S_FAILED: "시작 실패", S_BAD: "시작 실패",
+               S_NOPROG: "시작 실패"}  # fmt: skip
+REQUEST_WORD = {"approved": "승인됨", "rejected": "거절됨", "withdrawn": "철회됨",
+                "pack": "준비 중", "review": "승인 대기"}  # fmt: skip
+LABEL_WORD = {"승인": "승인됨", "거절": "거절됨", "철회": "철회됨"}
+CLI_NEXT = {
+    S_NEED: "mint server get {name}", S_FAILED: "mint server get {name}",
+    S_BAD: "mint server get {name}", S_EXPIRED: "mint report", S_WAIT: "mint report",
+    S_START: "하네스에서 서버를 시작하면 확인됩니다",
+    S_WORK: "관리자 단계가 마칠 때까지 기다리십시오",
+    S_NOPROG: "관리자에게 런타임 설치를 요청하십시오",
+}  # fmt: skip
+PENDING_DONE = ("approved", "rejected", "withdrawn", "failed")
+
+
+def short_id(row: dict) -> str:
+    return str(row.get("id") or "")[:8]
+
+
+def request_word(row: dict) -> str:
+    word = REQUEST_WORD.get(str(row.get("stage"))) or row_label(row)
+    return LABEL_WORD.get(word, word)
+
+
+def server_rows(model: dict) -> list[dict]:
+    return [{
+        "server_id": r["name"], "kind": r["kind"], "state": SERVER_WORD.get(r["state"], "준비 중"),
+        "detail": r["state"], "permit_until": r.get("permit_until"),
+        "pack_sha256": r.get("pack_sha256"),
+        "next": CLI_NEXT.get(r["state"], "").format(name=r["name"]),
+    } for r in model["servers"]]  # fmt: skip
+
+
+def request_rows(model: dict) -> list[dict]:
+    return [{
+        "id": str(r.get("id") or ""), "server_id": r.get("server_id"), "state": request_word(r),
+        "stage": r.get("stage"), "reason": r.get("reason"), "next": next_text(r),
+        "created_at": r.get("created_at"),
+    } for r in model["intakes"]]  # fmt: skip
+
+
+def when(text: object) -> str:
+    return str(text or "")[:16].replace("T", " ")
+
+
+def known_tools(home: Path, server: str) -> list[str]:
+    """실행기가 본 서버의 도구 이름(받아 둔 목록이 없으면 빈 목록)."""
+    names: list[str] = []
+    try:
+        files = sorted((home / STATE_REL / TOOLS_DIR).glob("*.json"))
+    except OSError:
+        return names
+    for path in files:
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+            tools = doc["tools"] if doc["server"] == server else []
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        names += [str(t["name"]) for t in tools if isinstance(t, dict) and t.get("name")]
+    return names
+
+
+def load_model(kit, state: dict, gateway: Gateway | None) -> dict:
+    """목록·조회 명령이 쓰는 값. 게이트웨이를 한 번만 묻고 안 되면 두 줄 오류를 낸다."""
+    status, me = reach(gateway)
+    return build_model(kit, state, Replay(status, me))
+
+
+def run_server_list(args, kit, state, gateway) -> int:
+    model = load_model(kit, state, gateway)
+    rows = server_rows(model)
+    if args.json:
+        print_json(pick_fields({"servers": rows}, args.fields, SERVER_FIELDS, "servers"))
+        return EXIT_OK
+    if not rows:
+        print("나에게 승인된 서버가 없습니다. 신청: mint server add <주소>")
+        return EXIT_OK
+    print(f"{pad('서버', 26)}{pad('종류', 6)}{pad('상태', 12)}{pad('실행 허가', 18)}다음 할 일")
+    for row in rows:
+        print(f"{pad(clip(row['server_id'], 25), 26)}{pad(row['kind'], 6)}{pad(row['state'], 12)}"
+              f"{pad(when(row['permit_until']) or '-', 18)}{row['next'] or '-'}")
+    return EXIT_OK
+
+
+def run_server_show(args, kit, state, gateway) -> int:
+    model = load_model(kit, state, gateway)
+    row = next((r for r in server_rows(model) if r["server_id"] == args.server), None)
+    mine = [r for r in request_rows(model) if r["server_id"] == args.server]
+    if row is None:
+        if mine and mine[0]["state"] != "승인됨":
+            text = (f"{args.server}은(는) 아직 승인되지 않았습니다 — "
+                    f"신청이 「{mine[0]['state']}」입니다.")
+            raise CliError(text, "mint request list", EXIT_FAIL, "not_found")
+        raise CliError(f"`{args.server}` 서버가 내 서버 목록에 없습니다.", "mint server list",
+                       EXIT_FAIL, "not_found")  # fmt: skip
+    source = next(r for r in model["servers"] if r["name"] == args.server)
+    row = {**row, "reason": source.get("reason") or None,
+           "tools": known_tools(kit.home, args.server), "requests": mine}  # fmt: skip
+    if args.json:
+        print_json(pick_fields(row, args.fields, SERVER_SHOW_FIELDS))
+        return EXIT_OK
+    items = [("서버", row["server_id"]), ("종류", row["kind"]), ("상태", row["state"])]
+    if row["detail"] != row["state"]:
+        items.append(("세부", row["detail"]))
+    items.append(("실행 허가", when(row["permit_until"]) or "-"))
+    if row["pack_sha256"]:
+        items.append(("묶음", str(row["pack_sha256"])[:16]))
+    if row["reason"]:
+        items.append(("사유", clip(str(row["reason"]), 70)))
+    items.append(("다음 할 일", row["next"] or "없음"))
+    print("\n".join(f"{pad(a, 12)}{b}" for a, b in items))
+    print("도구  " + (", ".join(row["tools"]) if row["tools"] else "아직 확인된 도구가 없습니다"))
+    for r in mine:
+        print(f"신청  {short_id({'id': r['id']})}  {r['state']}")
+    return EXIT_OK
+
+
+def run_request_list(args, kit, state, gateway) -> int:
+    model = load_model(kit, state, gateway)
+    rows = request_rows(model)
+    if args.json:
+        print_json(pick_fields({"requests": rows}, args.fields, REQUEST_FIELDS, "requests"))
+        return EXIT_OK
+    if not rows:
+        print("신청한 서버가 없습니다. 신청: mint server add <주소>")
+        return EXIT_OK
+    print(f"{pad('번호', 10)}{pad('서버', 28)}{pad('상태', 14)}다음 할 일")
+    for row in rows:
+        print(f"{pad(short_id(row), 10)}{pad(clip(str(row['server_id']), 27), 28)}"
+              f"{pad(row['state'], 14)}{clip(row['next'], 36)}")
+    return EXIT_OK
+
+
+def run_request_show(args, kit, state, gateway) -> int:
+    model = load_model(kit, state, gateway)
+    hits = [r for r in request_rows(model)
+            if r["id"].startswith(args.number) or r["server_id"] == args.number]  # fmt: skip
+    if not hits:
+        raise CliError(f"`{args.number}` 신청을 찾지 못했습니다.", "mint request list",
+                       EXIT_FAIL, "not_found")  # fmt: skip
+    if len(hits) > 1:
+        raise CliError(f"`{args.number}`와 맞는 신청이 {len(hits)}건입니다 — 번호가 모자랍니다.",
+                       "mint request list", EXIT_USAGE, "usage")  # fmt: skip
+    row = hits[0]
+    if args.json:
+        print_json(pick_fields(row, args.fields, REQUEST_FIELDS))
+        return EXIT_OK
+    items = [("번호", short_id(row)), ("서버", row["server_id"]), ("상태", row["state"]),
+             ("진행", stage_path(row["stage"])), ("사유", row["reason"] or "-"),
+             ("다음 할 일", row["next"]), ("접수", when(row["created_at"]) or "-")]  # fmt: skip
+    print("\n".join(f"{pad(a, 12)}{b}" for a, b in items))
+    return EXIT_OK
+
+
+def run_server_get(args, kit, gateway) -> int:
+    _, me = reach(gateway)
+    approved = {s.get("server_id") for s in me.get("servers", []) if isinstance(s, dict)}
+    if args.server not in approved:
+        mine = [i for i in me.get("intakes", []) if isinstance(i, dict)
+                and i.get("server_id") == args.server and i.get("stage") not in PENDING_DONE]
+        if mine:
+            raise CliError(f"{args.server}은(는) 아직 승인되지 않았습니다 — 신청이 진행 중입니다.",
+                           "mint request list", EXIT_FAIL, "not_found")  # fmt: skip
+        raise CliError(f"[막힘] {args.server} — 이 서버를 쓸 승인이 없습니다.",
+                       f'mint request access {args.server} --reason "사유"',
+                       EXIT_DENIED, "denied", "해결")  # fmt: skip
+    lines: list[str] = []
+    code = run_get(kit, gateway, args.server, lines.append, progress=print)
+    return finish(lines, code, "get")
+
+
+def run_server_add(args, kit, gateway) -> int:
+    reach(gateway)
+    tty = sys.stdin.isatty() and not args.non_interactive
+    if not args.purpose and (args.yes or not tty):
+        raise CliError("목적이 필요합니다 — 입력이 터미널이 아니거나 --yes를 썼습니다.",
+                       'mint server add <대상> --purpose "사용 목적"', EXIT_USAGE, "usage")
+    lines: list[str] = []
+    result: dict = {}
+    code = run_add(args, kit.home, gateway, lines.append, tty=tty, key=read_key if tty else None,
+                   result=result)  # fmt: skip
+    if code == 0 and args.json:
+        print_json({"request": result})
+        return EXIT_OK
+    return finish(lines, code, "add")
+
+
+def run_request_inspect(args, kit, state, gateway) -> int:
+    reach(gateway)
+    if find_inspection(kit.home, args.target) is None and state:
+        kit.report(state, "installed")  # 받아 둔 검사 권한이 없으면 한 번 보고해서 받는다
+    lines: list[str] = []
+    code = run_inspect(kit, gateway, args.target, lines.append, progress=print)
+    return finish(lines, code, "inspect")
+
+
+def finish(lines: list[str], code: int, name: str) -> int:
+    """기존 out 방식 함수의 결과를 새 형식으로: 성공은 그대로, 실패는 마지막 줄을 두 줄 오류로."""
+    if code == 0:
+        for line in lines:
+            print(line)
+        return EXIT_OK
+    if not lines:
+        return code  # app run이 실행한 명령의 코드는 그대로 돌려준다
+    for line in lines[:-1]:
+        print(line)
+    last = lines[-1]
+    if last == KEY_REJECTED_TEXT:
+        raise err_key_rejected()
+    if last == NO_GATEWAY:
+        raise err_unreachable(0)
+    if last == NO_KEY_TEXT:
+        raise err_no_key()
+    usage = code == EXIT_USAGE
+    raise CliError(last, ERROR_NEXT.get(name, ""), code if code in (EXIT_USAGE, 127) else EXIT_FAIL,
+                   "usage" if usage else "failed")  # fmt: skip
+
+
+def gateway_of(kit) -> Gateway | None:
+    """키트 설정(키가 없으면 키 파일)으로 만든 게이트웨이. 키나 주소가 없으면 None."""
+    if not kit.config.get("key"):
+        try:
+            kit.config["key"] = (kit.home / KEY_REL).read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
+    key, url = kit.config.get("key"), kit.config.get("decide_url")
+    return Gateway(url, key, kit.config.get("ca_pem")) if key and url else None
+
+
+def status_doc(kit, state: dict) -> dict:
+    """``mint status --json``: 설치 상태에 계정·게이트웨이·키·서버 수·대기 신청 수를 더한다."""
+    gateway = gateway_of(kit)
+    status, me = gateway.json("GET", ME_PATH) if gateway else (0, None)
+    ok = status == 200 and isinstance(me, dict)
+    key = "none" if gateway is None else "ok" if ok else (
+        "rejected" if status in (401, 403, 404) else "unknown")
+    intakes = [i for i in (me or {}).get("intakes", []) if isinstance(i, dict)] if ok else []
+    pending = sum(1 for i in intakes if i.get("stage") not in PENDING_DONE) if ok else None
+    return {**state, "gateway": {"url": kit.config.get("decide_url"), "connected": ok},
+            "key": key, "server_count": len(state.get("mcp_servers", [])),
+            "pending_requests": pending}  # fmt: skip
+
+
+def status_text(kit, state: dict, doc: dict) -> list[str]:
+    link = {"ok": "유효", "rejected": "거절됨", "none": "없음"}.get(doc["key"], "확인하지 못함")
+    where = f"{doc['gateway']['url'] or '-'} · " + (
+        "연결됨" if doc["gateway"]["connected"] else NO_GATEWAY)
+    head = [("계정", state.get("user") or "-"), ("게이트웨이", where), ("키", link)]
+    lines = [f"{pad(a, 12)}{b}" for a, b in head] + status_lines(kit, state)
+    pending = doc["pending_requests"]
+    waiting = "확인하지 못함" if pending is None else f"{pending}건"
+    extra = [f"{pad('서버 수', 12)}{doc['server_count']}개", f"{pad('대기 신청', 12)}{waiting}"]
+    at = next((i for i, line in enumerate(lines) if line.startswith("승인 서버")), len(lines) - 1)
+    return lines[:at + 1] + extra + lines[at + 1:]
+
+
+def run_config_list(args, kit, state) -> int:
+    key = "present" if gateway_of(kit) is not None else "absent"
+    doc = {"gateway_url": kit.config.get("decide_url"), "kit_folder": str(kit.folder),
+           "mode": state.get("mode") or "none", "kit_version": state.get("kit_version"),
+           "user": state.get("user"), "harnesses": list(kit.harnesses), "key": key}  # fmt: skip
+    if args.json:
+        print_json(pick_fields(doc, args.fields, CONFIG_FIELDS))
+        return EXIT_OK
+    modes = {"managed": "관리형", "user": "사용자 수준(관리되지 않음)"}
+    mode = modes.get(doc["mode"], "설치 안 됨")
+    rows = [("게이트웨이", doc["gateway_url"] or "-"), ("설치 폴더", doc["kit_folder"]),
+            ("설치 방식", mode), ("판본", doc["kit_version"] or "-"),
+            ("계정", doc["user"] or "-"), ("AI 도구", ", ".join(doc["harnesses"]) or "-"),
+            ("키", "있음(값은 보이지 않습니다)" if key == "present" else "없음")]  # fmt: skip
+    print("\n".join(f"{pad(a, 12)}{b}" for a, b in rows))
+    return EXIT_OK
+
+
+def build_parser() -> Parser:
+    """명사 → 동사 명령 트리. 모든 하위 명령은 ``--kit``·``--debug``·``--non-interactive``를 받는다.
+    """
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--kit", default=argparse.SUPPRESS, help="키트 폴더(기본: 설치된 위치)")
+    common.add_argument("--debug", action="store_true", default=argparse.SUPPRESS,
+                        help="오류 때 자세한 흔적도 보입니다")  # fmt: skip
+    common.add_argument("--non-interactive", action="store_true", default=argparse.SUPPRESS,
+                        help=NON_INTERACTIVE)
     parser = Parser(prog="mint", description="MINT 직원 PC 명령. 전체 목록: mint --help")
     parser.add_argument("--kit", default=str(KIT), help="키트 폴더(기본: 설치된 위치)")
-    sub = parser.add_subparsers(dest="command_name", required=True, metavar="명령")
-    sub.add_parser("screen", help="터미널 화면을 엽니다")
-    sub.add_parser("requests", help="내 신청과 진행 상황을 봅니다")
-    sub.add_parser("relink", help="키가 거절될 때 이 PC를 다시 연결합니다").add_argument(
-        "url", help="직원 화면 「내 단말」에서 받은 설치 주소"
-    )
-    get = sub.add_parser("get", help="승인된 서버를 이 PC에 받아 준비합니다")
+    parser.add_argument("--debug", action="store_true", help="오류 때 자세한 흔적도 보입니다")
+    parser.add_argument("--non-interactive", action="store_true", help=NON_INTERACTIVE)
+    top = parser.add_subparsers(dest="command_name", required=True, metavar="명령")
+
+    def node(subs, name, summary, *examples, aliases=(), listing=False, **kwargs):
+        p = subs.add_parser(name, parents=[common], help=summary, description=summary,
+                            aliases=list(aliases), epilog="\n".join("  " + e for e in examples),
+                            **kwargs)  # fmt: skip
+        EXAMPLES[p.prog] = examples[0] if examples else ""
+        KNOWN_PROGS.add(p.prog)
+        if listing:
+            p.add_argument("--json", action="store_true", help="결과를 JSON 한 객체로 냅니다")
+            p.add_argument("--fields", metavar="이름,이름", help="JSON에서 보일 필드(기본: 전부)")
+        return p
+
+    def noun(name, summary, *examples):
+        p = node(top, name, summary, *examples)
+        return p.add_subparsers(dest=f"{name}_action", required=True, metavar="동작")
+
+    node(top, "screen", "터미널 화면을 엽니다(명령 없이 mint만 쳐도 같습니다)", "mint")
+    server = noun("server", "내가 쓸 수 있는 서버를 봅니다·신청합니다·받습니다",
+                  "mint server list", "mint server show github_mcp",
+                  'mint server add https://example.com/mcp --purpose "사내 문서 검색"')  # fmt: skip
+    node(server, "list", "내가 쓸 수 있는 서버와 상태", "mint server list",
+         "mint server list --json", listing=True)  # fmt: skip
+    show = node(server, "show", "서버 하나의 상태·실행 허가·도구", "mint server show github_mcp",
+                "mint server show github_mcp --json", listing=True)  # fmt: skip
+    show.add_argument("server", help="서버 이름(mint server list에 보이는 이름)")
+    get = node(server, "get", "승인된 서버를 이 PC에 받아 준비합니다", "mint server get github_mcp")
     get.add_argument("server", help="서버 이름")
-    inspect = sub.add_parser("inspect", help="검사가 열린 신청을 이 PC에서 검사합니다")
-    inspect.add_argument("target", help="신청 번호 또는 서버 이름")
-    add = sub.add_parser(
-        "add",
-        help="MCP 서버를 신청합니다",
-        description="예) mint add https://example.com/mcp · "
-        "mint add https://github.com/소유자/저장소 · "
-        "mint add fetch -- uvx mcp-server-fetch==2025.4.7",
-    )
+    add = node(
+        server, "add", "서버를 신청합니다(서버는 실행하지 않고 검사 뒤 관리자가 결정합니다)",
+        'mint server add https://example.com/mcp --purpose "사내 문서 검색"',
+        'mint server add https://github.com/소유자/저장소 --purpose "코드 검색"',
+        'mint server add fetch --purpose "웹 읽기" -- uvx mcp-server-fetch==2025.4.7')  # fmt: skip
     add.add_argument("name", nargs="?", help="원격·저장소 주소나 패키지, 또는 실행 명령 앞의 이름")
-    add.add_argument("command", nargs="*", help="-- 뒤의 실행 명령")
-    add.add_argument("--from", dest="source", help="저장소 주소(이름과 따로 줄 때)")
-    add.add_argument("--purpose", help="사용 목적(없으면 물어봅니다)")
-    add.add_argument("--grade", help="자료 등급(없으면 기본값)")
-    add.add_argument("--network", choices=["none", "hosts"], help="네트워크: 막음 또는 --host만")
-    add.add_argument("--host", action="append", help="허용할 호스트(여러 번)")
-    add.add_argument("--env", action="append", help="서버에 넘길 환경 변수 이름(여러 번)")
-    add.add_argument("--ro", action="append", help="읽기만 허용할 경로(여러 번)")
-    add.add_argument("--rw", action="append", help="읽기·쓰기를 허용할 경로(여러 번)")
-    add.add_argument("--yes", action="store_true", help="확인 화면 없이 바로 제출")
-    add.add_argument("--request-id", help="웹에서 만든 신청 번호로 이어서 제출")
-    app = sub.add_parser("app", help="자체 스크립트용 앱 자격을 다룹니다").add_subparsers(
-        dest="app_action", required=True, metavar="동작"
-    )
-    new = app.add_parser("new", help="앱 자격을 만듭니다(키는 이 PC에만 둡니다)")
-    new.add_argument("name", help="앱 이름")
-    new.add_argument("--days", type=int, choices=range(1, 91), metavar="1-90", help="유효 기간(일)")
-    app.add_parser("list", help="앱 자격 목록과 상태")
-    app.add_parser("rm", help="앱 자격을 회수하고 이 PC의 키를 지웁니다").add_argument(
-        "name", help="앱 이름"
-    )
-    run = app.add_parser("run", help="앱 자격을 넣어 명령을 실행합니다")
+    add.add_argument("command", nargs="*", help="-- 뒤의 실행 명령(uvx 패키지==판본 등)")
+    add.add_argument("--from", dest="source", metavar="주소", help="저장소 주소(이름과 따로 줄 때)")
+    add.add_argument("--purpose", metavar="목적",
+                     help="사용 목적(필수. 터미널에서 --yes 없이 부르면 물어봅니다)")  # fmt: skip
+    add.add_argument("--grade", metavar="등급", help=f"자료 등급 {GRADE_CHOICES}(기본: 내부)")
+    add.add_argument("--network", choices=["none", "hosts"],
+                     help="네트워크: none 막음, hosts는 --host만 허용(기본: 자동)")  # fmt: skip
+    add.add_argument("--host", action="append", metavar="호스트", help="허용할 호스트(여러 번)")
+    add.add_argument("--env", action="append", metavar="이름[=값]",
+                     help="서버에 넘길 환경 변수 이름(여러 번, 비밀은 받지 않습니다)")  # fmt: skip
+    add.add_argument("--ro", action="append", metavar="경로", help="읽기만 허용할 경로(여러 번)")
+    add.add_argument("--rw", action="append", metavar="경로", help="읽기·쓰기 허용 경로(여러 번)")
+    add.add_argument("--yes", action="store_true", help="묻지 않고 바로 제출(--purpose 필수)")
+    add.add_argument("--request-id", metavar="번호", help="웹에서 만든 신청 번호로 이어서 제출")
+    add.add_argument("--json", action="store_true", help="신청 결과를 JSON 한 객체로 냅니다")
+    request = noun("request", "서버 신청과 권한 요청의 진행을 봅니다",
+                   "mint request list", "mint request show 3f2a9c1b")  # fmt: skip
+    node(request, "list", "내 신청과 진행 상황", "mint request list", "mint request list --json",
+         listing=True)  # fmt: skip
+    rshow = node(request, "show", "신청 한 건의 단계·사유·다음 할 일", "mint request show 3f2a9c1b",
+                 listing=True)  # fmt: skip
+    rshow.add_argument("number", help="신청 번호(mint request list의 앞 글자만 써도 됩니다)")
+    access = node(request, "access", "막힌 서버·도구의 권한을 요청합니다",
+                  'mint request access github_mcp delete_repo --reason "저장소 정리"')  # fmt: skip
+    access.add_argument("server", help="서버 이름")
+    access.add_argument("tool", nargs="?", help="도구 이름(없으면 서버 전체)")
+    access.add_argument("--reason", required=True, metavar="사유", help="권한이 필요한 사유(필수)")
+    access.add_argument("--json", action="store_true", help="결과를 JSON 한 객체로 냅니다")
+    cancel = node(request, "cancel", "신청·요청을 취소합니다", "mint request cancel 3f2a9c1b")
+    cancel.add_argument("number", help="신청 번호")
+    cancel.add_argument("--yes", action="store_true", help="확인 없이 취소")
+    cancel.add_argument("--json", action="store_true", help="결과를 JSON 한 객체로 냅니다")
+    inspect = node(request, "inspect", "검사가 열린 신청을 이 PC에서 검사합니다",
+                   "mint request inspect github_mcp")  # fmt: skip
+    inspect.add_argument("target", help="신청 번호 또는 서버 이름")
+    app = noun("app", "자체 스크립트용 앱 자격을 다룹니다(키는 이 PC에만 둡니다)",
+               "mint app new my-bot", "mint app run my-bot -- python bot.py")  # fmt: skip
+    new = node(app, "new", "앱 자격을 만듭니다(키는 이 PC에만 둡니다)", "mint app new my-bot")
+    new.add_argument("name", help="앱 이름(영문 소문자·숫자·하이픈)")
+    new.add_argument("--days", type=int, choices=range(1, 91), metavar="1-90",
+                     help="유효 기간(일, 기본: 30)")  # fmt: skip
+    node(app, "list", "앱 자격 목록과 상태", "mint app list", listing=True)
+    node(app, "remove", "앱 자격을 회수하고 이 PC의 키를 지웁니다", "mint app remove my-bot",
+         aliases=["rm"]).add_argument("name", help="앱 이름")  # fmt: skip
+    run = node(app, "run", "앱 자격을 넣어 명령을 실행합니다(그 명령의 종료 코드를 돌려줍니다)",
+               "mint app run my-bot -- python bot.py")  # fmt: skip
     run.add_argument("name", help="앱 이름")
     run.add_argument("command", nargs=argparse.REMAINDER, help="-- 뒤의 실행 명령")
-    env = app.add_parser("env", help="앱 자격을 셸 환경 변수 줄로 냅니다")
+    env = node(app, "env", "앱 자격을 셸 환경 변수 줄로 냅니다", "mint app env my-bot")
     env.add_argument("name", help="앱 이름")
-    env.add_argument("--shell", choices=["sh", "powershell"], help="셸 종류")
-    app.add_parser("mcp", help="MCP 클라이언트 설정 항목을 냅니다").add_argument(
-        "name", help="앱 이름"
-    )
-    args = parser.parse_args(argv)
-    if args.command_name == "relink":
-        return run_relink(args.url)
+    env.add_argument("--shell", choices=["sh", "powershell"], help="셸 종류(기본: 이 PC에 맞게)")
+    node(app, "mcp", "MCP 클라이언트 설정 항목을 냅니다", "mint app mcp my-bot").add_argument(
+        "name", help="앱 이름")  # fmt: skip
+    config = noun("config", "이 PC의 MINT 설정을 봅니다", "mint config list")
+    node(config, "list", "게이트웨이 주소·설치 폴더·판본(키 값은 보이지 않습니다)",
+         "mint config list", "mint config list --json", listing=True)  # fmt: skip
+    node(top, "link", "키가 거절될 때 설치 주소로 이 PC를 다시 연결합니다",
+         "mint link https://게이트웨이/kit/코드").add_argument(
+        "url", help="직원 화면 「내 PC」에서 받은 설치 주소")  # fmt: skip
+    return parser
+
+
+def cli_main(argv: list[str]) -> int:
+    argv = canonical(argv)
+    Parser.json_errors = "--json" in argv
+    args, extra = build_parser().parse_known_args(argv)
+    if extra:
+        report_error(usage_error(help_prog(argv), "unrecognized arguments: " + " ".join(extra)),
+                     Parser.json_errors)  # fmt: skip
+        return EXIT_USAGE
+    try:
+        return dispatch(args)
+    except CliError as err:
+        report_error(err, getattr(args, "json", False))
+        return err.code
+
+
+def dispatch(args) -> int:
+    name = args.command_name
+    action = getattr(args, f"{name}_action", None)
+    if name == "link":
+        lines: list[str] = []
+        return finish(lines, run_relink(args.url, lines.append), "link")
+    if action == "access":
+        raise err_unavailable("직원 화면 「내 MCP 서버」에서 권한을 요청하십시오.")
+    if action == "cancel":
+        raise err_unavailable("직원 화면 「내 요청」에서 취소하십시오.")
     kit, state, gateway = open_installed(Path(args.kit))
-    if args.command_name == "get":
-        return run_get(kit, gateway, args.server, progress=print)
-    if args.command_name == "requests":
-        return run_requests(gateway)
-    if args.command_name == "inspect":
-        if gateway is not None and find_inspection(kit.home, args.target) is None and state:
-            kit.report(state, "installed")  # 받아 둔 검사 권한이 없으면 한 번 보고해서 받는다
-        return run_inspect(kit, gateway, args.target, progress=print)
-    if args.command_name == "app":
-        return run_app(args, kit, state, gateway)
-    if args.command_name == "add":
-        if gateway is None:
-            print("키가 없습니다. 한 줄 설치 명령을 붙여 넣으십시오")
-            return 1
-        tty = sys.stdin.isatty()
-        return run_add(args, kit.home, gateway, tty=tty, key=read_key if tty else None)
+    if name == "screen":
+        return run_terminal(kit, state, gateway)
+    if name == "config":
+        return run_config_list(args, kit, state)
+    if name == "server":
+        return {"list": lambda: run_server_list(args, kit, state, gateway),
+                "show": lambda: run_server_show(args, kit, state, gateway),
+                "get": lambda: run_server_get(args, kit, gateway),
+                "add": lambda: run_server_add(args, kit, gateway)}[action]()  # fmt: skip
+    if name == "request":
+        runner = {"list": run_request_list, "show": run_request_show,
+                  "inspect": run_request_inspect}[action]  # fmt: skip
+        return runner(args, kit, state, gateway)
+    lines = []
+    if action in ("rm", "remove"):
+        args.app_action = "remove"
+    code = run_app(args, kit, state, gateway, lines.append)
+    return finish(lines, code, "app")
+
+
+def run_terminal(kit, state: dict, gateway: Gateway | None) -> int:
+    """``mint``(screen): 터미널이면 화면, 아니면 ``mint status --json``과 같은 값."""
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
-        print(json.dumps(state or {"mode": "none"}, indent=1))
-        return 0
+        if not state:
+            raise err_not_installed()
+        print_json(status_doc(kit, state))
+        return EXIT_OK
 
     def live(text: str) -> None:  # 오래 걸리는 동안 화면 맨 아래 줄에 진행을 보인다
         sys.stdout.write("\r\x1b[K" + clip(text, 78))
@@ -6813,20 +7420,44 @@ def codex_version(home: Path) -> str | None:
     return tool_version(find_codex(home))
 
 
+NO_KIT_TEXT = (
+    "이 PC에 MINT 키트가 없습니다. 직원 화면 「내 단말」에서 설치 명령을 만들어 붙여 넣으십시오"
+)
+USER_WORDS = (*CLI_COMMANDS, "status", "check", "doctor")  # 직원이 치는 명령(두 줄 오류 대상)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    Parser.json_errors = "--json" in argv
+    word = first_word(argv)
     try:
         return run_main(argv)
+    except CliError as err:
+        report_error(err, Parser.json_errors)
+        return err.code
     except KitMissing:
-        if "--json" in argv:
+        if word in USER_WORDS:
+            report_error(err_not_installed(), Parser.json_errors)
+            return EXIT_LINK
+        if "--json" in argv:  # 설치·보고 경로는 예전 그대로
             doc = {"mode": "none", "error": "kit_missing", "message": NO_KIT_TEXT}
             print(json.dumps(doc, ensure_ascii=False))
         else:
             print(NO_KIT_TEXT, file=sys.stderr)
         return 2
+    except Exception as exc:  # noqa: BLE001 - 직원 명령은 흔적 대신 두 줄로 알리고 --debug에서만 보인다
+        if word not in USER_WORDS or "--debug" in argv:
+            raise
+        report_error(CliError(f"예상하지 못한 오류가 났습니다 — {type(exc).__name__}.",
+                              "mint doctor로 점검하거나 --debug를 붙여 다시 실행하십시오.",
+                              EXIT_FAIL, "internal"), Parser.json_errors)  # fmt: skip
+        return EXIT_FAIL
 
 
 def run_main(argv: list[str]) -> int:
+    index = first_index(argv)
+    if index is not None and argv[index] == "doctor":  # doctor는 설치기 check의 새 이름
+        argv = [*argv[:index], "check", *argv[index + 1:]]
     word = first_word(argv)
     if word in CLI_COMMANDS:
         return cli_main(argv)
@@ -6842,6 +7473,8 @@ def run_main(argv: list[str]) -> int:
         help="install 설치 · uninstall 제거 · status 상태 · check 점검 · sync 설정 · report 보고",
     )
     parser.add_argument("--json", action="store_true", help="JSON으로 출력(status·check)")
+    parser.add_argument("--fields", metavar="이름,이름", help="status --json에서 보일 필드")
+    parser.add_argument("--debug", action="store_true", help="오류 때 자세한 흔적도 보입니다")
     parser.add_argument("--if-due", action="store_true", help="보고 주기가 됐을 때만 보고")
     parser.add_argument("--tick", action="store_true", help="예약 작업에서 부를 때")
     parser.add_argument("--jitter", type=int, default=0, help="보고 전 무작위 대기(초)")
@@ -6907,12 +7540,13 @@ def run_main(argv: list[str]) -> int:
             if state:
                 kit = managed
         if args.action == "status":
+            if not state:
+                raise err_not_installed()
+            doc = status_doc(kit, state)
             if args.json:
-                print(json.dumps(state or {"mode": "none"}, indent=1))
-            elif state:
-                print(NL.join(status_lines(kit, state)))
+                print_json(pick_fields(doc, args.fields, tuple(doc) + STATUS_FIELDS))
             else:
-                print("MINT가 설치되어 있지 않습니다.")
+                print(NL.join(status_text(kit, state, doc)))
             return 0
         if args.action == "sync":
             result = kit.sync_codex_block(state) if state else {}
@@ -6921,8 +7555,7 @@ def run_main(argv: list[str]) -> int:
             print(json.dumps(result, ensure_ascii=False))
             return 0
         if not state:
-            print(json.dumps({"mode": "none"}, indent=1))
-            return 1
+            raise err_not_installed()
         result, problems = kit.check(state)
         result.pop("files", None)
         if args.json:

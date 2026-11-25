@@ -1,0 +1,1 @@
+- 직원 PC `mint` 명령을 명사 → 동사(`server list|show|add|get`, `request list|show|access|cancel|inspect`, `app remove`, `doctor`, `config list`, `link`)로 정비했다. 옛 명령은 같은 결과의 별칭으로 남고, 도움말·두 줄 오류·`--json`·`--fields`·비대화형·종료 코드 표(0~4)와 터미널 화면 4번째 탭(내 요청)을 더했다.

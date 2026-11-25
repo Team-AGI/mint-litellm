@@ -1,9 +1,24 @@
 $ python src/mint_litellm/endpoint/kit/mint_kit.py app --help
-usage: mint app [-h] {new,list,rm,run,env,mcp} ...
+자체 스크립트용 앱 자격을 다룹니다(키는 이 PC에만 둡니다)
 
-positional arguments:
-  {new,list,rm,run,env,mcp}
+사용법: mint app [--kit KIT] [--debug] [--non-interactive] [-h] 동작 ...
 
-options:
-  -h, --help            show this help message and exit
+인자:
+  동작
+    new          앱 자격을 만듭니다(키는 이 PC에만 둡니다)
+    list         앱 자격 목록과 상태
+    remove (rm)  앱 자격을 회수하고 이 PC의 키를 지웁니다
+    run          앱 자격을 넣어 명령을 실행합니다(그 명령의 종료 코드를 돌려줍니다)
+    env          앱 자격을 셸 환경 변수 줄로 냅니다
+    mcp          MCP 클라이언트 설정 항목을 냅니다
+
+옵션:
+  --kit KIT          키트 폴더(기본: 설치된 위치)
+  --debug            오류 때 자세한 흔적도 보입니다
+  --non-interactive  묻지 않고 실패합니다(입력이 터미널이 아니면 자동으로 켜집니다)
+  -h, --help         이 도움말을 보입니다
+
+예시:
+  mint app new my-bot
+  mint app run my-bot -- python bot.py
 [exit=0]

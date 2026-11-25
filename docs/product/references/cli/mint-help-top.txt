@@ -1,24 +1,35 @@
 $ python src/mint_litellm/endpoint/kit/mint_kit.py --help
-usage: mint_kit.py [-h] [--json] [--if-due] [--tick] [--jitter JITTER]
-                   [--user-level] [--dry-run] [--user USER] [--home HOME]
-                   [--root ROOT] [--kit KIT]
-                   [{install,uninstall,status,check,sync,report}]
+MINT 직원 PC 명령. 명령 없이 mint만 치면 터미널 화면이 열립니다.
 
-MINT endpoint kit
+사용법: mint <명령> [옵션]
 
-positional arguments:
-  {install,uninstall,status,check,sync,report}
+자주 쓰는 일
+  status                       계정·게이트웨이·키·서버 수·대기 신청 수를 봅니다
+  server list|show <서버>      내가 쓸 수 있는 서버와 도구, 상태를 봅니다
+  server add <주소>            서버를 신청합니다(실행 명령은 server add <이름> -- <명령>)
+  server get <서버>            승인된 서버를 이 PC에 받아 준비합니다
+  request list|show <번호>     신청의 진행 단계와 다음 할 일을 봅니다
+  request access <서버> [도구]  막힌 서버·도구의 권한을 요청합니다
+  request cancel <번호>        신청·요청을 취소합니다
+  request inspect <신청>       검사가 열린 신청을 이 PC에서 검사합니다
 
-options:
-  -h, --help            show this help message and exit
-  --json
-  --if-due
-  --tick
-  --jitter JITTER
-  --user-level
-  --dry-run
-  --user USER
-  --home HOME
-  --root ROOT
-  --kit KIT
+앱 자격
+  app new|list|remove|run|env|mcp   자체 스크립트용 앱 자격을 다룹니다
+
+설치·유지
+  doctor                       설치를 점검하고 고칠 명령을 알려 줍니다
+  link <설치 주소>             키가 거절될 때 이 PC를 다시 연결합니다
+  config list                  게이트웨이 주소·설치 폴더·판본을 봅니다(키 값은 보이지 않습니다)
+  install | uninstall | sync | report   설치·제거·설정 반영·보고(관리자 권한)
+
+예시
+  mint server add https://example.com/mcp --purpose "사내 문서 검색"
+  mint request list
+  mint app run my-bot -- python bot.py
+
+옛 명령(add, get, requests, inspect, relink, check, app rm)도 같은 결과로 쓸 수 있습니다.
+목록·조회 명령은 --json(한 객체)과 --fields 이름,이름을 받습니다.
+입력이 터미널이 아니면 묻지 않고, 필요한 값이 없으면 사용법 오류로 끝납니다.
+종료 코드: 0 성공 · 1 실행 실패 · 2 사용법 오류 · 3 연결 필요 · 4 정책 거부
+명령마다 자세한 도움말: mint <명령> --help
 [exit=0]

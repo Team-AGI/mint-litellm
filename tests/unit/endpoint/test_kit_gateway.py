@@ -288,8 +288,9 @@ def test_status_without_privileges_reads_the_managed_install(tmp_path, reports, 
     empty = tmp_path / "x"
     empty.mkdir()
     assert kit_module.main(["status", "--json", "--kit", str(folder), "--home", str(home),
-                            "--root", str(empty)]) == 0  # fmt: skip
-    assert json.loads(capsys.readouterr().out) == {"mode": "none"}
+                            "--root", str(empty)]) == kit_module.EXIT_LINK  # fmt: skip
+    seen = capsys.readouterr()
+    assert seen.out == "" and json.loads(seen.err)["error"]["code"] == "not_installed"
 
 
 # --- Codex 훅 신뢰 -----------------------------------------------------------------------------

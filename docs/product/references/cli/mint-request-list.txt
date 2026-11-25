@@ -1,0 +1,6 @@
+$ python src/mint_litellm/endpoint/kit/mint_kit.py request list
+(시험용 가짜 게이트웨이 응답: 서버 2·신청 2)
+번호      서버                        상태          다음 할 일
+3f2a9c1b  docs_mcp                    검사 중       검사가 끝나기를 기다림
+9d8e7f60  github_mcp                  승인됨        없음
+[exit=0]

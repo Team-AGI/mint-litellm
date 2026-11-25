@@ -1,4 +1,4 @@
-$ python src/mint_litellm/endpoint/kit/mint_kit.py add --bogus
-usage: mint [-h] [--kit KIT] {screen,requests,relink,get,inspect,add,app} ...
-mint: error: unrecognized arguments: --bogus
+$ python src/mint_litellm/endpoint/kit/mint_kit.py server add --bogus
+오류: `--bogus`는 없는 옵션입니다.
+다음: mint server add --help
 [exit=2]
