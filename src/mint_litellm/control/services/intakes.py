@@ -148,7 +148,8 @@ def list_intakes(ctx: Context, status: str | None = None) -> list[dict]:
     return fetchall(
         ctx.conn,
         "SELECT id, server_id, source, status, decision, requested_by, owner_user_id, created_at,"
-        " decided_at, state_version FROM mint.intakes WHERE instance_id = %s"
+        " decided_at, state_version, endpoint_key_token IS NOT NULL AS via_pc"
+        " FROM mint.intakes WHERE instance_id = %s"
         " AND (%s::text IS NULL OR status = %s) ORDER BY created_at DESC, id",
         (ctx.instance_id, status, status),
     )

@@ -218,8 +218,8 @@ def application_rows(actor: StaffActor) -> list[dict]:
     if rows:
         details = fetchall(
             actor.sctx.control,
-            "SELECT id, source, state_version FROM mint.intakes WHERE instance_id = %s"
-            " AND requested_by = %s AND id = ANY(%s)",
+            "SELECT id, source, state_version, endpoint_key_token IS NOT NULL AS via_pc"
+            " FROM mint.intakes WHERE instance_id = %s AND requested_by = %s AND id = ANY(%s)",
             (actor.sctx.instance_id, actor.user_id, [r["id"] for r in rows]),
         )
         by_id = {r["id"]: r for r in details}
@@ -236,6 +236,15 @@ def source_of(actor: StaffActor, ids: list) -> dict:
                     "SELECT id, source FROM mint.intakes WHERE instance_id=%s AND id = ANY(%s)",
                     (actor.sctx.instance_id, ids))
     return {r["id"]: r["source"] for r in rows}
+
+
+def from_pc(actor: StaffActor, ids: list) -> set:
+    """PC(mint add)에서 낸 신청. 나머지 로컬 신청은 웹 화면에서 냈다."""
+    if not ids:
+        return set()
+    return {r["id"] for r in fetchall(
+        actor.sctx.control, "SELECT id FROM mint.intakes WHERE instance_id=%s AND id = ANY(%s)"
+        " AND endpoint_key_token IS NOT NULL", (actor.sctx.instance_id, ids))}
 
 
 def intake_form(request: Request, actor: StaffActor, form=None, error=None, status=200):
@@ -350,6 +359,7 @@ def intake_detail(intake_id: str, request: Request, actor: StaffActor = Depends(
         _, check, code = reason.split(":", 2)
         reason = labels.pick(labels.CHECK, check) + ": " + labels.pick(labels.CHECK_REASON, code)
     source = source_of(actor, [row["id"]]).get(row["id"], "staff")
+    via_pc = row["id"] in from_pc(actor, [row["id"]])
     # 검사에서 걸린 것(가장 최근 시도). 판별 불가·실패에서 직원이 다음을 알 수 있게 사유를 보인다.
     issues = [
         f"{labels.pick(labels.CHECK, c['check'])}: {labels.check_reason(c)}"
@@ -379,7 +389,7 @@ def intake_detail(intake_id: str, request: Request, actor: StaffActor = Depends(
             local=source == "endpoint", called=any(t["calls"] for t in seen))
     return staff_render(request, "staff_intake_detail.html",
                         {"i": row, "decision_reason": reason, "source": source,
-                         "issues": issues,
+                         "issues": issues, "via_pc": via_pc,
                          "stages": stages, "delivery": delivery,
                          "job_error": _intake_job_error(actor, row),
                          "retry": intakes_service.retry_state(

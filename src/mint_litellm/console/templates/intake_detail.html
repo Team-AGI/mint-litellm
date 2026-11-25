@@ -38,7 +38,7 @@
 {% if tab == 'info' %}
 <dl class="detail">
   <dt>대상 MCP 서버</dt><dd><a href="/servers/{{ i.server_id | urlencode }}">{{ i.server_id }}</a></dd>
-  <dt>출처</dt><dd>{{ m.source_badge(i.source) }}</dd>
+  <dt>출처</dt><dd>{{ m.source_badge(i.source, i.endpoint_key_token is not none) }}</dd>
   <dt>신청자</dt><dd>{{ i.requested_by | who }}</dd>
   <dt>담당 사용자</dt><dd>{{ i.owner_user_id | blank }}</dd>
   <dt>목적</dt><dd>{{ i.purpose | blank }}</dd>

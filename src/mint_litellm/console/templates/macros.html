@@ -1,6 +1,6 @@
 {% macro badge(table, value) %}{{ status_badge(L.status(table, value)) }}{% endmacro %}
 {% macro status_badge(st) %}<span class="badge {{ st.level }}"><span class="icon" aria-hidden="true">{{ ICONS[st.level] }}</span>{{ st.text }}</span>{% endmacro %}
-{% macro source_badge(source) %}{% if source == 'endpoint' %}<span class="badge off">{{ L.pick(L.SOURCE, source) }}</span>{% else %}{{ L.pick(L.SOURCE, source) }}{% endif %}{% endmacro %}
+{% macro source_badge(source, via_pc=true) %}{% if source == 'endpoint' and not via_pc %}<span class="badge off">웹 신청(로컬)</span>{% elif source == 'endpoint' %}<span class="badge off">{{ L.pick(L.SOURCE, source) }}</span>{% else %}{{ L.pick(L.SOURCE, source) }}{% endif %}{% endmacro %}
 {% macro empty(title, href, action) %}<div class="empty"><h3>{{ title }}</h3><a class="button" href="{{ href }}">{{ action }}</a></div>{% endmacro %}
 {% macro csrf(actor) %}<input type="hidden" name="csrf" value="{{ actor.csrf }}">{% endmacro %}
 {% macro pager(base, page, count) %}

@@ -19,7 +19,7 @@
 <table class="clickable"><thead><tr><th>MCP 서버</th><th>출처</th><th>진행</th><th>결정</th><th>신청자</th><th>접수 시각</th><th>경과</th></tr></thead><tbody>
 {% for r in rows %}<tr>
 <td><a href="/intakes/{{ r.id }}">{{ r.server_name }}</a>{% if r.server_url %}<br>{{ r.server_url }}{% endif %}<br><span class="muted">{{ m.ident(r.server_id) }}</span> <button type="button" class="copy" data-copy="{{ r.server_id }}">복사</button></td>
-<td>{{ m.source_badge(r.source) }}</td>
+<td>{{ m.source_badge(r.source, r.via_pc) }}</td>
 <td>{{ m.badge(L.INTAKE, r.status) }}</td>
 <td>{% if r.decision %}{{ m.badge(L.DECISION, r.decision) }}{% else %}—{% endif %}</td>
 <td>{{ r.requester or (r.requested_by | who) }}</td><td class="nowrap">{{ r.created_at | when }}</td>
