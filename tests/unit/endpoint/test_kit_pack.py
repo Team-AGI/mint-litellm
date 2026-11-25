@@ -904,6 +904,24 @@ def test_an_npm_server_starts_from_the_downloaded_tarball_only_when_its_hash_mat
         assert handle.read() == b"tarball"
 
 
+def test_an_npm_server_keeps_its_tarball_under_the_expanded_state_folder(tmp_path, monkeypatch):
+    # 기본 상태 폴더 ``~/.cache/mint``의 ``~``가 그대로 남으면 작업 폴더 아래 ``~``에 저장되고
+    # npx는 ``file:~/…``을 집 폴더로 풀어 파일을 못 찾는다(PC에서 서버가 곧바로 끝났다).
+    seen = {}
+
+    def stop(approved, *, folder):
+        seen["folder"] = folder
+        raise agent.Refuse("stop")
+
+    contracts = tmp_path / "contracts.json"
+    contracts.write_text(json.dumps({"servers": {"s": npm_contract()}}))
+    monkeypatch.setattr(agent, "verify_npm", stop)
+    with pytest.raises(agent.Refuse):
+        agent.run_server("s", str(contracts), {}, state_dir="~/.cache/mint")
+    assert "~" not in seen["folder"]
+    assert seen["folder"] == os.path.join(os.path.expanduser("~/.cache/mint"), agent.NPM_DIR)
+
+
 def test_an_npm_tarball_that_differs_from_the_approved_hash_is_refused(tmp_path):
     with pytest.raises(agent.Refuse, match="integrity"):
         agent.verify_npm(npm_contract(integrity="sha512-" + "B" * 86 + "=="),
