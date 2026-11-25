@@ -322,7 +322,7 @@ def test_the_launcher_refuses_a_server_the_last_report_marked_retired(world, tmp
     state = tmp_path / "cache"
     retire(state, ["srv-1"])
     started = Exec()
-    with pytest.raises(agent.Refuse, match="retired"):
+    with pytest.raises(agent.Refuse, match="이용이 끝난 서버"):
         agent.run_server("srv-1", world.listing, {}, execve=started, state_dir=str(state))
     assert started.calls == [] and not (state / "launched").exists()
 

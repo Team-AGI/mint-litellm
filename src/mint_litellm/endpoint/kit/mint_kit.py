@@ -110,7 +110,7 @@ MAX_REPORTED_SERVERS = 256  # 받는 쪽 보고 상한과 같다. 넘으면 잘�
 UNIT = "mint-report"
 TASK_NAME = "MINT Endpoint Report"
 SYNC_TASK_NAME = "MINT Endpoint Sync"  # Windows 관리형: 사용자 권한으로 Codex 설정을 맞추는 작업
-SYNC_INTERVAL_MINUTES = 10
+SYNC_INTERVAL_MINUTES = 5  # Windows 사용자 쪽(Codex 사용자 설정) 반영 주기
 NET_TASK_NAME = "MINT Endpoint Net"  # Windows 관리형: 호스트 허용 방화벽 규칙을 만드는 SYSTEM 작업
 NET_DIR = "net"
 NET_GROUP = "MINT sandbox "
@@ -5836,10 +5836,9 @@ def _status_lines(kit, state: dict) -> list[str]:
     model = build_model(kit, state, None)
     rejected = any((d / KEY_REJECTED).exists() for d in (kit.home / STATE_REL, kit.programs))
     last = None
-    for folder in (kit.home / STATE_REL, kit.programs):
+    for folder in (kit.home / STATE_REL, kit.programs):  # 사용자 보고기와 SYSTEM 보고기 중 최근 것
         try:
-            last = float((folder / LAST_REPORT).read_text())
-            break
+            last = max(last or 0.0, float((folder / LAST_REPORT).read_text()))
         except (OSError, ValueError):
             continue
     stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(last)) if last else None

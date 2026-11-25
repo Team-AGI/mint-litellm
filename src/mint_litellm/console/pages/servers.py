@@ -728,7 +728,22 @@ JOB_ERRORS = {
 
 
 def intake_job_error(conn, instance: str, intake: dict) -> dict | None:
-    """검사 작업이 실패해 다시 시도 중이거나 멈췄으면 사유와 횟수(「검사 중」에 가려지지 않게)."""
+    """검사 작업이 실패해 다시 시도 중이거나 멈췄으면 사유와 횟수(「검사 중」에 가려지지 않게).
+    승인된 신청은 LiteLLM 등록 작업(sync_server)의 실패를 본다(「등록 대기」에 가려지지 않게)."""
+    if intake["status"] == "decided" and intake.get("decision") in ("approved", "exception"):
+        row = fetchone(
+            conn, "SELECT status, attempts, max_attempts, last_error_code, run_after FROM mint.jobs"
+            " WHERE instance_id = %s AND kind = 'sync_server' AND target_ref = %s"
+            " AND status IN ('pending', 'failed') AND last_error_code IS NOT NULL"
+            " ORDER BY created_at DESC LIMIT 1",
+            (instance, intake["server_id"]),
+        )
+        if row is None:
+            return None
+        code = row["last_error_code"]
+        return {"text": JOB_ERRORS.get(code, f"LiteLLM 등록 작업이 실패했습니다({code})"),
+                "n": row["attempts"], "limit": row["max_attempts"], "what": "LiteLLM 등록",
+                "stopped": row["status"] == "failed", "next": row["run_after"]}
     if intake["status"] not in ("received", "checking"):
         return None
     row = fetchone(
@@ -741,7 +756,7 @@ def intake_job_error(conn, instance: str, intake: dict) -> dict | None:
         return None
     code = row["last_error_code"]
     return {"text": JOB_ERRORS.get(code, f"검사 작업이 실패했습니다({code})"),
-            "n": row["attempts"], "limit": row["max_attempts"],
+            "n": row["attempts"], "limit": row["max_attempts"], "what": "검사",
             "stopped": row["status"] == "failed", "next": row["run_after"]}
 
 
