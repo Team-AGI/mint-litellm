@@ -138,7 +138,8 @@ def test_the_policy_input_carries_defaults_filled_from_the_contract_and_the_inta
     (doc,) = calls
     conditions = doc["approval"]["conditions"]
     assert conditions["allowed_arg_keys"] == ["limit", "q"]
-    assert conditions["require_user_confirmation"]["tools"] == ["search"]
+    # 본인 확인은 기본으로 채우지 않는다(기본 통과, 필요하면 관리자가 조건으로 건다)
+    assert "require_user_confirmation" not in conditions
     assert conditions["require_consent"] == "support"
     assert doc["tool"]["action_type"] == "delete"
 

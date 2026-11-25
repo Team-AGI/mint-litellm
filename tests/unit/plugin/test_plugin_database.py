@@ -892,9 +892,11 @@ def test_a_silent_database_ends_every_access_at_the_budget_and_recovers(scenario
     ).fetchone() in {(0,), (1,)}
 
 
-def test_a_call_to_a_silent_database_is_blocked_as_a_dependency_failure_at_the_budget(
+def test_a_call_to_a_silent_database_stays_allowed_and_is_recorded_later_within_the_budget(
     scenario, plugin_database, tmp_path
 ):
+    """가용성 우선: DB가 응답하지 않아도 앞서 읽은 판정 자료로 승인된 호출은 통과하고 사건은
+    로컬 버퍼에 남는다(DB 복구 뒤 올린다). 판정은 예산 안에 끝난다."""
     target = conninfo_to_dict(plugin_database)
     proxy = SilentProxy(target.get("host", "localhost"), int(target.get("port", 5432)))
 
@@ -929,8 +931,8 @@ def test_a_call_to_a_silent_database_is_blocked_as_a_dependency_failure_at_the_b
 
     warm, outcome, seconds = run(go())
     assert warm.allowed
-    assert not outcome.allowed and outcome.error.code == "MINT-DEPENDENCY-DB"
-    assert outcome.error.retry_safe and seconds < 1.5, seconds
+    assert outcome.allowed and outcome.evidence in (Evidence.BUFFER, Evidence.STDERR)
+    assert seconds < 1.5, seconds
 
 
 def test_the_loser_of_a_concurrent_consumption_is_always_blocked_as_already_consumed(
