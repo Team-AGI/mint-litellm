@@ -161,30 +161,30 @@ def test_top_servers_and_alert_stats(world, conn):
 # --- 화면 -------------------------------------------------------------------------------------
 
 
-def test_the_dashboard_has_five_cards_four_charts_and_status_rows(world, admin):
-    decision(world, "blocked", enforced="deny", reason="SERVER_NOT_APPROVED")
-    alert(world, "critical")
+def test_the_dashboard_has_cards_charts_and_status_rows(world, admin):
+    for _ in range(5):  # 표본이 5건 미만이면 차트 대신 숫자만 보인다
+        decision(world, "blocked", enforced="deny", reason="SERVER_NOT_APPROVED")
+    for _ in range(5):
+        alert(world, "critical")
     html = admin.get("/").text
     for label in (
-        "승인 대기",
-        "열린 경보(치명·높음)",
         "차단률",
         "호출 수(7일)",
         "적용 엔드포인트",
     ):
         assert label in html
-    assert html.count('class="stat') >= 8 + 3
-    assert html.count("data-chart=") >= 4 and "이번 달 비용" not in html
+    assert html.count('class="stat') >= 9
+    assert html.count("data-chart=") >= 3 and "이번 달 비용" not in html
     assert "MINT 판정 지연(중앙값·95%)" in html
     assert "승인되지 않은 서버" in html and "SERVER_NOT_APPROVED" not in shown(html)
     assert "원장 봉인" in html and "내보내기" in html
-    assert 'class="stat danger" href="/alerts?status=open"' in html
+    assert 'class="banner error" role="alert"><span><strong>치명·높음 경보 5건' in html
 
 
 def test_a_slow_approval_queue_is_highlighted_and_cards_link_to_screens(world, admin):
     seed(world, age="10 minutes")
     html = admin.get("/").text
-    assert 'class="stat wait" href="/approvals"' in html
+    assert 'class="banner error" role="alert"><span><strong>승인 대기 신청' in html
     for href in ('href="/ledger?result=deny"', 'href="/endpoints"', 'href="/ledger"'):
         assert href in html
 
@@ -206,7 +206,7 @@ def test_the_ledger_has_a_chart_chips_and_a_row_drawer(world, admin):
         world, "blocked", enforced="deny", reason="CALL_APPROVAL_REQUIRED", policies=["P1"]
     )
     listing = admin.get("/ledger?range=24h")
-    assert listing.status_code == 200 and "data-chart=" in listing.text
+    assert listing.status_code == 200 and "단위 건" in listing.text
     assert f"/ledger?range=24h&amp;open={event}" in listing.text
     text = shown(admin.get(f"/ledger?range=24h&open={event}").text)
     assert "호출 승인 필요" in text and "P1" in text and "차단" in text
@@ -232,7 +232,7 @@ def test_the_alert_screen_shows_severity_cards_a_kind_chart_and_a_drawer(world, 
     alert(world, "critical")
     alert(world, "low", kind="job_failed")
     html = admin.get("/alerts").text
-    assert "가장 오래 열린 경보" in html and html.count("data-chart=") == 1
+    assert "가장 오래 열린 경보" in html and "단위 건" in html
     assert 'class="card kpi danger" href="/alerts?status=open&amp;severity=critical"' in html
     assert "<aside" not in html
     row = world.query("SELECT id FROM mint.alerts WHERE severity = 'critical'")[0][0]
@@ -278,9 +278,10 @@ def test_empty_charts_collapse_to_one_line_instead_of_a_blank_box(world, admin):
 
 
 def test_the_charts_carry_well_formed_data_once_there_are_records(world, admin):
-    decision(world, "blocked", enforced="deny", reason="SERVER_NOT_APPROVED", server="srv-a")
-    decision(world, server="srv-a")
-    alert(world, "critical")
+    for _ in range(5):
+        decision(world, "blocked", enforced="deny", reason="SERVER_NOT_APPROVED", server="srv-a")
+        decision(world, server="srv-a")
+        alert(world, "critical")
     for path, expected in (("/", {"stacked", "donut", "bars"}), ("/ledger", {"stacked", "donut"})):
         charts = chart_payloads(admin.get(path).text)
         assert {c["kind"] for c in charts} == expected

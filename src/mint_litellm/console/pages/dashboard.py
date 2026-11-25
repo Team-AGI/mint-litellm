@@ -1,30 +1,36 @@
 """대시보드·호출 기록·경보·정책 화면."""
 
-from datetime import datetime, timedelta
-from urllib.parse import quote, urlencode
+from datetime import UTC, datetime, timedelta
+from urllib.parse import parse_qsl, quote, urlencode
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi.responses import RedirectResponse
 
 from mint_litellm.console import alert_view, audit_report, labels
-from mint_litellm.console.core import Actor, page_actor, require_csrf
+from mint_litellm.console.core import Actor, can, page_actor, require_csrf
 from mint_litellm.console.labels import Status
 from mint_litellm.console.pages.common import act, server_names
+from mint_litellm.console.pages.endpoints_admin import endpoint_view
 from mint_litellm.console.templating import RANGES, local_time, render, span
-from mint_litellm.control import jobs, usage_reader
+from mint_litellm.control import endpoint_kits, jobs, usage_reader
 from mint_litellm.control import status as control_status
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
+from mint_litellm.control.services import access_requests as access_request_service
 from mint_litellm.control.services import alerts as alert_service
 from mint_litellm.control.services import approval_metrics, dashboard_reads, reads
 from mint_litellm.control.services import denials as denial_service
 from mint_litellm.control.services import policy as policy_service
 from mint_litellm.control.services import settings as settings_service
+from mint_litellm.types.errors import REASON_EXPLANATIONS
+from mint_litellm.types.reason_codes import parse_reason_code
 from mint_litellm.types.settings import Mode
 
 router = APIRouter(dependencies=[Depends(require_csrf)])
 
 SLOW_WAIT_SECONDS = 300
+LEDGER_DEFAULT_RANGE = "24h"
 RANGE_BY_HOURS = {dashboard_reads.HOURS[key]: text for key, text in RANGES}
 
 
@@ -96,35 +102,15 @@ def reason_donut(reasons: list[dict], blocked: int) -> dict:
 # --- 대시보드 -------------------------------------------------------------------------------
 
 
-def dashboard_cards(o, series, previous, coverage, workers, wait, hours):
+def dashboard_cards(o, series, previous, coverage, hours):
     total, blocked = sum(series["total"]), sum(series["block"])
     before, blocked_before = sum(previous["total"]), sum(previous["block"])
-    alerts = o["alerts"]
-    urgent = alerts.get("critical", 0) + alerts.get("high", 0)
     if total >= 5 and before >= 5:
         rate_note = f"전 기간 대비 {100 * blocked / total - 100 * blocked_before / before:+.0f}%p"
     else:
         rate_note = f"호출 {total}건 중 {blocked}건" if total else "호출 없음"
-    # 메뉴 「승인 센터」 표지와 같은 수(도입 신청은 메뉴 「도입 신청」에 따로 센다)
-    holds = o.get("pending_holds", 0)
-    waiting = o["pending_calls"] + o["pending_servers"] + holds + o["reapproval"]
-    slow = (wait["average_seconds"] or 0) >= SLOW_WAIT_SECONDS
+    # 승인 대기·경보는 위의 「지금 처리할 일」에서 한 번만 보인다.
     return [
-        card(
-            "승인 대기",
-            waiting,
-            "/approvals",
-            f"호출 {o['pending_calls']} · MCP 서버 {o['pending_servers']}"
-            f" · 예외 {holds} · 갱신 {o['reapproval']}",
-            "wait" if slow else None,
-        ),
-        card(
-            "열린 경보(치명·높음)",
-            urgent,
-            "/alerts?status=open",
-            f"전체 {sum(alerts.values())}",
-            "danger" if alerts.get("critical") else ("wait" if urgent else None),
-        ),
         card(
             "차단률",
             percent(blocked, total),
@@ -202,6 +188,56 @@ def status_dots(o, workers, zone):
     return dots
 
 
+def todo_items(actor: Actor, o: dict, wait: dict) -> list[dict]:
+    """「지금 처리할 일」: 0건은 빼고 항목마다 해당 화면(필터 적용)으로 보낸다. 중복 없음."""
+    conn, instance = actor.conn, actor.instance
+    out: list[dict] = []
+
+    def add(count, text, href, level="warn", why=None):
+        if count:
+            out.append({"text": text.format(n=count), "href": href, "level": level, "why": why})
+
+    alerts = o["alerts"]
+    add(
+        alerts.get("critical", 0) + alerts.get("high", 0), "치명·높음 경보 {n}건",
+        "/alerts?status=open", "error" if alerts.get("critical") else "warn",
+    )
+    view = endpoint_view(endpoint_kits.installs(conn, instance), [], datetime.now(UTC))
+    add(view["count"].get("violation", 0), "격리 위반 PC {n}대",
+        "/endpoints?tab=installs&state=violation", "error")
+    add(view["count"].get("stale", 0), "보고 끊긴 PC {n}대", "/endpoints?tab=installs&state=stale")
+    if actor.role in ("admin", "approver"):
+        waiting = (o["pending_calls"] + o["pending_servers"] + o.get("pending_holds", 0)
+                   + o["reapproval"])
+        slow = (wait["average_seconds"] or 0) >= SLOW_WAIT_SECONDS
+        add(
+            waiting, "승인 대기 신청 {n}건", "/approvals", "error" if slow else "warn",
+            f"호출 {o['pending_calls']} · MCP 서버 {o['pending_servers']}"
+            f" · 예외 {o.get('pending_holds', 0)} · 갱신 {o['reapproval']}",
+        )
+        add(len(access_request_service.pending(conn, instance)), "권한 요청 {n}건",
+            "/approvals?tab=access")
+        # 승인 센터에 이미 올라온 서버의 신청은 위 「승인 대기」에서 센다.
+        intakes = fetchone(
+            conn,
+            "SELECT count(*) AS n FROM mint.intakes i WHERE i.instance_id = %s"
+            " AND i.status IN ('received', 'checking', 'passed', 'indeterminate')"
+            " AND NOT EXISTS (SELECT 1 FROM mint.servers s WHERE s.instance_id = i.instance_id"
+            " AND s.server_id = i.server_id AND s.status = 'awaiting_approval')",
+            (instance,),
+        )
+        add(intakes["n"], "도입 신청 검토 {n}건", "/intakes")
+    if actor.role == "admin":
+        signup = fetchone(
+            conn,
+            "SELECT count(*) AS n FROM mint.signup_requests WHERE instance_id = %s"
+            " AND status = 'pending' AND decided_at IS NULL",
+            (instance,),
+        )
+        add(signup["n"], "가입 요청 {n}건", "/signup-requests")
+    return out
+
+
 @router.get("/")
 def dashboard(
     request: Request,
@@ -233,8 +269,7 @@ def dashboard(
     )
     latency = dashboard_reads.latency_series(conn, instance, hours, zone)
     cards = dashboard_cards(
-        o, series, previous, dashboard_reads.endpoint_coverage(conn, instance), workers, wait,
-        hours,
+        o, series, previous, dashboard_reads.endpoint_coverage(conn, instance), hours,
     )
     cards += [
         card("이번 달 호출", month["calls"], "/reports/usage"),
@@ -249,6 +284,7 @@ def dashboard(
     ctx = {
         "range": name,
         "ranges": choices("/", {}, "range", RANGES, name),
+        "todo": todo_items(actor, o, wait),
         "cards": cards,
         "trend": trend_chart(series, previous),
         "trend_has_data": sum(series["total"]) > 0,
@@ -315,9 +351,23 @@ def ledger_targets(row: dict, subject: dict) -> dict:
     }
 
 
+LEDGER_KEEP = (
+    "since", "until", "kind", "actor", "server_id", "result", "ref", "invocation", "range",
+)
+
+
+def ledger_back(text: str, **extra: str) -> str:
+    """차단 뒤 돌아갈 호출 기록 주소. 걸어 둔 조건만 남기고 다른 값은 버린다."""
+    kept = [(k, v) for k, v in parse_qsl(text) if k in LEDGER_KEEP and v]
+    query = urlencode([*kept, *extra.items()])
+    return f"/ledger?{query}" if query else "/ledger"
+
+
 @router.post("/ledger/{event_id}/block")
 def block_from_ledger(event_id: str, request: Request, target: str = Form(...),
-                      actor: Actor = Depends(page_actor)):
+                      back: str = Form(""), actor: Actor = Depends(page_actor)):
+    made: list[str] = []
+
     def action():
         row = dashboard_reads.event(actor.conn, actor.instance, str(UUID(event_id)))
         if row is None:
@@ -330,18 +380,70 @@ def block_from_ledger(event_id: str, request: Request, target: str = Form(...),
         if target not in ("tool", "user") or not targets.get(target):
             raise ControlError("차단할 대상을 확인할 수 없습니다.")
         sid = row["server_id"]
-        denial_service.deny(
+        made.append(denial_service.deny(
             actor.ctx, scope_type="server" if target == "tool" else "user",
             scope_id=sid if target == "tool" else targets["user"], server_id=sid,
             tools=[targets["tool"]] if target == "tool" else None,
             reason="호출 기록에서 관리자 차단", org_id=None,
+        ))
+
+    result = act(actor, action, "denied", "/ledger",
+                 lambda **kw: render(request, "error.html", {
+                     **kw, "title": "차단 처리 확인", "message": kw["error"],
+                     "back_href": "/ledger", "back_name": "호출 기록",
+                     "reference": actor.request_id,
+                 }, actor=actor, status=kw["status"]))
+    if made:  # 결과 띠의 「되돌리기」가 이 차단을 가리킨다
+        return RedirectResponse(ledger_back(back, denial=str(made[0])), status_code=303)
+    return result
+
+
+@router.post("/ledger/denials/{denial_id}/undo")
+def undo_block(denial_id: str, request: Request, state_version: int = Form(...),
+               back: str = Form(""), actor: Actor = Depends(page_actor)):
+    def action():
+        denial_service.lift(
+            actor.ctx, str(UUID(denial_id)), expected_version=state_version
         )
 
-    return act(actor, action, "denied", "/ledger",
+    return act(actor, action, "lifted", ledger_back(back),
                lambda **kw: render(request, "error.html", {
-                   **kw, "title": "차단 처리 확인", "message": kw["error"],
+                   **kw, "title": "차단 해제 확인", "message": kw["error"],
                    "back_href": "/ledger", "back_name": "호출 기록", "reference": actor.request_id,
                }, actor=actor, status=kw["status"]))
+
+
+def ledger_reason(row: dict) -> str | None:
+    """막힌 호출 행의 사유. 호출자가 보는 첫 줄과 같은 낱말을 쓴다(없으면 사유 이름)."""
+    if row["kind"] != "decision_evaluated" or row.get("result") not in ("deny", "stop"):
+        return None
+    payload = row.get("payload") or {}
+    code = (payload.get("stop") or {}).get("reason_code") or next(
+        (f.get("reason_code") for f in payload.get("findings") or [] if f.get("reason_code")), ""
+    )
+    if not code:
+        return None
+    try:
+        family, _ = parse_reason_code(code)
+    except ValueError:
+        return labels.outcome_reason(code)
+    return REASON_EXPLANATIONS.get(family) or labels.outcome_reason(code)
+
+
+def undo_band(actor: Actor, denial: str) -> dict | None:
+    """방금 건 차단의 「되돌리기」 띠. 이미 풀렸거나 만든 사람이 아니어도 풀 수 있는 역할만 본다."""
+    if not denial or not can(actor, "denial lift"):
+        return None
+    try:
+        key = str(UUID(denial))
+    except ValueError:
+        return None
+    return fetchone(
+        actor.conn,
+        "SELECT id, server_id, tools, state_version FROM mint.denials WHERE instance_id = %s"
+        " AND id = %s AND lifted_at IS NULL",
+        (actor.instance, key),
+    )
 
 
 def ledger_cards(series, previous):
@@ -390,6 +492,7 @@ def ledger(
     invocation: str = "",
     range_value: str = Query("", alias="range"),
     open_id: str = Query("", alias="open"),
+    denial: str = "",
     page: int = 1,
     actor: Actor = Depends(page_actor),
 ):
@@ -419,6 +522,8 @@ def ledger(
     now = datetime.now(zone)
     first = now - timedelta(days=reads.LEDGER_DEFAULT_DAYS)
     picked = range_value if range_value in dashboard_reads.HOURS and not begin else ""
+    if not picked and not (range_value or begin or ref.strip() or invocation_id):
+        picked = LEDGER_DEFAULT_RANGE  # 처음 열면 최근 24시간
     if picked:
         start = now - timedelta(hours=dashboard_reads.hours_of(picked))
     else:
@@ -459,6 +564,7 @@ def ledger(
     } if rows else {}
     for row in rows:
         row["targets"] = ledger_targets(row, subjects.get(str(row["event_id"]), {}))
+        row["reason_text"] = ledger_reason(row)
     more = more and not bad_filter
     query = {
         "since": since,
@@ -525,7 +631,11 @@ def ledger(
         "range": current,
         "ranges": choices("/ledger", params, "range", RANGES, current),
         "results": choices(
-            "/ledger", params, "result", [("", "전체"), *labels.RESULT_FILTER.items()], result
+            "/ledger", params, "result",
+            [("deny", "차단"), ("", "전체"), *(
+                (k, v) for k, v in labels.RESULT_FILTER.items() if k != "deny"
+            )],
+            result,
         ),
         "cards": ledger_cards(series, previous),
         "trend": trend_chart(series, previous),
@@ -534,6 +644,12 @@ def ledger(
             dashboard_reads.block_reasons(conn, instance, hours, **cond), blocked
         ),
         "ev": shown,
+        "views": choices(
+            "/ledger", params, "kind",
+            [("", "전체 기록"), ("decision_evaluated", "호출 판정")], kind,
+        ),
+        "undo": undo_band(actor, denial),
+        "back": qs,
     }
     return render(request, "ledger.html", ctx, actor=actor, status=400 if error else 200)
 
@@ -562,6 +678,7 @@ def alerts_page(
     zone = actor.config.time_zone
     for row in rows:
         row["summary"] = alert_view.summary(row["kind"], row["subject"])
+        row["operational"] = row["kind"] in alert_view.OPERATIONAL
     qs = urlencode({k: v for k, v in q.items() if v})
     stats = dashboard_reads.alert_stats(actor.conn, actor.instance)
     order = ("critical", "high", "medium", "low")
@@ -619,6 +736,7 @@ def alerts_page(
         ctx.update(
             a=row,
             summary=alert_view.summary(row["kind"], row["subject"]),
+            operational=row["kind"] in alert_view.OPERATIONAL,
             fields=alert_view.subject_rows(row["subject"], zone),
             link=alert_view.link(row["kind"], row["subject"]),
         )
@@ -707,6 +825,7 @@ def policy_page(request: Request, actor: Actor, error=None, status=200):
         "shadow_day": shadow and f"{shadow['set_at'].astimezone(actor.config.zone):%Y-%m-%d}",
         "s": setting,
         "ceiling": ceiling,
+        "blocked_24h": dashboard_reads.decision_totals(actor.conn, actor.instance, 24)["block"],
         "error": error,
         "range": name,
         "ranges": choices("/policy", {}, "range", RANGES, name),

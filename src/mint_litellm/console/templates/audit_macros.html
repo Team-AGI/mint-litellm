@@ -3,9 +3,16 @@
 <span class="segments" role="group" aria-label="{{ label }}">{% for text, href, active in items %}<a class="segment" href="{{ href }}"{% if active %} aria-current="true"{% endif %}>{% if active %}<strong>{{ text }}</strong>{% else %}{{ text }}{% endif %}</a>{% endfor %}</span>
 {% endmacro %}
 
-{# 차트 자리. 데이터가 없으면 낮은 빈 상태 한 줄만 둔다. #}
-{% macro panel(title, data, has_data) %}
-<section><h2>{{ title }}</h2>
-{% if has_data %}<div class="chart" data-chart="{{ data | to_json }}"></div>{% else %}<div class="empty slim">이 기간에 기록이 없습니다</div>{% endif %}
+{# 차트 자리. 단위를 제목 옆에 적고, 데이터가 없으면 빈 상태 한 줄, 표본이 5건 미만이면 그리지 않고 숫자만 보인다. #}
+{% macro panel(title, data, has_data, unit='건') %}
+{% set kind = data['kind'] %}
+{% if kind == 'bars' %}{% set total = data['values'] | sum %}
+{% elif kind == 'donut' %}{% set total = data['items'] | sum(attribute='value') %}
+{% elif kind == 'stacked' %}{% set total = data['series'] | map(attribute='data') | map('sum') | sum %}
+{% else %}{% set total = 5 %}{% endif %}
+<section><h2>{{ title }} <span class="muted unit">단위 {{ unit }}</span></h2>
+{% if not has_data %}<div class="empty slim">이 기간에 기록이 없습니다</div>
+{% elif total < 5 %}<p class="small-sample">{% if kind == 'bars' %}{% for n in data['labels'] %}{{ n }} {{ data['values'][loop.index0] }}{{ unit }}{{ ' · ' if not loop.last }}{% endfor %}{% elif kind == 'donut' %}{% for i in data['items'] %}{{ i.name }} {{ i.value }}{{ unit }}{{ ' · ' if not loop.last }}{% endfor %}{% else %}{% for s in data['series'] %}{{ s.name }} {{ s.data | sum }}{{ unit }}{{ ' · ' if not loop.last }}{% endfor %}{% endif %}</p>
+{% else %}<div class="chart" data-chart="{{ data | to_json }}"></div>{% endif %}
 </section>
 {% endmacro %}

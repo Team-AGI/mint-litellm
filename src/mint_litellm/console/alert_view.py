@@ -145,7 +145,21 @@ SUMMARY = {
 TIME_KEYS = ("valid_until", "expires_at", "deadline_at")
 
 
+# 운영 점검 경보: 정책 위반이 아니라 MINT 자신의 상태(연결·키·디스크·작업)가 나빠졌다는 뜻이다.
+OPERATIONAL = frozenset({
+    "operational_check", "litellm_unreachable", "control_key_mismatch", "enforcement_unverified",
+    "siem_forward_failing", "export_failed", "job_failed", "vuln_feed_unreachable",
+    "dep_graph_unreachable", "endpoint_kit_not_ready",
+})
+CHECK = {"litellm": "LiteLLM 연결", "key": "제어 키", "guardrail": "가드레일 등록",
+         "disk": "내보내기 디스크"}
+
+
 def summary(kind: str, subject: dict[str, Any]) -> str:
+    if kind == "operational_check":
+        name = CHECK.get((subject or {}).get("check"), "운영 점검")
+        detail = (subject or {}).get("detail")
+        return f"{name} 점검: {detail}" if detail else f"{name} 점검에서 문제가 발견되었습니다."
     text = SUMMARY.get(kind)
     if text is None:
         return labels.pick(labels.ALERT_KIND, kind)

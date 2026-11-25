@@ -34,7 +34,15 @@
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ s.settings_version }}">
   <label>모드<select name="mode"><option value="enforce"{% if s.mode == 'enforce' %} selected{% endif %}>집행</option><option value="observe"{% if ceiling == 'enforce' %} disabled{% endif %}{% if s.mode == 'observe' %} selected{% endif %}>관측</option></select></label>
 </form>
-{{ m.confirm_submit('mode-confirm', '모드 변경', '정책 모드 변경', '관측으로 바꾸면 차단될 호출이 기록만 남고 통과합니다. 집행으로 바꾸면 위반 호출이 다시 차단됩니다.', 'mode-form', '모드 변경', danger=false, trigger_class='primary') }}
+{% if ceiling == 'enforce' %}<span class="blocked-action"><span class="reason">환경 상한이 집행이라 관측은 고를 수 없습니다</span></span>{% endif %}
+{% set mode_effect %}<dl class="detail">
+<dt>영향</dt><dd>관측으로 바꾸면 최근 24시간 차단 {{ blocked_24h }}건에 해당하는 호출이 기록만 남고 통과합니다. 집행으로 바꾸면 위반 호출이 다시 차단됩니다.</dd>
+<dt>즉시</dt><dd>MINT 판정이 다음 호출부터 새 모드로 판정합니다.</dd>
+<dt>늦게</dt><dd>PC 실행기는 다음 보고(약 20초)</dd>
+<dt>취소 불가</dt><dd>이미 통과한 호출은 되돌릴 수 없습니다.</dd>
+<dt>되돌리기</dt><dd>이 화면에서 모드를 다시 바꾸면 즉시 복귀합니다.</dd>
+</dl>{% endset %}
+{{ m.confirm_submit('mode-confirm', '모드 변경', '정책 모드 변경', mode_effect, 'mode-form', '모드 변경', danger=false, trigger_class='primary') }}
 {% endif %}
 <dl class="detail">
   <dt>관측 허용 사유</dt><dd>{% for r in s.observable_reasons %}{{ L.pick(L.REASON, r) }}{{ ', ' if not loop.last }}{% endfor %}</dd>

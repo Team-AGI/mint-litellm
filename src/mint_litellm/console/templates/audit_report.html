@@ -30,10 +30,10 @@
   {% for t in s.tables %}
   <h3>{{ t.title }}</h3>
   {% if t.rows %}
-  <table class="compact"><thead><tr>{% for c in t.columns %}<th>{{ c }}</th>{% endfor %}</tr></thead><tbody>
+  <table class="compact"><thead><tr>{% for c in t.columns %}<th{% if t.rows and t.rows[0][loop.index0] is number %} class="num"{% endif %}>{{ c }}</th>{% endfor %}</tr></thead><tbody>
   {% for r in t.rows %}<tr>{% for c in r %}<td{% if c is number %} class="num"{% endif %}>{{ c }}</td>{% endfor %}</tr>{% endfor %}
   </tbody></table>
-  {% else %}<p class="muted">해당 없음</p>{% endif %}
+  {% else %}<div class="empty slim">이 기간에 기록이 없습니다</div>{% endif %}
   {% endfor %}
 </section>
 {% endfor %}

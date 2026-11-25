@@ -3,10 +3,11 @@
 {% block page_class %}wide{% endblock %}
 {% block body %}
 <h1>대시보드</h1>
-{% set todo = namespace(n=0) %}
-<section class="todo" aria-label="지금 처리할 일"><h2>지금 처리할 일</h2><div class="cards">
-{% for _, items in MENU %}{% for href, text, key in items %}{% if key and badges and badges.get(key) and (href != '/signup-requests' or actor.role == 'admin') %}{% set todo.n = todo.n + 1 %}{{ m.kpi(text, badges[key], href=href, level='wait') }}{% endif %}{% endfor %}{% endfor %}
-</div>{% if not todo.n %}<p class="muted">처리할 일이 없습니다</p>{% endif %}</section>
+{% set setup_left = badges.get('setup') if badges and actor.role == 'admin' else 0 %}
+<section class="todo" aria-label="지금 처리할 일"><h2>지금 처리할 일</h2>
+{% for t in todo %}{{ m.banner(t.level, t.text, t.why, t.href, '처리') }}{% endfor %}
+{% if setup_left %}{{ m.banner('warn', '시작하기 필수 항목 ' ~ setup_left ~ '개', none, '/setup', '처리') }}{% endif %}
+{% if not todo and not setup_left %}<p class="muted">처리할 일 없음</p>{% endif %}</section>
 <div class="filterbar">{{ a.choices('시간 범위', ranges) }}<a class="button" href="/?range={{ range }}">새로고침</a><a class="button" href="/reports/audit" hx-boost="false">감사 보고서</a></div>
 {{ m.strip(cards) }}
 <div class="grid">
@@ -23,7 +24,7 @@
   {{ m.strip(approval_cards) }}
   {% if approval_has_data %}<div class="chart" data-height="200" data-chart="{{ approval_trend | to_json }}"></div>{% else %}<div class="empty slim">이 기간에 기록이 없습니다</div>{% endif %}
 </section>
-{{ a.panel('MINT 판정 지연 추이', latency_trend, latency_has_data) }}
+{{ a.panel('MINT 판정 지연 추이', latency_trend, latency_has_data, '밀리초') }}
 </div>
 <section>
   <h2>상태</h2>
