@@ -7,7 +7,7 @@ from mint_litellm.console.core import Actor, can
 from mint_litellm.console.labels import Status
 from mint_litellm.control import status as control_status
 from mint_litellm.control import webhook_store
-from mint_litellm.control.db.connection import fetchall, fetchone
+from mint_litellm.control.db.connection import fetchone
 from mint_litellm.control.operators import SERVICE_ACCOUNTS
 
 DONE = Status("완료", "ok")
@@ -115,21 +115,24 @@ def _servers(actor: Actor) -> dict:
 
 def _approval_flow(actor: Actor) -> dict:
     """승인할 수 있는 사람: 관리자도 승인할 수 있으므로 관리자와 승인자를 함께 센다."""
-    rows = fetchall(
-        actor.conn,
-        "SELECT role, count(*) AS n FROM mint.operators WHERE instance_id = %s"
-        " AND role IN ('admin', 'approver') AND name <> 'root'"
+    admins = _count(
+        actor,
+        "SELECT count(*) AS n FROM mint.operators WHERE instance_id = %s"
+        " AND role = 'admin' AND name <> 'root'"
         " AND name <> ALL(%s) AND coalesce(user_id, '') <> ALL(%s)"
-        " AND (expires_at IS NULL OR expires_at > now()) GROUP BY role",
-        (actor.instance, list(SERVICE_ACCOUNTS), list(SERVICE_ACCOUNTS)),
+        " AND (expires_at IS NULL OR expires_at > now())",
+        list(SERVICE_ACCOUNTS), list(SERVICE_ACCOUNTS),
     )
-    count = {r["role"]: r["n"] for r in rows}
-    admins, approvers = count.get("admin", 0), count.get("approver", 0)
+    approvers = _count(
+        actor,
+        "SELECT count(*) AS n FROM mint.operators WHERE instance_id = %s AND role = 'approver'"
+        " AND (expires_at IS NULL OR expires_at > now())",
+    )
     if admins or approvers:
         line = f"승인할 수 있는 사람 {admins + approvers}명 · 관리자 {admins} · 승인자 {approvers}"
         return _item("approval", "승인자", DONE, line)
     return _item(
-        "approval", "승인자", OPEN, "기본 관리자만 있습니다. 승인자를 따로 지정할 수 있습니다.",
+        "approval", "승인자", OPEN, "기본 관리자가 직접 결정할 수 있습니다.",
         "/admin?tab=operators#operator-form", "승인자 지정", optional=True,
     )
 
