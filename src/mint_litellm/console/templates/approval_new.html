@@ -2,6 +2,11 @@
 {% block title %}사후 제한 · MINT{% endblock %}
 {% block page_class %}narrow{% endblock %}
 {% block body %}
+{% if not relation %}
+<h1>승인할 이용 관계 고르기</h1>
+{{ m.empty('어느 이용 관계를 승인할지 먼저 고르십시오', '/approvals?tab=servers', '승인 센터 서버 도입 보기') }}
+<p class="actions"><a class="button" href="/servers">MCP 서버 목록</a> <a class="button" href="/intakes">도입 신청 목록</a></p>
+{% else %}
 <h1>사후 제한</h1>
 <dl class="detail">
   <dt>MCP 서버</dt><dd><a href="/servers/{{ relation.server_id | urlencode }}">{{ relation.server_name }}</a>{% if relation.server_url %} · {{ relation.server_url }}{% endif %}<br>MCP 서버 식별자 {{ m.ident(relation.server_id) }} <button type="button" class="copy" data-copy="{{ relation.server_id }}">복사</button></dd>
@@ -17,4 +22,5 @@
   <div class="actions full"><a class="button" href="/servers/{{ relation.server_id | urlencode }}">취소</a><button type="submit" class="primary">제한</button></div>
 </form>
 {% else %}{{ m.empty('이 콘솔에서는 제한할 수 없습니다', '/servers', 'MCP 서버 목록') }}{% endif %}
+{% endif %}
 {% endblock %}

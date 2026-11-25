@@ -14,6 +14,7 @@ from mint_litellm.control import dormant, key_block
 from mint_litellm.control.approvals import DEFAULT_CALL_WINDOW
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
+from mint_litellm.control.services import access_requests as access_request_service
 from mint_litellm.control.services import allowlists as allowlist_service
 from mint_litellm.control.services import approval_metrics, dashboard_reads, exception_holds, reads
 from mint_litellm.control.services import approvals as approval_service
@@ -65,8 +66,26 @@ def _focus(request: Request) -> str | None:
 
 SLOW_SECONDS = 300  # 호출 승인이 이만큼 기다리면 강조한다(기본 처리 기한)
 SLA_MINUTES = (5, 15, 30, 60)
-TABS = ("calls", "servers", "second", "renewals", "rules", "blocks")
+# 탭 순서이자 기본 탭을 고르는 순서: 대기 건이 있는 첫 탭이 열린다(규칙은 대기 개념이 없다).
+TABS = ("servers", "calls", "access", "second", "renewals", "rules", "blocks")
+TAB_NAMES = {
+    "servers": "서버 도입", "calls": "호출", "access": "권한 요청", "second": "예외·2인 확인",
+    "renewals": "갱신", "rules": "규칙", "blocks": "차단 제안",
+}
+# 권한 요청의 사유 코드 → 승인자가 읽는 뜻
+ACCESS_REASONS = {
+    "DENIED": "관리자 차단에 걸렸습니다",
+    "APPROVAL_ABSENT": "이 사람에게 내려진 승인이 없습니다",
+    "TOOL_NOT_IN_APPROVAL": "승인 범위에 이 도구가 없습니다",
+    "APPROVAL_EXPIRED": "승인 기간이 끝났습니다",
+    "APPROVAL_REVOKED": "승인이 철회되었습니다",
+    "CALL_APPROVAL_REQUIRED": "이 도구는 호출마다 승인이 필요합니다",
+    "CALL_APPROVAL_DENIED": "호출 승인이 거절되었습니다",
+}
+ACCESS_HOW = {"lift": "access_lifted", "grant": "access_granted", "temp": "access_temp"}
+# 공통 알림 표(labels.py)는 이 작업 범위 밖이라 이 화면의 결과 문구만 여기서 더한다.
 ACCESS_TABS = ("approvals", "dormant", "denials", "allowlists")
+
 RULE_FIELDS = {  # 규칙 칸 -> 이전 링크의 쿼리 이름
     "org_id": "rule_org", "server_id": "rule_server", "tool_pattern": "rule_tool",
     "action_class": "rule_class", "principal_type": "", "principal_id": "", "window_minutes": "",
@@ -90,23 +109,36 @@ def _slow_total(actor: Actor, sla: int) -> int:
     return row["n"] if row else 0
 
 
-def approvals_page(request: Request, actor: Actor, error=None, status=200, tab=None):
-    """승인 센터: 호출·서버 도입·갱신·규칙 탭. 호출 탭이 기본이다."""
+def approvals_page(
+    request: Request, actor: Actor, error=None, status=200, tab=None, focus_id=None
+):
+    """승인 센터. 탭을 고르지 않으면 대기 건이 있는 첫 탭이 열린다."""
     query = request.query_params
-    tab = tab or (query.get("tab") if query.get("tab") in TABS else "calls")
-    focus = _focus(request)
+    focus = focus_id or _focus(request)
     calls = reads.call_approvals(actor.conn, actor.instance, page=page_number(request))
     pending = [c for c in calls if c["status"] == "pending"]
     asked = query.get("sla", "")
     sla = int(asked) if asked.isdigit() and int(asked) in SLA_MINUTES else SLOW_SECONDS // 60
     queue = reads.queue(actor.conn, actor.instance)
+    intakes = fetchall(
+        actor.conn, "SELECT id, server_id, purpose, requested_by, status FROM mint.intakes"
+        " WHERE instance_id = %s AND status <> 'decided' ORDER BY created_at", (actor.instance,),
+    )
+    holds = exception_holds.pending(actor.conn, actor.instance)
+    wait = dashboard_reads.pending_wait(actor.conn, actor.instance)
+    renewal = renewal_service.candidates(actor.conn, actor.instance)
+    access_open = access_request_service.pending(actor.conn, actor.instance)
+    waiting = {
+        "servers": len({r["server_id"] for r in queue} | {r["server_id"] for r in intakes}),
+        "calls": wait["count"], "access": len(access_open),
+        "second": len(holds), "renewals": len(renewal["unchanged"]) + len(renewal["changed"]),
+        "blocks": key_block.count_waiting(actor.conn, actor.instance),
+    }
+    tab = tab or (query.get("tab") if query.get("tab") in TABS else None) or next(
+        (t for t in TABS if waiting.get(t)), "calls"
+    )
     permissions = []
     if tab == "servers":
-        intakes = fetchall(
-            actor.conn, "SELECT id, server_id, purpose, requested_by, status FROM mint.intakes"
-            " WHERE instance_id = %s"
-            " AND status <> 'decided' ORDER BY created_at", (actor.instance,),
-        )
         by_server = {r["server_id"]: r for r in intakes}
         for row in queue:
             intake = by_server.get(row["server_id"], {})
@@ -121,12 +153,14 @@ def approvals_page(request: Request, actor: Actor, error=None, status=200, tab=N
         permissions = [s for s in reads.servers(actor.conn, actor.instance)
                        if s["status"] in ("approved", "suspended")]
         server_display(actor, permissions)
-    renewal = renewal_service.candidates(actor.conn, actor.instance)
     rules = reads.call_approval_rules(actor.conn, actor.instance)
     blocks = key_block.listing(actor.conn, actor.instance) if tab == "blocks" else []
-    holds = exception_holds.pending(actor.conn, actor.instance)
-    wait = dashboard_reads.pending_wait(actor.conn, actor.instance)
     ctx = {
+        "access_open": access_open, "access_reasons": ACCESS_REASONS,
+        "access_selected": next((r for r in access_open if str(r["id"]) == focus), None)
+        if tab == "access" else None,
+        "grant_days": access_request_service.GRANT_DAYS,
+        "temp_minutes": access_request_service.TEMP_MINUTES,
         "holds": holds, "blocks": blocks, "block_view": _block_view,
         "permissions": permissions,
         "tab": tab, "focus": focus, "error": error, "page": page_number(request),
@@ -139,10 +173,9 @@ def approvals_page(request: Request, actor: Actor, error=None, status=200, tab=N
             actor.conn, actor.instance, actor.config.time_zone
         ),
         "tabs": [
-            ("calls", "호출", wait["count"]), ("servers", "서버 도입", len(queue)),
-            ("renewals", "갱신", len(renewal["unchanged"]) + len(renewal["changed"])),
-            ("rules", "규칙", sum(1 for r in rules if r["status"] == "active")),
-            ("blocks", "차단 제안", key_block.count_waiting(actor.conn, actor.instance)),
+            (t, TAB_NAMES[t], waiting.get(t) or (
+                sum(1 for r in rules if r["status"] == "active") if t == "rules" else 0))
+            for t in TABS
         ],
         "can_grant": actor.config.litellm_admin is not None,
         "one_shot": ONE_SHOT_ACTIONS, "orgs": reads.orgs(actor.conn, actor.instance),
@@ -150,8 +183,6 @@ def approvals_page(request: Request, actor: Actor, error=None, status=200, tab=N
         "selected": None, "history": [], "stats": None,
         "range_options": [("24h", "24시간"), ("7d", "7일"), ("30d", "30일")],
     }
-    if holds or tab == "second":  # 두 번째 승인은 대기가 있을 때만 탭에 나온다
-        ctx["tabs"].insert(2, ("second", "두 번째 승인", len(holds)))
     if tab == "calls":
         chosen = query.get("range", "")
         ctx["stats"] = approval_metrics.collect(
@@ -237,6 +268,12 @@ def approval_form_page(
     return render(request, "approval_new.html", form, actor=actor, status=status)
 
 
+@router.get("/approvals/review")
+def approval_form_missing(request: Request, actor: Actor = Depends(page_actor)):
+    """이용 관계 없이 열린 승인 양식(막다른 길). 어디서 고르는지 안내한다."""
+    return render(request, "approval_new.html", {"relation": None}, actor=actor)
+
+
 @router.get("/approvals/review/{relation_id}")
 def approval_form(relation_id: str, request: Request, actor: Actor = Depends(page_actor)):
     return approval_form_page(request, actor, relation_id)
@@ -286,6 +323,17 @@ def grant_approval(
 # --- 접근 통제 --------------------------------------------------------------------------------
 
 
+def denial_source(d: dict) -> str:
+    """차단이 어디서 왔는지. 출처 열이 따로 없어 대상 종류·등록자·사유로 가른다."""
+    if d["scope_type"] == "server":
+        return "서버"
+    if str(d["reason"]).startswith("권한 요청"):
+        return "권한 요청"
+    if d["created_by"] in ("system", "mint", "automation") or str(d["reason"]).startswith("호출"):
+        return "호출 기록"
+    return "사람"
+
+
 def access_page(request: Request, actor: Actor, error=None, status=200, tab=None):
     """접근 통제: 승인·미사용·거부·허용 목록 탭."""
     query = request.query_params
@@ -304,11 +352,12 @@ def access_page(request: Request, actor: Actor, error=None, status=200, tab=None
     }
     ctx = {
         "tab": tab, "focus": focus, "error": error, "page": page_number(request),
-        "dormant_days": days, "denials": denials, "allowlists": allowlists,
+        "dormant_days": days,
+        "denials": [{**d, "source": denial_source(d)} for d in denials], "allowlists": allowlists,
         "new": bool(query.get("new")), "counts": counts, "stale": len(stale),
         "tabs": [
             ("approvals", "승인", len(counts["active"])), ("dormant", "미사용", len(stale)),
-            ("denials", "거부", counts["denials"]),
+            ("denials", "차단", counts["denials"]),
             ("allowlists", "허용 목록", counts["allowlists"]),
         ],
         "rows": [],
@@ -674,3 +723,61 @@ def decide_key_block(
           "unblock": "key_block_unblock"}
     return act(actor, action, ok.get(decision, "key_block_approved"), "/approvals?tab=blocks",
                lambda **kw: approvals_page(request, actor, tab="blocks", **kw))
+
+
+# --- 권한 요청(FM-60) -------------------------------------------------------------------------
+
+
+def _access_page(request: Request, actor: Actor, request_id: str):
+    """처리 뒤 같은 서랍을 다시 그리는 함수. 오류·낡은 판본이면 최신 내용이 보인다."""
+    return lambda **kw: approvals_page(
+        request, actor, tab="access", focus_id=str(uuid.UUID(request_id)), **kw
+    )
+
+
+@router.post("/access-requests/{request_id}/resolve")
+def resolve_access_request(
+    request_id: str,
+    request: Request,
+    how: str = Form(...),
+    state_version: int = Form(...),
+    denial_ids: list[str] = Form([]),
+    valid_days: int = Form(30),
+    actor: Actor = Depends(page_actor),
+):
+    def action():
+        if how == "lift":
+            access_request_service.resolve_lift(
+                actor.ctx, request_id, denial_ids, expected_version=state_version
+            )
+        elif how == "grant":
+            access_request_service.resolve_grant(
+                actor.ctx, actor.litellm(), request_id, valid_days=valid_days,
+                expected_version=state_version,
+            )
+        elif how == "temp":
+            access_request_service.resolve_temp(
+                actor.ctx, request_id, expected_version=state_version
+            )
+        else:
+            raise AdminError(AdminCode.NOT_FOUND, "알 수 없는 동작입니다.")
+
+    return act(actor, action, ACCESS_HOW.get(how, "access_granted"), "/approvals?tab=access",
+               _access_page(request, actor, request_id))
+
+
+@router.post("/access-requests/{request_id}/reject")
+def reject_access_request(
+    request_id: str,
+    request: Request,
+    state_version: int = Form(...),
+    note: str = Form(""),
+    actor: Actor = Depends(page_actor),
+):
+    return act(
+        actor,
+        lambda: access_request_service.reject(
+            actor.ctx, request_id, note, expected_version=state_version
+        ),
+        "access_rejected", "/approvals?tab=access", _access_page(request, actor, request_id),
+    )

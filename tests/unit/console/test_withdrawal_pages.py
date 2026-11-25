@@ -87,7 +87,7 @@ def test_staff_withdrawal_removes_the_second_approval_from_the_reviewer_console(
     assert f'action="{review_path}/decision"' not in reviewer_page
     queue = reviewer.get(queue_path).text
     assert confirm_path not in queue
-    assert "두 번째 승인을 기다리는 요청이 없습니다" in queue
+    assert "2인 확인을 기다리는 요청이 없습니다" in queue
 
     # A reviewer may still have the pre-withdrawal form open in a different tab.
     stale = reviewer.post(confirm_path, data={"csrf": sworld.csrf(reviewer)})

@@ -8,10 +8,12 @@
   {{ m.kpi('응답 대기 호출', pending_total, '/approvals?tab=calls', level='wait' if pending_total else none) }}
   {{ m.kpi('처리 기한 초과', slow, '/approvals?tab=calls', note=sla ~ '분 넘게 대기', level='danger' if slow else none) }}
   {{ m.kpi('MCP 서버 도입 대기', queue | length, '/approvals?tab=servers') }}
+  {{ m.kpi('권한 요청 대기', access_open | length, '/approvals?tab=access', level='wait' if access_open else none) }}
   {{ m.kpi('만료 임박 승인', (renewal.unchanged | length) + (renewal.changed | length), '/approvals?tab=renewals') }}
   {{ m.kpi('오늘 처리', done_today) }}
 </div>
-{% if tab == 'calls' %}{% include "_approvals_calls.html" %}
+{% if tab == 'access' %}{% include "_approvals_access.html" %}
+{% elif tab == 'calls' %}{% include "_approvals_calls.html" %}
 {% elif tab == 'servers' %}{% include "_approvals_servers.html" %}
 {% elif tab == 'second' %}{% include "_approvals_second.html" %}
 {% elif tab == 'renewals' %}{% include "_approvals_renewals.html" %}

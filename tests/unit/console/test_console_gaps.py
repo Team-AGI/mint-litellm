@@ -85,7 +85,7 @@ def test_the_approval_metrics_scan_can_use_the_requested_index(world):
 def test_the_approval_center_shows_one_row_of_at_most_six_cards_and_an_inline_sla_picker(
     world, admin
 ):
-    html = admin.get("/approvals").text
+    html = admin.get("/approvals?tab=calls").text
     assert html.count('class="card kpi') <= 6
     assert 'class="stats-line"' in html and "결정 중앙값" in html
     bar = re.search(r'<form class="filterbar".*?</form>', html, re.S).group(0)

@@ -704,6 +704,10 @@ SESSION_END_REASON = {
 }
 
 NOTICES = {
+    "access_lifted": "해제했습니다. 요청자는 바로 다시 호출할 수 있습니다.",
+    "access_granted": "허용했습니다.",
+    "access_temp": "30분 동안 허용했습니다.",
+    "access_rejected": "거절했습니다.",
     "password_changed": "비밀번호를 바꿨습니다.",
     "webhook_tested": "시험 메시지를 보냈습니다.",
     "webhook_saved": "알림 주소를 저장했습니다. 「시험 전송」으로 도착을 확인하십시오.",

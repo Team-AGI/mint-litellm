@@ -64,7 +64,7 @@ def test_a_viewer_cannot_decide_and_an_approver_cannot_unblock(world):
     proposal = seed(world)
     world.with_control_key()
     viewer = world.session_client("viewer")
-    assert "차단 승인" not in viewer.get(f"/approvals?tab=blocks&focus={proposal}").text
+    assert 'name="scope"' not in viewer.get(f"/approvals?tab=blocks&focus={proposal}").text
     refused = form_post(world, viewer, f"/key-blocks/{proposal}/approve", scope="key",
                         state_version=version(world, proposal))
     assert refused.status_code in (400, 403)
