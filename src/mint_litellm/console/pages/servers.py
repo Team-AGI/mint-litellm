@@ -609,6 +609,32 @@ def intake_sbom(intake_id: str, actor: Actor = Depends(page_actor)):
     return JSONResponse(doc, headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
+@router.get("/intakes/{intake_id}/checks.json")
+def intake_checks_file(intake_id: str, actor: Actor = Depends(page_actor), check: str = ""):
+    """신청 검사 결과(발견 항목 포함)를 파일로. ``check``를 주면 그 검사 하나만."""
+    from fastapi.encoders import jsonable_encoder
+    from fastapi.responses import JSONResponse
+
+    info = intake_service.show(actor.ctx, intake_id)
+    rows = [c for c in info["checks"] if not check_na(c) and (not check or c["check"] == check)]
+    if not rows:
+        raise AdminError(AdminCode.NOT_FOUND, "검사 결과가 없습니다.")
+    server_id = info["intake"]["server_id"]
+    doc = {
+        "server_id": server_id,
+        "intake_id": intake_id,
+        "checks": [{
+            "check": c["check"], "name": labels.pick(labels.CHECK, c["check"]),
+            "result": shown_result(c), "reason_code": c.get("reason_code"),
+            "method": c.get("method"), "ran_at": c.get("ran_at"),
+            "evidence_valid_until": c.get("evidence_valid_until"), "inputs": c.get("inputs"),
+        } for c in rows],
+    }
+    name = f"{server_id}-{check or 'checks'}.json"
+    return JSONResponse(jsonable_encoder(doc),
+                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
 def _person(actor: Actor, user_id: str | None) -> str | None:
     """사용자 식별자의 사람 이름(이메일·아이디). 명부에 없으면 None."""
     if not user_id:
