@@ -122,6 +122,12 @@ CONSENT = {
     "revoked": Status("철회됨", "block"),
     "expired": Status("만료", "off"),
 }
+ACCESS_REQUEST = {
+    "open": Status("대기", "wait"),
+    "resolved": Status("허용됨", "ok"),
+    "rejected": Status("거절됨", "block"),
+    "cancelled": Status("취소됨", "off"),
+}
 CONSENT_STATE = {
     "active": Status("동의함", "ok"),
     "none": Status("동의 필요", "wait"),
@@ -745,6 +751,10 @@ NOTICES = {
     "requester_assigned": "신청자를 지정했습니다.",
     "intake_created": "신청을 등록했습니다.",
     "intake_existing": "이미 신청한 서버입니다",
+    "access_requested": "권한을 요청했습니다. 승인자가 처리하면 여기에 결과가 보입니다.",
+    "access_existing": "같은 요청이 이미 대기 중입니다.",
+    "access_cancelled": "권한 요청을 취소했습니다.",
+    "kit_revoked_one": "이 PC의 연결을 해제했습니다. 다른 PC는 그대로입니다.",
     "intake_withdrawn": "신청을 철회했습니다. 기존 검사 이력은 보존됩니다.",
     "evidence_attached": "증빙을 첨부했습니다.",
     "rechecked": "재검사를 등록했습니다.",

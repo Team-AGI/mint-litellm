@@ -50,6 +50,7 @@ from mint_litellm.control.db.connection import connect, fetchall, fetchone
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
 from mint_litellm.control.litellm_admin import LiteLLMError
 from mint_litellm.control.services import (
+    access_requests,
     console_sessions,
     local_intakes,
     reads,
@@ -338,17 +339,40 @@ def repo_intake(request: Request, actor: StaffActor, form: dict):
         except ControlError as error:
             return intake_form(request, actor, form, error=str(error), status=422)
         return intake_form(request, actor, form)
-    target = {}
+    target = {"existing": False}
 
     def action():
-        target["id"] = local_intakes.submit_staff(actor.sctx, actor.id_hash, form["request_id"],
-                                                  form)
+        prior = my_prior_local_intake(actor, form)
+        if prior:  # 같은 서버를 다시 신청하면 오류 대신 기존 신청으로 보낸다(원격 신청과 같다)
+            target.update(id=prior, existing=True)
+        else:
+            target["id"] = local_intakes.submit_staff(
+                actor.sctx, actor.id_hash, form["request_id"], form)
 
     response = act(actor, action, "intake_created", "/staff/intakes/" + form["request_id"],
                    lambda **kw: intake_form(request, actor, form, **kw))
     if response.status_code == 303:
-        response.headers["location"] = f"/staff/intakes/{target['id']}?ok=intake_created"
+        notice = "intake_existing" if target["existing"] else "intake_created"
+        response.headers["location"] = f"/staff/intakes/{target['id']}?ok={notice}"
     return response
+
+
+def my_prior_local_intake(actor: StaffActor, form: dict) -> str | None:
+    """같은 직원이 같은 이름·판본으로 낸 진행 중이거나 승인된 로컬 신청의 번호(없으면 None)."""
+    payload = local_intakes.build_payload(form)
+    version = (payload["spec"] or {}).get("version")
+    row = fetchone(
+        actor.sctx.control,
+        "SELECT i.id, d.pack_spec ->> 'version' AS version FROM mint.intakes i"
+        " LEFT JOIN mint.deployment_contracts d ON d.instance_id = i.instance_id AND d.id = i.id"
+        " WHERE i.instance_id = %s AND i.requested_by = %s AND i.server_id = %s"
+        " AND i.source = 'endpoint' AND (i.status <> 'decided' OR i.decision IN"
+        " ('approved', 'exception')) ORDER BY i.created_at DESC LIMIT 1",
+        (actor.sctx.instance_id, actor.user_id, payload["server_id"]),
+    )
+    if row and (row["version"] is None or version is None or row["version"] == version):
+        return str(row["id"])
+    return None
 
 
 def _intake_job_error(actor: StaffActor, row: dict):
@@ -618,6 +642,7 @@ def my_calls(actor: StaffActor) -> list[dict]:
             "at": e["inserted_at"], "server_id": p.get("resolved_server_id") or p.get("server_id"),
             "tool": p.get("tool"), "bucket": bucket,
             "reason": labels.outcome_reason(code) if bucket == "block" else None,
+            "code": code if bucket == "block" else None,
         })
         if len(rows) == RECENT_RECORDS:
             break
@@ -647,6 +672,155 @@ def server_guide(actor: StaffActor, row: dict) -> dict:
                 ).get("pack_spec") or {}
         out.update(repo=spec.get("git"), commit=(spec.get("version") or "")[:12] or None)
     return out
+
+
+def pc_stages(actor: StaffActor, server_ids: list[str]) -> dict[str, set[str]]:
+    """내 PC(해제되지 않은 것)가 서버별로 받거나 시작한 단계(device_received·started·discovered)."""
+    if not server_ids:
+        return {}
+    out: dict[str, set[str]] = {}
+    for r in fetchall(
+        actor.sctx.control,
+        "SELECT DISTINCT i.server_id, r.stage FROM mint.delivery_receipts r"
+        " JOIN mint.intakes i ON i.instance_id = r.instance_id AND i.id = r.intake_id"
+        " JOIN mint.endpoint_installs k ON k.instance_id = r.instance_id AND k.key_token ="
+        " r.target AND k.user_id = %s AND k.revoked_at IS NULL"
+        " WHERE r.instance_id = %s AND i.server_id = ANY(%s)"
+        " AND r.stage IN ('device_received', 'started', 'discovered')",
+        (actor.user_id, actor.sctx.instance_id, server_ids),
+    ):
+        out.setdefault(r["server_id"], set()).add(r["stage"])
+    return out
+
+
+def card_phase(row: dict, stages: set[str], pcs: int) -> tuple[str, str]:
+    """카드 상태. PC가 받고 시작하고 도구를 발견하기 전에는 사용 가능으로 보이지 않는다.
+
+    원격 서버는 게이트웨이로 가므로 승인되고 도구가 있으면 사용 가능이다. 로컬(stdio) 서버는 내 PC가
+    도구 목록을 보고해야 사용 가능이고, 그 전에는 준비 중(수신 대기·시작 중)이다.
+    시작 실패는 사유와 함께 보인다.
+    """
+    if row["stopped"]:
+        return "stopped", "내가 사용을 그만둔 서버입니다"
+    if row["seen"]:
+        return "ready", ""
+    if row["start_failed"]:
+        return "failed", "시작 실패" + (f" · {row['start_reason']}" if row["start_reason"] else "")
+    if row["preparing"]:
+        return "preparing", "승인됐고 도구를 확인하는 중입니다"
+    if not row["local"]:
+        return "ready", ""
+    if not pcs:
+        return "preparing", "연결된 PC가 없습니다. 내 PC에서 설치 명령을 실행하십시오"
+    if stages & {"device_received", "started"}:
+        return "preparing", "내 PC가 받았습니다. 시작하고 도구를 확인하는 중입니다"
+    return "preparing", "승인됐고 내 PC가 아직 받지 않았습니다"
+
+
+def my_open_requests(actor: StaffActor) -> dict[tuple[str, str], dict]:
+    """내 대기 권한 요청: (서버, 도구)별. 도구를 비운 요청(서버 전체)은 도구가 빈 문자열이다."""
+    return {(r["server_id"], r["tool"] or ""): r for r in access_requests.mine(actor.sctx)
+            if r["status"] == "open"}
+
+
+def tool_table(actor: StaffActor, row: dict, calls: list[dict]) -> list[dict]:
+    """서랍의 도구 표. 승인된 도구 계약·검사 후보·내 PC가 실제로 본 도구를 합쳐 도구별 상태를 낸다.
+
+    상태: 사용 가능 / 관리자 차단 / 승인 범위 밖 / 호출마다 승인. ``source``는 근거(내 PC가 확인 ·
+    승인된 도구 · 검사 후보), ``code``는 막힌 사유 코드(권한 요청 양식에 그대로 실린다).
+    """
+    sctx, sid = actor.sctx, row["server_id"]
+    status: dict[str, str] = {}
+    for c in fetchall(sctx.control, "SELECT tool, status FROM mint.tool_contracts"
+                      " WHERE instance_id = %s AND server_id = %s AND status IN ('candidate',"
+                      " 'approved')", (sctx.instance_id, sid)):
+        if status.get(c["tool"]) != "approved":
+            status[c["tool"]] = c["status"]
+    seen = {
+        t.get("name") for r in fetchall(
+            sctx.control,
+            "SELECT t.tools FROM mint.endpoint_tool_lists t JOIN mint.endpoint_installs i ON"
+            " i.instance_id = t.instance_id AND i.key_token = t.key_token WHERE"
+            " t.instance_id = %s AND t.server_id = %s AND i.user_id = %s AND i.revoked_at IS NULL",
+            (sctx.instance_id, sid, actor.user_id))
+        for t in r["tools"] if isinstance(t, dict) and t.get("name")
+    }
+    names = sorted(set(status) | seen | {t for t in row["tools"] if t != "*"})
+    denied = fetchall(
+        sctx.control,
+        "SELECT tools FROM mint.denials WHERE instance_id = %(iid)s AND lifted_at IS NULL"
+        " AND server_id = %(sid)s AND ((scope_type = 'user' AND scope_id = %(user)s)"
+        " OR (scope_type = 'team' AND scope_id = ANY(%(teams)s))"
+        " OR (scope_type = 'key' AND scope_id = %(key)s) OR scope_type = 'server')"
+        " AND NOT (scope_type = 'user' AND created_by = %(user)s AND tools IS NULL)",
+        {"iid": sctx.instance_id, "sid": sid, "user": actor.user_id,
+         "teams": list(sctx.team_ids), "key": sctx.key_token},
+    )
+    denied_all = any(d["tools"] is None for d in denied)
+    denied_tools = {t for d in denied for t in d["tools"] or ()}
+    last: dict[str, dict] = {}
+    for c in calls:  # 최근 순
+        if c["server_id"] == sid and c["tool"] and c["tool"] not in last:
+            last[c["tool"]] = c
+    out = []
+    for name in names:
+        if denied_all or name in denied_tools:
+            state, text, code = "block", "관리자 차단", "DENIED"
+        elif "*" not in row["tools"] and name not in row["tools"]:
+            state, text, code = "block", "승인 범위 밖", "TOOL_NOT_IN_APPROVAL"
+        elif last.get(name, {}).get("bucket") == "approve":
+            state, text, code = "wait", "호출마다 승인", None
+        else:
+            state, text, code = "ok", "사용 가능", None
+        source = ("내 PC가 확인" if name in seen
+                  else "검사 후보" if status.get(name) == "candidate" else "승인된 도구")
+        out.append({"name": name, "state": state, "text": text, "code": code,
+                    "source": source, "last": last.get(name, {}).get("at")})
+    return out
+
+
+def org_servers(actor: StaffActor, available: list[dict], shown: set, blocked: dict,
+                lapsed: set[str]) -> list[dict]:
+    """조직에 승인돼 있지만 내 권한이 없는 서버: 이름과 목적만 보인다(도구 목록은 보이지 않는다)."""
+    rows = [
+        {**r, "ref": f"{r['org_id']}|{r['server_id']}",
+         "reason_code": "APPROVAL_EXPIRED" if r["server_id"] in lapsed else "APPROVAL_ABSENT"}
+        for r in available
+        if (r["org_id"], r["server_id"]) not in shown and r["server_id"] not in blocked
+    ]
+    if rows:
+        purposes = {
+            p["server_id"]: p["purpose"] for p in fetchall(
+                actor.sctx.control,
+                "SELECT DISTINCT ON (server_id) server_id, purpose FROM mint.intakes"
+                " WHERE instance_id = %s AND server_id = ANY(%s) AND decision IN ('approved',"
+                " 'exception') ORDER BY server_id, decided_at DESC",
+                (actor.sctx.instance_id, [r["server_id"] for r in rows]))
+        }
+        for r in rows:
+            r["purpose"] = (purposes.get(r["server_id"]) or "")[:128]
+    name_servers(actor, rows)
+    return rows
+
+
+def request_preset(request: Request, rows: list[dict], orgs: list[dict], tools_of) -> dict | None:
+    """거부 응답의 해결 링크 ``/staff?request=서버&tool=도구&reason=사유``를 읽는다.
+
+    내가 볼 수 있는 서버·도구일 때만 그 서랍과 요청 양식을 열고, 아니면 None(그냥 목록)이다.
+    """
+    want = request.query_params.get("request")
+    if not want:
+        return None
+    tool = request.query_params.get("tool", "").strip()
+    code = request.query_params.get("reason", "").strip().upper()
+    code = code if code in access_requests.SUGGESTED else "APPROVAL_ABSENT"
+    match = next((r for r in rows if r["server_id"] == want), None)
+    if match and (not tool or tool in {t["name"] for t in tools_of(match)}):
+        return {"server_id": want, "tool": tool, "reason_code": code, "ref": match["ref"]}
+    other = next((r for r in orgs if r["server_id"] == want), None)
+    if other and not tool:
+        return {"server_id": want, "tool": "", "reason_code": code, "ref": other["ref"]}
+    return None
 
 
 def servers_page(request: Request, actor: StaffActor, error=None, status=200, form=None):
@@ -695,10 +869,17 @@ def servers_page(request: Request, actor: StaffActor, error=None, status=200, fo
         row["progress"] = progress.get(row["server_id"])
         row["local"] = row.get("transport") == "stdio"
     failed = start_failures(actor, [r["server_id"] for r in rows if not r["seen"]])
+    stages = pc_stages(actor, [r["server_id"] for r in rows if r["local"]])
+    pcs = sum(i["state"] in ("managed", "user") for i in endpoint_kits.installs(
+        actor.sctx.control, actor.sctx.instance_id, actor.user_id))
     for row in rows:
         row["start_failed"] = row["server_id"] in failed
         row["start_reason"] = failed.get(row["server_id"], "")
+        row["phase"], row["phase_note"] = card_phase(
+            row, stages.get(row["server_id"], set()), pcs)
     name_servers(actor, rows)
+    orgs = org_servers(actor, available, shown, blocked, lapsed)
+    open_requests = my_open_requests(actor)
     tab = request.query_params.get("tab", "servers")
     tab = tab if tab in ("servers", "applications", "records", "calls") else "servers"
     search = request.query_params.get("q", "").strip()[:256]
@@ -709,8 +890,13 @@ def servers_page(request: Request, actor: StaffActor, error=None, status=200, fo
         for e in staff.list_events(actor.sctx, RECENT_RECORDS)
     ] if tab == "records" else []
     form = form or {}
-    opened = form.get("target") or request.query_params.get("open")
+    params = request.query_params
+    wants_calls = tab == "calls" or params.get("open") or params.get("request") or form
+    recent_calls = my_calls(actor) if wants_calls else []
+    preset = request_preset(request, rows, orgs, lambda r: tool_table(actor, r, recent_calls))
+    opened = form.get("target") or request.query_params.get("open") or (preset or {}).get("ref")
     selected = next((r for r in rows if r["ref"] == opened), None) if opened else None
+    selected_org = next((r for r in orgs if r["ref"] == opened), None) if opened else None
     ctx = {
         "rows": rows,
         "catalog": catalog,
@@ -718,15 +904,22 @@ def servers_page(request: Request, actor: StaffActor, error=None, status=200, fo
         "applications": application_rows(actor) if tab == "applications" else [],
         "tab": tab,
         "records": records,
-        "calls": my_calls(actor) if tab == "calls" else [],
+        "calls": [{**c, "requested": open_requests.get((c["server_id"], c["tool"] or ""))}
+                  for c in recent_calls] if tab == "calls" else [],
         "pending_calls": sum(r["view"] == "pending" for r in my_approvals(actor))
         if not rows
         else 0,
         "need": sum(r["state"] == "none" and not r["stopped"] and not r["preparing"] for r in rows),
-        "pcs": sum(i["state"] in ("managed", "user") for i in endpoint_kits.installs(
-            actor.sctx.control, actor.sctx.instance_id, actor.user_id)),
+        "pcs": pcs,
         "expiring": sum(r["expiring"] for r in rows),
         "selected": selected,
+        "selected_org": selected_org,
+        "org_servers": orgs,
+        "open_requests": {f"{k[0]}|{k[1]}": v for k, v in open_requests.items()},
+        "tools_table": tool_table(actor, selected, recent_calls) if selected else [],
+        "preset": preset,
+        "ready": sum(r["phase"] == "ready" for r in rows),
+        "waiting": sum(r["phase"] in ("preparing", "failed") for r in rows),
         "guide": server_guide(actor, selected) if selected else None,
         "max_days": actor.config.stage2.staff_consent_max_days,
         "text_version": labels.CONSENT_TEXT_VERSION,
@@ -805,6 +998,46 @@ def withdraw_consent(
     )
 
 
+@router.post("/staff/access-requests")
+def access_request_open(
+    request: Request, server_id: str = Form(..., max_length=128),
+    tool: str = Form("", max_length=256), reason_code: str = Form("APPROVAL_ABSENT"),
+    note: str = Form("", max_length=500),
+    actor: StaffActor = Depends(staff_actor),
+):
+    """막힌 도구·서버의 권한 요청. 같은 대상의 대기 요청이 있으면 그 요청으로 안내한다."""
+    result: dict = {}
+
+    def action():
+        calls = my_calls(actor)
+        visible = {r["server_id"] for r in staff.list_available(actor.sctx)}
+        visible |= {c["server_id"] for c in calls if c["server_id"]}
+        if server_id not in visible:
+            raise ControlError("이 서버는 권한을 요청할 수 없습니다. 관리자에게 문의하십시오.")
+        result["existing"] = (server_id, tool.strip()) in my_open_requests(actor)
+        access_requests.staff_open(
+            actor.sctx, actor.id_hash, server_id=server_id, tool=tool.strip() or None,
+            reason_code=reason_code, note=note.strip())
+
+    response = act(actor, action, "access_requested", f"{REQUESTS}?tab=access",
+                   lambda **kw: servers_page(request, actor, **kw))
+    if response.status_code == 303 and result["existing"]:
+        response.headers["location"] = f"{REQUESTS}?tab=access&ok=access_existing"
+    return response
+
+
+@router.post("/staff/access-requests/{request_id}/cancel")
+def access_request_cancel(
+    request_id: str, request: Request, actor: StaffActor = Depends(staff_actor)
+):
+    def action():
+        if not access_requests.staff_cancel(actor.sctx, actor.id_hash, request_id):
+            raise ControlError("이미 처리되었거나 취소된 요청입니다.")
+
+    return act(actor, action, "access_cancelled", f"{REQUESTS}?tab=access",
+               lambda **kw: requests_page(request, actor, tab="access", **kw))
+
+
 # --- 12 내 요청(확인할 요청 · 내 승인 요청) ----------------------------------------------------
 
 
@@ -829,8 +1062,13 @@ def requests_page(request: Request, actor: StaffActor, error=None, status=200, t
     now = datetime.now(UTC)
     pending = [r for r in waiting if r["view"] == "pending"]
     opened = request.query_params.get("open")
+    asked = access_requests.mine(actor.sctx)
+    name_servers(actor, asked)
+    for r in asked:
+        r["reason_text"] = labels.outcome_reason(r["reason_code"])
     ctx = {
-        "tab": "mine" if tab == "mine" else "pending",
+        "tab": tab if tab in ("mine", "access") else "pending",
+        "asked": asked, "access_waiting": sum(r["status"] == "open" for r in asked),
         "waiting": waiting, "history": history, "mine": mine, "error": error,
         "pending_count": len(pending),
         "soonest": min(
@@ -919,6 +1157,12 @@ def my_approvals_api(actor: StaffActor = Depends(staff_actor)):
 @router.get("/staff/usage")
 def usage(request: Request, period: str = "", actor: StaffActor = Depends(staff_actor)):
     from mint_litellm.console.pages.reports import usage_view
+
+    # 직원 화면 틀은 차트 스크립트를 싣지 않아 이 화면만 스크립트를 직접 싣는다(staff_usage.html).
+    # 이동(boost)으로 들어오면 스크립트가 차트를 그린 뒤에야 도착하므로 전체 화면으로 다시 연다.
+    if request.headers.get("HX-Boosted"):
+        return Response(headers={"HX-Redirect": str(request.url.path) + (
+            f"?{request.url.query}" if request.url.query else "")})
 
     ctx = usage_view(actor.config.litellm_admin, actor.sctx.control, actor.sctx.instance_id,
                      period, "/staff/usage", actor.user_id)
@@ -1155,7 +1399,11 @@ def endpoint_app_revoke(
 
 
 @router.post("/staff/endpoint/revoke")
-def endpoint_revoke(request: Request, actor: StaffActor = Depends(staff_actor)):
+def endpoint_revoke(
+    request: Request, key_alias: str = Form("", max_length=256),
+    actor: StaffActor = Depends(staff_actor),
+):
+    """내 PC의 연결을 해제한다. ``key_alias``가 있으면 그 PC 하나(본인 PC만), 없으면 내 모든 PC."""
     issuer = actor.config.kit_issuer
     sctx = actor.sctx
 
@@ -1163,11 +1411,19 @@ def endpoint_revoke(request: Request, actor: StaffActor = Depends(staff_actor)):
         if issuer is None:
             raise ControlError("단말 연결을 해제할 수 없습니다.")
         try:
-            endpoint_kits.revoke_keys(
-                sctx.control, issuer, sctx.instance_id, actor.user_id, actor.user_id)
+            if key_alias:
+                mine = {r["key_alias"] for r in endpoint_kits.installs(
+                    sctx.control, sctx.instance_id, actor.user_id) if r["state"] != "revoked"}
+                if key_alias not in mine:
+                    raise ControlError("해제할 단말 연결이 없습니다.")
+                endpoint_kits.revoke_install(
+                    sctx.control, issuer, sctx.instance_id, key_alias, actor.user_id)
+            else:
+                endpoint_kits.revoke_keys(
+                    sctx.control, issuer, sctx.instance_id, actor.user_id, actor.user_id)
         except LiteLLMError:
             log.exception("단말 설치 묶음 키 해제 실패")
             raise ControlError("단말 연결을 해제하지 못했습니다.") from None
 
-    return act(actor, action, "kit_revoked", "/staff/endpoint",
-               lambda **kw: endpoint_page(request, actor, **kw))
+    return act(actor, action, "kit_revoked_one" if key_alias else "kit_revoked",
+               "/staff/endpoint", lambda **kw: endpoint_page(request, actor, **kw))

@@ -67,6 +67,7 @@ GET,/alerts/{alert_id},/alerts/{},src/mint_litellm/console/pages/__init__.py,ale
 GET,/approvals/new,/approvals/new,src/mint_litellm/console/pages/__init__.py,approval_form,
 GET,/link/{token},/link/{},src/mint_litellm/console/pages/__init__.py,open_link,
 GET,/approvals,/approvals,src/mint_litellm/console/pages/approvals.py,approvals,approval_new.html
+GET,/approvals/review,/approvals/review,src/mint_litellm/console/pages/approvals.py,approval_form_missing,approval_new.html
 GET,/approvals/review/{relation_id},/approvals/review/{},src/mint_litellm/console/pages/approvals.py,approval_form,
 POST,/approvals,/approvals,src/mint_litellm/console/pages/approvals.py,grant_approval,access.html
 GET,/access,/access,src/mint_litellm/console/pages/approvals.py,access,
@@ -85,6 +86,8 @@ POST,/allowlists,/allowlists,src/mint_litellm/console/pages/approvals.py,add_all
 POST,/allowlists/{allowlist_id}/lift,/allowlists/{}/lift,src/mint_litellm/console/pages/approvals.py,lift_allowlist,
 POST,/exceptions/{hold_id}/{decision},/exceptions/{}/{},src/mint_litellm/console/pages/approvals.py,decide_exception_hold,
 POST,/key-blocks/{proposal_id}/{decision},/key-blocks/{}/{},src/mint_litellm/console/pages/approvals.py,decide_key_block,
+POST,/access-requests/{request_id}/resolve,/access-requests/{}/resolve,src/mint_litellm/console/pages/approvals.py,resolve_access_request,
+POST,/access-requests/{request_id}/reject,/access-requests/{}/reject,src/mint_litellm/console/pages/approvals.py,reject_access_request,
 GET,/builtin-tools,/builtin-tools,src/mint_litellm/console/pages/builtins.py,builtin_tools,
 POST,/builtin-tools/block,/builtin-tools/block,src/mint_litellm/console/pages/builtins.py,block_builtin,
 POST,/builtin-tools/allow,/builtin-tools/allow,src/mint_litellm/console/pages/builtins.py,allow_builtin,
@@ -186,7 +189,10 @@ GET,/staff,/staff,src/mint_litellm/console/staff_pages.py,servers,
 GET,/staff/consents,/staff/consents,src/mint_litellm/console/staff_pages.py,consents,
 POST,/staff/consents,/staff/consents,src/mint_litellm/console/staff_pages.py,give_consent,
 POST,/staff/servers/{action},/staff/servers/{},src/mint_litellm/console/staff_pages.py,stop_or_resume,
-POST,/staff/consents/{consent_id}/revoke,/staff/consents/{}/revoke,src/mint_litellm/console/staff_pages.py,withdraw_consent,staff_requests.html
+POST,/staff/consents/{consent_id}/revoke,/staff/consents/{}/revoke,src/mint_litellm/console/staff_pages.py,withdraw_consent,
+POST,/staff/access-requests,/staff/access-requests,src/mint_litellm/console/staff_pages.py,access_request_open,
+POST,/staff/access-requests/{request_id}/cancel,/staff/access-requests/{}/cancel,src/mint_litellm/console/staff_pages.py,access_request_cancel,staff_requests.html
+GET,/staff/confirmations,/staff/confirmations,src/mint_litellm/console/staff_pages.py,requests,
 GET,/staff/requests,/staff/requests,src/mint_litellm/console/staff_pages.py,legacy_requests,
 GET,/staff/link/{token},/staff/link/{},src/mint_litellm/console/staff_pages.py,open_link,
 POST,/staff/confirmations/{confirmation_id}/{decision},/staff/confirmations/{}/{},src/mint_litellm/console/staff_pages.py,decide,

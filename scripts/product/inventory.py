@@ -60,6 +60,10 @@ def routes() -> list[dict]:
     rows = []
     for py in sorted(CONSOLE.rglob("*.py")):
         text = py.read_text(encoding="utf-8")
+        # 경로 상수(`REQUESTS = "/staff/..."`)로 등록한 라우트도 문자열로 바꿔 읽는다
+        for name, value in re.findall(r'^([A-Z_]+) = "(/[^"]*)"$', text, re.M):
+            use = rf"(@\w+\.(?:get|post|put|delete)\(\s*){name}\b"
+            text = re.sub(use, rf'\g<1>"{value}"', text)
         found = list(ROUTE.finditer(text))
         for i, m in enumerate(found):
             end = found[i + 1].start() if i + 1 < len(found) else len(text)

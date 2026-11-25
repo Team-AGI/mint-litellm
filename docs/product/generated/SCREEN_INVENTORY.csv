@@ -2,6 +2,9 @@ screen,kind,method,target,label
 _allowlists.html,form,POST,/allowlists/{}/lift,해제
 _allowlists.html,form,POST,/allowlists,추가
 _allowlists.html,link,GET,/access,
+_approvals_access.html,form,POST,/access-requests/{}/resolve,
+_approvals_access.html,form,POST,/access-requests/{}/reject,거절
+_approvals_access.html,link,GET,/approvals,
 _approvals_blocks.html,form,POST,/key-blocks/{}/unblock,차단 해제
 _approvals_blocks.html,link,GET,/approvals,
 _approvals_blocks.html,link,GET,/ledger,
@@ -57,6 +60,8 @@ alerts.html,form,GET,/alerts,조회
 alerts.html,form,POST,/alerts/{}/acknowledge,확인함
 alerts.html,link,GET,/alerts,
 approval_new.html,form,POST,/servers/{}/tools/block,제한
+approval_new.html,link,GET,/servers,
+approval_new.html,link,GET,/intakes,
 approval_new.html,link,GET,/servers/{},
 audit_report.html,form,GET,/reports/audit,조회
 base.html,form,POST,/logout,로그아웃
@@ -129,8 +134,8 @@ staff_endpoint.html,form,POST,/staff/endpoint/code,설치 명령 만들기
 staff_endpoint.html,form,POST,/staff/endpoint/reconnect,연결 복구
 staff_endpoint.html,form,POST,/staff/endpoint/request,신청
 staff_endpoint.html,form,POST,/staff/endpoint/ignore,알림에서 제외
+staff_endpoint.html,confirm,POST,/staff/endpoint/revoke,이 PC 연결 해제
 staff_endpoint.html,confirm,POST,/staff/endpoint/apps/{}/revoke,자격 회수
-staff_endpoint.html,confirm,POST,/staff/endpoint/revoke,연결 해제
 staff_intake_detail.html,confirm,POST,/staff/intakes/{}/withdraw,대기 취소
 staff_intake_detail.html,link,GET,/staff/intakes/new,
 staff_intake_detail.html,link,GET,/staff/intakes,
@@ -139,14 +144,16 @@ staff_intake_new.html,form,POST,/staff/intakes,주소 확인
 staff_intake_new.html,link,GET,/staff/intakes,
 staff_intakes.html,link,GET,/staff/intakes/new,
 staff_password.html,form,POST,/staff/account/password,바꾸기
+staff_requests.html,confirm,POST,/staff/access-requests/{}/cancel,요청 취소
 staff_requests.html,link,GET,/staff/confirmations,
+staff_servers.html,form,POST,/staff/access-requests,요청 보내기
 staff_servers.html,form,GET,/staff,검색
 staff_servers.html,form,POST,/staff/consents,동의
 staff_servers.html,confirm,POST,/staff/servers/resume,다시 사용하기
 staff_servers.html,confirm,POST,/staff/servers/stop,사용 그만두기
 staff_servers.html,confirm,POST,/staff/consents/{}/revoke,철회
 staff_servers.html,confirm,POST,/staff/servers/stop,동의하지 않음
+staff_servers.html,link,GET,/staff/confirmations,
 staff_servers.html,link,GET,/staff/intakes/new,
 staff_servers.html,link,GET,/staff,
-staff_servers.html,link,GET,/staff/confirmations,
 staff_servers.html,link,GET,/staff/endpoint,

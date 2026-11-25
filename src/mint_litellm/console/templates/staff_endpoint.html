@@ -27,7 +27,7 @@
 {% endif %}
 {% if behind %}<p class="muted">한 번만 다시 설치하면 이후 자동 갱신됩니다</p>{% endif %}
 {% if rows %}
-<table><thead><tr><th>PC</th><th>팀</th><th>설치 상태</th><th>Claude Code 판본</th><th>MCP 서버</th><th>발급</th><th>마지막 보고</th></tr></thead><tbody>
+<table><thead><tr><th>PC</th><th>팀</th><th>설치 상태</th><th>Claude Code 판본</th><th>MCP 서버</th><th>발급</th><th>마지막 보고</th><th></th></tr></thead><tbody>
 {% for r in rows %}<tr>
 <td>{{ r.host or '—' }}{% if r.os %}<br><span class="muted">{{ r.os }}</span>{% endif %}</td>
 <td>{{ r.team_id | blank }}</td>
@@ -36,6 +36,7 @@
 <td>{{ ((['게이트웨이'] if r.gateway else []) + (r.mcp_servers or [])) | join }}</td>
 <td class="nowrap">{{ r.issued_at | when }}</td>
 <td class="nowrap">{{ r.reported_at | when }}</td>
+<td>{% if r.state != 'revoked' %}{% call m.confirm_dialog('revoke-pc-' ~ loop.index, '이 PC 연결 해제', 'PC 연결 해제', (r.host or '이 PC') ~ '의 키만 지워지고 이 PC에 묶인 앱 자격이 회수됩니다. 내 다른 PC와 다른 앱은 그대로입니다. 되돌릴 수 없고 다시 연결하려면 이 PC에서 새 설치 명령을 실행해야 합니다.', '/staff/endpoint/revoke', actor, '이 PC 연결 해제') %}<input type="hidden" name="key_alias" value="{{ r.key_alias }}">{% endcall %}{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
 {% if tools %}
@@ -82,6 +83,6 @@
 </tr>{% endfor %}
 </tbody></table>{% endif %}
 <p class="muted">PC 터미널에서 `mint app new 이름`으로 만듭니다.</p>
-{% if active %}{{ m.confirm_dialog('revoke-endpoint', '연결 해제', '단말 연결을 해제합니다', '이 단말의 키가 지워집니다. 새 설치 명령을 붙여 넣어야 다시 연결됩니다.', '/staff/endpoint/revoke', actor, '연결 해제') }}{% endif %}
+{% set live = rows | rejectattr('state', 'equalto', 'revoked') | list | length %}{% if live > 1 %}{{ m.confirm_dialog('revoke-endpoint', '내 PC 모두 해제', '내 PC ' ~ live ~ '대의 연결을 모두 해제합니다', '내 모든 PC의 키가 지워지고 내가 만든 앱의 자격도 함께 회수됩니다. 되돌릴 수 없고 PC마다 새 설치 명령을 실행해야 다시 연결됩니다.', '/staff/endpoint/revoke', actor, '모두 해제') }}{% endif %}
 {% else %}<div class="empty"><h3>설치한 단말이 없습니다</h3></div>{% endif %}
 {% endblock %}

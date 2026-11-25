@@ -31,7 +31,7 @@ def intake_for(world, purpose="고객 문의 정리", decision="approved"):
 
 
 def test_the_consent_form_is_prefilled_from_the_approved_application(sworld):
-    add_approval(sworld, "user", STAFFER, tools=("echo",))
+    add_approval(sworld, "user", STAFFER, tools=("echo",), consent=True)
     intake_for(sworld)
     page = logged_in(sworld).get("/staff?open=acme%7Csrv-ok").text
     assert 'value="고객 문의 정리"' in page and "내부 자료" in page
@@ -66,7 +66,8 @@ def test_my_calls_lists_only_my_decisions_with_the_block_reason(sworld):
     decision(staff_tests.OTHER, "theirs", "allowed")
     page = logged_in(sworld).get("/staff?tab=calls").text
     assert "mine_ok" in page and "mine_blocked" in page and "승인 없음" in page
-    assert "theirs" not in page and "APPROVAL_ABSENT" not in page
+    assert "theirs" not in page
+    assert "APPROVAL_ABSENT" not in page.replace('value="APPROVAL_ABSENT"', "")
 
 
 @pytest.fixture
