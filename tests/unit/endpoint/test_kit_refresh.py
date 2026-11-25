@@ -1,4 +1,4 @@
-"""승인 서버 목록 반영: 관리형은 자기 항목만 고치고, 사용자 수준은 파일을 고치지 않는다."""
+"""승인 서버 목록 반영: 관리형·사용자 수준 모두 자기 항목만 더하거나 고친다."""
 
 import json
 import os
@@ -114,14 +114,45 @@ def test_a_contract_file_someone_else_changed_is_left_alone(tmp_path, reports, c
     assert "계약 파일" in capsys.readouterr().err
 
 
-def test_a_user_level_install_only_says_what_changed(tmp_path, reports, capsys):
+def test_a_user_level_install_adds_new_servers_where_it_installed_them(
+    tmp_path, reports, monkeypatch
+):
     kit, state = installed(tmp_path, managed=False)
-    settings = (kit.home / ".claude/settings.json").read_bytes()
-    before = (kit.programs / "contracts.json").read_bytes()
-    assert kit.refresh(state, [item("srv-1", CONTRACT), item("srv-3", NEW)]) == []
-    assert "srv-3" in capsys.readouterr().err
-    assert (kit.programs / "contracts.json").read_bytes() == before
-    assert (kit.home / ".claude/settings.json").read_bytes() == settings
+    calls = []
+
+    def run(argv, **_):
+        calls.append(argv[1:3] + argv[3:4])
+        return type(
+            "Done", (), {"returncode": 1 if argv[1:3] == ["mcp", "get"] else 0, "stdout": ""}
+        )()
+
+    monkeypatch.setattr(kit, "claude", lambda: "claude")
+    monkeypatch.setattr(kit_module.subprocess, "run", run)
+    # 설치 때 claude가 없어 못 넣은 srv-1도 이번에 넣는다
+    assert kit.refresh(state, [item("srv-1", CONTRACT), item("srv-3", NEW)]) == ["srv-1", "srv-3"]
+    assert ["mcp", "add-json", "-s"] in calls
+    assert "srv-3" in contracts(kit) and "srv-3" in state["mcp_servers"]
+
+
+def test_a_user_level_install_keeps_a_same_named_server_the_user_added(
+    tmp_path, reports, monkeypatch
+):
+    kit, state = installed(tmp_path, managed=False)
+
+    def run(argv, **_):
+        assert argv[1:3] != ["mcp", "add-json"], "사용자 항목을 덮으면 안 된다"
+        return type("Done", (), {"returncode": 0, "stdout": "srv-3: node my-own.js"})()
+
+    monkeypatch.setattr(kit, "claude", lambda: "claude")
+    monkeypatch.setattr(kit_module.subprocess, "run", run)
+    assert kit.refresh(state, [item("srv-3", NEW)]) == []
+
+
+def test_a_user_level_codex_install_adds_the_table_inside_its_block(tmp_path, reports):
+    kit, state = installed(tmp_path, managed=False, harnesses=("codex",))
+    assert kit.refresh(state, [item("srv-3", NEW)]) == ["srv-3"]
+    tables = tomllib.loads(kit.codex_config().read_text())["mcp_servers"]
+    assert tables["srv-3"]["args"][-2:] == ["--server", "srv-3"]
 
 
 def test_codex_tables_are_added_in_both_files_and_stay_valid(tmp_path, reports):
@@ -182,8 +213,10 @@ def test_the_periodic_report_applies_the_answer_and_reports_the_result(
     tmp_path, monkeypatch, reports
 ):
     sent, calls = [], []
-    answers = [{"recorded": True, "desired": [item("srv-3", NEW)], "retired": ["old"]},
-               {"recorded": True}]
+    answers = [
+        {"recorded": True, "desired": [item("srv-3", NEW)], "retired": ["old"]},
+        {"recorded": True},
+    ]
 
     def post(url, key, payload, ca_file):
         sent.append(payload)

@@ -3582,10 +3582,10 @@ class Kit:
         """MINT가 승인한 서버 목록에 맞춰 관리형 설정에 서버를 더하거나(계약이 바뀌었으면 갱신)
         한다. 돌려주는 값은 더하거나 갱신한 이름이다.
 
-        폐기 서버를 지우는 일은 ``remediate``가 한다. 여기서는 지우지 않는다. 사용자 수준 설치는
-        파일을 고치지 않고 바뀐 서버를 알리기만 한다. 관리형은 이 묶음이 쓴 계약 파일(기록한
-        해시와 같을 때만)과 이 묶음의 실행기로 시작하는 항목만 고치고, 같은 이름의 사용자 항목은
-        건드리지 않는다.
+        폐기 서버를 지우는 일은 ``remediate``가 한다. 여기서는 지우지 않는다. 관리형·사용자 수준
+        모두 이 묶음이 쓴 계약 파일(기록한 해시와 같을 때만)과 이 묶음의 실행기로 시작하는 항목만
+        고치고, 같은 이름의 사용자 항목은 건드리지 않는다. 사용자 수준은 설치 때와 같은 자리
+        (Claude Code 사용자 범위 MCP, Codex 사용자 설정의 표식 구간)에 더한다.
         """
         items = self.desired_items(desired, set(retired or ()))
         logical = f"{self.logical_programs}/contracts.json"
@@ -3599,13 +3599,6 @@ class Kit:
         configured = set(state.get("mcp_servers", []))
         todo = {n: c for n, c in items.items() if current.get(n) != c or n not in configured}
         if not todo:
-            return []
-        if not self.managed:
-            print(
-                "MINT 승인 서버가 바뀌었습니다: " + ", ".join(sorted(todo))
-                + ". 설치 명령을 다시 실행하면 반영됩니다.",
-                file=sys.stderr,
-            )
             return []
         if state.get("files", {}).get(logical) != sha256_bytes(raw):
             print("MINT 계약 파일이 바뀌어 있어 서버 목록을 갱신하지 않습니다.", file=sys.stderr)
@@ -3621,11 +3614,11 @@ class Kit:
         }
         data = json.dumps({**listing, "servers": {**current, **todo}}, indent=1).encode()
         try:
-            write_atomic(path, data, 0o644)
+            write_atomic(path, data, 0o644, None if self.managed else self.owner)
         except OSError:
             return []
         state.setdefault("files", {})[logical] = sha256_bytes(data)
-        done = self.put_configs(state, mcp)
+        done = self.put_configs(state, mcp) if self.managed else self.put_user_configs(mcp)
         state["mcp_servers"] = sorted(configured | done)
         self.save_state(state)
         return sorted(done)
@@ -3818,6 +3811,33 @@ class Kit:
         except (OSError, ValueError):
             return {}
         return doc if isinstance(doc, dict) else {}
+
+    def put_user_configs(self, mcp: dict) -> set[str]:
+        """사용자 수준 설치: 설치 때와 같은 자리에 서버 항목을 더한다(이 묶음 것만). 반영한 이름."""
+        done: set[str] = set()
+        if "claude" in self.harnesses and (claude := self.claude()) is not None:
+            for name, definition in sorted(mcp.items()):
+                found = subprocess.run([claude, "mcp", "get", name], capture_output=True, text=True)
+                if found.returncode == 0 and AGENT not in found.stdout:
+                    continue  # 같은 이름의 사용자 항목은 그대로 둔다
+                subprocess.run([claude, "mcp", "remove", "-s", "user", name], capture_output=True)
+                added = subprocess.run(
+                    [claude, "mcp", "add-json", "-s", "user", name, json.dumps(definition)],
+                    capture_output=True,
+                )
+                if added.returncode == 0:
+                    done.add(name)
+        if "codex" in self.harnesses:
+            config = self.codex_config()
+            try:
+                current = config.read_bytes().decode("utf-8-sig")
+                new, put = put_block_tables(current, mcp)
+                if new != current:
+                    write_atomic(config, new.encode(), config.stat().st_mode & 0o777, self.owner)
+                done |= set(put)
+            except OSError:
+                pass
+        return done
 
     def put_configs(self, state: dict, mcp: dict) -> set[str]:
         """관리형 설정 파일에 서버 항목을 더하거나 바꾼다(이 묶음의 것만). 반영한 이름."""
