@@ -3,9 +3,6 @@
 {% block page_class %}wide{% endblock %}
 {% block body %}
 <h1>{{ s.server_name or s.server_id }} {{ m.badge(L.SERVER, s.status) }}{% if provisional and s.status not in ('rejected', 'terminated') %} <span title="승인된 계약이 없어 호출마다 추정한 계약으로 검사합니다">{{ m.badge(L.CONTRACT_STATE, 'provisional') }}</span>{% endif %}</h1>
-{% if actor.role == 'admin' and s.status in ('approved', 'suspended') %}
-<div class="actions">{% if s.status == 'approved' %}{{ a.suspend(s, actor, 'stop-server', active_approvals, '', true) }}{% else %}{{ a.resume(s, actor, 'resume-server') }}{% endif %}</div>
-{% endif %}
 {% if s.vuln_blocked_at %}<div class="banner error" role="alert">치명 취약점 조치 기한이 지나 호출이 차단되었습니다</div>{% endif %}
 {% if s.instance_mismatch_at %}<div class="banner error" role="alert">다른 인스턴스와 계약·보안 설정이 달라 호출이 차단되었습니다</div>{% endif %}
 <div class="cards">
@@ -14,9 +11,14 @@
   {{ m.kpi('치명 취약점', critical, '?tab=security', level='danger' if critical) }}
   {{ m.kpi('마지막 관측', s.last_observed_at | when) }}
 </div>
+<div class="{{ 'grid with-aside' if actor.role == 'admin' }}">
+<div>
 {{ m.tabs(tabs, tab, '/servers/' ~ (s.server_id | urlencode)) }}
 {% if tab == 'contract' %}{% include "_server_contract.html" %}<h2>도구</h2>{% include "_server_tools.html" %}
 {% elif tab == 'security' %}<h2>취약점</h2>{% include "_server_vulns.html" %}<h2>패키지</h2>{% include "_server_packages.html" %}
 {% elif tab == 'usage' %}{% include "_server_usage.html" %}<h2>증빙</h2>{% set evidence_action = '/servers/' ~ (s.server_id | urlencode) ~ '/evidence' %}{% include "_evidence.html" %}
 {% else %}{% include "_server_overview.html" %}{% endif %}
+</div>
+{% if actor.role == 'admin' %}<aside>{% include "_server_controls.html" %}{% include "_root_panel.html" ignore missing %}</aside>{% endif %}
+</div>
 {% endblock %}

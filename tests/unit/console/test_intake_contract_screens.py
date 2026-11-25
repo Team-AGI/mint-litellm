@@ -52,14 +52,15 @@ def add_intake(
     reason="X_CODE",
     with_evidence=True,
     url_blocked=False,
+    source="operator",
 ) -> str:
     intake_id = str(uuid.uuid4())
     world.query(
         "INSERT INTO mint.intakes (id, instance_id, org_id, server_id, source, purpose, data_grade,"
         " allowed_resources, provider, owner_user_id, readiness, data_return_terms, requested_by)"
-        " VALUES (%s, %s, 'acme', %s, 'operator', '문서 검색', 'internal', %s, '제공자',"
+        " VALUES (%s, %s, 'acme', %s, %s, '문서 검색', 'internal', %s, '제공자',"
         " 'human-9', %s, '반환 조건', %s)",
-        intake_id, INSTANCE, server, json.dumps(["docs"]), READINESS, requested_by)
+        intake_id, INSTANCE, server, source, json.dumps(["docs"]), READINESS, requested_by)
     if status != "received":
         world.query("UPDATE mint.intakes SET status = 'checking' WHERE id = %s", intake_id)
         world.query("UPDATE mint.intakes SET status = %s WHERE id = %s", status, intake_id)

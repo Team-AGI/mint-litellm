@@ -11,12 +11,14 @@ from fastapi.responses import Response
 
 from mint_litellm.console import api, compare, labels, pack_view
 from mint_litellm.console.core import Actor, page_actor, require_csrf
+from mint_litellm.console.labels import Status
 from mint_litellm.console.pages import intake_submission
 from mint_litellm.console.pages.common import act, server_display
 from mint_litellm.console.templating import local_time, render
 from mint_litellm.control import intake_checks, source_scan, usage_reader
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import AdminCode, AdminError, ControlError
+from mint_litellm.control.operators import separation_enforced
 from mint_litellm.control.services import call_review as review_service
 from mint_litellm.control.services import contracts as contract_service
 from mint_litellm.control.services import denials as denial_service
@@ -172,6 +174,10 @@ SERVER_TABS = (
 TAB_ALIAS = {"tools": "contract", "packages": "security", "vulns": "security", "evidence": "usage"}
 
 
+# 통제 직후 「전파 상태」 줄을 보이는 알림(C.7)
+PROPAGATING = ("suspended", "resumed", "server_terminating")
+
+
 def contract_context(request: Request, actor: Actor, server_id: str) -> dict:
     info = contract_service.diff(actor.ctx, server_id)
     rows = compare.changes(info)
@@ -217,6 +223,9 @@ def server_page(
         "active_approvals": sum(1 for a in row["approvals"] if a["status"] == "active"),
         "provisional": row["contract_status"] != "managed",
         "ctl": tool_controls(actor, server_id),
+        "propagation": request.query_params.get("ok", "") in PROPAGATING
+        or row["status"] in ("suspended", "terminating"),
+        "root_target": {"kind": "server", "id": server_id, "status": row["status"]},
         "impact": relation_impacts(actor, row["relations"]) if tab == "usage" else {},
         "proof": relation_proofs(actor, row["relations"]) if tab == "usage" else {},
         "c": contract_context(request, actor, server_id) if tab == "contract" else None,
@@ -416,6 +425,7 @@ def suspend_server(
     request: Request,
     state_version: int = Form(...),
     next: str = Form(""),
+    reason: str = Form(""),  # ponytail: 서비스가 사유를 저장하지 않는다(보고 9번)
     actor: Actor = Depends(page_actor),
 ):
     # 중지는 「재개」로 되돌릴 수 있어 확인 창 한 번이면 된다(이름 입력은 이용 종료에만)
@@ -444,6 +454,30 @@ def resume_server(
         lambda: server_service.resume(actor.ctx, server_id, expected_version=state_version),
         "resumed",
         back_to(server_id, next),
+        lambda **kw: server_page(request, actor, server_id, **kw),
+    )
+
+
+@router.post("/servers/{server_id}/terminate")
+def terminate_server(
+    server_id: str,
+    request: Request,
+    state_version: int = Form(...),
+    confirm_name: str = Form(""),
+    actor: Actor = Depends(page_actor),
+):
+    def action():
+        if actor.role != "admin":
+            raise AdminError(AdminCode.FORBIDDEN, "관리자만 서버를 폐기할 수 있습니다.")
+        if confirm_name.strip() != server_id:
+            raise ControlError("확인란에 서버 식별자를 그대로 입력하십시오.")
+        server_service.terminate(actor.ctx, server_id, expected_version=state_version)
+
+    return act(
+        actor,
+        action,
+        "server_terminating",
+        f"/servers/{server_id}",
         lambda **kw: server_page(request, actor, server_id, **kw),
     )
 
@@ -565,7 +599,10 @@ def intakes(request: Request, actor: Actor = Depends(page_actor)):
     return intakes_page(request, actor)
 
 
-INTAKE_TABS = (("overview", "검사 결과"), ("info", "신청 내용"), ("evidence", "증빙"))
+INTAKE_TABS = (
+    ("overview", "심사 요약"), ("source", "출처·공급망"), ("info", "신청 내용"),
+    ("evidence", "증빙"),
+)
 PACK_TAB = ("pack", "실행 묶음")
 
 
@@ -785,6 +822,114 @@ def intake_job_error(conn, instance: str, intake: dict) -> dict | None:
             "stopped": row["status"] == "failed", "next": row["run_after"]}
 
 
+REPO_OWNER = re.compile(r"(?:github\.com|gitlab\.com|bitbucket\.org)[/:]([^/\s]+)/([^/\s.]+)")
+
+
+def source_view(intake: dict, checks: list[dict], pack: dict | None, url: str | None,
+                provider_blocked: bool) -> dict:
+    """「출처·공급망」 탭의 6줄 점검표(C.6). 수집된 값만 쓰고 검사 전이면 「검사 중」."""
+    by = {c["check"]: c for c in checks}
+
+    def inputs(name: str) -> dict:
+        got = (by.get(name) or {}).get("inputs")
+        return got if isinstance(got, dict) else {}
+
+    src = next((i["source"] for i in map(inputs, ("code_scan", "supply_chain", "sbom"))
+                if isinstance(i.get("source"), dict)), {})
+    waiting = not checks
+    todo = Status("검사 중", "wait")
+
+    def row(label: str, status: Status, value: str, more: list[str] | None = None, link=None):
+        return {"label": label, "status": todo if waiting else status,
+                "value": "—" if waiting else value, "more": [] if waiting else more or [],
+                "link": link}
+
+    repo = src.get("repo") or ""
+    owner = REPO_OWNER.search(repo)
+    host = re.sub(r"^\w+://([^/:]+).*$", r"\1", url or "") if url else ""
+    who = f"{owner[1]}/{owner[2]}" if owner else (repo or host or "—")
+    commit, tree = src.get("commit"), src.get("tree_sha256")
+    sha = (pack or {}).get("sha")
+    pinned = [x for x in (
+        f"커밋 {commit[:12]}" if commit else "", f"소스 지문 {tree[:12]}" if tree else "",
+        f"묶음 {sha[:12]}" if sha else "") if x]
+    sbom, vuln_in, code = inputs("sbom"), inputs("dependency_vulns"), inputs("code_scan")
+    comps = sbom.get("components")
+    files = (pack or {}).get("files") or []
+    sbom_check = by.get("sbom")
+    counts = vuln_in if "vuln_critical" in vuln_in else code
+    found = [(g, counts.get(f"vuln_{k}", 0)) for k, g in (
+        ("critical", "심각"), ("high", "높음"), ("medium", "보통"), ("low", "낮음"))]
+    flaws = (code.get("code_high", 0), code.get("secrets", 0),
+             code.get("misconfig_high", 0) + code.get("misconfig_critical", 0))
+    bad = any(c["result"] == "fail" and c["check"] in ("code_scan", "dependency_vulns")
+              for c in checks)
+    licenses = code.get("license_findings") or []
+    net = (pack or {}).get("network")
+    net_text = {"none": "차단", "hosts": "허용 호스트만", "any": "제한 없음"}.get(net, "")
+    paths = [f"{a['path']} ({'읽기·쓰기' if a.get('mode') == 'rw' else '읽기'})"
+             for a in (pack or {}).get("access") or []]
+    env = [name for name, _ in (pack or {}).get("env") or []]
+    return {
+        "waiting": waiting,
+        "rows": [
+            row("출처·소유자", Status("허용 목록 밖", "error") if provider_blocked
+                else Status("허용", "ok"), who, [repo] if repo and repo != who else None),
+            row("고정", Status("고정됨", "ok") if pinned else Status("미고정", "wait"),
+                " · ".join(pinned) or "커밋·묶음 지문이 없습니다"),
+            row("의존성", Status("통과", "ok") if sbom_check and sbom_check["result"] == "pass"
+                else Status("판별 불가", "wait"),
+                f"구성요소 {comps}개" if comps is not None else (
+                    f"묶음 파일 {len(files)}개" if files else "구성요소 목록 없음"),
+                [f"묶음 파일 {len(files)}개"] if files and comps is not None else None),
+            row("라이선스", Status("검토 필요", "wait") if licenses
+                else Status("통과", "ok") if src.get("license") else Status("판별 불가", "wait"),
+                f"{src.get('license') or '알 수 없음'} · 주의 {len(licenses)}건"),
+            row("취약점·코드", Status("실패", "error") if bad else
+                Status("검토 필요", "wait") if any(flaws) or counts.get("vuln_high")
+                else Status("통과", "ok") if code or vuln_in else Status("판별 불가", "wait"),
+                " · ".join(f"{g} {n}" for g, n in found),
+                [f"코드 높음 {flaws[0]} · 비밀 의심 {flaws[1]} · 설정 오류 높음 이상 {flaws[2]}"]),
+            row("권한·네트워크·격리", Status("넓음", "wait") if net == "any"
+                else Status("최소", "ok") if net else Status("판별 불가", "wait"),
+                f"네트워크 {net_text}" if net_text else "실행 묶음 없음(원격 서버)",
+                [x for x in (("파일 " + ", ".join(paths)) if paths else "",
+                             ("환경 변수 " + ", ".join(env)) if env else "") if x],
+                "#decision" if pack and pack.get("ready") else None),
+        ],
+    }
+
+
+def stuck_step(actor: Actor, intake: dict) -> dict | None:
+    """승인 뒤 「키 반영」에서 멈춘 원인: 승인 대상(키·팀)이 LiteLLM에서 사라진 경우."""
+    gone = {
+        r["dedup_key"].removeprefix("sync_target_missing:")
+        for r in fetchall(
+            actor.conn, "SELECT dedup_key FROM mint.alerts WHERE instance_id = %s"
+            " AND kind = 'sync_target_missing' AND status <> 'resolved'", (actor.instance,))
+    }
+    for a in reads.approvals(actor.conn, actor.instance, server_id=intake["server_id"],
+                             status="active"):
+        if f"{a['scope_type']}:{a['scope_id']}" in gone:
+            link = f"/approvals/review/{a['relation_id']}" if a["relation_id"] else None
+            return {"text": f"원인: 승인 대상 {a['scope_type']} {a['scope_id']}이(가) "
+                    "LiteLLM에 없습니다", "href": link}
+    return None
+
+
+def tool_calls(tools: list[dict], seen: list[dict], counted: bool) -> list[dict]:
+    """계약 표의 도구별 호출·차단 수. 집계가 있으면 안 불린 도구는 「미호출」, 집계 전이면
+    「미집계」, 계약에 없는데 불린 도구는 따로 보인다."""
+    by = {t["tool"]: t for t in seen}
+    rows = [{**t, "calls": by[t["tool"]]["calls"] if t["tool"] in by else None,
+             "blocked": by[t["tool"]]["blocked"] if t["tool"] in by else None,
+             "note": None if t["tool"] in by else ("미호출" if counted else "미집계")}
+            for t in tools]
+    known = {t["tool"] for t in tools}
+    return rows + [{"tool": t["tool"], "calls": t["calls"], "blocked": t["blocked"],
+                    "note": "계약 밖", "extra": True} for t in seen if t["tool"] not in known]
+
+
 def intake_page(
     request: Request,
     actor: Actor,
@@ -804,7 +949,7 @@ def intake_page(
     candidate = intake_service.deployment_candidate(actor.conn, actor.instance, intake["server_id"])
     server_name = entry.get("server_name") or entry.get("alias") or intake["server_id"]
     local = intake["source"] == "endpoint"
-    intake_tabs = INTAKE_TABS[:1] + (PACK_TAB,) + INTAKE_TABS[1:] if local else INTAKE_TABS
+    intake_tabs = INTAKE_TABS[:2] + (PACK_TAB,) + INTAKE_TABS[2:] if local else INTAKE_TABS
     pack = (
         pack_view.view(
             pack_view.read(actor.conn, actor.instance, intake["server_id"]), intake["status"]
@@ -864,7 +1009,18 @@ def intake_page(
     )
     open_inspection = next((x for x in inspections if x["status"] in inspection_service.OPEN), None)
     counted = [c for c in checks if not check_na(c)]
+    provider_blocked = intake_checks.provider_limit_enabled() and any(
+        c["reason_code"] == "PROVIDER_NOT_ALLOWED" for c in checks)
+    key_stage = [i for i, (stage, _) in enumerate(DELIVERY_STAGES) if stage == "key_applied"][0]
+    stuck = stuck_step(actor, intake) if approved and delivery and delivery[key_stage][0] != "ok" \
+        else None
+    url = candidate["url"] if candidate else entry.get("url")
     ctx = {
+        "root_target": {"kind": "intake", "id": str(intake["id"]), "status": intake["status"]},
+        "source": source_view(intake, checks, pack, url, provider_blocked)
+        if tab == "source" else None,
+        "stuck": stuck and {**stuck, "index": key_stage},
+        "tool_rows": tool_calls(tools, seen, approved),
         "delivery": delivery,
         "seen": seen,
         "i": intake,
@@ -919,8 +1075,7 @@ def intake_page(
         "job_error": intake_job_error(actor.conn, actor.instance, intake),
         "decision_form": decision_form or {},
         "hold": hold,
-        "provider_blocked": intake_checks.provider_limit_enabled()
-        and any(c["reason_code"] == "PROVIDER_NOT_ALLOWED" for c in checks),
+        "provider_blocked": provider_blocked,
         "passed": sum(1 for c in counted if c["result"] == "pass"),
         "failed": sum(1 for c in counted if c["result"] == "fail"),
         "checks_total": len(counted),
@@ -1164,8 +1319,9 @@ def decide_intake(
         (api.hold_exception if decision == "except" else api.decide_intake)(
             actor, intake_id, body)
 
-    ok = {"reject": "intake_rejected", "except": "exception_requested"}.get(
-        decision, "intake_approved")
+    ok = "intake_rejected" if decision == "reject" else "intake_approved"
+    if decision == "except" and separation_enforced(actor.ctx.operator):
+        ok = "exception_requested"
     return act(
         actor,
         action,

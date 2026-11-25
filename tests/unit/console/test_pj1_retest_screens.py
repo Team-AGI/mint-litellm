@@ -29,7 +29,7 @@ def test_the_long_failure_detail_is_confined_to_a_wrapping_scrolling_box():
     assert ".grid > * { min-width: 0; }" in css
     rule = css[css.index("pre.out {"): css.index("}", css.index("pre.out {"))]
     assert "max-width: 100%" in rule and "overflow: auto" in rule and "pre-wrap" in rule
-    html = (CONSOLE / "templates/intake_detail.html").read_text(encoding="utf-8")
+    html = (CONSOLE / "templates/_intake_checks.html").read_text(encoding="utf-8")
     assert '<pre class="out">' in html
 
 

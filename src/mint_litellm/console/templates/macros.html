@@ -85,7 +85,7 @@
 {% endmacro %}
 
 {# 해시값 복사 버튼. 값은 data-copy 속성, 복사는 console.js. #}
-{% macro copy_hash(value) %}<button type="button" class="copy" data-copy="{{ value }}" title="{{ value }}">{{ value[-8:] }} 복사</button>{% endmacro %}
+{% macro copy_hash(value) %}{% if value %}<button type="button" class="copy" data-copy="{{ value }}" title="{{ value }}">{{ value[-8:] }} 복사</button>{% else %}—{% endif %}{% endmacro %}
 
 {# 명령 복사 상자. 명령은 data-copy 속성, 복사는 console.js. #}
 {% macro copy_cmd(command) %}<div class="cmd"><span class="cmd-text">{{ command }}</span> <button type="button" class="copy" data-copy="{{ command }}">복사</button></div>{% endmacro %}

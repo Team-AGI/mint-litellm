@@ -45,12 +45,16 @@ def server(vulns):
     }
 
 
+NO_CONTROLS = {"blocked": {}, "actions": {}, "whole": None}
+
+
 def test_server_detail_marks_direct_and_dependency_and_counts_down():
     soon = datetime.now(UTC) + timedelta(hours=30)
     html = render(
         "server_detail.html",
         s=server([vuln(None, soon), vuln("A → B → lib", soon, "high")]),
         evidence=[],
+        ctl=NO_CONTROLS,
         tab="security",
     )
     text = shown(html)
@@ -61,6 +65,7 @@ def test_server_detail_marks_direct_and_dependency_and_counts_down():
             "server_detail.html",
             s=server([vuln(None, soon - timedelta(days=3))]),
             evidence=[],
+            ctl=NO_CONTROLS,
             tab="security",
         )
     )

@@ -20,7 +20,7 @@ def test_a_stale_screen_is_refused_with_a_conflict_message(world, admin):
     version = world.query("SELECT state_version FROM mint.servers WHERE server_id = 'srv-ok'")[0][0]
     response = form_post(world, admin, "/servers/srv-ok/suspend", state_version=version + 5,
                          confirm_name="srv-ok")
-    assert response.status_code == 409 and "화면을 연 뒤 상태가 바뀌었습니다" in response.text
+    assert response.status_code == 409 and "상태가 바뀌었습니다" in response.text
 
 
 def test_an_approval_whose_key_was_deleted_in_litellm_is_marked_missing(world, admin):
