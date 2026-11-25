@@ -423,7 +423,14 @@ def _error(reply: httpx.Response) -> tuple[str | None, str | None]:
         return None, None
     try:
         detail = reply.json().get("detail")
-        parsed = json.loads(detail) if isinstance(detail, str) else detail
+        if isinstance(detail, str):
+            # 차단 본문은 「사람이 읽을 안내」 줄 뒤에 JSON 한 줄이 온다(하네스는 앞줄만 보여 준다).
+            try:
+                parsed = json.loads(detail)
+            except ValueError:
+                parsed = json.loads(detail.rsplit(chr(10), 1)[-1])
+        else:
+            parsed = detail
         return parsed.get("code"), parsed.get("reference")
     except (ValueError, KeyError, AttributeError):
         return None, None
