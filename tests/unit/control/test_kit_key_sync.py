@@ -170,15 +170,14 @@ def test_key_receipt_is_recorded_once_after_permission_is_applied(conn, world):
     ).fetchall() == [(7, token)]
 
 
-def test_leaving_the_team_revokes_its_approval_and_an_unreadable_team_does_not(conn, world):
+def test_the_installs_team_decides_the_team_approvals_on_the_key(conn, world):
     relation, _, token = world
     approve(conn, relation, "team", "t1", ("a",))
-    client = Client(user={"teams": ["t1"]})
+    client = Client()
     kit_key_sync.sync_kit_keys(conn, INSTANCE, client)
     assert client.written[-1][1] == ["ctl-everything"]
-    client.user = {}  # 소속을 읽지 못함: 회수하지 않는다
-    assert kit_key_sync.sync_kit_keys(conn, INSTANCE, client) == 0
-    client.user = {"teams": []}
+    # 명부 동기화가 팀을 나간 것을 반영
+    conn.execute("UPDATE mint.endpoint_installs SET team_id = NULL")
     kit_key_sync.sync_kit_keys(conn, INSTANCE, client)
     assert client.written[-1] == (token, [], {})
 

@@ -234,6 +234,13 @@ def sync(conn: psycopg.Connection, instance_id: str, admin: LiteLLMAdmin) -> Syn
                 " AND gone_at IS NULL AND NOT (user_id = ANY(%s))",
                 (instance_id, sorted(humans)),
             ).rowcount
+            # 명부에서 빠진 사람은 팀 범위도 잃는다
+            for table in ("endpoint_installs", "endpoint_apps"):
+                moved += conn.execute(
+                    f"UPDATE mint.{table} SET team_id = NULL WHERE instance_id = %s"
+                    " AND revoked_at IS NULL AND team_id IS NOT NULL AND NOT (user_id = ANY(%s))",
+                    (instance_id, sorted(humans)),
+                ).rowcount
         if moved:  # 단말 게이트웨이 키의 권한도 새 팀으로 다시 맞춘다
             enqueue_job(
                 Context(conn, instance_id, Operator("directory", "system", None)),

@@ -163,3 +163,6 @@ def test_sync_moves_a_kit_installs_team_and_queues_the_gateway_key_resync(conn):
     assert state() == ([(None,)], [(None,)])
     directory.sync(conn, INSTANCE, teams("t3"))  # 다시 들어오면 채운다
     assert state() == ([("t3",)], [("t3",)])
+    # 명부에서 빠진 사람은 팀 범위를 잃는다
+    directory.sync(conn, INSTANCE, FakeLiteLLM([user("u2")]))
+    assert state() == ([(None,)], [(None,)])
