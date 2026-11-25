@@ -126,7 +126,17 @@ def sha256_file(path: Path) -> str:
 
 def write_atomic(path: Path, data: bytes, mode: int, owner: tuple[int, int] | None = None) -> None:
     """같은 폴더의 임시 파일에 쓰고 바꿔 넣는다. 기존 심볼릭 링크는 따라가지 않는다."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # 관리자 권한 설치기가 사용자 폴더(~/.cache/mint 등)를 처음 만들면 폴더도 그 사용자 것이어야
+    # 사용자 보고기가 보고 시각을 남긴다(root 소유로 남으면 「아직 보고 없음」으로 보인다).
+    missing = []
+    folder = path.parent
+    while not folder.exists():
+        missing.append(folder)
+        folder = folder.parent
+    for folder in reversed(missing):
+        folder.mkdir(exist_ok=True)
+        if owner is not None:
+            os.chown(folder, *owner)
     fd, name = tempfile.mkstemp(dir=path.parent, prefix=".mint-")
     try:
         with os.fdopen(fd, "wb") as handle:
