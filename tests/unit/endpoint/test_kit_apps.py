@@ -75,7 +75,8 @@ def test_run_passes_the_key_only_as_environment_variables(kit):
         return 0
 
     code, _ = run(kit, "run", name="bot", command=["--", "python", "bot.py"], call=call)
-    assert code == 0 and seen["command"] == ["python", "bot.py"]
+    assert code == 0 and seen["command"][1:] == ["bot.py"]
+    assert os.path.basename(seen["command"][0]).lower().startswith("python")
     env = seen["env"]
     assert env["OPENAI_BASE_URL"] == "https://mint.test/v1" and env["OPENAI_API_KEY"] == SECRET
     assert env["ANTHROPIC_BASE_URL"] == "https://mint.test" and env["MINT_APP"] == "bot"
@@ -134,3 +135,24 @@ def test_the_cli_parses_app_commands(kit, monkeypatch):
     assert seen["name"] == "bot" and kit_module.app_command(seen["command"]) == [
         "python", "x.py", "--flag"]
     assert kit_module.cli_main(["app", "new", "bot", "--days", "7"]) == 0 and seen["days"] == 7
+
+
+def test_rm_never_claims_a_revoke_it_did_not_make_and_run_explains_a_missing_command(
+    kit, monkeypatch
+):
+    listing = FakeGateway({("GET", kit_module.APPS_PATH): (200, {"apps": []})})
+    code, lines = run(kit, "rm", listing, name="typo")
+    assert code == 1 and "없습니다" in lines[0]
+    code, lines = run(kit, "rm", FakeGateway({("GET", kit_module.APPS_PATH): (0, None)}),
+                      name="typo")
+    assert code == 1 and "회수하고" not in lines[0]
+    assert run(kit, "new", FakeGateway(new_reply()), name="bot\n")[0] == 2
+    run(kit, "new", FakeGateway(new_reply()), name="bot")
+    code, lines = run(kit, "run", name="bot", command=["--", "no-such-command-xyz"])
+    assert code == 127 and "실행하지 못했습니다" in lines[0]
+    seen = []
+    monkeypatch.setattr(kit_module.shutil, "which",
+                        lambda name, *a, **k: "C:/nodejs/npx.CMD" if name == "npx" else None)
+    run(kit, "run", name="bot", command=["--", "npx", "tsx", "a.ts"],
+        call=lambda command, env: seen.append(command) or 0)
+    assert seen == [["C:/nodejs/npx.CMD", "tsx", "a.ts"]]  # Windows .cmd 명령도 띄운다
