@@ -64,8 +64,8 @@ h3 { font-size: 14px; font-weight: 600; margin: var(--s3) 0 var(--s2); }
 small, .muted { font-size: 12px; color: var(--muted); }
 code { font: 12px ui-monospace, SFMono-Regular, Consolas, monospace; }
 
-/* LiteLLM Sidebar: 280px expanded, 72px collapsed. */
-body.shell { --sidebar-width: 280px; min-height: 100vh; padding-top: 64px; }
+/* 메뉴 글자 폭에 맞춘 사이드바: 220px, 접으면 72px. */
+body.shell { --sidebar-width: 220px; min-height: 100vh; padding-top: 64px; }
 .topbar {
   position: fixed; inset: 0 0 auto; height: 64px; z-index: 5;
   display: flex; align-items: center; justify-content: space-between; gap: 16px;
@@ -126,7 +126,8 @@ th {
   position: sticky; top: 64px; background: var(--bg-subtle); font-weight: 600; z-index: 1;
   white-space: nowrap;
 }
-td { overflow-wrap: anywhere; }
+/* 한글은 띄어쓰기에서만 줄을 바꾼다(긴 주소·지문만 글자 단위로 끊는다). */
+td { overflow-wrap: anywhere; word-break: keep-all; }
 .ident { font-family: monospace; }
 td .nowrap, td button, td .badge { white-space: nowrap; }
 button > span[aria-hidden="true"] { margin-right: 4px; }
@@ -155,6 +156,10 @@ a.card:hover, a.card:focus-visible { border-color: var(--accent); }
 .grid > * { min-width: 0; }
 @media (min-width: 1800px) { .page.wide .grid.panels { grid-template-columns: repeat(4, 1fr); } }
 @media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } }
+/* 본문+결정 패널: 표가 있는 본문을 넓게, 결정 패널은 고정 폭. 좁으면 결정 패널을 위로 올린다. */
+.grid.with-aside { grid-template-columns: minmax(0, 1fr) 22rem; }
+.grid.with-aside > * { min-width: 0; }
+@media (max-width: 1360px) { .grid.with-aside { grid-template-columns: minmax(0, 1fr); } .grid.with-aside > aside { order: -1; } }
 .chart { height: 280px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
 .chart[data-height="200"] { height: 200px; }
 .chart[data-height="240"] { height: 240px; }
