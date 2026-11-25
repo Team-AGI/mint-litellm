@@ -2658,7 +2658,11 @@ class AppContainerRun:
             flags = 0x80000 | 0x4 | 0x400  # 확장 시작 정보, 멈춘 채로 생성, 유니코드 환경
             if not k32.CreateProcessW(
                 approved["executable"], command, None, None, True, flags, env_buffer,
-                approved.get("cwd") or None, ctypes.byref(info), ctypes.byref(proc),
+                # 작업 폴더를 정하지 않았으면 격리가 열 수 있는 폴더(격리 임시 폴더, 없으면 받아 둔
+                # 묶음 폴더)에서 시작한다. AI 도구의 작업 폴더(예: Codex의 TEMP)는 격리가 못 열어
+                # npm이 cmd.exe를 띄우다 ENOENT로 끝났다(pj3 실측).
+                approved.get("cwd") or temp or approved.get("_pack_dir") or None,
+                ctypes.byref(info), ctypes.byref(proc),
             ):  # fmt: skip
                 raise SandboxUnavailable(f"CreateProcess failed ({ctypes.get_last_error()})")
         finally:
@@ -3632,7 +3636,10 @@ def main(argv: list[str] | None = None) -> None:
                     stream.flush()
                 except (OSError, ValueError):
                     pass
-            os._exit(exc.code if isinstance(exc.code, int) else 0 if exc.code is None else 1)
+            code = exc.code if isinstance(exc.code, int) else 0 if exc.code is None else 1
+            if code >= 2**31:  # Windows 종료 코드는 부호 없는 32비트다(예: -4058 → 4294963238)
+                code -= 2**32
+            os._exit(code if -(2**31) <= code < 2**31 else 1)
         except Refuse as exc:
             if args.server and not isinstance(exc, (Paused, Unreachable)):  # 일시 장애는 빼고
                 record_start_failure(state_dir, args.server, plain_reason(str(exc)))
