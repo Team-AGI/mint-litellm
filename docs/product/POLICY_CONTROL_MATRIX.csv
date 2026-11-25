@@ -1,0 +1,154 @@
+control_id,kind,class,rule,purpose,control_points,applies_to,deny_reasons,user_message,error_type,resolution,root_override,ux_review,test_ids,status
+POL-I-01,policy,unconditional,제공자·배포 주소가 허용 목록에 있어야 신청이 통과한다,,src/mint_litellm/control/intake_checks.py::_ip_in_entry src/mint_litellm/plugin/pipeline.py::denial_and_approval,,,,,,,,,IMPLEMENTED
+POL-I-03,policy,unconditional,도구별 허용 자료·작업 범위를 승인 때 정한다,,src/mint_litellm/plugin/pipeline.py::denial_and_approval policy/bundle/mint/policy.rego:250,,,,,,,,,IMPLEMENTED
+POL-I-04,policy,unconditional,도구 설명에 지시 삽입 문구가 있으면 도입을 거부한다,,src/mint_litellm/control/intake_checks.py::description_scan src/mint_litellm/control/services/intakes.py::decide,,,,,,,,,IMPLEMENTED
+POL-I-05,policy,unconditional,도구 결과의 형식·포함 가능 자료를 미리 정한다,,src/mint_litellm/control/services/intakes.py::_REQUIRED,,,,,,,,,IMPLEMENTED
+POL-I-11,policy,unconditional,요구사항(기능·자료·권한·승인 기준) 필수 항목을 기록한다,,src/mint_litellm/control/services/intakes.py::_REQUIRED,,,,,,,,,IMPLEMENTED
+POL-R-01,policy,unconditional,승인 목록에 없거나 확인 못 하는 서버는 연결을 거부한다,,src/mint_litellm/plugin/pipeline.py::add src/mint_litellm/types/decision.py::server_state_result,,,,,,,,,IMPLEMENTED
+POL-R-02,policy,unconditional,예외 승인이 만료되면 자동으로 차단한다,,src/mint_litellm/plugin/pipeline.py::denial_and_approval src/mint_litellm/control/services/expiry.py::expire_due,,,,,,,,,IMPLEMENTED
+POL-R-03,policy,unconditional,승인 때 대상·목적·범위·정책 판본을 기록한다,,src/mint_litellm/control/approvals.py::check_scope_and_permission src/mint_litellm/plugin/pipeline.py::build_policy_input,,,,,,,,,IMPLEMENTED
+POL-R-08,policy,unconditional,인증 요청은 허용 목록에 등록된 인증 서버로만 보낸다,,src/mint_litellm/control/intake_checks.py::oauth_issuer_allowlist,,,,,,,,,IMPLEMENTED
+POL-R-15,policy,unconditional,사용자·Agent 권한을 승인 범위로 제한하고 초과 요청은 거부한다,,src/mint_litellm/plugin/pipeline.py::PipelineDeps policy/bundle/mint/policy.rego:250,,,,,,,,,IMPLEMENTED
+POL-R-16,policy,unconditional,원격 연결은 암호화 경로(HTTPS)만 쓴다,,src/mint_litellm/control/intake_checks.py::url_guard src/mint_litellm/plugin/pipeline.py::add,,,,,,,,,IMPLEMENTED
+POL-R-22,policy,unconditional,동의는 특정 서버·기능·기간에만 적용하고 기록한다,,src/mint_litellm/plugin/pipeline.py::bound_to_current_contract src/mint_litellm/control/consents.py::add,,,,,,,,,IMPLEMENTED
+POL-E-01,policy,unconditional,현재 사용자·Agent에게 허용된 범위 안에서만 실행한다,,src/mint_litellm/plugin/pipeline.py::state_results policy/bundle/mint/policy.rego:257,,,,,,,,,IMPLEMENTED
+POL-E-02,policy,unconditional,이전 허용 결과를 재사용하지 않고 호출마다 권한을 새로 확인한다,,src/mint_litellm/plugin/pipeline.py::same_call,,,,,,,,,IMPLEMENTED
+POL-E-03,policy,unconditional,호출마다 요청자·서버·도구·대상이 승인 범위인지 확인한다,,src/mint_litellm/plugin/pipeline.py::same_call policy/bundle/mint/policy.rego:250,,,,,,,,,IMPLEMENTED
+POL-E-21,policy,unconditional,확인한 값과 실제 호출 값이 같아야 하며 한 번만 쓴다,,src/mint_litellm/plugin/pipeline.py::policy_stage,,,,,,,,,IMPLEMENTED
+POL-E-25,policy,unconditional,모든 호출을 사용자·도구·대상·시각·결과로 기록한다,,src/mint_litellm/plugin/pipeline.py::_run_stages src/mint_litellm/plugin/result.py::screen_result,,,,,,,,,IMPLEMENTED
+POL-E-26,policy,unconditional,감사 기록을 바꾸거나 지우지 못하게 하고 변경 여부를 확인한다,,src/mint_litellm/control/db/migrations/001_initial.sql:427 src/mint_litellm/control/seal.py::row_hash,,,,,,,,,IMPLEMENTED
+POL-E-27,policy,unconditional,거부·실패·예외 호출도 판정과 사유를 기록한다,,src/mint_litellm/plugin/pipeline.py::obligation_check src/mint_litellm/plugin/result.py::screen_result,,,,,,,,,IMPLEMENTED
+POL-O-01,policy,unconditional,승인 때 도구 명세와 달라지면 재승인 전까지 사용을 제한한다,,src/mint_litellm/plugin/pipeline.py::contract_result src/mint_litellm/control/contract_observe.py::record_tools,,,,,,,,,IMPLEMENTED
+POL-O-02,policy,unconditional,다른 사용자에게 허용되지 않은 도구는 보이지 않게 한다,,src/mint_litellm/plugin/discovery.py::evaluate_listed_tool,,,,,,,,,IMPLEMENTED
+POL-O-11,policy,unconditional,새 배포 주소는 기존 승인 주소와 구분해 재확인한다,,src/mint_litellm/control/contract_observe.py::record_tools src/mint_litellm/plugin/pipeline.py::audience_result,,,,,,,,,IMPLEMENTED
+POL-O-16,policy,unconditional,허용·거부·실패 호출 기록이 빠짐없이 수집되는지 시험한다,,src/mint_litellm/plugin/result.py::observe_response tests/integration/test_acceptance_core.py::code_of,,,,,,,,,IMPLEMENTED
+POL-O-19,policy,unconditional,서버·도구를 즉시 사용 중지할 수 있다,,src/mint_litellm/control/servers.py::register_local src/mint_litellm/control/approvals.py::approve,,,,,,,,,IMPLEMENTED
+POL-D-08,policy,unconditional,폐기 전후 감사 기록을 보존기간 동안 보호한다,,src/mint_litellm/control/db/migrations/001_initial.sql:427 src/mint_litellm/control/seal.py::verify,,,,,,,,,IMPLEMENTED
+POL-D-09,policy,unconditional,데이터베이스 복원이 감지되면 확인 전까지 호출을 막는다,,src/mint_litellm/plugin/restore_watch.py::RestoreWatch src/mint_litellm/restore/judge.py::RESTORE_PENDING,,,,,,,,,IMPLEMENTED
+POL-I-02,policy,unconditional,자료 등급을 기록하고 등급에 따라 동의·승인을 요구한다,,policy/bundle/mint/policy.rego:251 src/mint_litellm/plugin/pipeline.py::consent_state src/mint_litellm/control/intake_checks.py::risk_grade,,,,,,,,,IMPLEMENTED
+POL-I-10,policy,conditional,관리자가 지정한 도구는 사용자 확인 대상에 넣는다,,policy/bundle/mint/policy.rego:372 src/mint_litellm/plugin/pipeline.py::policy_stage,,,,,,,,,IMPLEMENTED
+POL-E-20,policy,conditional,지정된 도구는 실행 직전 사용자 확인을 받는다,,policy/bundle/mint/policy.rego:372 src/mint_litellm/plugin/pipeline.py::policy_stage,,,,,,,,,IMPLEMENTED
+POL-E-08,policy,conditional,전송 자료 종류·수신자·목적이 승인 범위여야 한다,,src/mint_litellm/plugin/policy/defaults.py::effective_conditions policy/bundle/mint/policy.rego:292,,,,,,,,,IMPLEMENTED
+POL-E-15,policy,conditional,정의되지 않은 입력 항목은 거부한다,,src/mint_litellm/plugin/policy/defaults.py::effective_conditions policy/bundle/mint/policy.rego:292,,,,,,,,,IMPLEMENTED
+POL-E-09,policy,conditional,경로 탐색과 지정된 승인 폴더 밖 파일 요청은 거부한다,,src/mint_litellm/plugin/policy/patterns.py::_traversal policy/bundle/mint/policy.rego:285,,,,,,,,,IMPLEMENTED
+POL-R-21,policy,conditional,서버 제공자·주소·기능을 보여 주고 사용자 동의를 받는다,,policy/bundle/mint/policy.rego:262 src/mint_litellm/plugin/policy/defaults.py::CONSENT_GRADES src/mint_litellm/plugin/pipeline.py::current_contract,,,,,,,,,IMPLEMENTED
+POL-E-07,policy,conditional,지정된 목적지 밖 URL을 거부한다,,policy/bundle/mint/policy.rego:271 src/mint_litellm/plugin/policy/patterns.py::host_allowed,,,,,,,,,IMPLEMENTED
+POL-E-14,policy,conditional,내부 주소로 이동하는 요청은 중단한다,,policy/bundle/mint/policy.rego:273 src/mint_litellm/plugin/policy/patterns.py::_private_host,,,,,,,,,IMPLEMENTED
+POL-E-28,policy,conditional,로그에 토큰·문서 본문·불필요한 개인정보를 남기지 않는다,,src/mint_litellm/plugin/selfcheck.py::check_items,,,,,,,,,IMPLEMENTED
+POL-E-29,policy,conditional,오류 메시지에 인증정보·내부 자료를 드러내지 않는다,,src/mint_litellm/types/errors.py::record_failed_error tests/unit/plugin/test_plugin_hooks.py::test_upstream_error_text_never_reaches_the_recorded_events,,,,,,,,,IMPLEMENTED
+POL-O-18,policy,conditional,위험 내용과 조치 절차를 담당자에게 전달한다,,src/mint_litellm/control/webhook.py::GUIDE src/mint_litellm/control/webhook.py::build_body,,,,,,,,,IMPLEMENTED
+POL-O-12,policy,partial,새 전송 목적지는 재승인 전에 쓰지 않는다,,src/mint_litellm/plugin/pipeline.py::state_results src/mint_litellm/control/contract_observe.py::record_tools src/mint_litellm/control/exec_drift.py::items src/mint_litellm/plugin/policy/patterns.py::compute_patterns policy/bundle/mint/policy.rego:271 src/mint_litellm/endpoint/kit/mint_agent.py::egress_verdict src/mint_litellm/endpoint/kit/mint_agent.py::EgressProxy tests/unit/endpoint/test_kit_sandbox.py::test_a_hosts_server_reaches_only_declared_hosts_through_the_proxy,,,,,,,,,IMPLEMENTED
+POL-O-06,policy,partial,패키지 제공처·버전을 기록하고 미승인·미고정 패키지는 쓰지 않는다,,src/mint_litellm/control/packages.py::extract src/mint_litellm/control/servers.py::_record_packages src/mint_litellm/control/approvals.py::require_package_acceptance tests/unit/control/test_packages.py::test_npx_specs tests/unit/control/test_local_servers.py::test_an_unpinned_package_opens_an_alert_and_blocks_approval_without_evidence,,,,,,,,,IMPLEMENTED
+POL-O-07,policy,partial,패키지의 알려진 취약점을 점검한다,,src/mint_litellm/control/vuln.py::parse_batch src/mint_litellm/control/vuln.py::run src/mint_litellm/control/depgraph.py::resolve tests/unit/control/test_vuln.py::test_fetch_queries_the_batch_endpoint_and_reads_each_new_vulnerability_once,,,,,,,,,IMPLEMENTED
+POL-O-08,policy,partial,치명·악용 중 취약점은 48시간 안에 조치하고 넘기면 호출을 막는다,,src/mint_litellm/control/vuln.py::is_critical src/mint_litellm/control/vuln.py::plan src/mint_litellm/plugin/pipeline.py::scope_result tests/unit/plugin/test_vuln_block.py::test_a_server_past_its_deadline_is_blocked tests/unit/control/test_local_servers.py::test_a_critical_vulnerability_blocks_the_server_after_48_hours_until_it_is_fixed,,,,,,,,,IMPLEMENTED
+POL-O-13,policy,conditional,업데이트로 늘어난 파일·실행·네트워크 권한은 승인 전 허용하지 않는다,,src/mint_litellm/control/contract_observe.py::record_tools src/mint_litellm/control/exec_drift.py::items src/mint_litellm/control/servers.py::_exec_drift src/mint_litellm/endpoint/kit/mint_agent.py::sandbox_mounts src/mint_litellm/endpoint/kit/mint_agent.py::bwrap_args src/mint_litellm/endpoint/kit/mint_agent.py::AppContainerRun,,,,,,,,,IMPLEMENTED
+POL-O-14,policy,unconditional,승인된 권한이 아직 필요한지 주기적으로 재확인한다,,src/mint_litellm/control/services/recert.py::scan src/mint_litellm/control/services/recert.py::confirm src/mint_litellm/plugin/pipeline.py::denial_and_approval tests/unit/control/test_recert.py::test_the_cycle_starts_at_the_grant_and_restarts_at_each_confirmation,,,,,,,,,IMPLEMENTED
+POL-O-15,policy,partial,승인보다 넓어진 인증 범위·도구 권한은 재승인 전 쓰지 않는다,,src/mint_litellm/plugin/pipeline.py::control_listing_negative src/mint_litellm/plugin/pipeline.py::scope_result src/mint_litellm/plugin/token_scope.py::exceeded_scopes src/mint_litellm/control/contract_observe.py::record_oauth_scopes src/mint_litellm/control/services/intakes.py::_deployment_candidate,,,,,,,,,IMPLEMENTED
+POL-O-17,policy,conditional,새 도구 사용·호출 급증 경보가 작동하는지 시험한다,,src/mint_litellm/control/contract_observe.py::_observe src/mint_litellm/control/call_spike.py::run tests/integration/test_contract_observe_schedule.py::test_a_new_tool_raises_a_contract_drift_alert tests/integration/test_contract_observe_schedule.py::test_a_burst_of_calls_raises_a_call_spike_alert_and_recovery_closes_it,,,,,,,,,IMPLEMENTED
+POL-R-18,policy,conditional,"원격은 HTTPS, 로컬은 승인된 실행 파일·설정으로만 시작한다",,policy/bundle/mint/policy.rego:305 src/mint_litellm/plugin/pipeline.py::state_results src/mint_litellm/endpoint/kit/mint_agent.py::host_matches src/mint_litellm/endpoint/kit/mint_agent.py::report_result src/mint_litellm/endpoint/kit/mint_agent.py::load_contract,,,,,,,,,IMPLEMENTED
+POL-R-20,policy,conditional,실행 파일·실행 값·환경이 승인본과 다르면 시작하지 않는다,,policy/bundle/mint/policy.rego:311 src/mint_litellm/plugin/pipeline.py::state_results src/mint_litellm/endpoint/kit/mint_agent.py::host_matches src/mint_litellm/endpoint/kit/mint_agent.py::report_result,,,,,,,,,IMPLEMENTED
+POL-D-02,policy,conditional,Agent 설정의 폐기 서버 접속 정보를 제거한다,,src/mint_litellm/control/endpoint_posture.py::findings src/mint_litellm/endpoint/remediation.py::retired_names src/mint_litellm/endpoint/kit/mint_kit.py::remediate src/mint_litellm/endpoint/kit/mint_kit.py::stop_launched src/mint_litellm/endpoint/kit/mint_agent.py::load_retired,,,,,,,,,IMPLEMENTED
+POL-E-06,policy,conditional,Agent의 MCP 연결은 게이트웨이를 거치게 하고 직접 연결은 제한한다,,src/mint_litellm/plugin/provider_mcp.py::external_mcp src/mint_litellm/plugin/guardrail.py::_screen_provider_mcp src/mint_litellm/control/endpoint_posture.py::findings src/mint_litellm/endpoint/kit/mint_kit.py::codex_requirements tests/unit/endpoint/test_kit_install.py::test_a_managed_codex_install_limits_servers_and_hooks_every_call,,,,,,,,,IMPLEMENTED
+POL-R-04,policy,unconditional,서버명+도구명으로 도구를 구분한다,,src/mint_litellm/plugin/selfcheck.py::check_items src/mint_litellm/types/settings.py::REUSE_POLICIES,,,,,,,,,IMPLEMENTED
+POL-R-05,policy,partial,다른 서버용 토큰은 거부한다,,src/mint_litellm/types/reuse_policy.py::reuse_violations src/mint_litellm/control/litellm_config.py::_server_defaults src/mint_litellm/plugin/pipeline.py::audience_result src/mint_litellm/plugin/token_audience.py::audience_verdict tests/integration/test_reuse_runtime.py::test_upstream_resource_puts_the_target_on_the_authorization_request,,,,,,,,,IMPLEMENTED
+POL-R-06,policy,conditional,연결 토큰을 다른 서비스로 전달하지 않는다,,src/mint_litellm/plugin/pipeline.py::denial_and_approval src/mint_litellm/types/reuse_policy.py::forwarding_violation tests/integration/test_reuse_runtime.py::test_forwarding_server_hands_the_callers_token_to_the_upstream,,,,,,,,,IMPLEMENTED
+POL-R-07,policy,conditional,응답 발급자가 연결 시작 때 선택한 대상과 같아야 한다,,src/mint_litellm/types/reuse_policy.py::reuse_violations tests/integration/test_reuse_runtime.py::test_response_issuer_must_match_the_pinned_issuer,,,,,,,,,IMPLEMENTED
+POL-R-09,policy,conditional,인증 결과 수신처는 사전 승인된 곳만 쓴다,,src/mint_litellm/types/reuse_policy.py::_origin_problem src/mint_litellm/types/reuse_policy.py::reuse_violations tests/integration/test_reuse_runtime.py::test_redirect_uri_outside_the_trusted_origins_is_refused,,,,,,,,,IMPLEMENTED
+POL-R-10,policy,conditional,연결 결과가 현재 사용자·세션의 요청과 같아야 한다,,src/mint_litellm/types/reuse_policy.py::reuse_violations tests/integration/test_reuse_runtime.py::test_callback_without_the_started_flow_is_not_forwarded tests/integration/test_reuse_runtime.py::test_identity_binding_enforce_requires_pkce_and_a_signed_in_caller,,,,,,,,,IMPLEMENTED
+POL-R-11,policy,conditional,정보 조회 주소를 승인된 목적지로 제한한다,,src/mint_litellm/plugin/selfcheck.py::check_items src/mint_litellm/types/reuse_policy.py::reuse_violations tests/integration/test_reuse_runtime.py::test_cross_origin_metadata_url_on_a_private_address_is_not_fetched,,,,,,,,,IMPLEMENTED
+POL-R-12,policy,partial,이름 조회·이동 뒤 최종 접속지를 다시 확인한다,,src/mint_litellm/plugin/selfcheck.py::check_items src/mint_litellm/types/settings.py::REUSE_POLICIES src/mint_litellm/plugin/pipeline.py::address_verdict src/mint_litellm/plugin/resolve_guard.py::ResolveGuard tests/unit/plugin/test_resolve_guard.py::test_public_private_and_mixed_answers,,,,,,,,,IMPLEMENTED
+POL-R-13,policy,partial,토큰·키는 설정·명령·로그에 평문으로 두지 않는다,,src/mint_litellm/plugin/selfcheck.py::check_items src/mint_litellm/types/plaintext_secrets.py::plaintext_secret_paths src/mint_litellm/types/reuse_policy.py::reuse_violations tests/integration/test_reuse_runtime.py::test_env_credential_login_is_refused_only_when_the_setting_is_on,,,,,,,,,IMPLEMENTED
+POL-R-14,policy,conditional,서버마다 별도 인증정보를 쓴다,,src/mint_litellm/types/reuse_policy.py::reuse_violations src/mint_litellm/types/reuse_policy.py::header_credential_digests,,,,,,,,,IMPLEMENTED
+POL-R-17,policy,unconditional,접속 주소와 인증서 이름이 같아야 한다,,src/mint_litellm/types/reuse_policy.py::ssl_verify_on src/mint_litellm/types/reuse_policy.py::reuse_violations tests/integration/test_reuse_runtime.py::test_tls_certificate_name_must_match_the_address,,,,,,,,,IMPLEMENTED
+POL-E-17,policy,partial,반복 조회·대량 추출을 탐지해 중단한다,,src/mint_litellm/types/reuse_policy.py::reuse_violations src/mint_litellm/control/bulk_extraction.py::run tests/unit/control/test_bulk_extraction.py::test_hold_denies_the_principal_on_that_server_until_an_admin_lifts_it tests/integration/test_reuse_runtime.py::test_server_rpm_limit_stops_calls_above_the_limit_before_the_upstream,,,,,,,,,IMPLEMENTED
+POL-E-18,policy,partial,서버 계정과 별개로 요청 사용자의 문서 권한을 확인한다,,src/mint_litellm/plugin/selfcheck.py::check_items src/mint_litellm/types/settings.py::REUSE_POLICIES,,,,,,,,,IMPLEMENTED
+POL-E-23,policy,conditional,호출 횟수·동시 실행 수에 상한을 둔다,,src/mint_litellm/types/reuse_policy.py::reuse_violations tests/integration/test_reuse_runtime.py::test_server_rpm_limit_stops_calls_above_the_limit_before_the_upstream tests/integration/test_reuse_runtime.py::test_server_concurrency_limit_serialises_calls_to_the_upstream,,,,,,,,,IMPLEMENTED
+POL-E-24,policy,unconditional,대기·실행 시간 상한을 넘기면 종료한다,,src/mint_litellm/types/reuse_policy.py::reuse_violations tests/integration/test_reuse_runtime.py::test_per_server_timeout_ends_a_slow_call_and_a_longer_one_is_left_alone,,,,,,,,,IMPLEMENTED
+POL-E-05,policy,conditional,입력의 인증정보·개인정보를 찾아 전달 전에 가린다,,src/mint_litellm/plugin/policy/sensitive_scan.py::_mask_table src/mint_litellm/plugin/pipeline.py::build_policy_input src/mint_litellm/plugin/output_guardrail.py::apply_guardrail src/mint_litellm/control/content_finding.py::run,,,,,,,,,IMPLEMENTED
+POL-E-04,policy,partial,결과 속 지시를 명령으로 처리하지 않는다,,src/mint_litellm/plugin/policy/result_scan.py::scan_instructions src/mint_litellm/plugin/result.py::screen_result src/mint_litellm/plugin/output_guardrail.py::apply_guardrail src/mint_litellm/plugin/logger.py::async_post_mcp_tool_call_hook src/mint_litellm/plugin/policy/sensitive_scan.py::locate_sensitive src/mint_litellm/control/content_finding.py::run,,,,,,,,,IMPLEMENTED
+POL-E-16,policy,conditional,한 요청의 반환 문서 수·크기에 상한을 둔다,,src/mint_litellm/plugin/result.py::inspect_result src/mint_litellm/plugin/logger.py::async_post_mcp_tool_call_hook src/mint_litellm/plugin/pipeline.py::_result_policy src/mint_litellm/plugin/config.py::DEFAULT_MAX_RESULT_BYTES tests/unit/plugin/test_plugin_patterns_input.py::test_managed_servers_get_default_result_limits_and_explicit_conditions_win,,,,,,,,,IMPLEMENTED
+POL-O-09,policy,conditional,서버 인스턴스 사이 도구 정의·설정 불일치를 막는다,,src/mint_litellm/control/contract_observe.py::compare_instances src/mint_litellm/control/contract_observe.py::_track src/mint_litellm/plugin/pipeline.py::scope_result src/mint_litellm/control/services/evidence.py::attach,,,,,,,,,IMPLEMENTED
+POL-D-01,policy,unconditional,연결 승인을 즉시 해제하고 회수 완료를 기록한다,,src/mint_litellm/control/relations.py::terminate src/mint_litellm/control/sync_jobs.py::relation_finalize,,,,,,,,,IMPLEMENTED
+POL-I-06,policy,semi_auto_evidence,도입 전 시험 실행으로 설명과 실제 행위가 같은지 확인한다,,src/mint_litellm/control/services/evidence.py::_KIND_LIST src/mint_litellm/control/services/intakes.py::decide src/mint_litellm/control/services/evidence.py::scan_alerts,,,,,,,,,IMPLEMENTED
+POL-I-09,policy,semi_auto_evidence,외부 제공자의 자료 보관·재사용·삭제 조건을 확인한다,,src/mint_litellm/control/services/evidence.py::_KIND_LIST src/mint_litellm/control/services/intakes.py::decide src/mint_litellm/control/services/evidence.py::scan_alerts,,,,,,,,,IMPLEMENTED
+POL-E-19,policy,semi_auto_evidence,서버 계정에는 필요한 권한만 부여한다,,src/mint_litellm/control/services/evidence.py::_KIND_LIST src/mint_litellm/control/services/intakes.py::decide src/mint_litellm/control/services/evidence.py::scan_alerts,,,,,,,,,IMPLEMENTED
+POL-I-07,policy,semi_auto_evidence,서버가 주는 지시문에 목적 변경·과잉 요구가 없는지 확인한다,,src/mint_litellm/control/services/evidence.py::_KIND_LIST src/mint_litellm/control/services/intakes.py::decide src/mint_litellm/control/services/evidence.py::scan_alerts,,,,,,,,,IMPLEMENTED
+POL-E-11,policy,semi_auto_evidence,서버 간 자료·인증정보 전달은 별도로 승인받는다,,src/mint_litellm/control/services/evidence.py::_KIND_LIST src/mint_litellm/control/services/intakes.py::decide src/mint_litellm/control/services/evidence.py::scan_alerts,,,,,,,,,IMPLEMENTED
+POL-O-10,policy,semi_auto_evidence,되돌릴 버전의 보안 문제를 확인하고 승인받은 뒤 복원한다,,src/mint_litellm/control/services/evidence.py::_KIND_LIST src/mint_litellm/control/services/contracts.py::reapprove src/mint_litellm/control/services/evidence.py::scan_alerts,,,,,,,,,IMPLEMENTED
+POL-D-07,policy,semi_auto_evidence,제공자 이용 종료 때 자료 삭제·반환 증빙을 받는다,,src/mint_litellm/control/services/evidence.py::_KIND_LIST src/mint_litellm/control/services/relations.py::finish src/mint_litellm/control/relations.py::finish,,,,,,,,,IMPLEMENTED
+POL-O-03,policy,semi_auto_evidence,변경 자료의 사용자별 접근 권한을 다시 확인한다,,src/mint_litellm/control/services/evidence.py::_KIND_LIST src/mint_litellm/control/services/evidence.py::scan_alerts,,,,,,,,,IMPLEMENTED
+POL-O-04,policy,semi_auto_evidence,변경 자료의 내용·출처를 확인한다,,src/mint_litellm/control/services/evidence.py::_KIND_LIST src/mint_litellm/control/services/evidence.py::scan_alerts,,,,,,,,,IMPLEMENTED
+POL-O-05,policy,semi_auto_evidence,바뀐 지시문을 재심사한 뒤 사용한다,,src/mint_litellm/control/services/evidence.py::_KIND_LIST src/mint_litellm/control/services/evidence.py::scan_alerts,,,,,,,,,IMPLEMENTED
+POL-E-13,policy,semi_auto_evidence,외부 입력을 명령에 그대로 붙이지 않는다,,src/mint_litellm/control/services/evidence.py::_KIND_LIST src/mint_litellm/control/services/intakes.py::decide src/mint_litellm/control/services/evidence.py::applies,,,,,,,,,IMPLEMENTED
+POL-D-05,policy,semi_auto_evidence,서버 전용 계정·공유 권한을 회수한다,,src/mint_litellm/control/services/evidence.py::_KIND_LIST src/mint_litellm/control/services/evidence.py::scan_alerts src/mint_litellm/control/sync_jobs.py::server_finalize,,,,,,,,,IMPLEMENTED
+POL-D-04,policy,partial,실행 중 서버를 종료하고 자동 시작을 제거한다,,src/mint_litellm/endpoint/kit/mint_kit.py::scan_outside src/mint_litellm/control/endpoint_posture.py::findings src/mint_litellm/endpoint/kit/mint_kit.py::scan_processes src/mint_litellm/endpoint/kit/mint_kit.py::scan_autostart src/mint_litellm/endpoint/kit/mint_kit.py::stop_launched src/mint_litellm/endpoint/kit/mint_kit.py::drop_autostart,,,,,,,,,IMPLEMENTED
+POL-D-03,policy,partial,연결에 쓴 토큰·API 키를 회수·무효화한다,,src/mint_litellm/control/sync_jobs.py::server_finalize src/mint_litellm/control/litellm_write.py::delete_user_credential src/mint_litellm/control/litellm_admin.py::list_server_credentials,,,,,,,,,IMPLEMENTED
+POL-I-08,policy,conditional,로컬 서버의 파일·실행 권한을 필요한 범위로 제한한다,,src/mint_litellm/types/exec_contract.py::network_hints src/mint_litellm/control/exec_drift.py::items src/mint_litellm/endpoint/kit/mint_agent.py::sandbox_mounts src/mint_litellm/endpoint/kit/mint_agent.py::win_grants,,,,,,,,,IMPLEMENTED
+RULE-R1,rule,Block,승인 범위 밖 호출,참조 정책: POL-I-03 POL-E-01 POL-E-03,policy/bundle,,,,,,,,,IMPLEMENTED
+RULE-R2,rule,RequireApproval,관리자가 지정한 도구의 호출별 승인,참조 정책: POL-I-02 POL-I-10,policy/bundle,,,,,,,,,IMPLEMENTED
+RULE-R3,rule,Block,업무 시간 밖 호출,참조 정책: POL-E-01,policy/bundle,,,,,,,,,IMPLEMENTED
+RULE-R4,rule,require_consent,동의 확인,참조 정책: POL-R-21 POL-R-22,policy/bundle,,,,,,,,,IMPLEMENTED
+RULE-POL-E-07,rule,Block,허용 목적지 밖 URL 인자 (목적지 미지정 시 HTTPS 허용),참조 정책: POL-E-07,policy/bundle,,,,,,,,,IMPLEMENTED
+RULE-POL-E-08,rule,Block,승인된 인자 키 밖 호출,참조 정책: POL-E-08,policy/bundle,,,,,,,,,IMPLEMENTED
+RULE-POL-E-09,rule,Block,경로 탐색 또는 지정된 승인 폴더 밖 경로 인자,참조 정책: POL-E-09,policy/bundle,,,,,,,,,IMPLEMENTED
+RULE-POL-E-14,rule,Block,사설·내부 주소 인자,참조 정책: POL-E-14,policy/bundle,,,,,,,,,IMPLEMENTED
+RULE-POL-E-15,rule,Block,정의되지 않은 인자 항목,참조 정책: POL-E-15,policy/bundle,,,,,,,,,IMPLEMENTED
+RULE-POL-R-18,rule,Block,승인된 실행 계약이 없는 로컬 서버 호출,참조 정책: POL-R-18,policy/bundle,,,,,,,,,IMPLEMENTED
+RULE-POL-R-20,rule,Block,승인된 실행 계약과 다른 로컬 서버 호출,참조 정책: POL-R-20,policy/bundle,,,,,,,,,IMPLEMENTED
+CHECK-endpoint_stale_server,check,alert,설치 보고에 폐기된 서버 항목이 남음,참조 정책: POL-D-02,src/mint_litellm/control,,,,,,,,,IMPLEMENTED
+CHECK-endpoint_unmanaged,check,alert,관리되지 않는 단말 설치(관리형에서만 게이트웨이 밖 MCP를 막음),참조 정책: POL-E-06,src/mint_litellm/control,,,,,,,,,IMPLEMENTED
+CHECK-endpoint_stale_process,check,alert,폐기·미승인 서버의 프로세스가 단말에 남음,참조 정책: POL-D-04,src/mint_litellm/control,,,,,,,,,IMPLEMENTED
+CHECK-endpoint_stale_autostart,check,alert,폐기·미승인 서버의 자동 시작 항목이 단말에 남음,참조 정책: POL-D-04,src/mint_litellm/control,,,,,,,,,IMPLEMENTED
+CHECK-endpoint_outside_retired,check,alert,폐기된 서버의 패키지가 실행기 밖에서 단말에 직접 실행됨,참조 정책: POL-D-04,src/mint_litellm/control,,,,,,,,,IMPLEMENTED
+CHECK-endpoint_outside_unapproved,check,alert,승인된 서버가 없는 MCP 패키지가 실행기 밖에서 단말에 직접 실행됨,참조 정책: POL-D-04,src/mint_litellm/control,,,,,,,,,IMPLEMENTED
+CHECK-endpoint_outside_approved,check,alert,승인된 서버의 패키지가 실행기 밖에서 단말에 직접 실행됨(격리·호출 전 훅·네트워크 거름 우회),참조 정책: POL-D-04,src/mint_litellm/control,,,,,,,,,IMPLEMENTED
+CHECK-endpoint_unsandboxed,check,alert,관리형 단말에서 로컬 서버가 격리 없이 실행됨,참조 정책: POL-O-13 POL-I-08,src/mint_litellm/control,,,,,,,,,IMPLEMENTED
+CHECK-endpoint_egress_refused,check,alert,허용 호스트 목록이 있는 로컬 서버의 접속이 목록 밖이라 단말에서 거절됨,참조 정책: POL-O-12 POL-O-13,src/mint_litellm/control,,,,,,,,,IMPLEMENTED
+CHECK-endpoint_egress_unfiltered,check,alert,Windows 단말에서 로컬 서버의 허용 호스트 목록이 집행되지 않은 채 실행됨,참조 정책: POL-O-13,src/mint_litellm/control,,,,,,,,,IMPLEMENTED
+CHECK-endpoint_silent,check,alert,설치 보고가 정해진 시간(기본 24시간) 넘게 끊김,참조 정책: POL-D-04 POL-E-06,src/mint_litellm/control,,,,,,,,,IMPLEMENTED
+CHECK-endpoint_key_expiring,check,alert,단말 설치 묶음 키가 만료 7일 안인데 갱신되지 않음,참조 정책: POL-E-06,src/mint_litellm/control,,,,,,,,,IMPLEMENTED
+CHECK-endpoint_update_failed,check,alert,단말의 키트 자동 갱신이 실패해 옛 프로그램이 도는 중,참조 정책: POL-E-06,src/mint_litellm/control,,,,,,,,,IMPLEMENTED
+REASON-SERVER_UNREGISTERED,deny_reason,MINT-SERVER-UNREGISTERED,,,src/mint_litellm/plugin,,,등록되지 않은 서버의 호출이 막혔습니다,policy,,,,,IMPLEMENTED
+REASON-SERVER_NOT_APPROVED,deny_reason,MINT-SERVER-NOT-APPROVED,,,src/mint_litellm/plugin,,,승인되지 않은 서버의 호출이 막혔습니다,policy,,,,,IMPLEMENTED
+REASON-APPROVAL_ABSENT,deny_reason,MINT-APPROVAL-ABSENT,,,src/mint_litellm/plugin,,,이 서버에 대한 승인이 없어 호출이 막혔습니다,policy,,,,,IMPLEMENTED
+REASON-TOOL_NOT_IN_APPROVAL,deny_reason,MINT-TOOL-NOT-IN-APPROVAL,,,src/mint_litellm/plugin,,,승인 범위에 없는 도구의 호출이 막혔습니다,policy,,,,,IMPLEMENTED
+REASON-POLICY_DETECT,deny_reason,MINT-POLICY-DETECT,,,src/mint_litellm/plugin,,,호출이 정책에 막혔습니다,policy,,,,,IMPLEMENTED
+REASON-CONTRACT_DRIFT,deny_reason,MINT-CONTRACT-DRIFT,,,src/mint_litellm/plugin,,,서버 계약과 실제 상태가 달라 호출이 막혔습니다,policy,,,,,IMPLEMENTED
+REASON-OUTPUT_SCAN,deny_reason,MINT-OUTPUT-SCAN,,,src/mint_litellm/plugin,,,결과 검사 정책에 따라 호출이 막혔습니다,policy,,,,,IMPLEMENTED
+REASON-SERVER_REJECTED,deny_reason,MINT-SERVER-REJECTED,,,src/mint_litellm/plugin,,,거부된 서버의 호출이 막혔습니다,policy,,,,,IMPLEMENTED
+REASON-SERVER_SUSPENDED,deny_reason,MINT-SERVER-SUSPENDED,,,src/mint_litellm/plugin,,,중지된 서버의 호출이 막혔습니다,policy,,,,,IMPLEMENTED
+REASON-SERVER_TERMINATED,deny_reason,MINT-SERVER-TERMINATED,,,src/mint_litellm/plugin,,,폐기된 서버의 호출이 막혔습니다,policy,,,,,IMPLEMENTED
+REASON-RELATION_TERMINATED,deny_reason,MINT-RELATION-TERMINATED,,,src/mint_litellm/plugin,,,종료된 이용 관계의 호출이 막혔습니다,policy,,,,,IMPLEMENTED
+REASON-DENIED,deny_reason,MINT-DENIED,,,src/mint_litellm/plugin,,,관리자가 이 도구를 막았습니다,policy,,,,,IMPLEMENTED
+REASON-APPROVAL_REVOKED,deny_reason,MINT-APPROVAL-REVOKED,,,src/mint_litellm/plugin,,,철회된 승인에 따른 호출이 막혔습니다,policy,,,,,IMPLEMENTED
+REASON-APPROVAL_EXPIRED,deny_reason,MINT-APPROVAL-EXPIRED,,,src/mint_litellm/plugin,,,승인이 만료되어 호출이 막혔습니다,policy,,,,,IMPLEMENTED
+REASON-APPROVAL_RECERT_REQUIRED,deny_reason,MINT-APPROVAL-RECERT-REQUIRED,,,src/mint_litellm/plugin,,,승인 재확인이 필요해 호출이 막혔습니다,policy,,,,,IMPLEMENTED
+REASON-CALL_APPROVAL_REQUIRED,deny_reason,MINT-CALL-APPROVAL-REQUIRED,,,src/mint_litellm/plugin,,,호출별 승인이 필요합니다,policy,,,,,IMPLEMENTED
+REASON-CALL_APPROVAL_STALE,deny_reason,MINT-CALL-APPROVAL-STALE,,,src/mint_litellm/plugin,,,호출별 승인을 다시 확인해야 합니다,policy,,,,,IMPLEMENTED
+REASON-CALL_APPROVAL_DENIED,deny_reason,MINT-CALL-APPROVAL-DENIED,,,src/mint_litellm/plugin,,,호출별 승인이 거부되었습니다,policy,,,,,IMPLEMENTED
+REASON-CONSENT_REQUIRED,deny_reason,MINT-CONSENT-REQUIRED,,,src/mint_litellm/plugin,,,동의가 필요해 호출이 막혔습니다,policy,,,,,IMPLEMENTED
+REASON-CONSENT_EXPIRED,deny_reason,MINT-CONSENT-EXPIRED,,,src/mint_litellm/plugin,,,동의가 만료되어 호출이 막혔습니다,policy,,,,,IMPLEMENTED
+REASON-CONSENT_REVOKED,deny_reason,MINT-CONSENT-REVOKED,,,src/mint_litellm/plugin,,,동의가 철회되어 호출이 막혔습니다,policy,,,,,IMPLEMENTED
+REASON-ALLOWLIST_EXPIRED,deny_reason,MINT-ALLOWLIST-EXPIRED,,,src/mint_litellm/plugin,,,허용 목록이 만료되어 호출이 막혔습니다,policy,,,,,IMPLEMENTED
+REASON-SERVER_IDENTITY_MISMATCH,deny_reason,MINT-SERVER-IDENTITY-MISMATCH,,,src/mint_litellm/plugin,,,서버 식별 정보가 달라 호출이 막혔습니다,policy,,,,,IMPLEMENTED
+REASON-SERVER_IDENTITY_AMBIGUOUS,deny_reason,MINT-SERVER-IDENTITY-AMBIGUOUS,,,src/mint_litellm/plugin,,,서버 식별 정보가 모호해 호출이 막혔습니다,system,,,,,IMPLEMENTED
+REASON-SERVER_UNRESOLVED,deny_reason,MINT-SERVER-UNRESOLVED,,,src/mint_litellm/plugin,,,서버를 식별하지 못해 호출이 막혔습니다,system,,,,,IMPLEMENTED
+REASON-MASTER_KEY_FORBIDDEN,deny_reason,MINT-MASTER-KEY-FORBIDDEN,,,src/mint_litellm/plugin,,,마스터 키로 도구 호출을 할 수 없습니다,policy,,,,,IMPLEMENTED
+REASON-EXTERNAL_MCP_FORBIDDEN,deny_reason,MINT-EXTERNAL-MCP-FORBIDDEN,,,src/mint_litellm/plugin,,,외부 MCP 호출이 허용되지 않습니다,policy,,,,,IMPLEMENTED
+REASON-REALTIME_FORBIDDEN,deny_reason,MINT-REALTIME-FORBIDDEN,,,src/mint_litellm/plugin,,,실시간 호출이 허용되지 않습니다,policy,,,,,IMPLEMENTED
+REASON-CODE_EXECUTION_FORBIDDEN,deny_reason,MINT-CODE-EXECUTION-FORBIDDEN,,,src/mint_litellm/plugin,,,코드 실행이 허용되지 않습니다,policy,,,,,IMPLEMENTED
+REASON-TOKEN_FORWARD_FORBIDDEN,deny_reason,MINT-TOKEN-FORWARD-FORBIDDEN,,,src/mint_litellm/plugin,,,토큰 전달이 허용되지 않습니다,policy,,,,,IMPLEMENTED
+REASON-RESOLVED_ADDRESS_FORBIDDEN,deny_reason,MINT-RESOLVED-ADDRESS-FORBIDDEN,,,src/mint_litellm/plugin,,,서버 주소가 허용되지 않습니다,policy,,,,,IMPLEMENTED
+REASON-TOKEN_AUDIENCE_MISMATCH,deny_reason,MINT-TOKEN-AUDIENCE-MISMATCH,,,src/mint_litellm/plugin,,,토큰의 대상이 맞지 않습니다,policy,,,,,IMPLEMENTED
+REASON-TOKEN_SCOPE_EXCEEDED,deny_reason,MINT-TOKEN-SCOPE-EXCEEDED,,,src/mint_litellm/plugin,,,토큰의 권한 범위가 허용 범위를 넘었습니다,policy,,,,,IMPLEMENTED
+REASON-UNSUPPORTED,deny_reason,MINT-UNSUPPORTED,,,src/mint_litellm/plugin,,,지원하지 않는 호출이 막혔습니다,system,,,,,IMPLEMENTED
+REASON-SCHEMA_ERROR,deny_reason,MINT-SCHEMA-ERROR,,,src/mint_litellm/plugin,,,요청 형식 오류로 호출이 막혔습니다,system,,,,,IMPLEMENTED
+REASON-POLICY_VERSION_MISMATCH,deny_reason,MINT-POLICY-VERSION-MISMATCH,,,src/mint_litellm/plugin,,,정책 버전이 달라 호출이 막혔습니다,system,,,,,IMPLEMENTED
+REASON-DEPENDENCY_FAILURE,deny_reason,MINT-DEPENDENCY-FAILURE,,,src/mint_litellm/plugin,,,필요한 서비스에 연결하지 못했습니다,system,,,,,IMPLEMENTED
+REASON-AUDIT_FAILURE,deny_reason,MINT-AUDIT-FAILURE,,,src/mint_litellm/plugin,,,감사 기록을 남기지 못해 호출이 막혔습니다,system,,,,,IMPLEMENTED
+REASON-ORG_BOUNDARY,deny_reason,MINT-ORG-BOUNDARY,,,src/mint_litellm/plugin,,,조직 경계를 벗어난 호출이 막혔습니다,policy,,,,,IMPLEMENTED
+REASON-ANONYMOUS,deny_reason,MINT-ANONYMOUS,,,src/mint_litellm/plugin,,,사용자를 식별하지 못해 호출이 막혔습니다,policy,,,,,IMPLEMENTED
+REASON-ENFORCEMENT_UNVERIFIED,deny_reason,MINT-ENFORCEMENT-UNVERIFIED,,,src/mint_litellm/plugin,,,정책 적용 상태가 확인되지 않아 호출이 막혔습니다,system,,,,,IMPLEMENTED
+REASON-CANCELLED,deny_reason,MINT-CANCELLED,,,src/mint_litellm/plugin,,,호출이 취소되었습니다,system,,,,,IMPLEMENTED
+REASON-CONFIRMATION_REQUIRED,deny_reason,MINT-CONFIRMATION-REQUIRED,,,src/mint_litellm/plugin,,,본인 확인이 필요합니다,policy,,,,,IMPLEMENTED
+REASON-CONFIRMATION_STALE,deny_reason,MINT-CONFIRMATION-STALE,,,src/mint_litellm/plugin,,,본인 확인을 다시 해야 합니다,policy,,,,,IMPLEMENTED

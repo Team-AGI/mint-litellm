@@ -1,0 +1,147 @@
+req,feature_id,feature,lifecycle,gui_status,scenarios,actions,apis,policies,tests,evidence,gaps
+REQ-01,FM-01,기본 관리자 계정,BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U1,S01.login,POST /login,,test_api.py,클린 설치에서 기본 계정 생성 실패를 발견해 수정한 뒤 생성 확인(기기).,독립 GUI 증거
+REQ-01,FM-02,한 번 로그인(LiteLLM 콘솔 바로 진입),BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U1 U2,S01a.litellm S01b.logout S-staff_base.logout,GET /litellm/open POST /logout POST /staff/logout,,test_api.py test_login_session.py test_staff_pages.py,"관리자·직원 모두 LiteLLM 바로 진입 확인(브라우저, 구현자 확인).",독립 GUI 증거
+REQ-01,FM-03,사람·팀·키 자동 연결,BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U2,,,,,"LiteLLM 팀 생성·Linux PC 추가 뒤 동기화 1회로 MINT 명부 팀 반영, 제거하면 비워짐(기기).",화면 동작 시험 독립 GUI 증거
+REQ-01,FM-04,신청(주소+목적),BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U4 U11,S02.open S12.cancel T1.run T2.run T3.run S-staff_intake_new.intake_submit S-staff_intake_new.intake_submit_2,GET /intakes/{intake_id} PC 터미널 명령 mint add(HTTP 경로 확인 필요) POST /staff/intakes POST /staff/intakes/{intake_id}/withdraw,,test_convenience_render.py test_staff_guide_calls_probe.py,소유자 실측에서 저장소 주소 신청이 멈춘 문제를 FM-37로 해소(기기).,독립 GUI 증거
+REQ-01,FM-05,관리자 신청 등록(서버 선택 없음),BACKEND_VERIFIED,재검증 필요,U4,S02a.submit S-intake_detail.assign_requester,POST /intakes POST /intakes/{intake_id}/requester,,test_admin_people_terminate.py,공개 원격 서버 주소를 등록해 접수·검사 중까지 확인했으나 연결 검사가 LiteLLM 1.106에서 판별 불가가 되어 수정 PR을 냈다(기기).,독립 GUI 증거
+REQ-01,FM-06,한 번 승인,BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U5,S03.approve S03.reject,POST /intakes/{intake_id}/decision,,,"원격·로컬 승인 1클릭 뒤 수동 조작 0, 하네스 실제 응답까지 확인(기기·Windows PC).",시험 독립 GUI 증거
+REQ-01,FM-07,중복 신청 안내,BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U7,S13.submit,POST /staff/intakes,,test_convenience_render.py test_staff_guide_calls_probe.py,중복 신청 안내 확인(기기).,독립 GUI 증거
+REQ-01,FM-08,적용 단계 표시,BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U5 U6,S03.stages S03.retry S03.tools,GET /intakes/{intake_id},,,7단계 모두 체크 확인(기기).,시험 독립 GUI 증거
+REQ-01,FM-09,팀 범위 자동 회수,BACKEND_VERIFIED,재검증 필요,E2E-12,,,,,"시험 팀 추가→팀 범위 승인→호출 허용→팀 이탈 동기화 뒤 호출 즉시 차단, 약 40초 뒤 PC 시작 거부 확인(기기).",화면 동작 시험 독립 GUI 증거
+REQ-01,FM-10,PC 빠른 반영·자동 갱신,BACKEND_VERIFIED,재검증 필요,U6 W1,S11.code,POST /staff/endpoint/code,,test_staff_pages.py,Linux PC와 Windows PC에서 설치 20초·서명 자동 갱신 확인.,독립 GUI 증거
+REQ-01,FM-11,승인 서버 기본 통과·도구 자동 허용,BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U6,H1.call,MCP /mcp 게이트웨이 경유(LiteLLM 호출 전 가드레일),,,Codex에서 확인 창 없음 확인(기기).,시험 독립 GUI 증거
+REQ-01,FM-12,호출 기록 행 바로 차단,BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U8,S05.block S-tool_controls.tool_control S-tool_controls.tool_control_2 S-tool_controls.tool_control_3 S-approval_new.tool_control,POST /ledger/{event_id}/block POST /servers/{server_id}/tools/{operation},,,1클릭 차단·한국어 안내 확인(기기).,시험 독립 GUI 증거
+REQ-01,FM-13,차단 해제(한 번 클릭),BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U9,S06.lift S-approvals_blocks.decide_key_block,POST /denials/{denial_id}/lift POST /key-blocks/{proposal_id}/{decision},,,해제 뒤 같은 세션 재호출 확인(기기).,시험 독립 GUI 증거
+REQ-01,FM-14,서버별 허용 토글,BACKEND_VERIFIED,재검증 필요,,S04.toggle S04a.tabs,GET /servers/{server_id} POST /servers/{server_id}/suspend · POST /servers/{server_id}/resume,,,"서버 상세 「중지」 직후 Linux PC 호출이 한국어 안내와 함께 즉시 거부, 「재개」 뒤 2초 안에 허용(기기).",시나리오 시험 독립 GUI 증거
+REQ-01,FM-15,시작하기 배지,BACKEND_VERIFIED,재검증 필요,U3,S07.checklist S-setup.,"GET /setup POST {i.post}(시작하기 항목별, 확인 필요)",,,root 단독 필수 0 확인(구현자). 항목 순서 지적으로 수정 중이었다.,시험 독립 GUI 증거
+REQ-01,FM-16,사용량 한 화면,BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U10,S08.range S09.cards S14.range,GET / GET /reports/usage GET /staff/usage,,,숫자 일치 확인(기기). 비용 표시는 제거하고 판정 지연 표시로 교체 중이었다.,시험 독립 GUI 증거
+REQ-01,FM-17,예약 백업·복원,BACKEND_VERIFIED,재검증 필요,,,,,,"백업 뒤 표지를 지우고 복원 89초 만에 표지 복구, 복원 뒤 봉인 앵커 일치(기기). 백업 폴더 권한 결함은 수정.",시나리오 화면 동작 시험 독립 GUI 증거
+REQ-01,FM-18,자기 점검·키 자동 복구,IMPLEMENTED,재검증 필요,,S-alerts.alert_acknowledge,POST /alerts/{alert_id}/acknowledge,,,"기기에 배포됨, 실측 전.",시나리오 시험 독립 GUI 증거
+REQ-01,FM-19,에이전트 재시도 안내,BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U6 U8 U9,,,,,관리자 차단 안내 확인(기기).,화면 동작 시험 독립 GUI 증거
+REQ-01,FM-20,장애 시 승인 호출 통과,BACKEND_VERIFIED,재검증 필요,,,,,,정책 엔진 컨테이너 중지 중 승인 서버 호출 허용·판정 기록 확인(기기).,시나리오 화면 동작 시험 독립 GUI 증거
+REQ-01,FM-21,직원 가입 요청,IMPLEMENTED,재검증 필요,U12,S-signup_form.signup_submit S-signup_requests.decide S-signup_requests.decide_2,POST /signup-requests/{request_id}/{decision} POST /staff/signup,,test_signup.py,"가입·승인·LiteLLM 계정 생성은 실측, 비밀번호 폼 전환 뒤 로그인은 실측 전.",독립 GUI 증거
+REQ-01,FM-22,통합 로그인(관리자·직원 한 화면),IMPLEMENTED,재검증 필요,U1 U2,S10.login S-login.login S-login.login_2,POST /login,,test_api.py test_oidc_login.py test_password_login.py,"통합 화면은 기기에서 확인, 로그인 뒤 역할 분기는 실측 전.",독립 GUI 증거
+REQ-01,FM-23,기본 계정·첫 로그인 변경 알림,IMPLEMENTED,재검증 필요,U1,S-password.password_submit S-staff_password.password_submit,POST /account/password POST /staff/account/password,,test_litellm_theme.py test_password_login.py,"계정 생성은 확인, 알림 띠는 실측 전.",독립 GUI 증거
+REQ-01,FM-24,SIEM 전달,BACKEND_VERIFIED,재검증 필요,,S-admin.siem_test,POST /admin/siem/{name}/test,,,"화면에서 HEC·OTLP 대상을 추가해 각 340건 전달 확인(기기, 구현자).",시나리오 시험 독립 GUI 증거
+REQ-01,FM-25,Slack 승인 단추,BLOCKED,재검증 필요,,,,,,실측 전.,시나리오 화면 동작 시험 독립 GUI 증거
+REQ-01,FM-26,웹 콘솔 LiteLLM 테마·접히는 메뉴,IMPLEMENTED,재검증 필요,,,,,,"로그인 화면은 기기 확인, 로그인 뒤 화면은 픽스처 캡처 48장.",시나리오 화면 동작 시험 독립 GUI 증거
+REQ-01,FM-27,직원 PC mint 화면,IMPLEMENTED,재검증 필요,T1,,,,,렌더 시험·캡처만.,화면 동작 시험 독립 GUI 증거
+REQ-01,FM-28,훅 없는 AI 도구 자동 연결,BACKEND_VERIFIED,재검증 필요,U2b U13,S11a.reconnect,POST /staff/endpoint/reconnect,,,Windows PC의 Gemini CLI 설정에 승인 로컬 서버가 중재 실행 항목으로 자동 들어감 확인.,시험 독립 GUI 증거
+REQ-01,FM-29,전송 전 중재(실행기 --mediate),BACKEND_VERIFIED,재검증 필요,U13 H2,H2.call,실행기 --mediate → 결정 서버,,,Windows PC의 Gemini 항목으로 도구 목록·도구 호출 허용 확인(격리 안).,시험 독립 GUI 증거
+REQ-01,FM-30,공통 장애 계약(단말),BACKEND_VERIFIED,재검증 필요,U17,S17.states,POST /endpoints/{alias}/pause · POST /endpoints/{alias}/resume,,,Linux PC에서 결정 서버 연결을 막아 승인 서버 호출 허용·오프라인 기록·복구 뒤 보고 확인.,시험 독립 GUI 증거
+REQ-01,FM-31,AI 도구 현황,IMPLEMENTED,재검증 필요,U14,S15.view,GET /endpoints,,,픽스처 화면만 확인(좁은 표 글자 끊김을 카드로 수정).,시험 독립 GUI 증거
+REQ-01,FM-32,관리 AI 연결 중지·재개,BACKEND_VERIFIED,재검증 필요,U16,S15a.pause S17.states,POST /endpoints/{alias}/pause · POST /endpoints/{alias}/resume POST /endpoints/{alias}/pause · POST /endpoints/{alias}/resume · POST /endpoints/{alias}/reconnect,,,"「관리 AI 연결 중지」 뒤 Linux PC 서버 시작 거부(한국어 안내), 「재개」 뒤 34초 안 허용.",시험 독립 GUI 증거
+REQ-01,FM-33,평문 키 탐지·보관 안내,IMPLEMENTED,재검증 필요,U15,S11d.keys S17.states,GET /staff/endpoint POST /endpoints/{alias}/pause · POST /endpoints/{alias}/resume,,,단위 시험(값 미전송)과 픽스처 화면 확인.,시험 독립 GUI 증거
+REQ-01,FM-34,쓰던 서버 웹 신청·알림 제외,IMPLEMENTED,재검증 필요,U18,S11b.request S11c.ignore,POST /staff/endpoint/ignore POST /staff/endpoint/request,,,실측 전.,시험 독립 GUI 증거
+REQ-01,FM-35,앱 자격(자체 스크립트),BACKEND_VERIFIED,재검증 필요,U19 T6,T6.run T6a.run T6b.run S11e.revoke S17a.revoke,PC 터미널 명령 mint app(HTTP 경로 확인 필요) POST /endpoints/apps/{app_id}/revoke POST /staff/endpoint/apps/{app_id}/revoke,,,"Linux PC에서 앱 생성→환경 변수 주입·모델 목록 200, 회수→LiteLLM 키 삭제, 8초 안 401.",시험 독립 GUI 증거
+REQ-01,FM-36,신청 취소(검사 중 포함),BACKEND_VERIFIED,재검증 필요,,S-intake_detail.withdraw_intake,POST /intakes/{intake_id}/withdraw,,,직원 화면에서 판별 불가 신청 취소 시 철회됨·신청자 취소 확인(기기).,시나리오 시험 독립 GUI 증거
+REQ-01,FM-37,저장소 주소로 로컬 MCP 신청(GUI),IMPLEMENTED,재검증 필요,U4b,,,,,기기 콘솔 컨테이너에서 저장소 커밋·실행 명령 자동 추출 확인. 로그인 뒤 화면 제출은 실측 전.,화면 동작 시험 독립 GUI 증거
+REQ-01,FM-38,관리자 운영 설정 GUI,IMPLEMENTED,재검증 필요,U3,S-admin.set_operator_role S-admin.add_operator S-admin.backup_now S-admin.siem_add S-admin.remove_operator S-admin.siem_remove,POST /admin/backups POST /admin/operators POST /admin/siem POST /admin/siem/{name}/remove POST /operators/{name}/remove POST /operators/{name}/role,,test_pages_endpoints_admin.py,백업 요청 12초 뒤 새 폴더 생성과 콘솔 목록 읽기 확인(기기). 로그인 뒤 화면 실측 전.,독립 GUI 증거
+REQ-01,FM-39,사용 그만두기·다시 사용하기,IMPLEMENTED,재검증 필요,U-철회,S-staff_servers.give_consent S-staff_servers.stop_or_resume S-staff_servers.stop_or_resume_2 S-staff_servers.withdraw_consent S-staff_servers.stop_or_resume_3,POST /staff/consents POST /staff/consents/{consent_id}/revoke POST /staff/servers/{action},,test_screen_links.py test_staff_pages.py test_staff_guide_calls_probe.py test_staff_pages.py,"렌더·DB 시험만, PC 반영 실측 전.",독립 GUI 증거
+REQ-01,FM-40,관리자 단말 연결 해제,BACKEND_VERIFIED,재검증 필요,,,,,,"Windows PC만 해제해 그 PC 보고가 거부되고 Linux PC는 계속 허용, 재설치로 복구(기기).",시나리오 화면 동작 시험 독립 GUI 증거
+REQ-01,FM-41,알림 주소 화면 설정,IMPLEMENTED,재검증 필요,U3,,,,,콘솔 저장→작업 실행기가 복호화해 읽음 확인(기기). 실제 Slack 수신은 실측 전.,화면 동작 시험 독립 GUI 증거
+REQ-01,FM-42,내 단말 OS별 설치 명령·준비 중 카드,IMPLEMENTED,재검증 필요,U2 U6,,,,,실측 전.,화면 동작 시험 독립 GUI 증거
+REQ-01,FM-43,로컬 신청 공급망 검사(SBOM·SCA·SAST),BACKEND_VERIFIED,재검증 필요,U4b,,,,,기기에서 로컬 서버 신청에 대해 SBOM·취약점·소스 검사·비밀 검사 결과와 소스 트리 해시 기록 확인.,화면 동작 시험 독립 GUI 증거
+REQ-01,FM-44,사람 화면,IMPLEMENTED,재검증 필요,,S-people.unblock_person S-people.make_operator S-people.block_person,POST /people/block POST /people/operator POST /people/unblock,,test_admin_people_terminate.py,실측 전(단위 시험만).,시나리오 독립 GUI 증거
+REQ-01,FM-45,이용 종료·등록부 내보내기,IMPLEMENTED,재검증 필요,E2E-11,S-server_usage.finish_relation,POST /servers/{server_id}/relations/{relation_id}/finish,,,실측 전.,시험 독립 GUI 증거
+REQ-01,FM-46,신청 화면 표시 버그,IMPLEMENTED,재검증 필요,,S-evidence.attach_intake_evidence S-intake_detail.recheck_intake,POST /intakes/{intake_id}/evidence · POST /servers/{server_id}/evidence POST /intakes/{intake_id}/recheck,,,"소유자 화면 지적에 대한 수정, 재확인 전.",시나리오 시험 독립 GUI 증거
+REQ-01,FM-47,패키지 형태 GUI 신청,BACKEND_VERIFIED,재검증 필요,U4b,,,,,기기 콘솔에서 npm·PyPI 이름이 판본·무결성으로 고정되는 것 확인(서버 쪽).,화면 동작 시험 독립 GUI 증거
+REQ-01,FM-48,종료 증빙·설치 사전 점검·PC 한 대 해제·SIEM 토큰,IMPLEMENTED,재검증 필요,,S-server_usage.attach_relation_evidence,POST /servers/{server_id}/relations/{relation_id}/evidence,,,"배포됨, 화면 실측 전.",시나리오 시험 독립 GUI 증거
+REQ-01,FM-49,로컬 npm 서버 PC 시작(Linux·Windows),BACKEND_VERIFIED,재검증 필요,U4b,,,,,"Linux PC는 낮은 Node 판본 거부 사유 기록, Windows PC는 격리 안에서 도구 2개 노출·서명 갱신 뒤에도 동작.",화면 동작 시험 독립 GUI 증거
+REQ-01,FM-50,한 직원 PC 여러 대(PC마다 설치 키),BACKEND_VERIFIED,재검증 필요,,S-staff_endpoint.endpoint_revoke,POST /staff/endpoint/revoke,,test_screen_links.py test_staff_pages.py,"Linux PC 재설치 뒤 Windows PC 유지, Windows PC 같은 PC 재설치 때 옛 키만 해제 확인. 키 발급 키가 컨테이너에 안",시나리오 독립 GUI 증거
+REQ-01,FM-51,콘솔 다음 행동·sol 시험 반영,BACKEND_VERIFIED,재검증 필요,,,,,,기기 화면에서 처리할 일 카드·PC 이름·OS 구분·직원 주소 확인 미리보기 제출 확인(구현자).,시나리오 화면 동작 시험 독립 GUI 증거
+REQ-01,FM-52,Windows Codex에서 로컬 npm 서버 호출,BACKEND_VERIFIED,재검증 필요,,,,,,Windows PC에서 필수 설정으로 도구 호출 응답 확인. 원인은 Codex 작업 폴더를 격리가 못 열던 문제.,시나리오 화면 동작 시험 독립 GUI 증거
+REQ-01,FM-53,한 사이클(도입→승인→사용→폐기),BACKEND_VERIFIED,재검증 필요,E2E-04 E2E-12 E2E-13,,,,,"PyPI·npm·원격 세 종류를 Linux PC·Windows PC에서 도입→사용→폐기, 폐기 차단 10초~2분(구현자).",화면 동작 시험 독립 GUI 증거
+REQ-01,FM-54,검사 실패 신청 철회·새 판본 재신청,BACKEND_VERIFIED,재검증 필요,,,,,,관리자 경로로 실패 신청→새 판본 재신청→옛 신청 자동 철회→새 신청 접수 확인(기기).,시나리오 화면 동작 시험 독립 GUI 증거
+REQ-01,FM-64,호출별 승인·상시 승인 규칙,IMPLEMENTED,재검증 필요,,S-approvals_calls.decide_call S-approvals_rules.disable_call_approval_rule S-approvals_rules.add_call_approval_rule,POST /call-approval-rules POST /call-approval-rules/{rule_id}/disable POST /call-approvals/{call_id}/{decision},,test_pages_approvals.py test_screen_links.py,,시나리오 독립 GUI 증거
+REQ-01,FM-65,허용 목록,IMPLEMENTED,재검증 필요,,S-allowlists.lift_allowlist S-allowlists.add_allowlist,POST /allowlists POST /allowlists/{allowlist_id}/lift,,test_pages_approvals.py test_pages_endpoints_admin.py,,시나리오 독립 GUI 증거
+REQ-01,FM-66,서버 계약 관리,IMPLEMENTED,재검증 필요,,S-server_contract.approve_provisional_contract S-server_contract.reapprove_contracts,POST /contracts/{server_id}/approve-provisional POST /contracts/{server_id}/reapprove,,,,시나리오 시험 독립 GUI 증거
+REQ-01,FM-67,승인 철회·재확인·거부 등록,IMPLEMENTED,재검증 필요,E2E-12,S-access.revoke_approval S-access.revoke_approval_2 S-access.revoke_approval_3 S-access.create_denial S-access.recertify_approval,POST /approvals/{approval_id}/recertify POST /approvals/{approval_id}/revoke POST /denials,,test_convenience_screens.py test_pages_approvals.py,,독립 GUI 증거
+REQ-01,FM-68,조직 관리,IMPLEMENTED,재검증 필요,,S-admin.add_org S-admin.apply_org_suggestion S-admin.ignore_org_suggestion S-admin.close_org,POST /org-suggestions/{suggestion_id}/apply POST /org-suggestions/{suggestion_id}/ignore POST /orgs POST /orgs/{org_id}/close,,test_pages_endpoints_admin.py test_screen_links.py,,시나리오 독립 GUI 증거
+REQ-01,FM-69,하네스 기본 기능 통제,IMPLEMENTED,재검증 필요,,S-builtin_tools.allow_builtin S-builtin_tools.block_builtin,POST /builtin-tools/allow POST /builtin-tools/block,,test_builtin_tools.py,,시나리오 독립 GUI 증거
+REQ-01,FM-70,정책 모드·시험 적용,IMPLEMENTED,재검증 필요,,S-policy.cancel_shadow S-policy.set_mode S-policy.apply_shadow,POST /policy/mode POST /policy/shadow/apply POST /policy/shadow/cancel,,test_pages_dashboard.py test_screen_links.py,,시나리오 독립 GUI 증거
+REQ-02,FM-04,신청(주소+목적),BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U4 U11,S02.open S12.cancel T1.run T2.run T3.run S-staff_intake_new.intake_submit S-staff_intake_new.intake_submit_2,GET /intakes/{intake_id} PC 터미널 명령 mint add(HTTP 경로 확인 필요) POST /staff/intakes POST /staff/intakes/{intake_id}/withdraw,,test_convenience_render.py test_staff_guide_calls_probe.py,소유자 실측에서 저장소 주소 신청이 멈춘 문제를 FM-37로 해소(기기).,독립 GUI 증거
+REQ-02,FM-05,관리자 신청 등록(서버 선택 없음),BACKEND_VERIFIED,재검증 필요,U4,S02a.submit S-intake_detail.assign_requester,POST /intakes POST /intakes/{intake_id}/requester,,test_admin_people_terminate.py,공개 원격 서버 주소를 등록해 접수·검사 중까지 확인했으나 연결 검사가 LiteLLM 1.106에서 판별 불가가 되어 수정 PR을 냈다(기기).,독립 GUI 증거
+REQ-02,FM-37,저장소 주소로 로컬 MCP 신청(GUI),IMPLEMENTED,재검증 필요,U4b,,,,,기기 콘솔 컨테이너에서 저장소 커밋·실행 명령 자동 추출 확인. 로그인 뒤 화면 제출은 실측 전.,화면 동작 시험 독립 GUI 증거
+REQ-02,FM-47,패키지 형태 GUI 신청,BACKEND_VERIFIED,재검증 필요,U4b,,,,,기기 콘솔에서 npm·PyPI 이름이 판본·무결성으로 고정되는 것 확인(서버 쪽).,화면 동작 시험 독립 GUI 증거
+REQ-02,FM-54,검사 실패 신청 철회·새 판본 재신청,BACKEND_VERIFIED,재검증 필요,,,,,,관리자 경로로 실패 신청→새 판본 재신청→옛 신청 자동 철회→새 신청 접수 확인(기기).,시나리오 화면 동작 시험 독립 GUI 증거
+REQ-03,FM-08,적용 단계 표시,BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U5 U6,S03.stages S03.retry S03.tools,GET /intakes/{intake_id},,,7단계 모두 체크 확인(기기).,시험 독립 GUI 증거
+REQ-03,FM-43,로컬 신청 공급망 검사(SBOM·SCA·SAST),BACKEND_VERIFIED,재검증 필요,U4b,,,,,기기에서 로컬 서버 신청에 대해 SBOM·취약점·소스 검사·비밀 검사 결과와 소스 트리 해시 기록 확인.,화면 동작 시험 독립 GUI 증거
+REQ-03,FM-46,신청 화면 표시 버그,IMPLEMENTED,재검증 필요,,S-evidence.attach_intake_evidence S-intake_detail.recheck_intake,POST /intakes/{intake_id}/evidence · POST /servers/{server_id}/evidence POST /intakes/{intake_id}/recheck,,,"소유자 화면 지적에 대한 수정, 재확인 전.",시나리오 시험 독립 GUI 증거
+REQ-04,FM-11,승인 서버 기본 통과·도구 자동 허용,BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U6,H1.call,MCP /mcp 게이트웨이 경유(LiteLLM 호출 전 가드레일),,,Codex에서 확인 창 없음 확인(기기).,시험 독립 GUI 증거
+REQ-04,FM-27,직원 PC mint 화면,IMPLEMENTED,재검증 필요,T1,,,,,렌더 시험·캡처만.,화면 동작 시험 독립 GUI 증거
+REQ-04,FM-39,사용 그만두기·다시 사용하기,IMPLEMENTED,재검증 필요,U-철회,S-staff_servers.give_consent S-staff_servers.stop_or_resume S-staff_servers.stop_or_resume_2 S-staff_servers.withdraw_consent S-staff_servers.stop_or_resume_3,POST /staff/consents POST /staff/consents/{consent_id}/revoke POST /staff/servers/{action},,test_screen_links.py test_staff_pages.py test_staff_guide_calls_probe.py test_staff_pages.py,"렌더·DB 시험만, PC 반영 실측 전.",독립 GUI 증거
+REQ-05,FM-13,차단 해제(한 번 클릭),BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U9,S06.lift S-approvals_blocks.decide_key_block,POST /denials/{denial_id}/lift POST /key-blocks/{proposal_id}/{decision},,,해제 뒤 같은 세션 재호출 확인(기기).,시험 독립 GUI 증거
+REQ-05,FM-60,막힌 도구 권한 요청,DISCOVERED,미구현,E2E-08 E2E-09 E2E-10,,,,,,화면 동작 시험 독립 GUI 증거
+REQ-06,FM-10,PC 빠른 반영·자동 갱신,BACKEND_VERIFIED,재검증 필요,U6 W1,S11.code,POST /staff/endpoint/code,,test_staff_pages.py,Linux PC와 Windows PC에서 설치 20초·서명 자동 갱신 확인.,독립 GUI 증거
+REQ-06,FM-28,훅 없는 AI 도구 자동 연결,BACKEND_VERIFIED,재검증 필요,U2b U13,S11a.reconnect,POST /staff/endpoint/reconnect,,,Windows PC의 Gemini CLI 설정에 승인 로컬 서버가 중재 실행 항목으로 자동 들어감 확인.,시험 독립 GUI 증거
+REQ-06,FM-42,내 단말 OS별 설치 명령·준비 중 카드,IMPLEMENTED,재검증 필요,U2 U6,,,,,실측 전.,화면 동작 시험 독립 GUI 증거
+REQ-06,FM-50,한 직원 PC 여러 대(PC마다 설치 키),BACKEND_VERIFIED,재검증 필요,,S-staff_endpoint.endpoint_revoke,POST /staff/endpoint/revoke,,test_screen_links.py test_staff_pages.py,"Linux PC 재설치 뒤 Windows PC 유지, Windows PC 같은 PC 재설치 때 옛 키만 해제 확인. 키 발급 키가 컨테이너에 안",시나리오 독립 GUI 증거
+REQ-07,FM-11,승인 서버 기본 통과·도구 자동 허용,BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U6,H1.call,MCP /mcp 게이트웨이 경유(LiteLLM 호출 전 가드레일),,,Codex에서 확인 창 없음 확인(기기).,시험 독립 GUI 증거
+REQ-07,FM-29,전송 전 중재(실행기 --mediate),BACKEND_VERIFIED,재검증 필요,U13 H2,H2.call,실행기 --mediate → 결정 서버,,,Windows PC의 Gemini 항목으로 도구 목록·도구 호출 허용 확인(격리 안).,시험 독립 GUI 증거
+REQ-07,FM-49,로컬 npm 서버 PC 시작(Linux·Windows),BACKEND_VERIFIED,재검증 필요,U4b,,,,,"Linux PC는 낮은 Node 판본 거부 사유 기록, Windows PC는 격리 안에서 도구 2개 노출·서명 갱신 뒤에도 동작.",화면 동작 시험 독립 GUI 증거
+REQ-07,FM-52,Windows Codex에서 로컬 npm 서버 호출,BACKEND_VERIFIED,재검증 필요,,,,,,Windows PC에서 필수 설정으로 도구 호출 응답 확인. 원인은 Codex 작업 폴더를 격리가 못 열던 문제.,시나리오 화면 동작 시험 독립 GUI 증거
+REQ-07,FM-53,한 사이클(도입→승인→사용→폐기),BACKEND_VERIFIED,재검증 필요,E2E-04 E2E-12 E2E-13,,,,,"PyPI·npm·원격 세 종류를 Linux PC·Windows PC에서 도입→사용→폐기, 폐기 차단 10초~2분(구현자).",화면 동작 시험 독립 GUI 증거
+REQ-08,FM-16,사용량 한 화면,BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U10,S08.range S09.cards S14.range,GET / GET /reports/usage GET /staff/usage,,,숫자 일치 확인(기기). 비용 표시는 제거하고 판정 지연 표시로 교체 중이었다.,시험 독립 GUI 증거
+REQ-08,FM-19,에이전트 재시도 안내,BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U6 U8 U9,,,,,관리자 차단 안내 확인(기기).,화면 동작 시험 독립 GUI 증거
+REQ-08,FM-27,직원 PC mint 화면,IMPLEMENTED,재검증 필요,T1,,,,,렌더 시험·캡처만.,화면 동작 시험 독립 GUI 증거
+REQ-09,FM-05,관리자 신청 등록(서버 선택 없음),BACKEND_VERIFIED,재검증 필요,U4,S02a.submit S-intake_detail.assign_requester,POST /intakes POST /intakes/{intake_id}/requester,,test_admin_people_terminate.py,공개 원격 서버 주소를 등록해 접수·검사 중까지 확인했으나 연결 검사가 LiteLLM 1.106에서 판별 불가가 되어 수정 PR을 냈다(기기).,독립 GUI 증거
+REQ-09,FM-08,적용 단계 표시,BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U5 U6,S03.stages S03.retry S03.tools,GET /intakes/{intake_id},,,7단계 모두 체크 확인(기기).,시험 독립 GUI 증거
+REQ-09,FM-43,로컬 신청 공급망 검사(SBOM·SCA·SAST),BACKEND_VERIFIED,재검증 필요,U4b,,,,,기기에서 로컬 서버 신청에 대해 SBOM·취약점·소스 검사·비밀 검사 결과와 소스 트리 해시 기록 확인.,화면 동작 시험 독립 GUI 증거
+REQ-09,FM-65,허용 목록,IMPLEMENTED,재검증 필요,,S-allowlists.lift_allowlist S-allowlists.add_allowlist,POST /allowlists POST /allowlists/{allowlist_id}/lift,,test_pages_approvals.py test_pages_endpoints_admin.py,,시나리오 독립 GUI 증거
+REQ-09,FM-66,서버 계약 관리,IMPLEMENTED,재검증 필요,,S-server_contract.approve_provisional_contract S-server_contract.reapprove_contracts,POST /contracts/{server_id}/approve-provisional POST /contracts/{server_id}/reapprove,,,,시나리오 시험 독립 GUI 증거
+REQ-10,FM-06,한 번 승인,BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U5,S03.approve S03.reject,POST /intakes/{intake_id}/decision,,,"원격·로컬 승인 1클릭 뒤 수동 조작 0, 하네스 실제 응답까지 확인(기기·Windows PC).",시험 독립 GUI 증거
+REQ-11,FM-14,서버별 허용 토글,BACKEND_VERIFIED,재검증 필요,,S04.toggle S04a.tabs,GET /servers/{server_id} POST /servers/{server_id}/suspend · POST /servers/{server_id}/resume,,,"서버 상세 「중지」 직후 Linux PC 호출이 한국어 안내와 함께 즉시 거부, 「재개」 뒤 2초 안에 허용(기기).",시나리오 시험 독립 GUI 증거
+REQ-11,FM-45,이용 종료·등록부 내보내기,IMPLEMENTED,재검증 필요,E2E-11,S-server_usage.finish_relation,POST /servers/{server_id}/relations/{relation_id}/finish,,,실측 전.,시험 독립 GUI 증거
+REQ-11,FM-53,한 사이클(도입→승인→사용→폐기),BACKEND_VERIFIED,재검증 필요,E2E-04 E2E-12 E2E-13,,,,,"PyPI·npm·원격 세 종류를 Linux PC·Windows PC에서 도입→사용→폐기, 폐기 차단 10초~2분(구현자).",화면 동작 시험 독립 GUI 증거
+REQ-11,FM-66,서버 계약 관리,IMPLEMENTED,재검증 필요,,S-server_contract.approve_provisional_contract S-server_contract.reapprove_contracts,POST /contracts/{server_id}/approve-provisional POST /contracts/{server_id}/reapprove,,,,시나리오 시험 독립 GUI 증거
+REQ-12,FM-03,사람·팀·키 자동 연결,BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U2,,,,,"LiteLLM 팀 생성·Linux PC 추가 뒤 동기화 1회로 MINT 명부 팀 반영, 제거하면 비워짐(기기).",화면 동작 시험 독립 GUI 증거
+REQ-12,FM-09,팀 범위 자동 회수,BACKEND_VERIFIED,재검증 필요,E2E-12,,,,,"시험 팀 추가→팀 범위 승인→호출 허용→팀 이탈 동기화 뒤 호출 즉시 차단, 약 40초 뒤 PC 시작 거부 확인(기기).",화면 동작 시험 독립 GUI 증거
+REQ-12,FM-44,사람 화면,IMPLEMENTED,재검증 필요,,S-people.unblock_person S-people.make_operator S-people.block_person,POST /people/block POST /people/operator POST /people/unblock,,test_admin_people_terminate.py,실측 전(단위 시험만).,시나리오 독립 GUI 증거
+REQ-12,FM-62,역할 분리,DISCOVERED,미구현,,,,,,,시나리오 화면 동작 시험 독립 GUI 증거
+REQ-13,FM-11,승인 서버 기본 통과·도구 자동 허용,BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U6,H1.call,MCP /mcp 게이트웨이 경유(LiteLLM 호출 전 가드레일),,,Codex에서 확인 창 없음 확인(기기).,시험 독립 GUI 증거
+REQ-13,FM-12,호출 기록 행 바로 차단,BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U8,S05.block S-tool_controls.tool_control S-tool_controls.tool_control_2 S-tool_controls.tool_control_3 S-approval_new.tool_control,POST /ledger/{event_id}/block POST /servers/{server_id}/tools/{operation},,,1클릭 차단·한국어 안내 확인(기기).,시험 독립 GUI 증거
+REQ-13,FM-13,차단 해제(한 번 클릭),BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U9,S06.lift S-approvals_blocks.decide_key_block,POST /denials/{denial_id}/lift POST /key-blocks/{proposal_id}/{decision},,,해제 뒤 같은 세션 재호출 확인(기기).,시험 독립 GUI 증거
+REQ-13,FM-64,호출별 승인·상시 승인 규칙,IMPLEMENTED,재검증 필요,,S-approvals_calls.decide_call S-approvals_rules.disable_call_approval_rule S-approvals_rules.add_call_approval_rule,POST /call-approval-rules POST /call-approval-rules/{rule_id}/disable POST /call-approvals/{call_id}/{decision},,test_pages_approvals.py test_screen_links.py,,시나리오 독립 GUI 증거
+REQ-13,FM-67,승인 철회·재확인·거부 등록,IMPLEMENTED,재검증 필요,E2E-12,S-access.revoke_approval S-access.revoke_approval_2 S-access.revoke_approval_3 S-access.create_denial S-access.recertify_approval,POST /approvals/{approval_id}/recertify POST /approvals/{approval_id}/revoke POST /denials,,test_convenience_screens.py test_pages_approvals.py,,독립 GUI 증거
+REQ-13,FM-69,하네스 기본 기능 통제,IMPLEMENTED,재검증 필요,,S-builtin_tools.allow_builtin S-builtin_tools.block_builtin,POST /builtin-tools/allow POST /builtin-tools/block,,test_builtin_tools.py,,시나리오 독립 GUI 증거
+REQ-14,FM-16,사용량 한 화면,BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U10,S08.range S09.cards S14.range,GET / GET /reports/usage GET /staff/usage,,,숫자 일치 확인(기기). 비용 표시는 제거하고 판정 지연 표시로 교체 중이었다.,시험 독립 GUI 증거
+REQ-14,FM-24,SIEM 전달,BACKEND_VERIFIED,재검증 필요,,S-admin.siem_test,POST /admin/siem/{name}/test,,,"화면에서 HEC·OTLP 대상을 추가해 각 340건 전달 확인(기기, 구현자).",시나리오 시험 독립 GUI 증거
+REQ-14,FM-31,AI 도구 현황,IMPLEMENTED,재검증 필요,U14,S15.view,GET /endpoints,,,픽스처 화면만 확인(좁은 표 글자 끊김을 카드로 수정).,시험 독립 GUI 증거
+REQ-15,FM-61,정책 예외 관리 화면,DISCOVERED,미구현,,,,,,,시나리오 화면 동작 시험 독립 GUI 증거
+REQ-15,FM-64,호출별 승인·상시 승인 규칙,IMPLEMENTED,재검증 필요,,S-approvals_calls.decide_call S-approvals_rules.disable_call_approval_rule S-approvals_rules.add_call_approval_rule,POST /call-approval-rules POST /call-approval-rules/{rule_id}/disable POST /call-approvals/{call_id}/{decision},,test_pages_approvals.py test_screen_links.py,,시나리오 독립 GUI 증거
+REQ-16,FM-38,관리자 운영 설정 GUI,IMPLEMENTED,재검증 필요,U3,S-admin.set_operator_role S-admin.add_operator S-admin.backup_now S-admin.siem_add S-admin.remove_operator S-admin.siem_remove,POST /admin/backups POST /admin/operators POST /admin/siem POST /admin/siem/{name}/remove POST /operators/{name}/remove POST /operators/{name}/role,,test_pages_endpoints_admin.py,백업 요청 12초 뒤 새 폴더 생성과 콘솔 목록 읽기 확인(기기). 로그인 뒤 화면 실측 전.,독립 GUI 증거
+REQ-16,FM-44,사람 화면,IMPLEMENTED,재검증 필요,,S-people.unblock_person S-people.make_operator S-people.block_person,POST /people/block POST /people/operator POST /people/unblock,,test_admin_people_terminate.py,실측 전(단위 시험만).,시나리오 독립 GUI 증거
+REQ-16,FM-62,역할 분리,DISCOVERED,미구현,,,,,,,시나리오 화면 동작 시험 독립 GUI 증거
+REQ-16,FM-68,조직 관리,IMPLEMENTED,재검증 필요,,S-admin.add_org S-admin.apply_org_suggestion S-admin.ignore_org_suggestion S-admin.close_org,POST /org-suggestions/{suggestion_id}/apply POST /org-suggestions/{suggestion_id}/ignore POST /orgs POST /orgs/{org_id}/close,,test_pages_endpoints_admin.py test_screen_links.py,,시나리오 독립 GUI 증거
+REQ-17,FM-56,Root 강제 상태 변경,DISCOVERED,미구현,E2E-11,,,,,,화면 동작 시험 독립 GUI 증거
+REQ-18,FM-12,호출 기록 행 바로 차단,BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U8,S05.block S-tool_controls.tool_control S-tool_controls.tool_control_2 S-tool_controls.tool_control_3 S-approval_new.tool_control,POST /ledger/{event_id}/block POST /servers/{server_id}/tools/{operation},,,1클릭 차단·한국어 안내 확인(기기).,시험 독립 GUI 증거
+REQ-18,FM-14,서버별 허용 토글,BACKEND_VERIFIED,재검증 필요,,S04.toggle S04a.tabs,GET /servers/{server_id} POST /servers/{server_id}/suspend · POST /servers/{server_id}/resume,,,"서버 상세 「중지」 직후 Linux PC 호출이 한국어 안내와 함께 즉시 거부, 「재개」 뒤 2초 안에 허용(기기).",시나리오 시험 독립 GUI 증거
+REQ-18,FM-67,승인 철회·재확인·거부 등록,IMPLEMENTED,재검증 필요,E2E-12,S-access.revoke_approval S-access.revoke_approval_2 S-access.revoke_approval_3 S-access.create_denial S-access.recertify_approval,POST /approvals/{approval_id}/recertify POST /approvals/{approval_id}/revoke POST /denials,,test_convenience_screens.py test_pages_approvals.py,,독립 GUI 증거
+REQ-18,FM-69,하네스 기본 기능 통제,IMPLEMENTED,재검증 필요,,S-builtin_tools.allow_builtin S-builtin_tools.block_builtin,POST /builtin-tools/allow POST /builtin-tools/block,,test_builtin_tools.py,,시나리오 독립 GUI 증거
+REQ-19,FM-32,관리 AI 연결 중지·재개,BACKEND_VERIFIED,재검증 필요,U16,S15a.pause S17.states,POST /endpoints/{alias}/pause · POST /endpoints/{alias}/resume POST /endpoints/{alias}/pause · POST /endpoints/{alias}/resume · POST /endpoints/{alias}/reconnect,,,"「관리 AI 연결 중지」 뒤 Linux PC 서버 시작 거부(한국어 안내), 「재개」 뒤 34초 안 허용.",시험 독립 GUI 증거
+REQ-19,FM-35,앱 자격(자체 스크립트),BACKEND_VERIFIED,재검증 필요,U19 T6,T6.run T6a.run T6b.run S11e.revoke S17a.revoke,PC 터미널 명령 mint app(HTTP 경로 확인 필요) POST /endpoints/apps/{app_id}/revoke POST /staff/endpoint/apps/{app_id}/revoke,,,"Linux PC에서 앱 생성→환경 변수 주입·모델 목록 200, 회수→LiteLLM 키 삭제, 8초 안 401.",시험 독립 GUI 증거
+REQ-19,FM-40,관리자 단말 연결 해제,BACKEND_VERIFIED,재검증 필요,,,,,,"Windows PC만 해제해 그 PC 보고가 거부되고 Linux PC는 계속 허용, 재설치로 복구(기기).",시나리오 화면 동작 시험 독립 GUI 증거
+REQ-19,FM-57,사람·키 일괄 차단,DISCOVERED,미구현,E2E-12,,,,,,화면 동작 시험 독립 GUI 증거
+REQ-20,FM-58,진행 중 실행 취소 요청,DISCOVERED,미구현,,,,,,,시나리오 화면 동작 시험 독립 GUI 증거
+REQ-21,FM-55,전역 정지(Kill Switch)·비상 정책,DISCOVERED,미구현,E2E-11,,,,,,화면 동작 시험 독립 GUI 증거
+REQ-21,FM-70,정책 모드·시험 적용,IMPLEMENTED,재검증 필요,,S-policy.cancel_shadow S-policy.set_mode S-policy.apply_shadow,POST /policy/mode POST /policy/shadow/apply POST /policy/shadow/cancel,,test_pages_dashboard.py test_screen_links.py,,시나리오 독립 GUI 증거
+REQ-22,FM-59,강제 조치 전파 확인,DISCOVERED,미구현,E2E-12 E2E-13,,,,,,화면 동작 시험 독립 GUI 증거
+REQ-23,FM-37,저장소 주소로 로컬 MCP 신청(GUI),IMPLEMENTED,재검증 필요,U4b,,,,,기기 콘솔 컨테이너에서 저장소 커밋·실행 명령 자동 추출 확인. 로그인 뒤 화면 제출은 실측 전.,화면 동작 시험 독립 GUI 증거
+REQ-23,FM-43,로컬 신청 공급망 검사(SBOM·SCA·SAST),BACKEND_VERIFIED,재검증 필요,U4b,,,,,기기에서 로컬 서버 신청에 대해 SBOM·취약점·소스 검사·비밀 검사 결과와 소스 트리 해시 기록 확인.,화면 동작 시험 독립 GUI 증거
+REQ-23,FM-49,로컬 npm 서버 PC 시작(Linux·Windows),BACKEND_VERIFIED,재검증 필요,U4b,,,,,"Linux PC는 낮은 Node 판본 거부 사유 기록, Windows PC는 격리 안에서 도구 2개 노출·서명 갱신 뒤에도 동작.",화면 동작 시험 독립 GUI 증거
+REQ-23,FM-54,검사 실패 신청 철회·새 판본 재신청,BACKEND_VERIFIED,재검증 필요,,,,,,관리자 경로로 실패 신청→새 판본 재신청→옛 신청 자동 철회→새 신청 접수 확인(기기).,시나리오 화면 동작 시험 독립 GUI 증거
+REQ-23,FM-65,허용 목록,IMPLEMENTED,재검증 필요,,S-allowlists.lift_allowlist S-allowlists.add_allowlist,POST /allowlists POST /allowlists/{allowlist_id}/lift,,test_pages_approvals.py test_pages_endpoints_admin.py,,시나리오 독립 GUI 증거
+REQ-24,FM-05,관리자 신청 등록(서버 선택 없음),BACKEND_VERIFIED,재검증 필요,U4,S02a.submit S-intake_detail.assign_requester,POST /intakes POST /intakes/{intake_id}/requester,,test_admin_people_terminate.py,공개 원격 서버 주소를 등록해 접수·검사 중까지 확인했으나 연결 검사가 LiteLLM 1.106에서 판별 불가가 되어 수정 PR을 냈다(기기).,독립 GUI 증거
+REQ-24,FM-06,한 번 승인,BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U5,S03.approve S03.reject,POST /intakes/{intake_id}/decision,,,"원격·로컬 승인 1클릭 뒤 수동 조작 0, 하네스 실제 응답까지 확인(기기·Windows PC).",시험 독립 GUI 증거
+REQ-25,FM-19,에이전트 재시도 안내,BACKEND_VERIFIED,이전 독립 GUI 확인(재검증 필요),U6 U8 U9,,,,,관리자 차단 안내 확인(기기).,화면 동작 시험 독립 GUI 증거
+REQ-25,FM-60,막힌 도구 권한 요청,DISCOVERED,미구현,E2E-08 E2E-09 E2E-10,,,,,,화면 동작 시험 독립 GUI 증거
+REQ-26,FM-26,웹 콘솔 LiteLLM 테마·접히는 메뉴,IMPLEMENTED,재검증 필요,,,,,,"로그인 화면은 기기 확인, 로그인 뒤 화면은 픽스처 캡처 48장.",시나리오 화면 동작 시험 독립 GUI 증거
+REQ-27,FM-27,직원 PC mint 화면,IMPLEMENTED,재검증 필요,T1,,,,,렌더 시험·캡처만.,화면 동작 시험 독립 GUI 증거
+REQ-27,FM-63,CLI 정비,DISCOVERED,미구현,,,,,,,시나리오 화면 동작 시험 독립 GUI 증거
+REQ-28,FM-63,CLI 정비,DISCOVERED,미구현,,,,,,,시나리오 화면 동작 시험 독립 GUI 증거
+REQ-29,FM-26,웹 콘솔 LiteLLM 테마·접히는 메뉴,IMPLEMENTED,재검증 필요,,,,,,"로그인 화면은 기기 확인, 로그인 뒤 화면은 픽스처 캡처 48장.",시나리오 화면 동작 시험 독립 GUI 증거
+REQ-29,FM-63,CLI 정비,DISCOVERED,미구현,,,,,,,시나리오 화면 동작 시험 독립 GUI 증거
+REQ-30,FM-53,한 사이클(도입→승인→사용→폐기),BACKEND_VERIFIED,재검증 필요,E2E-04 E2E-12 E2E-13,,,,,"PyPI·npm·원격 세 종류를 Linux PC·Windows PC에서 도입→사용→폐기, 폐기 차단 10초~2분(구현자).",화면 동작 시험 독립 GUI 증거
+REQ-30,FM-56,Root 강제 상태 변경,DISCOVERED,미구현,E2E-11,,,,,,화면 동작 시험 독립 GUI 증거
+REQ-30,FM-60,막힌 도구 권한 요청,DISCOVERED,미구현,E2E-08 E2E-09 E2E-10,,,,,,화면 동작 시험 독립 GUI 증거

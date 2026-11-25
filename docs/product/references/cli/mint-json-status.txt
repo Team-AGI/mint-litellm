@@ -1,0 +1,19 @@
+$ python src/mint_litellm/endpoint/kit/mint_kit.py status --json --home C:/nonexistent_home --user-level
+Traceback (most recent call last):
+  File "C:\work\mint-product\src\mint_litellm\endpoint\kit\mint_kit.py", line 6880, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "C:\work\mint-product\src\mint_litellm\endpoint\kit\mint_kit.py", line 6798, in main
+    kit = Kit(
+          ^^^^
+  File "C:\work\mint-product\src\mint_litellm\endpoint\kit\mint_kit.py", line 1884, in __init__
+    self.config = json.loads((folder / "kit.json").read_text(encoding="utf-8"))
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\bobysg\AppData\Local\Programs\Python\Python312\Lib\pathlib.py", line 1027, in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\bobysg\AppData\Local\Programs\Python\Python312\Lib\pathlib.py", line 1013, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'C:\\work\\mint-product\\src\\mint_litellm\\endpoint\\kit\\kit.json'
+[exit=1]

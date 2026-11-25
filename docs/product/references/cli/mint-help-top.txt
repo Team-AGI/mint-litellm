@@ -1,0 +1,24 @@
+$ python src/mint_litellm/endpoint/kit/mint_kit.py --help
+usage: mint_kit.py [-h] [--json] [--if-due] [--tick] [--jitter JITTER]
+                   [--user-level] [--dry-run] [--user USER] [--home HOME]
+                   [--root ROOT] [--kit KIT]
+                   [{install,uninstall,status,check,sync,report}]
+
+MINT endpoint kit
+
+positional arguments:
+  {install,uninstall,status,check,sync,report}
+
+options:
+  -h, --help            show this help message and exit
+  --json
+  --if-due
+  --tick
+  --jitter JITTER
+  --user-level
+  --dry-run
+  --user USER
+  --home HOME
+  --root ROOT
+  --kit KIT
+[exit=0]

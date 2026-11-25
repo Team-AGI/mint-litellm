@@ -1,0 +1,3 @@
+$ gh repo view cli/cli --json name,visibility,defaultBranchRef
+{"defaultBranchRef":{"name":"trunk"},"name":"cli","visibility":"PUBLIC"}
+[exit=0]

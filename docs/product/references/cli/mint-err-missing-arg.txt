@@ -1,0 +1,4 @@
+$ python src/mint_litellm/endpoint/kit/mint_kit.py app new
+usage: mint app new [-h] [--days 1-90] name
+mint app new: error: the following arguments are required: name
+[exit=2]

@@ -1,0 +1,10 @@
+$ python src/mint_litellm/endpoint/kit/mint_kit.py app new --help
+usage: mint app new [-h] [--days 1-90] name
+
+positional arguments:
+  name
+
+options:
+  -h, --help   show this help message and exit
+  --days 1-90
+[exit=0]

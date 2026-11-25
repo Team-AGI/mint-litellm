@@ -1,0 +1,146 @@
+screen,kind,method,target,label
+_allowlists.html,form,POST,/allowlists/{}/lift,해제
+_allowlists.html,form,POST,/allowlists,추가
+_allowlists.html,link,GET,/access,
+_approvals_blocks.html,form,POST,/key-blocks/{}/unblock,차단 해제
+_approvals_blocks.html,link,GET,/approvals,
+_approvals_blocks.html,link,GET,/ledger,
+_approvals_calls.html,form,POST,/call-approvals/{}/approve,
+_approvals_calls.html,link,GET,/approvals,
+_approvals_calls.html,link,GET,/servers/{},
+_approvals_renewals.html,link,GET,/servers/{},
+_approvals_rules.html,form,POST,/call-approval-rules/{}/disable,해제
+_approvals_rules.html,form,GET,/approvals,영향 확인
+_approvals_rules.html,form,POST,/call-approval-rules,규칙 만들기
+_approvals_rules.html,link,GET,/approvals,
+_approvals_second.html,link,GET,/intakes/{},
+_approvals_servers.html,link,GET,/servers/{},
+_evidence.html,form,POST,{},증빙 첨부
+_server_actions.html,form,POST,/servers/{}/{},취소
+_server_actions.html,form,POST,/servers/{}/{},
+_server_actions.html,confirm,POST,/servers/{}/resume,재개
+_server_contract.html,form,POST,/contracts/{}/approve-provisional,승인해 계약으로 전환
+_server_contract.html,form,POST,/contracts/{}/reapprove,재승인 계획 등록
+_server_usage.html,form,POST,/servers/{}/relations/{}/evidence,증빙 첨부
+_server_usage.html,form,POST,/servers/{}/relations/{}/finish,종료 완료
+_server_usage.html,link,GET,/approvals/review/{},
+_server_usage.html,link,GET,/access,
+_staff_applications.html,confirm,POST,/staff/intakes/{}/withdraw,대기 취소
+_staff_applications.html,link,GET,/staff/intakes/{},
+_tool_controls.html,form,POST,/servers/{}/tools/{},
+_tool_controls.html,form,POST,/servers/{}/tools/unblock,해제
+_tool_controls.html,form,POST,/servers/{}/tools/block,행위 차단
+access.html,form,POST,/approvals/{}/revoke,취소
+access.html,form,POST,/approvals/{}/revoke,철회
+access.html,form,POST,/approvals/{}/revoke,철회 + 거부
+access.html,form,GET,/access,
+access.html,form,POST,/denials/{}/lift,해제
+access.html,form,POST,/denials,거부 등록
+access.html,confirm,POST,/approvals/{}/recertify,재확인
+access.html,link,GET,/access,
+access.html,link,GET,/servers/{},
+admin.html,form,POST,/operators/{}/role,역할 변경
+admin.html,form,POST,/admin/operators,권한 주기
+admin.html,form,POST,/orgs,조직 생성
+admin.html,form,POST,/admin/backups,지금 백업
+admin.html,form,POST,/admin/siem,추가
+admin.html,form,POST,/admin/siem/{}/test,시험 전송
+admin.html,form,POST,/org-suggestions/{}/apply,적용
+admin.html,form,POST,/org-suggestions/{}/ignore,무시
+admin.html,confirm,POST,/operators/{}/remove,운영자 삭제
+admin.html,confirm,POST,/orgs/{}/close,조직 닫기
+admin.html,confirm,POST,/admin/siem/{}/remove,제거
+admin.html,link,GET,/admin/config/export,
+admin.html,link,GET,/admin/backups/{}/{},
+alerts.html,form,GET,/alerts,조회
+alerts.html,form,POST,/alerts/{}/acknowledge,확인함
+alerts.html,link,GET,/alerts,
+approval_new.html,form,POST,/servers/{}/tools/block,제한
+approval_new.html,link,GET,/servers/{},
+audit_report.html,form,GET,/reports/audit,조회
+base.html,form,POST,/logout,로그아웃
+base.html,link,GET,/staff,
+base.html,link,GET,/litellm/open,
+base.html,link,GET,/account/password,
+builtin_tools.html,form,POST,/builtin-tools/allow,허용
+builtin_tools.html,form,POST,/builtin-tools/block,차단
+dashboard.html,link,GET,/,
+dashboard.html,link,GET,/reports/audit,
+endpoints.html,form,POST,/endpoints/{}/resume,재개
+endpoints.html,form,POST,/endpoints/{}/reconnect,연결 복구
+endpoints.html,confirm,POST,*/{}/revoke,자격 회수
+endpoints.html,confirm,POST,/endpoints/{}/pause,관리 AI 연결 중지
+endpoints.html,link,GET,/endpoints,
+endpoints.html,link,GET,/intakes/new,
+error.html,link,GET,/,
+intake_detail.html,form,POST,/intakes/{}/withdraw,신청 철회
+intake_detail.html,form,POST,/intakes/{}/requester,지정
+intake_detail.html,form,POST,/intakes/{}/recheck,재검사
+intake_detail.html,form,POST,/intakes/{}/decision,승인
+intake_detail.html,form,POST,/intakes/{}/decision,거부
+intake_detail.html,link,GET,/access,
+intake_detail.html,link,GET,/intakes/new,
+intake_detail.html,link,GET,/servers/{},
+intake_detail.html,link,GET,/intakes/{}/checks.json,
+intake_detail.html,link,GET,/intakes/{}/sbom.json,
+intake_new.html,form,POST,/intakes,신청 등록
+intake_new.html,link,GET,/intakes,
+intakes.html,link,GET,/intakes/new,
+intakes.html,link,GET,/intakes{{,
+intakes.html,link,GET,/intakes,
+intakes.html,link,GET,/intakes/{},
+ledger.html,form,GET,/ledger,조회
+ledger.html,form,POST,/ledger/{}/block,
+ledger.html,link,GET,/api/v1/ledger/export,
+ledger.html,link,GET,/ledger,
+login.html,form,POST,/login,로그인
+login.html,form,POST,/login,키로 로그인
+login.html,link,GET,/auth/oidc/login,
+login.html,link,GET,/staff/signup,
+password.html,form,POST,/account/password,바꾸기
+people.html,form,GET,/people,조회
+people.html,form,POST,/people/unblock,MCP 차단 해제
+people.html,form,POST,/people/operator,권한 주기
+people.html,confirm,POST,/people/block,이 사람 MCP 차단
+people.html,link,GET,/litellm/open,
+policy.html,form,POST,/policy/shadow/cancel,취소
+policy.html,form,POST,/policy/mode,
+policy.html,confirm,POST,/policy/shadow/apply,적용
+policy.html,link,GET,/reports/audit,
+policy.html,link,GET,/ledger,
+servers.html,link,GET,/servers/export,
+servers.html,link,GET,/servers{},
+servers.html,link,GET,/servers/{},
+setup.html,form,POST,{},
+signup_form.html,form,POST,/staff/signup,가입 요청
+signup_form.html,link,GET,/login,
+signup_requests.html,form,POST,/signup-requests/{}/approve,승인
+signup_requests.html,form,POST,/signup-requests/{}/reject,거절
+staff_base.html,form,POST,/staff/logout,로그아웃
+staff_base.html,link,GET,/staff/litellm/open,
+staff_base.html,link,GET,/staff/account/password,
+staff_endpoint.html,form,POST,/staff/endpoint/code,설치 명령 만들기
+staff_endpoint.html,form,POST,/staff/endpoint/reconnect,연결 복구
+staff_endpoint.html,form,POST,/staff/endpoint/request,신청
+staff_endpoint.html,form,POST,/staff/endpoint/ignore,알림에서 제외
+staff_endpoint.html,confirm,POST,/staff/endpoint/apps/{}/revoke,자격 회수
+staff_endpoint.html,confirm,POST,/staff/endpoint/revoke,연결 해제
+staff_intake_detail.html,confirm,POST,/staff/intakes/{}/withdraw,대기 취소
+staff_intake_detail.html,link,GET,/staff/intakes/new,
+staff_intake_detail.html,link,GET,/staff/intakes,
+staff_intake_new.html,form,POST,/staff/intakes,신청 제출
+staff_intake_new.html,form,POST,/staff/intakes,주소 확인
+staff_intake_new.html,link,GET,/staff/intakes,
+staff_intakes.html,link,GET,/staff/intakes/new,
+staff_password.html,form,POST,/staff/account/password,바꾸기
+staff_requests.html,link,GET,/staff/confirmations,
+staff_servers.html,form,GET,/staff,검색
+staff_servers.html,form,POST,/staff/consents,동의
+staff_servers.html,confirm,POST,/staff/servers/resume,다시 사용하기
+staff_servers.html,confirm,POST,/staff/servers/stop,사용 그만두기
+staff_servers.html,confirm,POST,/staff/consents/{}/revoke,철회
+staff_servers.html,confirm,POST,/staff/servers/stop,동의하지 않음
+staff_servers.html,link,GET,/staff/intakes/new,
+staff_servers.html,link,GET,/staff,
+staff_servers.html,link,GET,/staff/confirmations,
+staff_servers.html,link,GET,/staff/endpoint,

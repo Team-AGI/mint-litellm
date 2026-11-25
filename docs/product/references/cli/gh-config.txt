@@ -1,0 +1,16 @@
+$ gh config list
+api_host=
+git_protocol=https
+editor=
+prompt=enabled
+prefer_editor_prompt=disabled
+pager=
+http_unix_socket=
+browser=
+clipboard=enabled
+color_labels=disabled
+accessible_colors=disabled
+accessible_prompter=disabled
+spinner=enabled
+telemetry=enabled
+[exit=0]

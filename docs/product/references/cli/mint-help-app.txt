@@ -1,0 +1,9 @@
+$ python src/mint_litellm/endpoint/kit/mint_kit.py app --help
+usage: mint app [-h] {new,list,rm,run,env,mcp} ...
+
+positional arguments:
+  {new,list,rm,run,env,mcp}
+
+options:
+  -h, --help            show this help message and exit
+[exit=0]
