@@ -308,7 +308,8 @@ def test_the_launcher_does_not_start_an_unknown_server_or_a_missing_list(world, 
 def run_agent(*args, stdin=""):
     return subprocess.run(
         [sys.executable, str(KIT / "mint_agent.py"), *args],
-        input=stdin, capture_output=True, text=True, timeout=30,
+        input=stdin, capture_output=True, text=True, timeout=30, encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},  # 거부 사유가 한국어다
     )  # fmt: skip
 
 

@@ -223,8 +223,15 @@ def application_rows(actor: StaffActor) -> list[dict]:
             (actor.sctx.instance_id, actor.user_id, [r["id"] for r in rows]),
         )
         by_id = {r["id"]: r for r in details}
+        live = {r["server_id"] for r in fetchall(  # 승인이 하나라도 살아 있는 서버
+            actor.sctx.control,
+            "SELECT DISTINCT server_id FROM mint.approvals WHERE instance_id = %s"
+            " AND server_id = ANY(%s) AND status IN ('active', 'pending') AND valid_until > now()",
+            (actor.sctx.instance_id, [r["server_id"] for r in rows]))}
         for row in rows:
             row.update(by_id.get(row["id"], {}))
+            row["ended"] = (row.get("decision") in ("approved", "exception")
+                            and row.get("server_id") not in live)
     return rows
 
 

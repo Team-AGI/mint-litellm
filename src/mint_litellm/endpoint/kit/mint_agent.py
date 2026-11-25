@@ -100,6 +100,10 @@ class Refuse(Exception):
     """호출이나 서버 시작을 막아야 하는 사유. 메시지는 사용자에게 보인다."""
 
 
+class Retired(Refuse):
+    """관리자가 이용을 끝낸 서버(정상 종료라 시작 실패로 남기지 않는다)."""
+
+
 class NoPermit(Refuse):
     """시작 허가가 없거나 만료됐다. 보고를 당겨 받으면 풀릴 수 있다."""
 
@@ -3350,7 +3354,7 @@ def run_server(
     ``mediator``가 있으면(훅 없는 AI 도구) 도구 호출을 서버에 보내기 전에 판정한다.
     """
     if state_dir is not None and server in load_retired(state_dir):
-        raise Refuse(f"server {server} was retired by MINT")
+        raise Retired(f"이용이 끝난 서버입니다({server}). 관리자에게 문의하십시오")
     if state_dir is not None and paused(state_dir):
         raise Paused(PAUSED_TEXT)
     if mediator is not None and state_dir is None:
@@ -3641,9 +3645,9 @@ def main(argv: list[str] | None = None) -> None:
                 code -= 2**32
             os._exit(code if -(2**31) <= code < 2**31 else 1)
         except Refuse as exc:
-            if args.server and not isinstance(exc, (Paused, Unreachable)):  # 일시 장애는 빼고
+            if args.server and not isinstance(exc, (Paused, Unreachable, Retired)):
                 record_start_failure(state_dir, args.server, plain_reason(str(exc)))
-            _give_up(REFUSED, f"MINT refused to start the server: {exc}")
+            _give_up(REFUSED, f"MINT가 서버 시작을 막았습니다: {exc}")
         except BaseException as exc:  # 어떤 예외도 시작으로 새지 않는다.
             _give_up(REFUSED, f"MINT launcher failed: {type(exc).__name__}")
         return
