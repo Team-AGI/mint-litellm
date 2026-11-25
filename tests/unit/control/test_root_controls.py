@@ -157,3 +157,18 @@ def test_a_freeze_blocks_new_approvals_but_not_rejections(world):
         world.decide(identifier, "approve", reason="심사 결과")
     world.decide(identifier, "reject", reason="동결 중 반려")
     assert world.intake(identifier)["decision"] == "rejected"
+
+
+def test_lockout_does_not_take_over_an_ordinary_user_block(world):
+    """「MCP 차단」으로 걸린 사용자 차단이 있어도 전체 차단은 따로 걸리고 해제도 그것만 푼다."""
+    from mint_litellm.control import approvals as approval_domain
+
+    as_admin(world, lambda ctx: approval_domain.create_denial(
+        ctx, scope_type="user", scope_id="emp-1", server_id=None, tools=None,
+        reason="MCP 차단", org_id=None))
+    as_admin(world, lambda ctx: root.lockout(ctx, None, "emp-1", "퇴사"))
+    rows = fetchall(world.conn, "SELECT reason, lifted_at FROM mint.denials ORDER BY id")
+    assert [r["reason"] for r in rows] == ["MCP 차단", root.LOCKOUT_REASON_PREFIX + "퇴사"]
+    as_admin(world, lambda ctx: root.unlock(ctx, "emp-1", "복직"))
+    rows = fetchall(world.conn, "SELECT reason, lifted_at FROM mint.denials ORDER BY id")
+    assert rows[0]["lifted_at"] is None and rows[1]["lifted_at"] is not None

@@ -11,14 +11,28 @@
 {{ m.tabs(([('operators', '운영자', operators | length)] if actor.role != 'viewer' else []) + [('orgs', '조직', orgs | length), ('suggestions', '연결 제안', suggestions | length)] + ([('transfer', '백업·전달', transfers | length + siem | length)] if actor.role == 'admin' else []), tab, '/admin') }}
 {% if tab == 'operators' %}
 {% if operators %}
-<table><thead><tr><th>이름</th><th>역할</th><th>사용자</th><th>만료</th><th></th></tr></thead><tbody>
-{% for o in operators %}<tr><td>{{ o.name }}</td><td>{{ L.pick(L.ROLE, o.role) }}</td><td>{{ o.user_id | blank }}</td><td class="nowrap">{{ o.expires_at | when }}</td>
+{% set admin_count = operators | selectattr('role', 'equalto', 'admin') | list | length %}
+{% set me_root = is_root(actor) %}
+<table><thead><tr><th>이름</th><th>역할</th><th>Root</th><th>사용자</th><th>만료</th><th></th></tr></thead><tbody>
+{% for o in operators %}<tr><td>{{ o.name }}</td><td>{{ L.pick(L.ROLE, o.role) }}</td><td>{% if o.root %}<span class="badge ok"><span class="icon" aria-hidden="true">{{ ICONS.ok }}</span>Root</span>{% else %}—{% endif %}</td><td>{{ o.user_id | blank }}</td><td class="nowrap">{{ o.expires_at | when }}</td>
 <td>{% if actor.role == 'admin' %}<div class="row-actions">
-{% set role_choices = ['admin', 'approver', 'viewer'] | reject('equalto', o.role) | select('in', ['admin', 'approver', 'viewer'] if o.user_id else ['viewer']) | list %}{% if role_choices %}<form method="post" action="/operators/{{ o.name | urlencode }}/role" class="row-actions">
+{% set role_choices = ['admin', 'approver', 'viewer'] | reject('equalto', o.role) | select('in', ['admin', 'approver', 'viewer'] if o.user_id else ['viewer']) | list %}
+{% if o.name == me %}{{ m.blocked_button('역할 변경', '본인의 역할은 바꿀 수 없습니다') }}
+{% elif o.root and not me_root %}{{ m.blocked_button('역할 변경', 'Root의 역할은 Root만 바꿀 수 있습니다') }}
+{% elif o.role == 'admin' and admin_count < 2 %}{{ m.blocked_button('역할 변경', '마지막 관리자의 역할은 바꿀 수 없습니다') }}
+{% elif role_choices %}<form method="post" action="/operators/{{ o.name | urlencode }}/role" class="row-actions">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ o.state_version }}">
   <select name="role" aria-label="{{ o.name }} 역할">{% for k in role_choices %}<option value="{{ k }}">{{ L.pick(L.ROLE, k) }}</option>{% endfor %}</select>
   <button type="submit">역할 변경</button>
 </form>{% endif %}
+{% if me_root and o.role == 'admin' %}{% if not o.root %}{% call m.confirm_dialog('root-on-' ~ loop.index, 'Root 지정', 'Root 지정 — ' ~ o.name, '긴급 통제·강제 조치·Root 지정·해제를 할 수 있게 됩니다. 「Root 해제」로 되돌릴 수 있습니다.', '/admin/operators/' ~ (o.name | urlencode) ~ '/root', actor, 'Root 지정', danger=false) %}
+<input type="hidden" name="on" value="1"><label>사유(필수)<textarea name="reason" required maxlength="500"></textarea></label>
+{% endcall %}
+{% elif o.name == 'root' %}{{ m.blocked_button('Root 해제', '기본 계정은 항상 Root입니다') }}
+{% elif o.name == me %}{{ m.blocked_button('Root 해제', '본인의 Root 표지는 풀 수 없습니다') }}
+{% else %}{% call m.confirm_dialog('root-off-' ~ loop.index, 'Root 해제', 'Root 해제 — ' ~ o.name, '이 사람은 Root 전용 조치를 할 수 없게 됩니다. 관리자 역할은 그대로입니다. 「Root 지정」으로 되돌릴 수 있습니다.', '/admin/operators/' ~ (o.name | urlencode) ~ '/root', actor, 'Root 해제') %}
+<input type="hidden" name="on" value="0"><label>사유(필수)<textarea name="reason" required maxlength="500"></textarea></label>
+{% endcall %}{% endif %}{% endif %}
 {% call m.confirm_dialog('remove-' ~ loop.index, '운영자 삭제', '운영자 삭제', '토큰이 끝나고 이 사용자의 콘솔 세션이 폐기됩니다.', '/operators/' ~ (o.name | urlencode) ~ '/remove', actor, '운영자 삭제', confirm_name=o.name) %}
 <input type="hidden" name="state_version" value="{{ o.state_version }}">
 {% endcall %}</div>

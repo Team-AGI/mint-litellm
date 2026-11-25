@@ -3,13 +3,16 @@
 from fastapi import APIRouter, Depends, Form, Request
 
 from mint_litellm.console.core import Actor, page_actor, require_csrf
+from mint_litellm.console.labels import Status
 from mint_litellm.console.pages.common import act
 from mint_litellm.console.pages.endpoints_admin import designate_operator
-from mint_litellm.console.templating import render
+from mint_litellm.console.templating import is_root, render
+from mint_litellm.control import endpoint_apps, endpoint_kits
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import AdminCode, AdminError
 from mint_litellm.control.services import denials as denial_service
 from mint_litellm.control.services import reads
+from mint_litellm.control.services import root_controls as root
 
 router = APIRouter(dependencies=[Depends(require_csrf)])
 
@@ -34,30 +37,102 @@ def directory_people(actor: Actor) -> list[dict]:
 
 
 def user_denials(actor: Actor) -> dict[str, dict]:
-    """사용자별 유효한 거부: 전체 차단(서버·도구 지정 없음) 목록과 그 밖의 일부 차단 수."""
+    """사용자별 유효한 거부. lock 전체 차단, whole MCP 차단(서버·도구 없음), partial 그 밖"""
     found: dict[str, dict] = {}
     for d in reads.denials(actor.conn, actor.instance, active_only=True):
         if d["scope_type"] != "user":
             continue
-        item = found.setdefault(d["scope_id"], {"whole": [], "partial": 0})
-        if d["server_id"] is None and not d["tools"]:
-            item["whole"].append(d)
-        else:
+        item = found.setdefault(
+            d["scope_id"], {"lock": [], "whole": [], "partial": 0, "all": []})
+        item["all"].append(d)
+        if d["server_id"] is not None or d["tools"]:
             item["partial"] += 1
+        elif (d["reason"] or "").startswith(root.LOCKOUT_REASON_PREFIX):
+            item["lock"].append(d)
+        else:
+            item["whole"].append(d)
     return found
+
+
+def status_of(block: dict) -> Status:
+    if block["lock"]:
+        return Status("전체 차단", "block")
+    if block["whole"] or block["partial"]:
+        return Status("일부 차단", "wait")
+    return Status("정상", "ok")
+
+
+LIVE_PC = "revoked_at IS NULL AND coalesce(install_mode, '') <> 'removed'"
+LIVE_SESSION = "revoked_at IS NULL AND idle_expiry > now() AND absolute_expiry > now()"
+
+
+def pc_counts(actor: Actor) -> dict[str, int]:
+    rows = fetchall(
+        actor.conn,
+        f"SELECT user_id, count(*) AS n FROM mint.endpoint_installs WHERE instance_id = %s"
+        f" AND {LIVE_PC} GROUP BY user_id",
+        (actor.instance,),
+    )
+    return {r["user_id"]: r["n"] for r in rows}
+
+
+def person_detail(actor: Actor, person: dict, block: dict) -> dict:
+    """서랍: 권한·차단 목록, PC·앱, 키·세션, 조치 가능 여부와 영향 수."""
+    uid = person["user_id"]
+    operators = [o for o in reads.operators(actor.conn, actor.instance) if o["user_id"] == uid]
+    names = root.root_names(actor.conn, actor.instance)
+    for o in operators:
+        o["root"] = o["name"] == "root" or o["name"] in names
+    pcs = [r for r in endpoint_kits.installs(actor.conn, actor.instance, uid)
+           if not r["revoked_at"] and r["install_mode"] != "removed"]
+    apps = [a for a in endpoint_apps.list_apps(actor.conn, actor.instance, uid)
+            if a["state"] == "active"]
+    sessions = fetchall(
+        actor.conn,
+        f"SELECT subject, count(*) AS n FROM mint.console_sessions WHERE instance_id = %s"
+        f" AND user_id = %s AND {LIVE_SESSION} GROUP BY subject",
+        (actor.instance, uid),
+    )
+    by_subject = {r["subject"]: r["n"] for r in sessions}
+    reported = [r["reported_at"] for r in pcs if r["reported_at"]]
+    me = uid == actor.ctx.operator.user_id
+    target_root = any(o["root"] for o in operators)
+    why = None
+    if me:
+        why = "본인은 차단할 수 없습니다."
+    elif target_root and not is_root(actor):
+        why = "Root는 Root만 차단할 수 있습니다."
+    return {
+        **person, "operators": operators, "block": block, "pcs": pcs, "apps": apps,
+        "last_report": max(reported) if reported else None,
+        "sessions": {"admin": by_subject.get("admin", 0), "staff": by_subject.get("staff", 0)},
+        "impact": {"pcs": len(pcs), "apps": len(apps), "sessions": sum(by_subject.values())},
+        "lock_blocked_reason": why,
+    }
 
 
 def people_page(request: Request, actor: Actor, error=None, status=200):
     wanted = request.query_params.get("q", "").strip().lower()
     blocked = user_denials(actor)
-    rows = directory_people(actor)
+    counts = pc_counts(actor)
+    everyone = directory_people(actor)
+    rows = everyone
     for r in rows:
-        r["block"] = blocked.get(r["user_id"]) or {"whole": [], "partial": 0}
+        r["block"] = blocked.get(r["user_id"]) or {"lock": [], "whole": [], "partial": 0, "all": []}
+        r["state"] = status_of(r["block"])
+        r["pcs"] = counts.get(r["user_id"], 0)
     if wanted:
         rows = [r for r in rows if wanted in f"{r['email'] or ''} {r['user_id']}".lower()]
+    opened = request.query_params.get("open")
+    selected = None
+    if opened:
+        person = next((r for r in everyone if r["user_id"] == opened), None)
+        if person is None:
+            raise AdminError(AdminCode.NOT_FOUND, "사람 목록에 없는 사용자입니다.")
+        selected = person_detail(actor, person, person["block"])
     ctx = {
-        "rows": rows, "q": wanted, "error": error,
-        "total": len(rows), "blocked": sum(1 for r in rows if r["block"]["whole"]),
+        "rows": rows, "q": wanted, "error": error, "selected": selected,
+        "total": len(rows), "blocked": sum(1 for r in rows if r["block"]["lock"]),
         "can_manage": actor.role == "admin",
     }
     return render(request, "people.html", ctx, actor=actor, status=status)
@@ -65,6 +140,8 @@ def people_page(request: Request, actor: Actor, error=None, status=200):
 
 @router.get("/people")
 def people(request: Request, actor: Actor = Depends(page_actor)):
+    if actor.role != "admin":
+        raise AdminError(AdminCode.FORBIDDEN, "관리자만 사람 화면을 볼 수 있습니다.")
     return people_page(request, actor)
 
 

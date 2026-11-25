@@ -5,7 +5,7 @@
 <h1>사람</h1>
 <div class="cards">
   {{ m.kpi('사람', total) }}
-  {{ m.kpi('MCP 차단', blocked, level='danger' if blocked) }}
+  {{ m.kpi('전체 차단', blocked, level='danger' if blocked) }}
 </div>
 <form method="get" action="/people" class="filters">
   <label>검색<input type="search" name="q" value="{{ q }}" placeholder="이름 또는 이메일" autocomplete="off"></label>
@@ -13,25 +13,17 @@
   {% if litellm_open %}<a class="button" href="/litellm/open" hx-boost="false">LiteLLM에서 계정 관리</a>{% endif %}
 </form>
 {% if rows %}
-<table><thead><tr><th>사람</th><th>LiteLLM 역할</th><th>팀</th><th>최근 로그인</th><th>MINT 권한</th><th>MCP</th><th></th></tr></thead><tbody>
+<table class="clickable"><thead><tr><th>사람</th><th>LiteLLM 역할</th><th>팀</th><th>최근 로그인</th><th>MINT 권한</th><th>상태</th><th class="num">PC</th></tr></thead><tbody>
 {% for p in rows %}<tr>
-<td>{{ p.email or p.user_id }}{% if p.email %}<div class="muted">{{ p.user_id }}</div>{% endif %}</td>
+<td><a href="/people?open={{ p.user_id | urlencode }}{% if q %}&q={{ q | urlencode }}{% endif %}" title="{{ p.user_id }}">{{ p.email or p.user_id }}</a></td>
 <td>{{ L.pick(L.LITELLM_ROLE, p.litellm_role) }}</td>
 <td>{{ p.team_ids | join }}</td>
 <td class="nowrap">{{ p.last_login | when }}</td>
 <td>{{ L.pick(L.ROLE, p.operator_role) }}</td>
-<td>{% if p.block.whole %}{{ m.status_badge(L.Status('전체 차단', 'block')) }}{% elif p.block.partial %}{{ m.status_badge(L.Status('일부 차단', 'wait')) }}{% else %}{{ m.status_badge(L.Status('정상', 'ok')) }}{% endif %}</td>
-<td>{% if can_manage %}<div class="row-actions">
-{% if p.block.whole %}<form method="post" action="/people/unblock" class="inline">{{ m.csrf(actor) }}<input type="hidden" name="user_id" value="{{ p.user_id }}"><button type="submit">MCP 차단 해제</button></form>
-{% else %}{% call m.confirm_dialog('block-' ~ loop.index, '이 사람 MCP 차단', 'MCP 사용 차단', (p.email or p.user_id) ~ ' 님의 모든 MCP 호출이 막힙니다. 해제로 되돌릴 수 있습니다.', '/people/block', actor, '차단') %}
-<input type="hidden" name="user_id" value="{{ p.user_id }}">
-<label>사유(선택)<input name="reason" maxlength="500" autocomplete="off"></label>
-{% endcall %}{% endif %}
-{% if not p.operator_role %}<form method="post" action="/people/operator" class="inline">{{ m.csrf(actor) }}<input type="hidden" name="user_id" value="{{ p.user_id }}">
-<select name="role" aria-label="MINT 권한" required><option value="" selected disabled>MINT 권한 선택</option><option value="viewer">조회자 · 화면만 보기</option><option value="approver">승인자 · 신청 승인·거부</option><option value="admin">관리자 · 모든 설정</option></select>
-<button type="submit">권한 주기</button></form>{% endif %}
-</div>{% endif %}</td>
+<td>{{ m.status_badge(p.state) }}</td>
+<td class="num">{{ p.pcs }}</td>
 </tr>{% endfor %}
 </tbody></table>
 {% else %}{{ m.empty('조건에 맞는 사람이 없습니다' if q else '아직 로그인한 사람이 없습니다', '/people', '조건 지우기' if q else '새로 고침') }}{% endif %}
+{% if selected %}{% include "_person_drawer.html" %}{% endif %}
 {% endblock %}

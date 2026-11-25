@@ -6,6 +6,7 @@ from mint_litellm.console import labels
 from mint_litellm.console.core import Actor, can
 from mint_litellm.console.labels import Status
 from mint_litellm.control import status as control_status
+from mint_litellm.control import webhook_store
 from mint_litellm.control.db.connection import fetchone
 from mint_litellm.control.operators import SERVICE_ACCOUNTS
 
@@ -113,27 +114,41 @@ def _servers(actor: Actor) -> dict:
 
 
 def _approval_flow(actor: Actor) -> dict:
-    solo = _count(
+    """승인할 수 있는 사람: 관리자도 승인할 수 있으므로 관리자와 승인자를 함께 센다."""
+    admins = _count(
         actor,
         "SELECT count(*) AS n FROM mint.operators WHERE instance_id = %s"
-        " AND role IN ('admin', 'approver') AND name <> 'root'"
+        " AND role = 'admin' AND name <> 'root'"
         " AND name <> ALL(%s) AND coalesce(user_id, '') <> ALL(%s)"
         " AND (expires_at IS NULL OR expires_at > now())",
         list(SERVICE_ACCOUNTS), list(SERVICE_ACCOUNTS),
-    ) == 0
+    )
     approvers = _count(
         actor,
         "SELECT count(*) AS n FROM mint.operators WHERE instance_id = %s AND role = 'approver'"
         " AND (expires_at IS NULL OR expires_at > now())",
     )
-    # 알림(Slack 등)은 아직 완성되지 않아 화면에서 뺐다. 승인은 「승인 센터」에서 한다.
-    if approvers:
-        status, line, extra = DONE, f"승인자 {approvers}명", {}
-    else:
-        status, line = (
-            (OPEN, "기본 관리자가 직접 결정할 수 있습니다.") if solo else (CHECK, "승인자 없음"))
-        extra = {"href": "/admin?tab=operators#operator-form", "action": "승인자 지정"}
-    return _item("approval", "승인자", status, line, optional=solo, **extra)
+    if admins or approvers:
+        line = f"승인할 수 있는 사람 {admins + approvers}명 · 관리자 {admins} · 승인자 {approvers}"
+        return _item("approval", "승인자", DONE, line)
+    return _item(
+        "approval", "승인자", OPEN, "기본 관리자가 직접 결정할 수 있습니다.",
+        "/admin?tab=operators#operator-form", "승인자 지정", optional=True,
+    )
+
+
+def _alerts(actor: Actor) -> dict:
+    """알림 주소와 시험 전송. 시험 전송까지 마쳐야 완료다(선택 항목)."""
+    settings = webhook_store.effective(actor.config.stage2, actor.conn, actor.instance)
+    tested = mark_time(actor, "webhook_test")
+    if not settings.webhook_urls:
+        return _item("alerts", "알림", OPEN, "알림 주소가 없습니다.", optional=True)
+    if tested is None:
+        return _item(
+            "alerts", "알림", OPEN, "주소를 저장했습니다. 시험 전송으로 도착을 확인하십시오.",
+            optional=True,
+        )
+    return _item("alerts", "알림", DONE, "시험 전송을 마쳤습니다.", optional=True)
 
 
 def _endpoints(actor: Actor) -> dict:
@@ -263,6 +278,7 @@ def steps(actor: Actor, default_password: bool = False) -> list[dict]:
         _gateway(workers),
         _policy(actor, workers),
         _approval_flow(actor),
+        _alerts(actor),
         *_optional(actor),
     ]
 

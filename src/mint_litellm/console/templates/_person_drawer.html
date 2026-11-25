@@ -1,0 +1,48 @@
+{% import "macros.html" as m %}
+{# 사람 서랍: 권한·차단 / PC·앱 / 키·세션 / 조치. selected는 people.person_detail() 값이다. #}
+{% macro four(impact, now, later, cannot, undo) %}<dl class="detail"><dt>영향</dt><dd>{{ impact }}</dd><dt>즉시</dt><dd>{{ now }}</dd><dt>늦게</dt><dd>{{ later }}</dd><dt>취소 불가</dt><dd>{{ cannot }}</dd><dt>되돌리기</dt><dd>{{ undo }}</dd></dl>{% endmacro %}
+{% set s = selected %}{% set who = s.email or s.user_id %}
+{% call m.drawer(who, '/people' ~ ('?q=' ~ (q | urlencode) if q), true) %}
+<p>{{ m.status_badge(s.state) }}</p>
+<h3>권한</h3>
+<dl class="detail">
+  <dt>LiteLLM 역할</dt><dd>{{ L.pick(L.LITELLM_ROLE, s.litellm_role) }}</dd>
+  <dt>MINT 권한</dt><dd>{% for o in s.operators %}{{ L.pick(L.ROLE, o.role) }}{% if o.root %} · Root{% endif %}{% if not loop.last %}<br>{% endif %}{% else %}없음{% endfor %}</dd>
+  <dt>차단 목록</dt><dd>{% for d in s.block.all %}{% if d.server_id %}{{ d.server_id }}{% if d.tools %} · {{ d.tools | join }}{% endif %}{% else %}모든 MCP{% endif %} · {{ d.reason | clip(60) }}{% if not loop.last %}<br>{% endif %}{% else %}없음{% endfor %}</dd>
+</dl>
+<h3>PC·앱</h3>
+<dl class="detail">
+  <dt>PC</dt><dd>{{ s.pcs | length }}대{% for r in s.pcs %}<br>{{ r.host or r.key_alias }}{% if r.reported_at %} <span class="muted">· {{ r.reported_at | when }}</span>{% endif %}{% endfor %}</dd>
+  <dt>앱</dt><dd>{{ s.apps | length }}개</dd>
+  <dt>마지막 보고</dt><dd>{{ s.last_report | when }}</dd>
+</dl>
+<h3>키·세션</h3>
+<dl class="detail">
+  <dt>PC 키</dt><dd>{{ s.impact.pcs }}개 사용 중</dd>
+  <dt>앱 키</dt><dd>{{ s.impact.apps }}개 사용 중</dd>
+  <dt>콘솔 세션</dt><dd>{{ s.sessions.admin }}개</dd>
+  <dt>직원 세션</dt><dd>{{ s.sessions.staff }}개</dd>
+</dl>
+{% if can_manage %}
+<h3>조치</h3>
+<div class="actions">
+{% if s.block.whole %}<form method="post" action="/people/unblock" class="inline" hx-boost="false">{{ m.csrf(actor) }}<input type="hidden" name="user_id" value="{{ s.user_id }}"><button type="submit">MCP 차단 해제</button></form>
+{% elif not s.block.lock %}{% call m.confirm_dialog('block-person', 'MCP 차단', '이 사람 MCP 차단 — ' ~ who, 'MCP 호출이 모두 막힙니다. 키와 세션은 그대로입니다. 「MCP 차단 해제」로 되돌릴 수 있습니다.', '/people/block', actor, '차단') %}
+<input type="hidden" name="user_id" value="{{ s.user_id }}">
+<label>사유(선택)<input name="reason" maxlength="500" autocomplete="off"></label>
+{% endcall %}{% endif %}
+{% if s.block.lock %}
+{% call m.confirm_dialog('unlock-person', '전체 차단 해제…', '전체 차단 해제 — ' ~ who, four('이 사람의 MCP 호출 차단', '다음 호출부터 승인 범위 안에서 다시 허용됩니다.', 'LiteLLM 키 권한 최대 60초', '해제된 PC 키는 돌아오지 않습니다.', 'PC는 새 설치 명령으로 다시 설치해야 합니다.'), '/people/' ~ (s.user_id | urlencode) ~ '/unlock', actor, '차단 해제', danger=false, trigger_class='primary') %}
+<label>사유(필수)<textarea name="reason" required maxlength="500"></textarea></label>
+{% endcall %}
+{% elif s.lock_blocked_reason %}{{ m.blocked_button('전체 차단…', s.lock_blocked_reason, 'danger-outline') }}
+{% else %}{% call m.confirm_dialog('lock-person', '전체 차단…', '전체 차단 — ' ~ who, four('PC 키 ' ~ s.impact.pcs ~ '개 · 앱 키 ' ~ s.impact.apps ~ '개 · 세션 ' ~ s.impact.sessions ~ '개', 'MINT 판정이 다음 호출부터 이 사람의 모든 MCP 호출을 거부합니다.', 'LiteLLM 키 권한 최대 60초 · PC 실행기는 다음 보고(약 20초)', '이미 원격 서버로 보낸 호출은 끝까지 실행됩니다. PC 키·앱 키는 해제되어 돌아오지 않습니다.', '「전체 차단 해제」로 호출을 다시 허용합니다. PC는 새 설치 명령으로 다시 설치해야 합니다.'), '/people/' ~ (s.user_id | urlencode) ~ '/lockout', actor, '차단', confirm_name='차단', name_label='확인을 위해 「차단」을 입력') %}
+<label>사유(필수)<textarea name="reason" required maxlength="500"></textarea></label>
+{% endcall %}{% endif %}
+</div>
+{% if not s.operators %}
+<form method="post" action="/people/operator" class="row-actions" hx-boost="false">{{ m.csrf(actor) }}<input type="hidden" name="user_id" value="{{ s.user_id }}">
+<select name="role" aria-label="MINT 권한" required><option value="" selected disabled>MINT 권한 선택</option><option value="viewer">조회자 · 화면만 보기</option><option value="approver">승인자 · 신청 승인·거부</option><option value="admin">관리자 · 모든 설정</option></select>
+<button type="submit">권한 주기</button></form>{% endif %}
+{% endif %}
+{% endcall %}
