@@ -4435,14 +4435,46 @@ def repo_command(url: str, fetch=None) -> list[str]:
         scripts = doc.get("project", {}).get("scripts") or {}
         if scripts:
             return ["uvx", "--from", f"git+{base}@{sha}", next(iter(scripts))]
-        try:
-            if json.loads(fetch(raw + "package.json")).get("bin"):
-                raise AddError("Node.js 저장소는 화면(신청 등록)에서 신청하십시오")
-        except urllib.error.HTTPError:
-            pass
+        name = published_npm(owner, repo, sha, fetch)
+        if name:  # 저장소(또는 그 아래 폴더)의 npm 패키지: 레지스트리 판본·무결성 해시로 고정한다
+            return ["npx", "-y", name]
     except (OSError, ValueError, KeyError, TypeError):
         raise AddError("저장소 정보를 가져오지 못했습니다. " + HAND_ADD) from None
     raise AddError("실행 명령을 찾지 못했습니다. " + HAND_ADD)
+
+
+def published_npm(owner: str, repo: str, sha: str, fetch) -> str | None:
+    """저장소 루트나 두 단계 아래 폴더의 실행 파일이 있는 npm 패키지 중, 레지스트리에 이 저장소로
+    올라간 패키지 이름. 없으면 None."""
+    tree = json.loads(fetch(f"https://api.github.com/repos/{owner}/{repo}/git/trees/{sha}"
+                            "?recursive=1") or b"{}")
+    paths = sorted((e["path"] for e in tree.get("tree", [])
+                    if e.get("type") == "blob" and e["path"].rsplit("/", 1)[-1] == "package.json"
+                    and e["path"].count("/") <= 2 and "node_modules/" not in e["path"]),
+                   key=lambda p: p.count("/"))
+    raw = f"https://raw.githubusercontent.com/{owner}/{repo}/{sha}/"
+    found = []
+    for path in paths[:10]:
+        try:
+            doc = json.loads(fetch(raw + path))
+        except (urllib.error.HTTPError, ValueError):
+            continue
+        name = doc.get("name")
+        if doc.get("bin") and not doc.get("private") and isinstance(name, str):
+            found.append((name, path))
+    # 여러 패키지면 MCP 서버(이름·경로에 mcp)를 먼저, 그다음 얕은 폴더를 고른다
+    found.sort(key=lambda f: ("mcp" not in (f[0] + f[1]).lower(), f[1].count("/")))
+    for name, _path in found:
+        try:
+            meta = json.loads(fetch("https://registry.npmjs.org/"
+                                    + urllib.parse.quote(name, safe="@/")))
+        except (urllib.error.HTTPError, ValueError):
+            continue
+        source = meta.get("repository") or {}
+        url = source.get("url", "") if isinstance(source, dict) else str(source)
+        if f"github.com/{owner}/{repo}/".lower() in url.lower().removesuffix(".git") + "/":
+            return name
+    return None
 
 
 NPM_REF = re.compile(
