@@ -744,6 +744,28 @@ def test_an_operator_repository_request_creates_the_same_records(world):
     assert again == (got[0], True)  # 진행 중인 같은 서버는 그 신청으로 안내
 
 
+def test_a_new_version_replaces_my_failed_request_but_not_an_open_one(world):
+    from mint_litellm.control.services import local_intakes
+
+    def form(sha):
+        return {**LOCAL_FORM, "commit": sha, "command": LOCAL_FORM["command"].replace(SHA, sha)}
+
+    first, _ = world.call(lambda ctx: local_intakes.submit_operator(ctx, "root-user", LOCAL_FORM))
+    for status in ("checking", "failed"):
+        world.conn.execute("UPDATE mint.intakes SET status = %s WHERE id = %s", (status, first))
+    second, existing = world.call(
+        lambda ctx: local_intakes.submit_operator(ctx, "root-user", form("e" * 40)))
+    assert not existing and second != first
+    assert world.intake(first)["decision"] == "withdrawn"
+    assert world.intake(second)["status"] == "received"
+    # 실패가 아니면 대체하지 않는다
+    with pytest.raises(Exception, match="다른 판본 신청이 진행 중"):
+        world.call(lambda ctx: local_intakes.submit_operator(ctx, "root-user", form("f" * 40)))
+    assert world.call(
+        lambda ctx: local_intakes.submit_operator(ctx, "root-user", form("e" * 40))
+    ) == (second, True)
+
+
 # --- npm 출처: 이름@판본 + 무결성 해시 ------------------------------------------------------
 
 INTEGRITY = "sha512-" + "A" * 86 + "=="

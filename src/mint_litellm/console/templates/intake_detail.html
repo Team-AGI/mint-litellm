@@ -4,7 +4,7 @@
 {% block body %}
 <h1>{{ server_name }} {{ m.badge(L.DECISION, i.decision) if i.decision == 'withdrawn' else m.badge(L.INTAKE, i.status) }}</h1>
 {% set withdrawal_source_owner = i.requested_by == actor.ctx.operator.user_id and i.source in ('operator', 'staff', 'endpoint') %}
-{% if withdrawal_source_owner and i.status in ('received','checking','passed','indeterminate') %}
+{% if withdrawal_source_owner and i.status in ('received','checking','passed','indeterminate','failed') %}
 <details><summary>신청 철회</summary>
 <p>승인 전 신청을 철회합니다. 검사 이력은 남습니다.</p>
 <form method="post" action="/intakes/{{ i.id }}/withdraw" class="form">
