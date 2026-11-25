@@ -273,6 +273,7 @@ CHECK_REASON = {
     "PACK_TOO_LARGE": "묶음이 너무 큼",
     "PACK_UNAVAILABLE": "묶음이 없어 검사하지 못함",
     "CRITICAL_VULNERABILITY": "심각한 취약점 있음",
+    "INSPECT_ON_FIRST_RUN": "PC에서 처음 띄울 때 도구를 확인합니다",
     "VULN_FEED_UNREACHABLE": "취약점 조회처에 닿지 못함",
     "SOURCE_UNAVAILABLE": "소스를 받지 못함",
     "SOURCE_UNSUPPORTED": "검사할 수 없는 소스 형식",
