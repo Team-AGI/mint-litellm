@@ -5,6 +5,7 @@
 출처(endpoint)로 생겨, 검사·묶음·승인·PC 반영이 그대로 이어진다. 네트워크는 ``fetch``로 바꾼다.
 """
 
+import hashlib
 import json
 import re
 import shlex
@@ -226,7 +227,7 @@ def submit_staff(sctx: staff.StaffContext, session_id_hash: str, request_id: str
             return str(row[0])
     except psycopg.errors.UniqueViolation:
         raise conflict("같은 서버의 신청이 이미 진행 중이거나 등록되어 있습니다. "
-                       "관리자에게 확인하십시오.") from None
+                       "내 신청이면 취소한 뒤 다시 신청하십시오.") from None
     except psycopg.errors.CheckViolation as error:
         if "MINT-QUOTA" in str(error):
             raise ControlError("진행 중인 신청이 3건입니다. 검사가 끝난 뒤 신청하십시오.") from None
@@ -239,7 +240,7 @@ def submit_operator(ctx, user: str, form: dict, owner: str | None = None) -> tup
     ``owner``(담당 사용자)가 있으면 신청자로 그 사람을 적는다. 확인은 부르는 쪽이 한다.
     """
     user = owner or user
-    from mint_litellm.control.services import intakes
+    from mint_litellm.control.services import intake_withdrawals, intakes
     from mint_litellm.control.services.base import transact
 
     payload = build_payload(form)
@@ -255,10 +256,22 @@ def submit_operator(ctx, user: str, form: dict, owner: str | None = None) -> tup
                           " WHERE instance_id = %s AND server_id = %s FOR UPDATE",
                           (ctx.instance_id, sid))
         if server:
-            prior = fetchone(conn, "SELECT id FROM mint.intakes WHERE instance_id = %s"
-                             " AND server_id = %s AND status <> 'decided' LIMIT 1",
-                             (ctx.instance_id, sid))
-            if prior:
+            prior = fetchone(conn, "SELECT i.id, i.status, i.state_version, i.requested_by,"
+                             " d.sha256 FROM mint.intakes i LEFT JOIN mint.deployment_contracts d"
+                             " ON d.instance_id = i.instance_id AND d.id = i.id"
+                             " WHERE i.instance_id = %s AND i.server_id = %s"
+                             " AND i.status <> 'decided' LIMIT 1", (ctx.instance_id, sid))
+            if prior and prior["sha256"] != hashlib.sha256(text.encode()).hexdigest():
+                if prior["status"] != "failed" or prior["requested_by"] != ctx.operator.user_id:
+                    raise conflict("같은 서버의 다른 판본 신청이 진행 중입니다. "
+                                   "그 신청을 결정하거나 철회한 뒤 다시 신청하십시오.")
+                # 검사에 실패한 내 신청은 새 판본 신청으로 대체한다
+                intake_withdrawals.withdraw(ctx, str(prior["id"]), prior["state_version"],
+                                            "새 판본으로 다시 신청")
+                server = fetchone(conn, "SELECT id, status, identity_kind FROM mint.servers"
+                                  " WHERE instance_id = %s AND server_id = %s",
+                                  (ctx.instance_id, sid))
+            elif prior:
                 return str(prior["id"]), True
             if server["identity_kind"] != "stdio" or server["status"] not in (
                     "pending", "awaiting_approval", "rejected"):

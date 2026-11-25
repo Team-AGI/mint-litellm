@@ -121,3 +121,19 @@ def test_admin_requester_can_withdraw_own_application_but_not_other_users(world)
         ).status_code
         == 403
     )
+
+
+def test_a_failed_application_can_be_cancelled_and_sent_again(sworld):
+    client = staff_tests.staff_tests.logged_in(sworld)
+    values = staff_tests.form(client)
+    assert client.post("/staff/intakes", data=values).status_code == 303
+    identifier = values["request_id"]
+    for status in ("checking", "failed"):
+        sworld.query("UPDATE mint.intakes SET status=%s WHERE id=%s", status, identifier)
+    path = "/staff/intakes/" + identifier
+    assert "신청 철회" in client.get(path).text
+    version = sworld.query("SELECT state_version FROM mint.intakes WHERE id=%s", identifier)[0][0]
+    data = {"csrf": staff_tests.staff_tests.csrf(client), "state_version": version,
+            "reason": "신청자 취소", "confirm": "yes"}
+    assert client.post(path + "/withdraw", data=data).status_code == 303
+    assert client.post("/staff/intakes", data=staff_tests.form(client)).status_code == 303

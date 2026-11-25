@@ -2,13 +2,13 @@
 {% block title %}{{ i.server_name }} 도입 신청 · MINT{% endblock %}
 {% block body %}
 <h1>{{ i.server_name }} {{ m.badge(L.DECISION, i.decision) if i.decision == 'withdrawn' else m.badge(L.INTAKE, i.status) }}</h1>
-{% if i.status in ('received','checking','passed','indeterminate') %}
+{% if i.status in ('received','checking','passed','indeterminate','failed') %}
 {% call m.confirm_dialog('cancel-intake', '대기 취소', '신청 철회', i.server_name, '/staff/intakes/' ~ i.id ~ '/withdraw', actor, '신청 취소') %}
 <input type="hidden" name="state_version" value="{{ i.state_version }}">
 <input type="hidden" name="reason" value="신청자 취소"><input type="hidden" name="confirm" value="yes">
 {% endcall %}
 {% endif %}
-{% if i.status in ('passed', 'indeterminate') %}<p>관리자가 검사 결과를 보고 결정합니다.</p>{% elif i.status == 'failed' %}<p>사유를 확인하고 다시 신청하십시오. <a href="/staff/intakes/new">다시 신청</a></p>{% endif %}
+{% if i.status in ('passed', 'indeterminate') %}<p>관리자가 검사 결과를 보고 결정합니다.</p>{% elif i.status == 'failed' %}<p>신청을 취소한 뒤 다시 신청하십시오. <a href="/staff/intakes/new">다시 신청</a></p>{% endif %}
 {% if issues %}<h2>검사에서 확인할 것</h2><ul>{% for t in issues %}<li>{{ t }}</li>{% endfor %}</ul>{% endif %}
 {% if stages %}<ol class="steps" aria-label="진행 단계">{% for level, text in stages %}<li class="{{ level }}"><span class="icon" aria-hidden="true">{{ ICONS[level] }}</span>{{ text }}</li>{% endfor %}</ol>{% endif %}
 {% if delivery and delivery | selectattr('1', 'equalto', 'PC 수신 대기') | list %}<p class="muted">PC에서 mint를 열고 r을 누르면 바로 받습니다.</p>{% endif %}
