@@ -43,12 +43,13 @@ NEXT_VERSION = "판본을 바꿔 다시 신청"
 NEXT_FIX = "신청 내용을 고쳐 다시 신청"
 NEXT_NONE = "없음"
 NEXT_INSPECT = "단말 검사 필요 · s로 시작"
+NEXT_FIRST_RUN = "관리자 승인 뒤 PC에서 처음 실행할 때 검사"
 REASON_INSPECT = "단말 검사가 필요합니다"
 UNKNOWN = "자동 검사로 판별하지 못했습니다"
 
 
 def stage_of(row: dict[str, Any]) -> str:
-    """접수·묶음 준비·검사 중·검사 통과·판별 불가·검사 실패·승인·거절·철회."""
+    """접수·묶음 준비·검사 중·검사 통과·승인 대기·판별 불가·검사 실패·승인·거절·철회."""
     decision, status = row.get("decision"), row.get("status")
     if decision in ("approved", "exception"):
         return "approved"
@@ -56,6 +57,8 @@ def stage_of(row: dict[str, Any]) -> str:
         return str(decision)
     if status == "checking":
         return "inspect" if row.get("pack_ready") else "pack"
+    if status == "indeterminate" and _code(row) == "INSPECT_ON_FIRST_RUN":
+        return "review"  # 실패가 아니다: 서버에서 띄울 수 없는 패키지라 승인 뒤 PC에서 검사한다
     known = ("received", "passed", "indeterminate", "failed")
     return str(status) if status in known else "received"
 
@@ -84,6 +87,8 @@ def next_of(row: dict[str, Any]) -> str:
         return NEXT_INSPECT
     if stage in ("received", "pack", "inspect"):
         return NEXT_WAIT
+    if stage == "review":
+        return NEXT_FIRST_RUN
     if stage in ("passed", "indeterminate"):
         return NEXT_VERSION if code in RETRY_VERSION else NEXT_REVIEW
     if stage == "failed":
