@@ -4896,7 +4896,8 @@ def pad(text: str, width: int) -> str:
 
 STAGE_NAMES = {
     "received": "접수", "pack": "묶음 준비", "inspect": "검사 중", "passed": "검사 통과",
-    "indeterminate": "판별 불가", "failed": "검사 실패", "approved": "승인", "rejected": "거절",
+    "review": "승인 대기", "indeterminate": "판별 불가", "failed": "검사 실패", "approved": "승인",
+    "rejected": "거절",
     "withdrawn": "철회",
 }
 STAGE_FLOW = ("received", "pack", "inspect")
