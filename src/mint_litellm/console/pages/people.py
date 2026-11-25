@@ -108,6 +108,7 @@ def person_detail(actor: Actor, person: dict, block: dict) -> dict:
         "sessions": {"admin": by_subject.get("admin", 0), "staff": by_subject.get("staff", 0)},
         "impact": {"pcs": len(pcs), "apps": len(apps), "sessions": sum(by_subject.values())},
         "lock_blocked_reason": why,
+        "end_blocked_reason": None if sum(by_subject.values()) else "끝낼 활성 세션이 없습니다.",
     }
 
 

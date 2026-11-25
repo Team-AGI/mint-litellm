@@ -220,7 +220,7 @@ def server_action(ctx: Context, server_id: str, action: str, reason: str) -> str
         {"i": ctx.instance_id, "s": server_id},
     )
     {"suspend": servers.suspend, "resume": servers.resume, "terminate": servers.terminate}[action](
-        ctx, server_id
+        ctx, server_id, reason=reason
     )
     with transact(ctx):
         return record(ctx, f"server_{action}", server_id, reason, impact=impact)
@@ -238,6 +238,30 @@ def _person_version(ctx: Context, user_id: str) -> int:
         (ctx.instance_id, user_id),
     )
     return row["n"] + 1
+
+
+def end_sessions(ctx: Context, user_id: str, reason: str) -> str:
+    """사람의 콘솔·직원 세션을 모두 끝낸다. 키와 MCP 호출은 그대로다."""
+    require_role(ctx, "deny")
+    if ctx.operator.role != "admin":
+        raise AdminError(AdminCode.FORBIDDEN, "관리자만 세션을 종료할 수 있습니다.")
+    reason = _reason(reason)
+    with transact(ctx):
+        sessions = fetchall(
+            ctx.conn,
+            "SELECT id_hash FROM mint.console_sessions"
+            " WHERE instance_id = %s AND user_id = %s AND revoked_at IS NULL",
+            (ctx.instance_id, user_id),
+        )
+        if not sessions:
+            raise ControlError("끝낼 활성 세션이 없습니다.")
+        ended = sum(
+            console_sessions.revoke(
+                ctx.conn, ctx.instance_id, s["id_hash"], actor=ctx.operator.name, reason=reason
+            )
+            for s in sessions
+        )
+        return record(ctx, "sessions_end", user_id, reason, impact={"sessions": ended})
 
 
 def lockout(ctx: Context, issuer: Any, user_id: str, reason: str) -> str:

@@ -3,6 +3,5 @@
 {% block body %}
 <h1>내 사용량</h1>
 <div class="filterbar">{{ a.choices('기간', choices) }}</div>
-<script src="/static/echarts.min.js"></script>
 {% include "_usage_tables.html" %}
 {% endblock %}

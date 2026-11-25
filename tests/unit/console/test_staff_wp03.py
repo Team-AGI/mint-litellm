@@ -216,8 +216,8 @@ def test_one_pc_can_be_disconnected_without_touching_the_others(kits):
     assert "내 PC 2대" not in client.get("/staff/endpoint").text  # 한 대만 남으면 모두 해제는 없다
 
 
-def test_the_staff_usage_page_loads_the_chart_script_itself(sworld):
+def test_the_staff_frame_loads_the_chart_script_for_every_screen(sworld):
     client = logged_in(sworld)
     assert "/static/echarts.min.js" in client.get("/staff/usage").text
     moved = client.get("/staff/usage?period=7d", headers={"HX-Boosted": "true"})
-    assert moved.headers["HX-Redirect"] == "/staff/usage?period=7d"
+    assert "HX-Redirect" not in moved.headers
