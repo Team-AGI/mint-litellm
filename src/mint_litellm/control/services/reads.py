@@ -621,7 +621,9 @@ def menu_counts(conn: psycopg.Connection, instance: str) -> dict[str, int]:
         " AND status = 'pending' AND expires_at > now())"
         " + (SELECT count(*) FROM mint.servers WHERE instance_id = %(instance)s"
         " AND status = 'awaiting_approval')"
-        f" + (SELECT count(*){exception_holds.PENDING_SQL}) AS approvals,"
+        f" + (SELECT count(*){exception_holds.PENDING_SQL})"
+        " + (SELECT count(*) FROM mint.servers WHERE instance_id = %(instance)s"
+        " AND deployment_drift) AS approvals,"
         " (SELECT count(*) FROM mint.intakes WHERE instance_id = %(instance)s"
         " AND status IN ('received', 'checking', 'passed', 'indeterminate')) AS intakes",
         {"instance": instance},
@@ -689,6 +691,9 @@ def overview(
         "pending_calls": one(
             "SELECT count(*) FROM mint.call_approvals WHERE instance_id = %s"
             " AND status = 'pending' AND expires_at > now()"
+        ),
+        "pending_holds": one(
+            f"SELECT count(*){exception_holds.PENDING_SQL.replace('%(instance)s', '%s')}"
         ),
         "reapproval": one(
             "SELECT count(*) FROM mint.servers WHERE instance_id = %s AND deployment_drift"

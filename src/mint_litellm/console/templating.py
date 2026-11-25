@@ -31,7 +31,7 @@ MENU = (
     ("단말", (("/endpoints", "엔드포인트", "endpoints"),)),
     ("감사", (("/ledger", "호출 기록", None), ("/policy", "정책", None),
             ("/reports/audit", "감사 보고서", None), ("/reports/usage", "사용량", None))),
-    ("관리", (("/people", "사람", None), ("/admin", "운영자·조직", None),
+    ("관리", (("/people", "사람", None), ("/admin", "설정·운영자", None),
             ("/signup-requests", "가입 요청", "signup"))),
 )
 STAFF_MENU = (

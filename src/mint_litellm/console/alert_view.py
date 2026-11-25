@@ -117,7 +117,8 @@ SUMMARY = {
     "enforcement_unverified": "집행 상태를 확인하지 못합니다.",
     "server_identity_conflict": "서버 신원이 충돌합니다.",
     "package_unpinned": "서버 {server_id}가 버전이 고정되지 않은 패키지를 씁니다.",
-    "package_vulnerable": "서버 {server_id}의 패키지 {package} {version}에 취약점이 있습니다.",
+    "package_vulnerable": "서버 {server_id}의 패키지 {package} {version}에 취약점이 있습니다."
+                          " 고친 판본으로 다시 신청하거나 예외 증빙을 붙이십시오.",
     "package_vuln_due": "서버 {server_id}의 취약점 조치 기한이 다가오거나 지났습니다.",
     "vuln_feed_unreachable": "취약점 조회처에 연결하지 못했습니다.",
     "dep_graph_unreachable": "의존 패키지 조회처에 연결하지 못했습니다.",
@@ -209,6 +210,9 @@ def link(kind: str, subject: dict[str, Any]) -> tuple[str, str] | None:
     """관련 화면 (주소, 이름). 분명한 경우만 돌려준다."""
     subject = subject or {}
     server = subject.get("server_id")
+    if kind.startswith("package_vuln") and subject.get("vuln_id"):  # 설명·고친 판본은 OSV에
+        return (f"https://osv.dev/vulnerability/{quote(str(subject['vuln_id']), safe='')}",
+                "취약점 설명·고친 판본(OSV)")
     if kind == "key_block_proposed" and subject.get("proposal_id"):
         focus = quote(str(subject["proposal_id"]), safe="")
         return f"/approvals?tab=blocks&focus={focus}", "차단 제안"

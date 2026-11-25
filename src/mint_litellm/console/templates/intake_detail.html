@@ -27,7 +27,8 @@
 {% if retry %}<div class="effect">자동 재시도: 마지막 {{ retry.last | when }} · 다음 {{ (retry.next | when) if retry.next else '없음' }} · {{ retry.n }}/{{ retry.limit }}회</div>{% endif %}
 {% if next_step %}<div class="effect">다음 행동: {% if next_step == '증빙 첨부' %}<a href="?tab=evidence">{{ next_step }}</a>{% else %}{{ next_step }}{% endif %}</div>{% endif %}
 <div class="cards">
-  {{ m.kpi('검사 통과', passed ~ ' / ' ~ checks_total, level='danger' if failed else ('wait' if passed != checks_total else none)) }}
+  {% set review = checks | selectattr('shown', 'equalto', 'review') | list | length %}
+  {{ m.kpi('검사 통과', passed ~ ' / ' ~ checks_total, note=('그중 검토 필요 ' ~ review) if review else none, level='danger' if failed else ('wait' if passed != checks_total or review else none)) }}
   {{ m.kpi('높음 이상 도구', high_risk, note='낮음 ' ~ risk.low ~ ' · 보통 ' ~ risk.medium ~ ' · 높음 ' ~ risk.high ~ ' · 심각 ' ~ risk.critical, level='wait' if high_risk) }}
   {% if i.decision == 'withdrawn' %}{{ m.kpi('증빙', '승인 심사 종료') }}{% else %}{{ m.kpi('권장 증빙', proof[0] ~ ' / ' ~ proof[1], '?tab=evidence', level='wait' if lacking) }}{% endif %}
 </div>

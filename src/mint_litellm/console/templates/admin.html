@@ -1,7 +1,7 @@
 {% extends "base.html" %}{% import "macros.html" as m %}
-{% block title %}운영자·조직 · MINT{% endblock %}
+{% block title %}설정·운영자 · MINT{% endblock %}
 {% block body %}
-<h1>운영자·조직</h1>
+<h1>설정·운영자</h1>
 <div class="cards">
   {% if actor.role != 'viewer' %}{{ m.kpi('운영자', operators | length, note='관리자 ' ~ (operators | selectattr('role', 'equalto', 'admin') | list | length) ~ ' · 승인자 ' ~ (operators | selectattr('role', 'equalto', 'approver') | list | length) ~ ' · 조회자 ' ~ (operators | selectattr('role', 'equalto', 'viewer') | list | length), href='/admin?tab=operators') }}{% endif %}
   {{ m.kpi('조직', orgs | length, href='/admin?tab=orgs') }}
