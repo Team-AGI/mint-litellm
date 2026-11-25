@@ -941,6 +941,7 @@ OUTCOME_REASON = {
     "CANCELLED": "취소됨",
     "CONFIRMATION_REQUIRED": "본인 확인 필요",
     "CONFIRMATION_STALE": "본인 확인 기한 지남",
+    "GLOBAL_HALT": "전역 정지",
 }
 
 

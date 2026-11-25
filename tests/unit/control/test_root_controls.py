@@ -147,3 +147,13 @@ def test_propagation_lists_each_point_and_verify_stores_it(world):
     assert points[-1]["state"] == "확인되지 않음"
     row = fetchone(world.conn, "SELECT verified_at, propagation FROM mint.forced_actions")
     assert row["verified_at"] and len(row["propagation"]) == 4
+
+
+def test_a_freeze_blocks_new_approvals_but_not_rejections(world):
+    identifier = world.create()
+    world.drain()
+    as_root(world, lambda ctx: root.set_halt(ctx, "freeze", "배포 동결"))
+    with pytest.raises(ControlError):
+        world.decide(identifier, "approve", reason="심사 결과")
+    world.decide(identifier, "reject", reason="동결 중 반려")
+    assert world.intake(identifier)["decision"] == "rejected"

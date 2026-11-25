@@ -20,35 +20,38 @@ BLOCK_STATUS_CODE = 403
 APPROVAL_RETRY_AFTER = 30
 TRANSIENT_RETRY_AFTER = 5
 APPROVAL_GUIDANCE = (
-    f"승인 대기 중입니다. 승인되면 같은 호출을 다시 하십시오(약 {APPROVAL_RETRY_AFTER}초 뒤 "
-    "재시도). Approval pending: retry the same call after approval."
+    "[승인 대기] 승인 대기 중입니다. 승인되면 같은 호출을 다시 하십시오"
+    f"(약 {APPROVAL_RETRY_AFTER}초 뒤 재시도). "
+    "Approval pending: retry the same call after approval."
 )
 TRANSIENT_GUIDANCE = (
-    f"일시 오류입니다. 잠시 뒤(약 {TRANSIENT_RETRY_AFTER}초) 같은 호출을 다시 하십시오. "
+    "[일시 오류] 정책 거부가 아닙니다. "
+    f"잠시 뒤(약 {TRANSIENT_RETRY_AFTER}초) 같은 호출을 다시 하십시오. "
     "Temporary error: retry shortly."
 )
 BLOCKED_GUIDANCE = (
-    "정책상 차단되었으니 같은 호출을 재시도하지 마십시오. 다른 방법을 쓰거나 관리자에게 "
-    "요청하십시오. Blocked by policy: do not retry the same call."
+    "정책상 차단되었으니 같은 호출을 재시도하지 마십시오. 해결: 직원 화면 「내 MCP 서버」에서 "
+    "권한을 요청하거나 관리자에게 문의하십시오. Blocked by policy: do not retry the same call."
 )
 # 관리자의 사후 차단: 해제되면 같은 호출을 다시 할 수 있다(정책 차단과 다르다).
 ADMIN_BLOCK_RETRY_AFTER = 1
 ADMIN_BLOCK_GUIDANCE = (
-    "관리자가 막은 도구입니다. 해제되면 바로 다시 호출하십시오. "
+    "[막힘] 관리자가 막은 도구입니다. 해결: 직원 화면 「내 MCP 서버」에서 권한을 요청하십시오"
+    "(터미널: mint request access <서버> <도구>). 해제되면 바로 다시 호출하십시오. "
     "Blocked by an administrator; call again once unblocked."
 )
 # 사용자 본인 확인이 필요한 호출. 확인 링크를 연 사람이 본인일 때만 확인된다.
 CONFIRMATION_GUIDANCE = (
-    "본인 확인이 필요합니다. 링크에서 확인한 뒤 같은 작업을 다시 요청하십시오."
+    "[승인 대기] 본인 확인이 필요합니다. 링크에서 확인한 뒤 같은 작업을 다시 요청하십시오."
 )
 # 관리자가 거부한 호출의 재시도. 실행되지 않았고, 되풀이하지 말고 사용자에게 알려야 한다.
 DENIAL_GUIDANCE = (
-    "관리자가 이 호출을 거부해 실행되지 않았습니다. 같은 작업을 되풀이하지 말고 사용자에게 "
+    "[막힘] 관리자가 이 호출을 거부해 실행되지 않았습니다. 같은 작업을 되풀이하지 말고 사용자에게 "
     "거부 사유를 알리십시오."
 )
 # 결과를 막은 오류. 도구는 이미 실행됐으므로 같은 작업을 되풀이하면 부작용이 겹친다.
 OUTPUT_GUIDANCE = (
-    "도구는 이미 실행되었고 결과만 막혔습니다. 같은 작업을 다시 요청하지 말고 사용자에게 "
+    "[막힘] 도구는 이미 실행되었고 결과만 막혔습니다. 같은 작업을 다시 요청하지 말고 사용자에게 "
     "결과가 정책에 막혔다고 알리십시오."
 )
 
@@ -98,6 +101,7 @@ REASON_EXPLANATIONS = {
     Reason.CANCELLED: "호출이 취소되었습니다",
     Reason.CONFIRMATION_REQUIRED: "본인 확인이 필요합니다",
     Reason.CONFIRMATION_STALE: "본인 확인을 다시 해야 합니다",
+    Reason.GLOBAL_HALT: "관리자가 전역 정지를 걸어 호출이 막혔습니다",
 }
 
 
@@ -133,6 +137,8 @@ class MintError(BaseModel):
     retry_after: int | None = None
     # 본인 확인 화면으로 가는 서명된 단기 링크. 본인 확인 요청을 열었을 때만 있다.
     confirm_link: str | None = None
+    # 막힌 도구의 권한을 요청하는 직원 화면 링크(서버·도구·사유를 채워 연다). 요청할 수 있는 사유만.
+    request_link: str | None = None
 
     @model_validator(mode="after")
     def _retry_only_before_dispatch(self) -> Self:
@@ -165,6 +171,8 @@ class MintError(BaseModel):
             body["retry_after"] = self.retry_after
         if self.confirm_link is not None:
             body["confirm_link"] = self.confirm_link
+        if self.request_link is not None:
+            body["request_link"] = self.request_link
         text = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
         if human_first and self.guidance:
             return f"{self.guidance}\n{text}"
@@ -236,20 +244,23 @@ def error_for_reason(
     name = policy_detect_name(reason_code)
     guidance = {
         Reason.POLICY_DETECT: (
-            f"정책 위반({name or '정책 탐지'})으로 막혔습니다. 호출 인자를 승인된 범위에 맞게 "
-            "고쳐 다시 요청하거나 관리자에게 승인 범위를 문의하십시오. 같은 인자로는 재시도하지 "
-            "마십시오. Blocked by policy: do not retry the same call."
+            f"[막힘] 정책 위반({name or '정책 탐지'})으로 막혔습니다. "
+            "호출 인자를 승인된 범위에 맞게 고쳐 다시 요청하거나 관리자에게 승인 범위를 "
+            "문의하십시오. 같은 인자로는 재시도하지 마십시오. "
+            "Blocked by policy: do not retry the same call."
         ),
         Reason.CALL_APPROVAL_DENIED: DENIAL_GUIDANCE,
         Reason.CONFIRMATION_REQUIRED: CONFIRMATION_GUIDANCE,
         Reason.CONFIRMATION_STALE: CONFIRMATION_GUIDANCE,
+        Reason.GLOBAL_HALT: (
+            "[막힘] 관리자가 전역 정지를 걸었습니다. 해제되면 자동으로 다시 됩니다. 같은 호출을 "
+            "되풀이하지 마십시오. Halted by an administrator: do not retry."
+        ),
         Reason.MASTER_KEY_FORBIDDEN: (
-            "마스터 키로 도구를 호출할 수 없습니다. 관리자에게 "
+            "[막힘] 마스터 키로 도구를 호출할 수 없습니다. 관리자에게 "
             "본인에게 발급된 일반 키를 요청하십시오."
         ),
-    }.get(family) or (
-        REASON_EXPLANATIONS[family] + ". " + BLOCKED_GUIDANCE
-    )
+    }.get(family) or ("[막힘] " + REASON_EXPLANATIONS[family] + ". " + BLOCKED_GUIDANCE)
     return MintError(
         code=error_code(reason_code),
         dispatch_state=DispatchState.NOT_DISPATCHED,

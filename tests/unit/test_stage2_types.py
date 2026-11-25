@@ -132,6 +132,7 @@ def test_reasons_are_the_stage_one_set_plus_the_later_additions():
         "APPROVAL_RECERT_REQUIRED",
         "TOKEN_AUDIENCE_MISMATCH",
         "TOKEN_SCOPE_EXCEEDED",
+        "GLOBAL_HALT",
     }
     later = ("CONFIRMATION_REQUIRED", "CONFIRMATION_STALE", "EXTERNAL_MCP_FORBIDDEN")
     for code in (*later, "REALTIME_FORBIDDEN", "CODE_EXECUTION_FORBIDDEN"):

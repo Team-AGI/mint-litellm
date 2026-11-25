@@ -52,9 +52,16 @@ def test_every_reason_maps_to_a_pre_dispatch_error():
         err = error_for_reason(code, REF)
         assert re.fullmatch(r"MINT-[A-Z0-9-]+", err.code)
         assert err.dispatch_state is DispatchState.NOT_DISPATCHED
-        # 전송 전에 취소된 호출과 호출별 승인 대기(승인 뒤 같은 호출 재요청)만 다시 보내도 안전하다.
+        # 전송 전 취소, 호출별 승인 대기(승인 뒤 같은 호출), 관리자 사후 차단(해제 뒤 같은 호출)만
+        # 다시 보내도 안전하다.
         assert err.retry_safe is (
-            reason in (Reason.CANCELLED, Reason.CALL_APPROVAL_REQUIRED, Reason.CALL_APPROVAL_STALE)
+            reason
+            in (
+                Reason.CANCELLED,
+                Reason.CALL_APPROVAL_REQUIRED,
+                Reason.CALL_APPROVAL_STALE,
+                Reason.DENIED,
+            )
         )
         assert err.reference == REF
         assert err.guidance
@@ -124,17 +131,18 @@ def test_code_must_carry_the_product_prefix():
 
 
 def test_block_response_is_a_403_with_a_json_string_detail():
-    block = error_for_reason("DENIED", REF).as_block()
+    block = error_for_reason("APPROVAL_ABSENT", REF).as_block()
     assert block.status_code == BLOCK_STATUS_CODE == 403
     assert isinstance(block.detail, str)
     parsed = json.loads(block.detail)
     assert list(parsed) == ["code", "dispatch_state", "retry_safe", "reference", "guidance"]
     assert parsed == {
-        "code": "MINT-DENIED",
+        "code": "MINT-APPROVAL-ABSENT",
         "dispatch_state": "not_dispatched",
         "retry_safe": False,
         "reference": REF,
-        "guidance": REASON_EXPLANATIONS[Reason.DENIED]
+        "guidance": "[막힘] "
+        + REASON_EXPLANATIONS[Reason.APPROVAL_ABSENT]
         + ". "
         + BLOCKED_GUIDANCE,
     }

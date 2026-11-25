@@ -354,6 +354,8 @@ class SettingsRow:
     settings_version: int | None = None
     control_key_token: str | None = None
     require_separate_confirm_key: bool = True
+    # Root 전역 정지 범위: all(모든 MCP 호출)·local(PC 로컬 서버)·freeze(새 승인·배포). None은 정상
+    halt_scope: str | None = None
 
 
 @dataclass(frozen=True)
@@ -559,6 +561,7 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
             settings_version=settings["settings_version"],
             control_key_token=settings.get("control_key_token"),
             require_separate_confirm_key=settings.get("require_separate_confirm_key", True),
+            halt_scope=settings.get("halt_scope"),
         ),
         bindings={
             (SubjectType(b["subject_type"]), b["subject_id"]): b["org_id"] for b in doc["bindings"]

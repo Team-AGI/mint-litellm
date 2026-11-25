@@ -41,6 +41,16 @@ _VERSIONED = {
 }
 
 
+def require_not_frozen(ctx: Context) -> None:
+    """Root가 「새 승인·배포 동결」을 걸었으면 새 승인을 막는다(기존 사용은 그대로)."""
+    row = fetchone(ctx.conn, "SELECT halt_scope FROM mint.settings WHERE instance_id = %s",
+                   (ctx.instance_id,))
+    if row and row["halt_scope"] in ("freeze", "all"):
+        raise conflict(
+            "전역 정지·동결 중이라 새 승인을 할 수 없습니다. Root가 해제한 뒤 다시 하십시오."
+        )
+
+
 def require_role(ctx: Context, command: str) -> None:
     """명령 표의 역할 집합에 행위자의 역할이 들어 있어야 한다. 토큰 없는 명령은 확인하지 않는다."""
     entry = _COMMANDS[command]
