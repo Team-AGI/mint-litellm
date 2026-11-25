@@ -1259,9 +1259,14 @@ def verify_npm(
     # 끝난다(pj3 실측). 옆의 node.exe로 npm의 npx-cli.js를 바로 돌린다.
     cli = os.path.join(os.path.dirname(runtime), "node_modules", "npm", "bin", "npx-cli.js")
     node = os.path.join(os.path.dirname(runtime), "node.exe")
+    env = dict(approved.get("env") or {})
     if runtime.lower().endswith((".cmd", ".bat")) and os.path.isfile(cli) and os.path.isfile(node):
         runtime, launch = node, [cli, *launch]
-    return {**approved, "executable": runtime, "argv": launch, "_pack_dir": directory}
+        # 격리 안의 LOCALAPPDATA는 시작마다 새로 생기는 격리 폴더라 의존성을 매번 다시 받는다
+        # (15초쯤, AI 도구의 첫 도구 목록보다 늦다). 권한을 준 사용자 npm 캐시를 쓴다.
+        local = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~/AppData/Local")
+        env.setdefault("npm_config_cache", os.path.join(local, "npm-cache"))
+    return {**approved, "executable": runtime, "argv": launch, "_pack_dir": directory, "env": env}
 
 
 # --- 서버 격리(Linux bubblewrap) ------------------------------------------------------------
