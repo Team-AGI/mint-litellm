@@ -1460,7 +1460,15 @@ class PluginDatabase:
                     kit_key_sync.APPLICABLE_SQL,
                     kit_key_sync.applicable_params(instance_id, install[0], install[1], ""),
                 )
-                return kit_key_sync.fold_permission(await rows.fetchall())[0]
+                names = kit_key_sync.fold_permission(await rows.fetchall())[0]
+            # 중지된 원격 서버도 키 권한에는 남지만(D-014) 쓸 수 없으니 PC 목록에는 내지 않는다
+            cursor = await conn.execute(
+                "SELECT server_id FROM mint.servers WHERE instance_id = %s"
+                " AND server_id = ANY(%s) AND status = 'approved'",
+                (instance_id, names),
+            )
+            usable = {row[0] for row in await cursor.fetchall()}
+            return [n for n in names if n in usable]
 
         return await self._run(read)  # type: ignore[no-any-return]
 
