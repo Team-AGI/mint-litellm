@@ -27,7 +27,7 @@ MENU = (
     (None, (("/", "대시보드", None), ("/setup", "시작하기", "setup"))),
     ("처리할 일", (("/approvals", "승인 센터", "approvals"), ("/alerts", "경보", "alerts"))),
     ("MCP 서버", (("/servers", "MCP 서버", "servers"), ("/intakes", "도입 신청", "intakes"),
-            ("/access", "접근 통제", None))),
+            ("/builtin-tools", "하네스 기본 기능", None), ("/access", "접근 통제", None))),
     ("단말", (("/endpoints", "엔드포인트", "endpoints"),)),
     ("감사", (("/ledger", "호출 기록", None), ("/policy", "정책", None),
             ("/reports/audit", "감사 보고서", None), ("/reports/usage", "사용량", None))),

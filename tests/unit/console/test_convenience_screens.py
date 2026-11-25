@@ -65,7 +65,7 @@ def test_decision_scope_and_optional_reason_are_collapsed(world, admin):
     identifier = add_intake(world)
     html = admin.get(f"/intakes/{identifier}").text
     form = html.split('id="decision"')[1].split("</form>")[0]
-    settings = re.search(r"<details><summary>추가 설정</summary>(.*?)</details>", form, re.S)
+    settings = re.search(r"<details[^>]*><summary>추가 설정</summary>(.*?)</details>", form, re.S)
     assert settings
     for field in ("scope_type", "scope_id", "valid_days", "reason"):
         assert f'name="{field}"' in settings.group(1)

@@ -12,6 +12,7 @@ from fastapi.responses import RedirectResponse
 from mint_litellm.console.core import Actor, page_actor, require_csrf
 from mint_litellm.console.pages import (
     approvals,
+    builtins,
     dashboard,
     endpoints_admin,
     people,
@@ -82,5 +83,5 @@ def open_link(token: str, actor: Actor = Depends(page_actor)):
     return RedirectResponse(target, status_code=303)
 
 
-for module in (dashboard, approvals, servers, endpoints_admin, people, reports, setup):
+for module in (dashboard, approvals, builtins, servers, endpoints_admin, people, reports, setup):
     router.include_router(module.router)

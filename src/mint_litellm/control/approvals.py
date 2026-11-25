@@ -24,6 +24,7 @@ from mint_litellm.types.contracts import (
     DENIABLE_ACTIONS,
     ONE_SHOT_ACTIONS,
 )
+from mint_litellm.types.decision import is_builtin_server
 from mint_litellm.types.events import EventKind
 from mint_litellm.types.ids import new_uuid7
 
@@ -549,7 +550,7 @@ def create_denial(
         server_id = scope_id
     if scope_type == "org":
         org_id = scope_id
-    if server_id and not fetchone(
+    if server_id and not is_builtin_server(server_id) and not fetchone(
         ctx.conn,
         "SELECT 1 AS x FROM mint.servers WHERE instance_id = %s AND server_id = %s",
         (ctx.instance_id, server_id),
