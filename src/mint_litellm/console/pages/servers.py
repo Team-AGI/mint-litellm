@@ -526,7 +526,11 @@ def intakes_page(request: Request, actor: Actor, error=None, status=200):
     server_display(actor, rows)
     rows.sort(key=lambda r: (r["created_at"], str(r["id"])))  # 오래된 것 먼저
     now = datetime.now(UTC)
+    people = {u["user_id"]: u["email"] for u in fetchall(  # 신청자를 UUID 대신 사람 이름으로
+        actor.conn, "SELECT user_id, email FROM mint.directory_users WHERE instance_id = %s",
+        (actor.instance,))}
     for r in rows:
+        r["requester"] = people.get(r.get("requested_by"))
         r["age"] = (now - r["created_at"]).total_seconds()
         r["stalled"] = r["status"] in OPEN_STATUSES and now - r["created_at"] > STALL
     counts = {key: sum(1 for r in rows if r["status"] in kinds) for key, kinds in STAGES.items()}

@@ -22,8 +22,8 @@
 <td>{{ m.source_badge(r.source) }}</td>
 <td>{{ m.badge(L.INTAKE, r.status) }}</td>
 <td>{% if r.decision %}{{ m.badge(L.DECISION, r.decision) }}{% else %}—{% endif %}</td>
-<td>{{ r.requested_by | who }}</td><td class="nowrap">{{ r.created_at | when }}</td>
-<td class="nowrap">{% if r.stalled %}<span class="badge wait"><span class="icon" aria-hidden="true">{{ ICONS.wait }}</span>{{ r.age | span }}</span>{% else %}—{% endif %}</td>
+<td>{{ r.requester or (r.requested_by | who) }}</td><td class="nowrap">{{ r.created_at | when }}</td>
+<td class="nowrap">{% if r.stalled %}<span class="badge wait"><span class="icon" aria-hidden="true">{{ ICONS.wait }}</span>{{ r.age | span }}</span>{% elif r.status in ('received', 'checking', 'passed', 'indeterminate') %}{{ r.age | span }}{% else %}—{% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
 {% else %}{{ m.empty('조건에 맞는 신청이 없습니다', '/intakes', '조건 지우기') }}{% endif %}

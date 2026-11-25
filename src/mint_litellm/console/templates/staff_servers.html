@@ -40,7 +40,7 @@
 <div class="muted">{{ r.org_name }}</div>
 <div>{% if r.stopped %}<span class="badge off">사용 그만둠</span>{% elif r.preparing %}<span class="badge wait">준비 중</span>{% else %}{{ m.badge(L.CONSENT_STATE, r.state) }}{% endif %}</div>
 <div>{% if r.preparing %}승인됐고 도구를 확인하는 중입니다{% else %}{{ ('도구 발견 ' ~ (r.seen | when)) if r.seen else ('시작 실패' if r.start_failed else '승인됨') }}{% endif %}</div>
-<dl class="detail"><dt>도구</dt><dd>{{ (r.tools | join) or '—' }}</dd><dt>승인 만료</dt><dd>{{ r.valid_until | when if r.valid_until else '기한 없음' }}</dd></dl>
+<dl class="detail"><dt>도구</dt><dd>{{ '모든 도구' if '*' in r.tools else ((r.tools | join) or '—') }}</dd><dt>승인 만료</dt><dd>{{ r.valid_until | when if r.valid_until and r.valid_until.year < 2900 else '기한 없음' }}</dd></dl>
 <div class="actions"><a class="button" href="/staff?open={{ r.ref | urlencode }}">{{ '동의 확인' if r.state == 'none' and not r.stopped and not r.preparing else 'MCP 서버 보기' }}</a>
 {% if r.preparing and r.progress %}<a class="button" href="{{ r.progress }}">진행 상황 보기</a>{% endif %}
 {{ stop_use(r, loop.index, '') }}</div>
@@ -56,8 +56,8 @@
   <dt>전송</dt><dd>{{ L.pick(L.TRANSPORT, selected.transport) if selected.transport else '—' }}</dd>
   <dt>인증</dt><dd>{{ L.pick(L.AUTH_TYPE, selected.auth_type) if selected.auth_type else '—' }}</dd>
   <dt>상태</dt><dd>{{ ('도구 발견 ' ~ (selected.seen | when)) if selected.seen else ('시작 실패' if selected.start_failed else '승인됨') }}</dd>
-  <dt>도구</dt><dd>{{ (selected.tools | join) or '—' }}</dd>
-  <dt>승인 만료</dt><dd>{{ selected.valid_until | when if selected.valid_until else '—' }}</dd>
+  <dt>도구</dt><dd>{{ '모든 도구' if '*' in selected.tools else ((selected.tools | join) or '—') }}</dd>
+  <dt>승인 만료</dt><dd>{{ selected.valid_until | when if selected.valid_until and selected.valid_until.year < 2900 else '기한 없음' }}</dd>
 </dl>
 <div class="actions">{{ stop_use(selected, 'open') }}</div>
 <h3>이용 방법</h3>

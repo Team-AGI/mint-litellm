@@ -252,6 +252,8 @@ def intake_probe(
 ):
     """제출 전 주소 확인. 실패해도 제출은 막지 않는다."""
     form = dict(request_id=request_id or str(new_uuid7()), url=url, purpose=purpose)
+    if local_intakes.is_local(url):  # 저장소·패키지: 판본·실행 명령을 풀어 미리보기를 보인다
+        return repo_intake(request, actor, {**form, "step": ""})
     ports = actor.config.stage2.intake_allowed_ports
     try:
         found = staff_intakes.probe(
@@ -262,8 +264,6 @@ def intake_probe(
                 " AND org_id IS NULL", (actor.sctx.instance_id,)),
             actor.config.control.litellm_control())
     except ControlError as error:
-        if local_intakes.is_local(url):  # 저장소·패키지는 확인 대신 신청 단계로 안내한다
-            return intake_form(request, actor, form, error="신청 제출 때 확인합니다.")
         return intake_form(request, actor, form, error=str(error), status=422)
     text = labels.PROBE[found["state"]].format(
         tools=found["tools"], reason=labels.pick(labels.CHECK_REASON, found.get("reason")))
@@ -350,6 +350,17 @@ def intake_detail(intake_id: str, request: Request, actor: StaffActor = Depends(
         _, check, code = reason.split(":", 2)
         reason = labels.pick(labels.CHECK, check) + ": " + labels.pick(labels.CHECK_REASON, code)
     source = source_of(actor, [row["id"]]).get(row["id"], "staff")
+    # 검사에서 걸린 것(가장 최근 시도). 판별 불가·실패에서 직원이 다음을 알 수 있게 사유를 보인다.
+    issues = [
+        f"{labels.pick(labels.CHECK, c['check'])}: {labels.check_reason(c)}"
+        for c in fetchall(
+            actor.sctx.control,
+            "SELECT \"check\", result, reason_code, inputs FROM mint.intake_checks c"
+            " WHERE c.instance_id = %s AND c.intake_id = %s AND c.result <> 'pass'"
+            " AND c.attempt = (SELECT max(attempt) FROM mint.intake_checks d"
+            " WHERE d.instance_id = c.instance_id AND d.intake_id = c.intake_id)",
+            (actor.sctx.instance_id, row["id"]))
+    ] if row["status"] in ("indeterminate", "failed", "passed") else []
     stages = None
     if source == "endpoint":
         pack = pack_view.read(actor.sctx.control, actor.sctx.instance_id, row["server_id"])
@@ -368,6 +379,7 @@ def intake_detail(intake_id: str, request: Request, actor: StaffActor = Depends(
             local=source == "endpoint", called=any(t["calls"] for t in seen))
     return staff_render(request, "staff_intake_detail.html",
                         {"i": row, "decision_reason": reason, "source": source,
+                         "issues": issues,
                          "stages": stages, "delivery": delivery,
                          "job_error": _intake_job_error(actor, row),
                          "retry": intakes_service.retry_state(
@@ -905,9 +917,10 @@ def endpoint_page(request: Request, actor: StaffActor, error=None, status=200, c
         "rows": rows, "active": any(r["state"] != "revoked" for r in rows), "error": error,
         "apps": endpoint_apps.list_apps(actor.sctx.control, actor.sctx.instance_id, actor.user_id),
         "platform": "windows" if windows else "linux", "commands": commands,
-        # 서버 판본보다 뒤처진 단말: 고정 공개 키가 없는 옛 설치는 한 번 다시 설치해야 한다.
-        "behind": bool(rows) and rows[0]["state"] in ("managed", "user")
-        and rows[0]["kit_version"] != kit_version(),
+        # 고정 공개 키가 없는 옛 설치(자동 갱신 불가)만 한 번 다시 설치해야 한다. 판본이 다르기만
+        # 한 단말은 다음 보고에 스스로 갱신된다.
+        "behind": any(r["state"] in ("managed", "user") and r.get("update_error") == "needed"
+                      and r["kit_version"] != kit_version() for r in rows),
     }
     return staff_render(request, "staff_endpoint.html", ctx, actor, status)
 
