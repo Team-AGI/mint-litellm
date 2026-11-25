@@ -227,7 +227,9 @@ def register_local(ctx: Context, server_id: str, contract: ExecContract) -> None
     _record_packages(ctx, server_id, contract)
 
 
-def _transition(ctx: Context, server_id: str, source: str, target: str, kind: EventKind) -> None:
+def _transition(
+    ctx: Context, server_id: str, source: str, target: str, kind: EventKind, reason: str = ""
+) -> None:
     row = fetchone(
         ctx.conn,
         "UPDATE mint.servers SET status = %s WHERE instance_id = %s AND server_id = %s"
@@ -236,18 +238,21 @@ def _transition(ctx: Context, server_id: str, source: str, target: str, kind: Ev
     )
     if row is None:
         raise not_found(f"{source} 상태의 서버 {server_id}이(가) 없습니다.")
-    ctx.emit(kind, row["id"], row["state_version"], {"server_id": server_id, "status": target})
+    ctx.emit(
+        kind, row["id"], row["state_version"],
+        {"server_id": server_id, "status": target, **({"reason": reason} if reason else {})},
+    )
 
 
-def suspend(ctx: Context, server_id: str) -> None:
-    _transition(ctx, server_id, "approved", "suspended", EventKind.SERVER_SUSPENDED)
+def suspend(ctx: Context, server_id: str, reason: str = "") -> None:
+    _transition(ctx, server_id, "approved", "suspended", EventKind.SERVER_SUSPENDED, reason)
 
 
-def resume(ctx: Context, server_id: str) -> None:
-    _transition(ctx, server_id, "suspended", "approved", EventKind.SERVER_RESUMED)
+def resume(ctx: Context, server_id: str, reason: str = "") -> None:
+    _transition(ctx, server_id, "suspended", "approved", EventKind.SERVER_RESUMED, reason)
 
 
-def terminate(ctx: Context, server_id: str) -> None:
+def terminate(ctx: Context, server_id: str, reason: str = "") -> None:
     """승인·중지 서버를 폐기 중으로 바꾼다. 자격 삭제와 확인은 ``server_finalize`` 작업이 한다."""
     status = fetchone(
         ctx.conn,
@@ -256,4 +261,6 @@ def terminate(ctx: Context, server_id: str) -> None:
     )
     if status is None or status["status"] not in ("approved", "suspended"):
         raise not_found(f"승인 또는 중지 상태의 서버 {server_id}이(가) 없습니다.")
-    _transition(ctx, server_id, status["status"], "terminating", EventKind.SERVER_TERMINATING)
+    _transition(
+        ctx, server_id, status["status"], "terminating", EventKind.SERVER_TERMINATING, reason
+    )

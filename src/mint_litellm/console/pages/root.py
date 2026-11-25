@@ -27,6 +27,7 @@ DONE = {
     "server_suspend": "서버를 중지했습니다.", "server_resume": "서버를 다시 열었습니다.",
     "server_terminate": "폐기를 시작했습니다.", "person_lockout": "차단했습니다.",
     "person_unlock": "해제했습니다. PC는 다시 설치해야 합니다.",
+    "sessions_end": "세션을 끝냈습니다.",
 }
 SERVER_ACTIONS = {
     "server_suspend": "suspend", "server_resume": "resume", "server_terminate": "terminate",
@@ -166,4 +167,12 @@ def unlock(
     user_id: str, request: Request, reason: str = Form(""), actor: Actor = Depends(page_actor)
 ):
     return _run(actor, lambda: root.unlock(actor.ctx, user_id, reason),
+                lambda **kw: actions_page(request, actor, **kw))
+
+
+@router.post("/people/{user_id}/sessions/end")
+def end_sessions(
+    user_id: str, request: Request, reason: str = Form(""), actor: Actor = Depends(page_actor)
+):
+    return _run(actor, lambda: root.end_sessions(actor.ctx, user_id, reason),
                 lambda **kw: actions_page(request, actor, **kw))

@@ -39,6 +39,10 @@
 {% else %}{% call m.confirm_dialog('lock-person', '전체 차단…', '전체 차단 — ' ~ who, four('PC 키 ' ~ s.impact.pcs ~ '개 · 앱 키 ' ~ s.impact.apps ~ '개 · 세션 ' ~ s.impact.sessions ~ '개', 'MINT 판정이 다음 호출부터 이 사람의 모든 MCP 호출을 거부합니다.', 'LiteLLM 키 권한 최대 60초 · PC 실행기는 다음 보고(약 20초)', '이미 원격 서버로 보낸 호출은 끝까지 실행됩니다. PC 키·앱 키는 해제되어 돌아오지 않습니다.', '「전체 차단 해제」로 호출을 다시 허용합니다. PC는 새 설치 명령으로 다시 설치해야 합니다.'), '/people/' ~ (s.user_id | urlencode) ~ '/lockout', actor, '차단', confirm_name='차단', name_label='확인을 위해 「차단」을 입력') %}
 <label>사유(필수)<textarea name="reason" required maxlength="500"></textarea></label>
 {% endcall %}{% endif %}
+{% if s.end_blocked_reason %}{{ m.blocked_button('세션 종료…', s.end_blocked_reason, 'danger-outline') }}
+{% else %}{% call m.confirm_dialog('end-sessions', '세션 종료…', '세션 종료 — ' ~ who, four('콘솔 세션 ' ~ s.sessions.admin ~ '개 · 직원 세션 ' ~ s.sessions.staff ~ '개', '이 사람은 다음 요청부터 다시 로그인해야 합니다.', '없음', '끝난 세션은 되살릴 수 없습니다. 키와 MCP 호출은 그대로입니다.', '다시 로그인하면 됩니다.'), '/people/' ~ (s.user_id | urlencode) ~ '/sessions/end', actor, '세션 종료') %}
+<label>사유(필수)<textarea name="reason" required maxlength="500"></textarea></label>
+{% endcall %}{% endif %}
 </div>
 {% if not s.operators %}
 <form method="post" action="/people/operator" class="row-actions" hx-boost="false">{{ m.csrf(actor) }}<input type="hidden" name="user_id" value="{{ s.user_id }}">

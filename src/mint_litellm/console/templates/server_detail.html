@@ -3,6 +3,7 @@
 {% block page_class %}wide{% endblock %}
 {% block body %}
 <h1>{{ s.server_name or s.server_id }} {{ m.badge(L.SERVER, s.status) }}{% if provisional and s.status not in ('rejected', 'terminated') %} <span title="승인된 계약이 없어 호출마다 추정한 계약으로 검사합니다">{{ m.badge(L.CONTRACT_STATE, 'provisional') }}</span>{% endif %}</h1>
+{% if s.suspension %}<div class="banner error" role="status">중지됨 · {{ s.suspension.actor or '알 수 없음' }} · {{ s.suspension.inserted_at | when }}{% if s.suspension.reason %} · 사유: {{ s.suspension.reason }}{% endif %}</div>{% endif %}
 {% if s.vuln_blocked_at %}<div class="banner error" role="alert">치명 취약점 조치 기한이 지나 호출이 차단되었습니다</div>{% endif %}
 {% if s.instance_mismatch_at %}<div class="banner error" role="alert">다른 인스턴스와 계약·보안 설정이 달라 호출이 차단되었습니다</div>{% endif %}
 <div class="cards">

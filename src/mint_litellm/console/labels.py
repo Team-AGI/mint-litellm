@@ -720,6 +720,7 @@ NOTICES = {
     "siem_test_requested": "시험 전송을 요청했습니다. 잠시 뒤 새로 고쳐 결과를 확인하십시오.",
     "suspended": "서버를 중지했습니다.",
     "resumed": "서버를 재개했습니다.",
+    "server_terminating": "서버 폐기를 시작했습니다. 남은 증빙을 이용 탭에서 확인하십시오.",
     "approved": "승인했습니다.",
     "revoked": "승인을 철회했습니다.",
     "recertified": "승인을 재확인했습니다.",

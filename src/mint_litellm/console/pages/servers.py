@@ -425,12 +425,14 @@ def suspend_server(
     request: Request,
     state_version: int = Form(...),
     next: str = Form(""),
-    reason: str = Form(""),  # ponytail: 서비스가 사유를 저장하지 않는다(보고 9번)
+    reason: str = Form(""),
     actor: Actor = Depends(page_actor),
 ):
     # 중지는 「재개」로 되돌릴 수 있어 확인 창 한 번이면 된다(이름 입력은 이용 종료에만)
     def action():
-        server_service.suspend(actor.ctx, server_id, expected_version=state_version)
+        server_service.suspend(
+            actor.ctx, server_id, expected_version=state_version, reason=reason
+        )
 
     return act(
         actor,

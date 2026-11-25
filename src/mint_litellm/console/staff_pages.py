@@ -1158,12 +1158,6 @@ def my_approvals_api(actor: StaffActor = Depends(staff_actor)):
 def usage(request: Request, period: str = "", actor: StaffActor = Depends(staff_actor)):
     from mint_litellm.console.pages.reports import usage_view
 
-    # 직원 화면 틀은 차트 스크립트를 싣지 않아 이 화면만 스크립트를 직접 싣는다(staff_usage.html).
-    # 이동(boost)으로 들어오면 스크립트가 차트를 그린 뒤에야 도착하므로 전체 화면으로 다시 연다.
-    if request.headers.get("HX-Boosted"):
-        return Response(headers={"HX-Redirect": str(request.url.path) + (
-            f"?{request.url.query}" if request.url.query else "")})
-
     ctx = usage_view(actor.config.litellm_admin, actor.sctx.control, actor.sctx.instance_id,
                      period, "/staff/usage", actor.user_id)
     return staff_render(request, "staff_usage.html", ctx, actor)

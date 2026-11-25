@@ -83,6 +83,13 @@ def server(conn: psycopg.Connection, instance: str, server_id: str) -> dict | No
     )
     if row is None:
         return None
+    row["suspension"] = None if row["status"] != "suspended" else fetchone(
+        conn,
+        "SELECT actor, inserted_at, payload ->> 'reason' AS reason FROM mint.events"
+        " WHERE instance_id = %s AND kind = 'server_suspended' AND payload ->> 'server_id' = %s"
+        " ORDER BY inserted_at DESC LIMIT 1",
+        (instance, server_id),
+    )
     row["exec_drift"] = fetchone(
         conn,
         "SELECT subject -> 'axes' AS axes, subject -> 'widened' AS widened FROM mint.alerts"
@@ -614,7 +621,7 @@ def urgent_alert_count(conn: psycopg.Connection, instance: str) -> int:
 
 
 def menu_counts(conn: psycopg.Connection, instance: str) -> dict[str, int]:
-    """좌측 메뉴 표지: 승인 대기(호출 + 서버 도입), 결정 대기 신청 수."""
+    """좌측 메뉴 표지: 승인 대기(호출·서버 도입·권한 요청), 결정 대기 신청 수."""
     row = fetchone(
         conn,
         "SELECT (SELECT count(*) FROM mint.call_approvals WHERE instance_id = %(instance)s"
@@ -623,7 +630,9 @@ def menu_counts(conn: psycopg.Connection, instance: str) -> dict[str, int]:
         " AND status = 'awaiting_approval')"
         f" + (SELECT count(*){exception_holds.PENDING_SQL})"
         " + (SELECT count(*) FROM mint.servers WHERE instance_id = %(instance)s"
-        " AND deployment_drift) AS approvals,"
+        " AND deployment_drift)"
+        " + (SELECT count(*) FROM mint.access_requests WHERE instance_id = %(instance)s"
+        " AND status = 'open') AS approvals,"
         " (SELECT count(*) FROM mint.intakes WHERE instance_id = %(instance)s"
         " AND status IN ('received', 'checking', 'passed', 'indeterminate')) AS intakes",
         {"instance": instance},
