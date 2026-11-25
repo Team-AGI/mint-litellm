@@ -275,15 +275,19 @@ def test_status_without_privileges_reads_the_managed_install(tmp_path, reports, 
     home = tmp_path / "other-home"
     home.mkdir()
     root = str(tmp_path / "root")
-    assert kit_module.main(["status", "--kit", str(folder), "--home", str(home),
+    assert kit_module.main(["status", "--json", "--kit", str(folder), "--home", str(home),
                             "--root", root]) == 0  # fmt: skip
     assert json.loads(capsys.readouterr().out)["mode"] == "managed"
+    assert kit_module.main(["status", "--kit", str(folder), "--home", str(home),
+                            "--root", root]) == 0  # fmt: skip
+    summary = capsys.readouterr().out
+    assert "관리형" in summary and "다음 할 일" in summary and "sha" not in summary
     assert kit_module.main(["check", "--kit", str(folder), "--home", str(home),
                             "--root", root]) in (0, 1)  # fmt: skip
     assert json.loads(capsys.readouterr().out)["mode"] == "managed"
     empty = tmp_path / "x"
     empty.mkdir()
-    assert kit_module.main(["status", "--kit", str(folder), "--home", str(home),
+    assert kit_module.main(["status", "--json", "--kit", str(folder), "--home", str(home),
                             "--root", str(empty)]) == 0  # fmt: skip
     assert json.loads(capsys.readouterr().out) == {"mode": "none"}
 
