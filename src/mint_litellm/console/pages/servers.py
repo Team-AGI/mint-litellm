@@ -860,6 +860,12 @@ def intake_page(
         ],
         "pack": pack,
         "requester_name": _person(actor, intake.get("requested_by") or intake.get("owner_user_id")),
+        # 승인 대상 고르기: 사람(아이디)·팀. 관리자가 직접 등록한 신청은 대상을 비워 둔다.
+        "people": fetchall(actor.conn, "SELECT user_id, email FROM mint.directory_users"
+                           " WHERE instance_id = %s AND gone_at IS NULL ORDER BY email",
+                           (actor.instance,)),
+        "default_target": "" if intake.get("source") == "operator" else (
+            intake.get("owner_user_id") or intake.get("requested_by") or ""),
         "progress": intake_progress(intake, lacking, checks, hold is not None, cause is not None,
                                  len(seen)),
         "cause": cause,
