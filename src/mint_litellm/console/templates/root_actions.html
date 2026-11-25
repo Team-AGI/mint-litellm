@@ -1,0 +1,36 @@
+{% extends "base.html" %}{% import "macros.html" as m %}
+{% block title %}강제 조치 기록 · MINT{% endblock %}
+{% block page_class %}wide{% endblock %}
+{% block body %}
+<h1>강제 조치 기록</h1>
+{% if error %}{{ m.banner('error', error) }}{% endif %}
+{% if done %}{{ m.banner('ok', done.text, done.line, '/root/actions?open=' ~ done.id, '지점별 전파 보기') }}{% endif %}
+<form method="get" action="/root/actions" class="filterbar">
+  <label>조치<select name="action"><option value="">전체</option>{% for k, t in labels.items() %}<option value="{{ k }}"{% if q.action == k %} selected{% endif %}>{{ t }}</option>{% endfor %}</select></label>
+  <label>실행자<select name="actor"><option value="">전체</option>{% for a in actors %}<option value="{{ a }}"{% if q.actor == a %} selected{% endif %}>{{ a }}</option>{% endfor %}</select></label>
+  <button type="submit" class="primary">조회</button>
+</form>
+{% if rows %}
+<table class="clickable compact"><thead><tr><th>시각</th><th>조치</th><th>대상</th><th>사유</th><th>실행자</th><th>전파</th></tr></thead><tbody>
+{% for r in rows %}<tr>
+<td class="nowrap"><a href="/root/actions?open={{ r.id }}">{{ r.created_at | when }}</a></td><td>{{ r.label }}</td><td>{{ r.target | clip(60) }}</td><td>{{ r.reason | clip(80) }}</td><td>{{ r.actor | who }}</td><td class="nowrap">{{ r.summary }}</td>
+</tr>{% endfor %}
+</tbody></table>
+{% else %}<div class="empty"><h3>강제 조치 기록이 없습니다</h3></div>{% endif %}
+{% if open %}
+{% call m.drawer(open.label, '/root/actions') %}
+<dl class="detail">
+  <dt>대상</dt><dd>{{ open.target }}</dd>
+  <dt>사유</dt><dd>{{ open.reason }}</dd>
+  <dt>실행자</dt><dd>{{ open.actor | who }}</dd>
+  <dt>시각</dt><dd>{{ open.created_at | when }}</dd>
+  <dt>마지막 확인</dt><dd>{{ open.verified_at | when }}</dd>
+</dl>
+<h3>지점별 전파</h3>
+<table class="compact"><thead><tr><th>지점</th><th>상태</th><th>반영 시각</th><th>기준</th></tr></thead><tbody>
+{% for p in open.points %}<tr><td>{{ p.point }}</td><td>{{ p.mark }} {{ '확인 못 함' if p.mark == '▲' else p.state }}</td><td>{{ p.at | when }}</td><td>{{ p.limit | blank }}</td></tr>{% endfor %}
+</tbody></table>
+<div class="actions"><form method="post" action="/root/actions/{{ open.id }}/verify">{{ m.csrf(actor) }}<button type="submit" class="primary">전파 다시 확인</button></form></div>
+{% endcall %}
+{% endif %}
+{% endblock %}

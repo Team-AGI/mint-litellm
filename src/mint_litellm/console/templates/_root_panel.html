@@ -1,0 +1,36 @@
+{# Root 전용 강제 조치 구역. 신청·서버 상세가 root_target(kind: intake|server, id, status)을 넘기고 포함한다. #}
+{% import "macros.html" as m %}
+{% macro four(impact, now, later, cannot, undo) %}<dl class="detail"><dt>영향</dt><dd>{{ impact }}</dd><dt>즉시</dt><dd>{{ now }}</dd><dt>늦게</dt><dd>{{ later }}</dd><dt>취소 불가</dt><dd>{{ cannot }}</dd><dt>되돌리기</dt><dd>{{ undo }}</dd></dl>{% endmacro %}
+{% if root_target and is_root(actor) %}
+{% set t = root_target %}
+<section class="root-panel">
+  <h3>강제 조치(Root)</h3>
+  <div class="actions">
+  {% if t.kind == 'intake' and t.status != 'decided' %}
+    {% call m.confirm_dialog('root-reject', '강제 반려…', '강제 반려 — ' ~ t.id, four('이 신청 1건, 남은 검사', '신청이 반려되고 남은 검사를 멈춥니다.', '실행 중 검사 작업은 임대 만료 때 멈춥니다(최대 60초).', '없음', '다시 신청할 수 있습니다.'), '/root/actions', actor, '강제 반려') %}
+    <input type="hidden" name="action" value="intake_reject"><input type="hidden" name="target" value="{{ t.id }}">
+    <label>사유(필수)<textarea name="reason" required maxlength="500"></textarea></label>
+    {% endcall %}
+  {% elif t.kind == 'server' %}
+    {% if t.status == 'approved' %}
+    {% call m.confirm_dialog('root-suspend', '중지…', '서버 중지 — ' ~ t.id, four('이 서버의 유효 승인과 사용자', 'MINT 판정이 다음 호출부터 거부합니다.', 'LiteLLM 키 권한 최대 60초 · PC 실행기 정지는 다음 보고(약 20초)', '이미 원격 서버로 보낸 호출은 끝까지 실행됩니다.', '「재개」로 즉시 복귀합니다.'), '/root/actions', actor, '서버 중지') %}
+    <input type="hidden" name="action" value="server_suspend"><input type="hidden" name="target" value="{{ t.id }}">
+    <label>사유(필수)<textarea name="reason" required maxlength="500"></textarea></label>
+    {% endcall %}
+    {% elif t.status == 'suspended' %}
+    {% call m.confirm_dialog('root-resume', '재개…', '서버 재개 — ' ~ t.id, four('이 서버의 유효 승인과 사용자', '다음 호출부터 승인 범위 안에서 다시 허용됩니다.', 'LiteLLM 키 권한 최대 60초 · PC는 다음 보고(약 20초)', '없음', '「중지」로 다시 멈출 수 있습니다.'), '/root/actions', actor, '서버 재개', danger=false) %}
+    <input type="hidden" name="action" value="server_resume"><input type="hidden" name="target" value="{{ t.id }}">
+    <label>사유(필수)<textarea name="reason" required maxlength="500"></textarea></label>
+    {% endcall %}
+    {% endif %}
+    {% if t.status in ('approved', 'suspended') %}
+    {% call m.confirm_dialog('root-terminate', '폐기…', '서버 폐기 — ' ~ t.id, four('이 서버와 모든 이용 관계', '호출이 차단됩니다.', '자격 삭제와 확인(작업 실행기), 증빙 뒤 종료', '이미 받은 결과와 파일은 남습니다.', '되돌릴 수 없습니다. 다시 신청해야 합니다.'), '/root/actions', actor, '서버 폐기', confirm_name=t.id, name_label='서버 이름을 입력') %}
+    <input type="hidden" name="action" value="server_terminate"><input type="hidden" name="target" value="{{ t.id }}">
+    <label>사유(필수)<textarea name="reason" required maxlength="500"></textarea></label>
+    {% endcall %}
+    {% endif %}
+  {% endif %}
+  </div>
+  <p class="muted">조치는 강제 조치 기록에 남습니다. <a href="/root/actions">강제 조치 기록</a></p>
+</section>
+{% endif %}
