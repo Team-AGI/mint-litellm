@@ -759,8 +759,14 @@ def test_the_grade_is_never_asked_and_an_option_is_sent_as_the_internal_value(tm
         return "목적" if "목적" in question else ""
 
     code = kit_module.run_add(
-        add_args(yes=False, grade=None, purpose=None), tmp_path, gateway, out=lines.append,
-        read=read, tty=True, key=lambda: "enter")
+        add_args(yes=False, grade=None, purpose=None),
+        tmp_path,
+        gateway,
+        out=lines.append,
+        read=read,
+        tty=True,
+        key=lambda: "enter",
+    )
     assert code == 0 and gateway.sent[0]["data_grade"] == "internal"
     assert asked == ["목적 "] and not any(line.startswith("자료 등급") for line in lines)
     lines.clear()
@@ -793,16 +799,26 @@ def test_add_asks_only_the_purpose_and_stops_at_once_when_the_key_is_refused(tmp
 
 
 def test_tab_three_shows_the_stage_and_never_an_english_next_step():
-    steps = [("received", "접수"), ("pack", "접수 > 묶음 준비"),
-             ("inspect", "접수 > 묶음 준비 > 검사 중"),
-             ("indeterminate", "접수 > 묶음 준비 > 검사 중 > 판별 불가"),
-             ("approved", "접수 > 묶음 준비 > 검사 중 > 승인")]
+    steps = [
+        ("received", "접수"),
+        ("pack", "접수 > 묶음 준비"),
+        ("inspect", "접수 > 묶음 준비 > 검사 중"),
+        ("indeterminate", "접수 > 묶음 준비 > 검사 중 > 판별 불가"),
+        ("approved", "접수 > 묶음 준비 > 검사 중 > 승인"),
+    ]
     for stage, path in steps:
         assert kit_module.stage_path(stage) == path
-    rows = [{"server_id": "a", "status": "checking", "decision": None, "stage": "pack",
-             "next": "wait"},
-            {"server_id": "b", "status": "decided", "decision": "approved", "stage": "approved",
-             "next": "none", "reason": None}]
+    rows = [
+        {"server_id": "a", "status": "checking", "decision": None, "stage": "pack", "next": "wait"},
+        {
+            "server_id": "b",
+            "status": "decided",
+            "decision": "approved",
+            "stage": "approved",
+            "next": "none",
+            "reason": None,
+        },
+    ]
     lines = kit_module.render_screen(model(intakes=rows), ui(tab=2, detail=True), 80, 24)
     text = "\n".join(lines)
     assert "묶음 준비" in text and "승인" in text and "진행  접수 > 묶음 준비" in text
@@ -814,9 +830,16 @@ def test_tab_three_shows_the_stage_and_never_an_english_next_step():
 
 
 def test_found_items_with_a_request_are_left_out_and_managed_codex_items_are_marked(tmp_path):
-    (tmp_path / ".claude.json").write_text(json.dumps({"mcpServers": {
-        "gh": {"command": "uvx", "args": ["demo==2.0"]},
-        "again": {"command": "uvx", "args": ["demo==2.0"]}}}))
+    (tmp_path / ".claude.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "gh": {"command": "uvx", "args": ["demo==2.0"]},
+                    "again": {"command": "uvx", "args": ["demo==2.0"]},
+                }
+            }
+        )
+    )
     (tmp_path / ".codex").mkdir()
     (tmp_path / ".codex/config.toml").write_text('[mcp_servers.tool]\ncommand = "uvx"\n')
 
@@ -832,9 +855,10 @@ def test_found_items_with_a_request_are_left_out_and_managed_codex_items_are_mar
         def local_permits(self):
             return {}
 
-    intakes = [{"server_id": "gh", "status": "checking", "decision": None, "stage": "pack"},
-               {"server_id": "again", "status": "decided", "decision": "rejected",
-                "stage": "rejected"}]
+    intakes = [
+        {"server_id": "gh", "status": "checking", "decision": None, "stage": "pack"},
+        {"server_id": "again", "status": "decided", "decision": "rejected", "stage": "rejected"},
+    ]
     me = {"user": "u", "servers": [], "intakes": intakes}
     built = kit_module.build_model(Kit(), {"mode": "managed"}, FakeGateway(me=me))
     found = {(i["harness"], i["name"]): i["blocked"] for i in built["found"]}
@@ -870,7 +894,8 @@ def npm_registry(doc):
 def test_npx_commands_become_npm_specs_pinned_by_version_and_integrity():
     doc = {"version": "1.2.3", "dist": {"integrity": NPM_INTEGRITY}, "bin": {"srv-bin": "x.js"}}
     spec = kit_module.parse_command(
-        ["npx", "-y", "@o/srv@1.2.3", "/data"], Path("/nonexistent-home"), npm_registry(doc))
+        ["npx", "-y", "@o/srv@1.2.3", "/data"], Path("/nonexistent-home"), npm_registry(doc)
+    )
     assert spec == {"index": "npm", "name": "@o/srv", "version": "1.2.3",
                     "integrity": NPM_INTEGRITY, "extras": [], "command": "srv-bin",
                     "argv": ["/data"]}  # fmt: skip
@@ -883,25 +908,37 @@ def test_npx_commands_become_npm_specs_pinned_by_version_and_integrity():
 
 def npm_contract(**ref):
     package = {"name": "@o/srv", "version": "1.2.3", "bin": "srv-bin", **ref}
-    return {"executable": "npx", "argv": ["-y", "@o/srv@1.2.3", "/data"],
-            "npm": {"integrity": agent.npm_integrity(b"tarball"), **package}}
+    return {
+        "executable": "npx",
+        "argv": ["-y", "@o/srv@1.2.3", "/data"],
+        "npm": {"integrity": agent.npm_integrity(b"tarball"), **package},
+    }
 
 
 def test_an_npm_server_starts_from_the_downloaded_tarball_only_when_its_hash_matches(tmp_path):
-    got = agent.verify_npm(npm_contract(), folder=str(tmp_path), which=lambda n: "/usr/bin/npx",
-                           download=lambda name, version: b"tarball")
+    got = agent.verify_npm(
+        npm_contract(),
+        folder=str(tmp_path),
+        which=lambda n: "/usr/bin/npx",
+        download=lambda name, version: b"tarball",
+    )
     tgz = os.path.join(got["_pack_dir"], "package.tgz")
     assert got["executable"] == "/usr/bin/npx"
     assert got["argv"] == ["-y", f"--package={tgz}", "srv-bin", "/data"]
     assert os.path.dirname(tgz) == got["_pack_dir"]
-    again = agent.verify_npm(npm_contract(), folder=str(tmp_path), which=lambda n: "/x/npx",
-                             download=lambda *a: pytest.fail("cached"))
+    again = agent.verify_npm(
+        npm_contract(),
+        folder=str(tmp_path),
+        which=lambda n: "/x/npx",
+        download=lambda *a: pytest.fail("cached"),
+    )
     assert again["argv"] == got["argv"]
     os.chmod(tgz, 0o644)  # 받아 둔 파일이 바뀌면 다시 받는다
     with open(tgz, "wb") as handle:
         handle.write(b"tampered")
-    replaced = agent.verify_npm(npm_contract(), folder=str(tmp_path), which=lambda n: "n",
-                                download=lambda *a: b"tarball")
+    replaced = agent.verify_npm(
+        npm_contract(), folder=str(tmp_path), which=lambda n: "n", download=lambda *a: b"tarball"
+    )
     assert replaced["_pack_dir"] == got["_pack_dir"]
     with open(tgz, "rb") as handle:
         assert handle.read() == b"tarball"
@@ -927,6 +964,7 @@ def test_an_npm_server_keeps_its_tarball_under_the_expanded_state_folder(tmp_pat
 
 def npm_tarball(engines):
     import tarfile
+
     raw = io.BytesIO()
     with tarfile.open(fileobj=raw, mode="w:gz") as archive:
         body = json.dumps({"name": "@o/srv", "engines": engines}).encode()
@@ -959,8 +997,13 @@ def test_on_windows_npx_runs_through_node_exe_with_the_tarball_readable(tmp_path
     (nodejs / "node_modules" / "npm" / "bin").mkdir(parents=True)
     for name in ("npx.cmd", "node.exe", "node_modules/npm/bin/npx-cli.js"):
         (nodejs / name).write_text("x")
-    got = agent.verify_npm(npm_contract(), folder=str(tmp_path / "c"), node_version=lambda: None,
-                           which=lambda n: str(nodejs / "npx.cmd"), download=lambda *a: b"tarball")
+    got = agent.verify_npm(
+        npm_contract(),
+        folder=str(tmp_path / "c"),
+        node_version=lambda: None,
+        which=lambda n: str(nodejs / "npx.cmd"),
+        download=lambda *a: b"tarball",
+    )
     assert got["executable"] == str(nodejs / "node.exe")
     assert got["argv"][0] == str(nodejs / "node_modules" / "npm" / "bin" / "npx-cli.js")
     assert got["argv"][1:3] == ["-y", f"--package={os.path.join(got['_pack_dir'], 'package.tgz')}"]
@@ -974,9 +1017,13 @@ def test_on_windows_npx_runs_through_node_exe_with_the_tarball_readable(tmp_path
 
     grants = agent.win_grants(
         {**got, "executable": r"C:\Program Files\nodejs\node.exe", "_pack_dir": pack},
-        r"C:\Users\u", {"ProgramFiles": r"C:\Program Files"},
-        exists=lambda p: p in made or p == pack, real=lambda p: p, read_text=no_cfg,
-        make=made.append)
+        r"C:\Users\u",
+        {"ProgramFiles": r"C:\Program Files"},
+        exists=lambda p: p in made or p == pack,
+        real=lambda p: p,
+        read_text=no_cfg,
+        make=made.append,
+    )
     assert (pack, "R", False) in grants
     assert cache in made  # 첫 실행 전에 캐시를 만든다(없으면 권한을 못 준다)
     assert (cache, "M", False) in grants
@@ -985,7 +1032,8 @@ def test_on_windows_npx_runs_through_node_exe_with_the_tarball_readable(tmp_path
 def test_windows_system_reporter_reopens_the_node_folder_to_appcontainers():
     ran = []
     folder = kit_module.open_node_to_sandbox(
-        Path(r"C:\Users\u"), which=lambda n: "/opt/nodejs/node.exe", run=ran.append)
+        Path(r"C:\Users\u"), which=lambda n: "/opt/nodejs/node.exe", run=ran.append
+    )
     assert folder == os.path.dirname(os.path.realpath("/opt/nodejs/node.exe"))
     assert ran[0] == ["icacls", folder, "/grant", "*S-1-15-2-1:(OI)(CI)(RX)", "/Q"]
     granted = {c[1]: c[3] for c in ran[1:]}
@@ -1005,8 +1053,17 @@ def test_a_refused_start_is_recorded_so_the_screens_show_the_reason(tmp_path, mo
     monkeypatch.setattr(agent, "run_server", refuse)
     monkeypatch.setattr(agent, "_give_up", give_up)
     with pytest.raises(SystemExit):
-        agent.main(["run", "--contracts", str(tmp_path / "c.json"), "--server", "s",
-                    "--state-dir", str(tmp_path)])
+        agent.main(
+            [
+                "run",
+                "--contracts",
+                str(tmp_path / "c.json"),
+                "--server",
+                "s",
+                "--state-dir",
+                str(tmp_path),
+            ]
+        )
     path = tmp_path / agent.FAILED_DIR / "s.json"
     assert json.loads(path.read_text(encoding="utf-8"))["reason"].startswith("이 PC에 Node.js")
     assert agent.plain_reason(r"cannot open C:\Users\a\x.py (OSError)") == "cannot open … (OSError)"
@@ -1015,23 +1072,35 @@ def test_a_refused_start_is_recorded_so_the_screens_show_the_reason(tmp_path, mo
 
 def test_an_npm_tarball_that_differs_from_the_approved_hash_is_refused(tmp_path):
     with pytest.raises(agent.Refuse, match="integrity"):
-        agent.verify_npm(npm_contract(integrity="sha512-" + "B" * 86 + "=="),
-                         folder=str(tmp_path), which=lambda n: "npx",
-                         download=lambda *a: b"tarball")
+        agent.verify_npm(
+            npm_contract(integrity="sha512-" + "B" * 86 + "=="),
+            folder=str(tmp_path),
+            which=lambda n: "npx",
+            download=lambda *a: b"tarball",
+        )
 
 
 def test_a_malformed_npm_contract_or_a_missing_npx_is_refused(tmp_path):
     for bad in ({"bin": "../x"}, {"version": "^1.2.3"}, {"name": "A b"}):
         with pytest.raises(agent.Refuse):
-            agent.verify_npm(npm_contract(**bad), folder=str(tmp_path), which=lambda n: "npx",
-                             download=lambda *a: b"tarball")
+            agent.verify_npm(
+                npm_contract(**bad),
+                folder=str(tmp_path),
+                which=lambda n: "npx",
+                download=lambda *a: b"tarball",
+            )
     with pytest.raises(agent.Refuse, match="npx"):
-        agent.verify_npm(npm_contract(), folder=str(tmp_path), which=lambda n: None,
-                         download=lambda *a: b"tarball")
+        agent.verify_npm(
+            npm_contract(),
+            folder=str(tmp_path),
+            which=lambda n: None,
+            download=lambda *a: b"tarball",
+        )
     other = {**npm_contract(), "argv": ["-y", "@o/srv@9.9.9"]}
     with pytest.raises(agent.Refuse):
-        agent.verify_npm(other, folder=str(tmp_path), which=lambda n: "npx",
-                         download=lambda *a: b"tarball")
+        agent.verify_npm(
+            other, folder=str(tmp_path), which=lambda n: "npx", download=lambda *a: b"tarball"
+        )
 
 
 def test_an_npm_contract_is_observed_without_an_executable_hash():
@@ -1078,7 +1147,7 @@ def test_an_old_key_the_server_no_longer_knows_is_retired_quietly(capsys):
 
 
 def test_status_tab_ends_with_the_single_next_step_and_tabs_show_pending_counts():
-    assert kit_module.next_step(model()) .startswith("pyghidra-mcp: 곧 자동으로")
+    assert kit_module.next_step(model()).startswith("pyghidra-mcp: 곧 자동으로")
     assert kit_module.next_step(model(servers=[], intakes=[])) == "할 일 없음"
     assert "한 줄 설치 명령" in kit_module.next_step(model(connected=False))
     row = {"name": "x", "kind": "묶음", "state": "받기 실패", "reason": "해시 불일치"}
@@ -1088,3 +1157,31 @@ def test_status_tab_ends_with_the_single_next_step_and_tabs_show_pending_counts(
     assert any(line.startswith("│ 다음 할 일") for line in lines)
     assert any("2 내 서버 1 실패 1" in line for line in lines)
     assert all(kit_module.cell_width(line) <= 80 for line in lines)
+
+
+def test_a_runtime_of_another_python_version_is_shown_and_refused_with_a_remedy(tmp_path):
+    digest, blobs = pack_of(GOOD)
+    kit_module.install_blobs(digest, blobs, tmp_path / "packs")
+    contract = {"executable": sys.executable, "pack": {"sha256": digest, "python": "2.7"}}
+    permits = {"s": {"pack_sha256": digest, "permit_until": LATER}}
+    state = kit_module.pack_state(
+        "s", contract, tmp_path, tmp_path / "staged", permits, time.time()
+    )
+    assert state == "Python 판본 다름"
+    assert kit_module.SERVER_WORD[state] == "시작 실패"
+    from mint_litellm.endpoint.kit import mint_agent
+
+    with pytest.raises(mint_agent.Refuse, match=r"승인된 판본\(2\.7\)과 달라.*해결: Python 2\.7"):
+        mint_agent.check_runtime(sys.executable, "2.7", managed=False)
+
+
+def test_ctrl_c_ends_the_screen_without_a_traceback(tmp_path, folder, reports):
+    kit = make_kit(folder, tmp_path, managed=False)
+    state = kit.install()
+
+    def interrupt():
+        raise KeyboardInterrupt
+
+    out = io.StringIO()
+    assert kit_module.run_screen(kit, state, None, {}, read=interrupt, out=out) == 130
+    assert out.getvalue().endswith("중단했습니다\n")
