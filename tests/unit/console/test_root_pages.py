@@ -94,6 +94,10 @@ def test_the_post_route_handles_server_and_intake_actions(world, boss):
     assert sorted(kinds) == sorted(
         ["server_suspend", "server_resume", "server_terminate", "intake_reject"])
     assert "반려했습니다" in boss.get(done.headers["location"]).text
+    cancelled = force("server_run_cancel", "srv-ok", "사고 대응")
+    assert cancelled.status_code == 303, cancelled.text
+    assert "이미 보낸 호출은 끝까지 실행됩니다" in boss.get(cancelled.headers["location"]).text
+    assert force("person_run_cancel", "human-1", "사고 대응").status_code == 303
 
 
 def test_a_non_root_admin_cannot_force_actions(world, admin):
@@ -140,5 +144,8 @@ def test_the_root_panel_partial_renders_by_target(world, boss, admin):
     assert 'value="server_resume"' in html
     html = draw(boss, {"kind": "intake", "id": "abc", "status": "checking"})
     assert 'value="intake_reject"' in html and re.search(r"취소 불가", html)
+    assert 'value="intake_except"' in html
+    html = draw(boss, {"kind": "server", "id": "srv-ok", "status": "approved"})
+    assert 'value="server_run_cancel"' in html
     assert draw(boss, {"kind": "intake", "id": "abc", "status": "decided"}).count("<dialog") == 0
     assert "<section" not in draw(boss, None)

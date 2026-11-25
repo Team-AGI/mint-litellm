@@ -20,6 +20,7 @@ ACTION_LABEL = {
     "server_suspend": "서버 중지", "server_resume": "서버 재개", "server_terminate": "서버 폐기",
     "person_lockout": "사람 전체 차단", "person_unlock": "전체 차단 해제",
     "sessions_end": "세션 종료", "root_set": "Root 지정", "root_unset": "Root 해제",
+    "intake_except": "검사 생략 승인", "run_cancel": "진행 중 실행 취소",
 }
 DONE = {
     "halt": "전역 정지를 걸었습니다.", "halt_lift": "정지를 해제했습니다.",
@@ -28,6 +29,8 @@ DONE = {
     "server_terminate": "폐기를 시작했습니다.", "person_lockout": "차단했습니다.",
     "person_unlock": "해제했습니다. PC는 다시 설치해야 합니다.",
     "sessions_end": "세션을 끝냈습니다.",
+    "intake_except": "검사를 생략하고 예외 승인했습니다(30일).",
+    "run_cancel": "대기 중인 호출 승인을 취소했습니다. 이미 보낸 호출은 끝까지 실행됩니다.",
 }
 SERVER_ACTIONS = {
     "server_suspend": "suspend", "server_resume": "resume", "server_terminate": "terminate",
@@ -141,6 +144,10 @@ def force(
     def run():
         if action == "intake_reject":
             return root.force_reject(actor.ctx, target, reason)
+        if action == "intake_except":
+            return root.force_except(actor.ctx, target, reason)
+        if action in ("server_run_cancel", "person_run_cancel"):
+            return root.cancel_runs(actor.ctx, action.split("_")[0], target, reason)
         if action in SERVER_ACTIONS:
             return root.server_action(actor.ctx, target, SERVER_ACTIONS[action], reason)
         raise ValueError(action)
