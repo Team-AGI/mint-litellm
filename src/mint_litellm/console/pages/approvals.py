@@ -84,12 +84,6 @@ ACCESS_REASONS = {
 }
 ACCESS_HOW = {"lift": "access_lifted", "grant": "access_granted", "temp": "access_temp"}
 # 공통 알림 표(labels.py)는 이 작업 범위 밖이라 이 화면의 결과 문구만 여기서 더한다.
-labels.NOTICES.update({
-    "access_lifted": "해제했습니다. 요청자는 바로 다시 호출할 수 있습니다.",
-    "access_granted": "허용했습니다.",
-    "access_temp": "30분 동안 허용했습니다.",
-    "access_rejected": "거절했습니다.",
-})
 ACCESS_TABS = ("approvals", "dormant", "denials", "allowlists")
 
 RULE_FIELDS = {  # 규칙 칸 -> 이전 링크의 쿼리 이름
