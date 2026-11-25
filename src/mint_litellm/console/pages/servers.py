@@ -676,11 +676,12 @@ def delivery_progress(
     latest = max((r["decision_version"] for r in receipts), default=0)
     done = {r["stage"] for r in receipts if r["decision_version"] == latest}
     if not failure and "start_failed" in done and not called and not done & {
-        "started", "discovered", "first_response"
-    }:  # 단말이 알린 시작 실패는 시작 단계의 실패로 보인다
-        broken = next((r.get("reason") for r in receipts if r["decision_version"] == latest
-                       and r["stage"] == "start_failed"), None)
-        failure = ("started", broken or "사유 없음")
+        "discovered", "first_response"
+    }:  # 단말이 알린 시작 실패는 시작 단계의 실패로 보인다(잠깐 뜬 프로세스의 「시작」은 무시)
+        broken = [r.get("reason") for r in receipts if r["decision_version"] == latest
+                  and r["stage"] == "start_failed" and r.get("reason")]
+        failure = ("started", broken[-1] if broken else "사유 없음")
+        done.discard("started")
     order = [stage for stage, _ in DELIVERY_STAGES]
     reached = max((order.index(x) for x in done if x in order), default=-1)
     if called:
