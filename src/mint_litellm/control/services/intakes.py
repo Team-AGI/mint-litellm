@@ -998,8 +998,13 @@ def decide(
     litellm: Callable[[], Any] | None = None,
     narrow_network: str | None = None,
     narrow_file_access: list[str] | None = None,
+    early: bool = False,
 ) -> dict:
-    """``approve``(통과), ``except``(판별 불가, 사유 필수·2인·유효 기간 90일 이내), ``reject``."""
+    """``approve``(통과), ``except``(판별 불가, 사유 필수·2인·유효 기간 90일 이내), ``reject``.
+
+    ``early``는 Root 강제 반려용이다. 접수·검사 중인 신청도 반려한다
+    (남은 검사는 결정을 보고 멈춘다).
+    """
     require_role(ctx, f"intake {decision}")
     if decision not in ("approve", "except", "reject"):
         raise ValueError(decision)
@@ -1018,6 +1023,8 @@ def decide(
             return row  # 같은 결정의 재전송·동시 클릭은 이미 내려진 결정을 그대로 돌려준다
         waiting = ("passed", "indeterminate", "failed")  # 검사 결과와 무관하게 관리자가 결정한다
         required = {"approve": waiting, "except": waiting, "reject": waiting}[decision]
+        if early and decision == "reject":
+            required = (*waiting, "received", "checking")
         if row["status"] not in required:
             raise conflict(f"{row['status']} 상태의 신청은 {decision}할 수 없습니다.")
         second_info = _require_separation(ctx, row, second, decision == "except")
