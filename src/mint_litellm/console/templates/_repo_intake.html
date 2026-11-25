@@ -1,6 +1,10 @@
 <input type="hidden" name="step" value="submit">
 {% set pypi = f.kind in ('pypi', 'npm') or ((f.command or '').startswith(('uvx', 'npx')) and 'git+' not in (f.command or '') and 'github:' not in (f.command or '')) %}<label class="full">출처<input type="text" value="{{ f.repo or f.url }}" readonly><small class="muted">직원 PC에서 실행하는 로컬 MCP로 신청합니다.</small></label>
 {% if f.note %}<p class="full muted">{{ f.note }}</p>{% endif %}
+{% set ready = f.name and f.commit and f.command %}
+{% if ready %}<dl class="detail full"><dt>이름</dt><dd>{{ f.name }}</dd><dt>{{ '판본' if pypi else '커밋' }}</dt><dd>{{ f.commit }}</dd><dt>실행 명령</dt><dd>{{ f.command }}</dd></dl>{% endif %}
+<details class="full"{{ '' if ready else ' open' }}><summary>이름·판본·실행 명령 고치기</summary>
 <label>이름<input type="text" name="name" value="{{ f.name }}" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9_\-]*" required><small class="muted">영문·숫자·밑줄</small></label>
 {% if pypi %}<label>판본<input type="text" name="commit" value="{{ f.commit }}" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._+!\-]*" required><small class="muted">이 판본으로 고정해 검사합니다.</small></label>{% else %}<label>커밋<input type="text" name="commit" value="{{ f.commit }}" maxlength="40" minlength="40" pattern="[0-9a-f]{40}" required><small class="muted">이 커밋으로 고정해 검사합니다.</small></label>{% endif %}
 <label class="full">실행 명령<input type="text" name="command" value="{{ f.command }}" maxlength="1024" required></label>
+</details>
