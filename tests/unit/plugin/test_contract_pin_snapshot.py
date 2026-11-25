@@ -74,8 +74,9 @@ def test_a_kit_key_is_judged_by_the_installs_current_team(fresh_db, login_roles)
         conn.execute("INSERT INTO mint.settings (instance_id) VALUES (%s)", (iid,))
         conn.execute("INSERT INTO mint.orgs (instance_id, org_id, name) VALUES (%s, 'o', 'O')",
                      (iid,))
-        conn.execute("INSERT INTO mint.org_bindings (instance_id, subject_type, subject_id,"
-                     " org_id, bound_by) VALUES (%s, 'team', 'new', 'o', 'x')", (iid,))
+        conn.execute("INSERT INTO mint.org_bindings (id, instance_id, subject_type, subject_id,"
+                     " org_id, created_by) VALUES (gen_random_uuid(), %s, 'team', 'new', 'o',"
+                     " 'x')", (iid,))
         conn.execute("INSERT INTO mint.endpoint_installs (instance_id, key_token, user_id,"
                      " key_alias, team_id, issued_by, mcp_key_token)"
                      " VALUES (%s, 'inst', 'u', 'a', 'new', 'x', 'gw')", (iid,))
