@@ -137,6 +137,7 @@ def write_atomic(path: Path, data: bytes, mode: int, owner: tuple[int, int] | No
         os.replace(name, path)
     finally:
         if os.path.exists(name):
+            os.chmod(name, 0o600)  # 읽기 전용 모드를 입힌 뒤 실패하면 Windows는 지우지 못한다
             os.unlink(name)
 
 
@@ -2659,7 +2660,7 @@ class Kit:
             try:
                 existed = path.exists()
                 data = load_settings(path) if existed else {}
-                if not isinstance(data, dict) or not isinstance(data.get(table, {}), dict):
+                if not isinstance(data, dict) or not isinstance(data.get(table) or {}, dict):
                     raise ValueError("unexpected settings shape")
             except (OSError, ValueError):
                 record[client] = {**mine, "failed": True}
@@ -5906,7 +5907,7 @@ def run_app(args, kit: Kit, state: dict, gateway: Gateway | None, out=print, cal
     """``mint app new|list|rm|run|env|mcp``."""
     action, home = args.app_action, kit.home
     name = getattr(args, "name", None)
-    if name is not None and not APP_NAME.match(name):
+    if name is not None and not APP_NAME.fullmatch(name):
         out("앱 이름은 영문 소문자·숫자·하이픈 40자 이내로 적으십시오")
         return 2
     if action in ("run", "env", "mcp"):
@@ -5944,7 +5945,12 @@ def use_app(args, kit: Kit, state: dict, out, call) -> int:
     if not command:
         out(f"실행할 명령을 적으십시오: mint app run {name} -- python 스크립트.py")
         return 2
-    return (call or subprocess.call)(command, env={**os.environ, **app_env(app)})
+    command[0] = shutil.which(command[0]) or command[0]  # Windows의 npx·npm은 .cmd라 찾아 줘야 뜬다
+    try:
+        return (call or subprocess.call)(command, env={**os.environ, **app_env(app)})
+    except OSError as exc:
+        out(f"명령을 실행하지 못했습니다: {command[0]} ({type(exc).__name__})")
+        return 127
 
 
 def new_app(args, kit: Kit, gateway: Gateway, out) -> int:
@@ -5998,14 +6004,21 @@ def remove_app(name: str, home: Path, gateway: Gateway, out) -> int:
     app_id = app.get("id") if app else None
     if not app_id:
         status, doc = gateway.json("GET", APPS_PATH)
-        listed = doc.get("apps") if status == 200 and isinstance(doc, dict) else []
-        app_id = next((a.get("id") for a in listed or []
-                       if a.get("name") == name and not a.get("revoked_at")), None)
+        listed = doc.get("apps") if status == 200 and isinstance(doc, dict) else None
+        if not isinstance(listed, list):  # 서버에서 찾지 못했으면 회수했다고 하지 않는다
+            kept = " · 이 PC의 키는 그대로 두었습니다" if app else ""
+            out(app_error("찾지", status, doc) + kept)
+            return 1
+        app_id = next((a.get("id") for a in listed if isinstance(a, dict)
+                       and a.get("name") == name and not a.get("revoked_at")), None)
     if app_id:
         status, doc = gateway.json("DELETE", f"{APPS_PATH}/{app_id}")
         if status not in (200, 204, 404):
             out(app_error("회수하지", status, doc) + " · 이 PC의 키는 그대로 두었습니다")
             return 1
+    elif app is None:
+        out(f"「{name}」 앱 자격이 없습니다. mint app list 로 확인하십시오")
+        return 1
     app_file(home, name).unlink(missing_ok=True)
     out(f"「{name}」 앱 자격을 회수하고 이 PC의 키를 지웠습니다")
     return 0

@@ -3,6 +3,7 @@
 import io
 import json
 import os
+import sys
 import threading
 
 import pytest
@@ -150,6 +151,18 @@ def test_an_unreadable_settings_file_is_left_alone(installed):
     assert record["gemini"]["failed"] is True
 
 
+def test_a_read_only_settings_file_leaves_no_copy_behind_and_a_null_table_is_empty(installed):
+    path = installed.home / ".gemini/settings.json"
+    path.write_text('{"mcpServers": null, "theme": "x"}', encoding="utf-8")
+    os.chmod(path, 0o444)
+    try:
+        installed.connect_clients()  # 실패해도 설정 사본(.mint-*)을 남기지 않는다
+        assert [p.name for p in path.parent.iterdir() if p.name.startswith(".mint-")] == []
+    finally:
+        os.chmod(path, 0o644)
+    assert "srv-1" in json.loads(installed.connect_clients() and path.read_text())["mcpServers"]
+
+
 # --- 전송 전 중재 ------------------------------------------------------------------------------
 
 
@@ -236,6 +249,31 @@ def test_an_oversized_call_is_not_sent():
     assert sent == b"" and json.loads(back)["id"] == 9
 
 
+def test_only_judged_lines_reach_the_server():
+    """판정하지 못한 줄(큰 줄·해석 못 한 줄·알림 꼴 호출)은 보내지 않는다. 일괄 요청은 항목마다."""
+
+    def judge(tool, arguments):
+        if tool == "wipe":
+            raise agent.Refuse("no")
+        return "ref"
+
+    method_last = json.dumps({"jsonrpc": "2.0", "id": 1, "params": {
+        "arguments": {"pad": "A" * agent.LINE_MAX}, "name": "wipe"}, "method": "tools/call"})
+    huge = call(2, "wipe", {"pad": "B" * (3 * agent.LINE_MAX)})  # 꼬리 조각도 따로 가면 안 된다
+    two = call(3).rstrip(b"\n") + call(4, "wipe")
+    note = json.dumps({"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "wipe"}})
+    sent, _, _ = mediate([method_last.encode() + b"\n", huge, two, note.encode() + b"\n",
+                          call(5)], judge)
+    assert sent == call(5)
+    batch = json.dumps([json.loads(call({"x": 1}, "wipe")), json.loads(call(6)),
+                        json.loads(call(6, "wipe")), [json.loads(call(7, "wipe"))]])
+    sent, back, _ = mediate([batch.encode() + b"\n", call(8)], judge)
+    assert [m["id"] for m in json.loads(sent.splitlines()[0])] == [6]
+    assert [m["params"]["name"] for m in json.loads(sent.splitlines()[0])] == ["search"]
+    assert sent.splitlines()[1] == call(8).rstrip(b"\n")
+    assert [m["id"] for m in json.loads(back)] == [{"x": 1}, 6]
+
+
 def test_the_mediated_judge_follows_the_outage_contract(tmp_path):
     listing = write(tmp_path / "contracts.json", {"servers": {"srv-1": {
         "executable": str(write(tmp_path / "bin", {})), "argv": [], "env": {},
@@ -253,6 +291,11 @@ def test_the_mediated_judge_follows_the_outage_contract(tmp_path):
     open(os.path.join(state, agent.PAUSED_FILE), "w").write("1")
     with pytest.raises(agent.Refuse, match="관리 AI 연결을 중지"):
         mediator.judge("search", {})
+    os.unlink(os.path.join(state, agent.PAUSED_FILE))
+    write(tmp_path / "state" / agent.RETIRED_FILE, {"servers": ["srv-1"]})
+    with pytest.raises(agent.Unreachable) as refused:  # 폐기 서버: 막고 첫 줄에 한국어 안내
+        mediator.judge("search", {})
+    assert str(refused.value).startswith(agent.OUTAGE_TEXT)
 
 
 def test_a_paused_pc_does_not_start_servers(tmp_path):
@@ -348,3 +391,25 @@ def test_the_mediated_request_names_the_tool_or_app_and_the_server_accepts_it(tm
     assert sent[0]["client"] == "app-bot"
     body = {"server": "builtin:claude", "tool": "Bash", "arguments": {}, "client": "app-bot"}
     assert DecideBody.model_validate(body).client == "app-bot"  # 서버가 받는 값이다
+
+
+def test_the_runner_ends_with_the_server_exit_code_even_if_the_server_quits_first(
+    tmp_path, monkeypatch
+):
+    """서버가 먼저 끝나면 하네스 입력을 읽던 스레드가 남는다. 보통 종료는 그 잠금에 걸려
+    「Fatal Python error」로 죽으므로 실행기는 서버의 종료 코드로 곧바로 끝난다."""
+    exits = []
+
+    class Exited(Exception):
+        pass
+
+    def fake_exit(code):
+        exits.append(code)
+        raise Exited
+
+    monkeypatch.setattr(agent, "run_server", lambda *a, **k: sys.exit(3))
+    monkeypatch.setattr(agent.os, "_exit", fake_exit)
+    with pytest.raises(Exited):
+        agent.main(["run", "--contracts", str(tmp_path / "c.json"), "--server", "s",
+                    "--state-dir", str(tmp_path)])
+    assert exits == [3]

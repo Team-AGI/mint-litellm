@@ -123,6 +123,8 @@ DOWN_FILE = "unreachable_until"  # 결정 서버에 방금 닿지 못했다: 이
 # 기다리지 않게). 그 사이 결정 서버가 돌아와도 새 차단은 이 시간만큼 늦게 반영된다.
 DOWN_HOLD = 10.0
 PAUSED_TEXT = "관리자가 이 PC의 관리 AI 연결을 중지했습니다. 재개되면 바로 다시 호출하십시오."
+OUTAGE_TEXT = ("MINT 결정 서버에 닿지 못했고 승인 목록에서 확인되지 않은 서버라 막았습니다. "
+               "잠시 뒤 다시 호출하십시오.")
 
 
 def paused(state_dir: str) -> bool:
@@ -731,11 +733,11 @@ def decide(
             payload, state_dir=state_dir, url=url, key=key, post=post,
             http_timeout=http_timeout, on_pending=on_pending,
         )
-    except Unreachable:
+    except Unreachable as exc:
         if not offline_allowed(payload["server"], contracts, state_dir):
             if paused(state_dir):
                 raise Refuse(PAUSED_TEXT) from None
-            raise
+            raise Unreachable(f"{OUTAGE_TEXT}\n{exc}") from None  # 하네스는 앞부분만 보여 준다
         record_offline(state_dir, payload["server"], payload["tool"], harness)
         return
     # 호출 뒤 훅이 결과를 보고할 수 있게 판정 참조를 호출 식별자로 남긴다.
@@ -996,8 +998,14 @@ def kick_notify(args: Sequence[str]) -> None:
 
 
 def launch_env(approved: Mapping[str, Any], inherited: Mapping[str, str]) -> dict[str, str]:
-    """상속한 환경에서 위험한 변수를 빼고 승인된 환경 값을 얹는다."""
-    env = {k: v for k, v in inherited.items() if not ENV_DENIED.match(k)}
+    """상속한 환경에서 위험한 변수를 빼고 승인된 환경 값을 얹는다.
+
+    ``mint app run``이 스크립트에 넣어 준 앱 키(``MINT_APP_KEY``와 같은 값의 변수)는 그 스크립트가
+    띄운 서버에 넘기지 않는다. 앱 키는 스크립트의 모델·게이트웨이 호출용이다.
+    """
+    app_key = inherited.get("MINT_APP_KEY")
+    env = {k: v for k, v in inherited.items()
+           if not ENV_DENIED.match(k) and not (app_key and v == app_key)}
     env.update({str(k): str(v) for k, v in (approved.get("env") or {}).items()})
     return env
 
@@ -3048,9 +3056,12 @@ class Mediator:
             sink.flush()
 
     def _check(self, msg: Any) -> bytes | None:
-        """``tools/call`` 하나를 판정한다. 막았으면 하네스에 돌려줄 줄, 보내도 되면 None."""
-        if not (isinstance(msg, dict) and msg.get("method") == "tools/call" and "id" in msg):
+        """``tools/call`` 하나를 판정한다. 막았으면 하네스에 돌려줄 줄(답할 수 없으면 빈 바이트),
+        보내도 되면 None."""
+        if not (isinstance(msg, dict) and msg.get("method") == "tools/call"):
             return None
+        if "id" not in msg:
+            return b""  # 알림 꼴 도구 호출: 답할 곳이 없으니 보내지 않기만 한다
         params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
         tool, arguments = params.get("name"), params.get("arguments")
         arguments = {} if arguments is None else arguments
@@ -3071,43 +3082,52 @@ class Mediator:
 
         ponytail: 판정은 한 번에 하나씩이라 동시 호출은 줄을 선다(호출당 판정 상한은 HTTP 대기).
         """
-        buffer = bytearray()
+        buffer, skipping = bytearray(), False
         while True:
             chunk = source.readline(65536)
             if not chunk:
                 return
+            if skipping:  # 상한을 넘은 줄의 나머지는 버린다
+                skipping = not chunk.endswith(b"\n")
+                continue
             buffer += chunk
-            if not chunk.endswith(b"\n") and len(buffer) <= LINE_MAX:
+            if len(buffer) > LINE_MAX:
+                # 판정할 수 없는 큰 줄은 보내지 않는다. 도구 호출로 보이고 식별자가 보이면 답한다.
+                head = bytes(buffer[:65536])
+                found = re.search(rb'"id"\s*:\s*("[^"]{0,128}"|\d{1,18})', head)
+                if found and b"tools/call" in head:
+                    text = "호출 인자가 너무 커서 MINT가 판정하지 못해 막았습니다."
+                    self._write(self._reply(json.loads(found.group(1)), text))
+                skipping = not chunk.endswith(b"\n")
+                buffer.clear()
+                continue
+            if not chunk.endswith(b"\n"):
                 continue
             line = bytes(buffer)
             buffer.clear()
-            if len(line) > LINE_MAX:
-                # 판정할 수 없는 큰 줄: 도구 호출로 보이면 보내지 않는다(식별자가 보이면 답한다).
-                if b"tools/call" in line[:65536]:
-                    found = re.search(rb'"id"\s*:\s*("[^"]{0,128}"|\d{1,18})', line[:65536])
-                    if found:
-                        text = "호출 인자가 너무 커서 MINT가 판정하지 못해 막았습니다."
-                        self._write(self._reply(json.loads(found.group(1)), text))
-                    continue
-                sink.write(line)
-                sink.flush()
-                continue
             try:
                 msg = json.loads(line)
             except ValueError:
+                if line.strip():
+                    continue  # 해석하지 못한 줄은 판정할 수 없으니 보내지 않는다
                 msg = None
             if isinstance(msg, list):  # 일괄 요청: 도구 호출만 판정하고 나머지는 그대로 보낸다
-                replies = [r for r in (self._check(m) for m in msg) if r is not None]
-                denied = {json.loads(r)["id"] for r in replies}
-                kept = [m for m in msg if not (isinstance(m, dict) and m.get("id") in denied
-                                                and m.get("method") == "tools/call")]
+                kept, replies = [], []
+                for item in msg:
+                    reply = self._check(item) if isinstance(item, dict) else b""
+                    if reply is None:
+                        kept.append(item)
+                    elif reply:
+                        replies.append(reply.rstrip(b"\n"))
                 if replies:
-                    self._write(b"[" + b",".join(r.rstrip(b"\n") for r in replies) + b"]\n")
+                    self._write(b"[" + b",".join(replies) + b"]\n")
+                if len(kept) < len(msg):
                     line = json.dumps(kept).encode() + b"\n" if kept else b""
             else:
                 reply = self._check(msg)
                 if reply is not None:
-                    self._write(reply)
+                    if reply:
+                        self._write(reply)
                     line = b""
             if line:
                 sink.write(line)
@@ -3206,11 +3226,11 @@ def mediator_for(
                 payload, state_dir=state_dir, url=url, key=key, post=post,
                 http_timeout=http_timeout,
             )
-        except Unreachable:
+        except Unreachable as exc:
             if not offline_allowed(server, contracts, state_dir):
                 if paused(state_dir):
                     raise Refuse(PAUSED_TEXT) from None
-                raise
+                raise Unreachable(f"{OUTAGE_TEXT}\n{exc}") from None
             record_offline(state_dir, server, tool, client)
             return None
         reference = answer.get("reference")
@@ -3604,8 +3624,15 @@ def main(argv: list[str] | None = None) -> None:
                 ),
                 pull_report, PERMIT_WAIT,
             )  # fmt: skip
-        except SystemExit:
-            raise  # 격리·Windows 실행은 서버의 종료 코드로 끝난다.
+        except SystemExit as exc:
+            # 서버의 종료 코드로 끝난다(정리는 끝났다). 서버가 먼저 끝나면 하네스 입력을 읽던
+            # 스레드가 표준 입력 잠금을 쥐고 남아, 보통 종료가 「Fatal Python error」로 죽는다.
+            for stream in (sys.stdout, sys.stderr):
+                try:
+                    stream.flush()
+                except (OSError, ValueError):
+                    pass
+            os._exit(exc.code if isinstance(exc.code, int) else 0 if exc.code is None else 1)
         except Refuse as exc:
             if args.server and not isinstance(exc, (Paused, Unreachable)):  # 일시 장애는 빼고
                 record_start_failure(state_dir, args.server, plain_reason(str(exc)))
