@@ -232,6 +232,8 @@ def context_result(
 
 
 def derive_principal(snapshot: Snapshot, principal: Principal) -> Principal:
+    if snapshot.has_effective_team and snapshot.effective_team != principal.team_id:
+        principal = principal.model_copy(update={"team_id": snapshot.effective_team})
     derivation = derive_org(
         team_id=principal.team_id,
         user_id=principal.user_id,

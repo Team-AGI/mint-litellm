@@ -175,7 +175,32 @@ SNAPSHOT_SQL = re.sub(
     flags=re.S,
 )
 
-CONFIRMATION_SNAPSHOT_SQL = STAGE2_SNAPSHOT_SQL.replace(
+# 단말 키는 설치·앱 행의 현재 팀으로 판정한다(키 자체의 팀은 발급 때 값으로 굳어 있다).
+# 행이 없으면 호출이 싣고 온 팀을 쓴다.
+_EFFECTIVE_TEAM_CTE = """
+kit AS (
+    SELECT team_id FROM mint.endpoint_installs
+    WHERE instance_id = %(iid)s AND revoked_at IS NULL
+      AND %(key_id)s IN (key_token, mcp_key_token)
+    UNION ALL
+    SELECT team_id FROM mint.endpoint_apps
+    WHERE instance_id = %(iid)s AND revoked_at IS NULL AND key_token = %(key_id)s
+),
+eff AS (
+    SELECT CASE WHEN EXISTS (SELECT 1 FROM kit) THEN (SELECT team_id FROM kit LIMIT 1)
+                ELSE %(team_id)s::text END AS team_id
+),
+"""
+
+CONFIRMATION_SNAPSHOT_SQL = (
+    STAGE2_SNAPSHOT_SQL.replace("%(team_id)s", "(SELECT team_id FROM eff)")
+    .replace("WITH" + chr(10), "WITH" + _EFFECTIVE_TEAM_CTE, 1)
+    .replace(
+        "'now', now(),",
+        "'now', now()," + chr(10) + "    'effective_team', (SELECT team_id FROM eff),",
+        1,
+    )
+).replace(
     "'consents', (",
     """'self_confirmations', (
         SELECT coalesce(jsonb_agg(to_jsonb(c) - 'display'), '[]'::jsonb)
@@ -510,6 +535,9 @@ class Snapshot:
     call_review_tools: frozenset[str] = frozenset()
     # 서버의 마지막 승인된 수용 신청이 적은 자료 등급. 수용 신청 없이 등록된 서버는 None.
     data_grade: str | None = None
+    # 단말 키는 설치·앱 행의 현재 팀, 그 밖의 키는 None(호출이 싣고 온 팀을 그대로 쓴다).
+    effective_team: str | None = None
+    has_effective_team: bool = False
 
 
 def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
@@ -674,6 +702,8 @@ def parse_snapshot(doc: Mapping[str, Any]) -> Snapshot:
         call_review_tools=frozenset(doc.get("call_review_tools") or ()),
         auto_profile=select_profile(basis.get("url"), basis.get("tools") or ()),
         data_grade=None if server is None else server.get("data_grade"),
+        effective_team=doc.get("effective_team"),
+        has_effective_team="effective_team" in doc,
     )
 
 

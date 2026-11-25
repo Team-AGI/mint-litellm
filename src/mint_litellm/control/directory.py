@@ -18,9 +18,11 @@ from datetime import UTC, datetime, timedelta
 import psycopg
 
 from mint_litellm.control import ledger, operators
+from mint_litellm.control.context import Context, Operator
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.litellm_admin import LiteLLMAdmin
 from mint_litellm.control.services import console_sessions
+from mint_litellm.control.services.base import enqueue_job
 from mint_litellm.types.cli_commands import OperatorRole
 from mint_litellm.types.events import EventKind
 
@@ -155,6 +157,23 @@ def record_login(
         _sync_operator(conn, instance_id, user_id, row, user)
 
 
+def _follow_team(conn: psycopg.Connection, instance_id: str, user_id: str, ids: list[str]) -> int:
+    """그 사람의 살아 있는 단말 설치·앱 행의 팀을 지금 소속에 맞춘다.
+
+    아직 소속이면 그대로 두고, 아니면 현재 팀 중 첫째(없으면 비움)로 바꾼다. 바뀐 행 수를 돌려준다.
+    """
+    first = ids[0] if ids else None
+    changed = 0
+    for table in ("endpoint_installs", "endpoint_apps"):
+        changed += conn.execute(
+            f"UPDATE mint.{table} SET team_id = %s WHERE instance_id = %s AND user_id = %s"
+            " AND revoked_at IS NULL AND team_id IS DISTINCT FROM %s"
+            " AND (team_id IS NULL OR NOT (team_id = ANY(%s)))",
+            (first, instance_id, user_id, first, ids),
+        ).rowcount
+    return changed
+
+
 @dataclass(frozen=True)
 class SyncResult:
     users: int
@@ -182,11 +201,13 @@ def sync(conn: psycopg.Connection, instance_id: str, admin: LiteLLMAdmin) -> Syn
         if isinstance(u.get("user_id"), str) and u.get("user_role") in operators.HUMAN_ROLES
         and u["user_id"] not in operators.SERVICE_ACCOUNTS  # 배포 서비스 계정은 사람이 아니다
     }
+    moved = 0
     with conn.transaction():
         for user_id, user in humans.items():
             ids = sorted({*_teams(user), *members.get(user_id, ())} - {DASHBOARD_TEAM})
             row = _upsert_user(conn, instance_id, user_id, user, ids)
             _sync_operator(conn, instance_id, user_id, row, user)
+            moved += _follow_team(conn, instance_id, user_id, ids)
         listed = {
             k["token"] for k in keys
             if isinstance(k.get("token"), str) and k.get("user_id") in humans
@@ -213,6 +234,11 @@ def sync(conn: psycopg.Connection, instance_id: str, admin: LiteLLMAdmin) -> Syn
                 " AND gone_at IS NULL AND NOT (user_id = ANY(%s))",
                 (instance_id, sorted(humans)),
             ).rowcount
+        if moved:  # 단말 게이트웨이 키의 권한도 새 팀으로 다시 맞춘다
+            enqueue_job(
+                Context(conn, instance_id, Operator("directory", "system", None)),
+                "kit_key_sync", "all",
+            )
     return SyncResult(len(humans), len(listed), gone_users, gone_keys)
 
 
