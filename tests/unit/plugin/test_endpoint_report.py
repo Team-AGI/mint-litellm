@@ -344,3 +344,21 @@ def test_a_paused_key_is_denied_on_the_decide_path_with_the_pause_code(tmp_path,
     assert answer["decision"] == "deny"
     assert answer["error"]["code"] == "MINT-ENDPOINT-PAUSED"
     assert "재개되면 바로 다시 호출하십시오" in answer["error"]["guidance"]
+
+
+def test_a_removal_report_retires_only_the_calling_pcs_key(tmp_path, stored, monkeypatch):
+    from mint_litellm.endpoint import apps
+
+    retired, issuer = [], object()
+
+    async def retire_install(self, instance_id, key_token, given):
+        retired.append((key_token, given))
+        return True
+
+    monkeypatch.setattr(FakeDatabase, "retire_install", retire_install, raising=False)
+    monkeypatch.setattr(apps, "issuer", lambda: issuer)
+    client, _ = build(tmp_path)
+    body = report(action="removed", mode="none", mcp_servers=[])
+    assert post(client, REPORT, body).json() == {"recorded": True, "retired": True}
+    assert retired == [(KEY, issuer)]  # 같은 사람의 다른 PC 키는 건드리지 않는다
+    assert post(client, REPORT, report()).status_code == 200 and len(retired) == 1

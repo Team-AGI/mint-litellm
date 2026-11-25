@@ -736,6 +736,19 @@ def make_router(
             raise HTTPException(status_code=404, detail="no such kit key")
         if outcome == "expired":
             raise HTTPException(status_code=403, detail="kit key expired; ask an admin to reissue")
+        if body.action == "removed":
+            # 이 PC에서 제거했거나 같은 PC에 새 키로 다시 설치했다: 이 키만 해제한다.
+            try:
+                issuer = apps.issuer()
+            except apps.AppRefused:
+                issuer = None
+            try:
+                retired = await runtime.database.retire_install(
+                    runtime.config.instance_id, who.key_id, issuer)
+            except Exception:
+                log.exception("removed install could not be retired")
+                retired = False
+            return {"recorded": True, "retired": retired}
         if body.action == "installed":
             seen = {
                 "device_received": body.mcp_servers,
