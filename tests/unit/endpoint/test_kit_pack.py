@@ -1193,8 +1193,12 @@ def test_a_runtime_of_another_python_version_is_shown_and_refused_with_a_remedy(
     assert kit_module.SERVER_WORD[state] == "시작 실패"
     from mint_litellm.endpoint.kit import mint_agent
 
-    with pytest.raises(mint_agent.Refuse, match=r"승인된 판본\(2\.7\)과 달라.*해결: Python 2\.7"):
+    with pytest.raises(mint_agent.Refuse) as refused:
         mint_agent.check_runtime(sys.executable, "2.7", managed=False)
+    text = str(refused.value)
+    assert "승인된 판본은 2.7" in text and "해결: Python 2.7을 설치해" in text
+    # QA-BUG-003: 해결 안내의 경로는 설정된 실행 경로이고, 지금 실행된 실제 파일 이름이 아니다
+    assert f"{sys.executable}이(가) 그 판본을 가리키게" in text
 
 
 def test_ctrl_c_ends_the_screen_without_a_traceback(tmp_path, folder, reports):

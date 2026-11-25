@@ -83,3 +83,23 @@ def test_live_servers_follow_the_approvals_of_the_instance(world):
     assert live == expected
     with pytest.raises(Exception, match="MINT-KEY"):
         call(world, "SELECT * FROM mint.endpoint_live_servers(%s)", "nobody")
+
+
+def test_without_a_reason_the_db_uses_the_active_block_to_classify(world):
+    """QA-BUG-104: 막힌 도구를 PC에서 요청하면 승인 없음이 아니라 차단(DENIED)으로 분류한다."""
+    from mint_litellm.control import approvals as approval_domain
+
+    staff_side.approved_server(world)
+    kit_side.install(world)
+    sql = "SELECT reason_code FROM mint.access_requests WHERE tool = %s"
+    open_(world, tool="search", reason=None)
+    assert call_one(world, sql, "search") == "APPROVAL_ABSENT"
+    world.call(lambda ctx: approval_domain.create_denial(
+        ctx, scope_type="user", scope_id=kit_side.USER, server_id="srv-a", tools=["delete"],
+        reason="위험", org_id=None))
+    open_(world, tool="delete", reason=None)
+    assert call_one(world, sql, "delete") == "DENIED"
+
+
+def call_one(world, sql, *args):
+    return fetchall(world.conn, sql, args)[0]["reason_code"]

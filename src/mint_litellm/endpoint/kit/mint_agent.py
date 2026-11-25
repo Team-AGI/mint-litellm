@@ -1077,16 +1077,18 @@ def check_runtime(executable: str, python: str, managed: bool) -> str:
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise Refuse(
-            f"승인된 Python({real})을 실행하지 못해 시작하지 않았습니다({type(exc).__name__}). "
-            f"해결: 이 PC에 Python {python}을 그 경로로 설치하거나 관리자에게 문의하십시오"
+            f"승인된 Python 실행 경로({executable})를 실행하지 못해 시작하지 않았습니다"
+            f"({type(exc).__name__}). 해결: Python {python}을 설치해 {executable}이(가) 그 판본을 "
+            "가리키게 하거나 관리자에게 이 PC의 런타임을 문의하십시오"
         ) from exc
     found = done.stdout.strip() or "?"
     if found != python:
         # 조직 런타임은 한 판본으로 고정되어 있다(묶음의 바이너리 휠이 그 판본용이다).
+        # 설치할 것은 판본이고, 경로는 그 판본을 가리켜야 할 실행 경로다(실제 파일 이름이 아니다).
         raise Refuse(
-            f"이 PC의 Python({found})이 승인된 판본({python})과 달라 시작하지 않았습니다. "
-            f"해결: Python {python}을 {real} 경로로 설치하거나 관리자에게 이 PC의 런타임을 "
-            "문의하십시오"
+            f"이 PC의 {executable}은(는) Python {found}이고 승인된 판본은 {python}이라 시작하지 "
+            f"않았습니다. 해결: Python {python}을 설치해 {executable}이(가) 그 판본을 가리키게 "
+            "하거나 관리자에게 이 PC의 런타임을 문의하십시오"
         )
     return real
 

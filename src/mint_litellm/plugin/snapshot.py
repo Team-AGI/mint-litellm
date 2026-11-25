@@ -1489,8 +1489,8 @@ class PluginDatabase:
         return await self._run(write)  # type: ignore[no-any-return]
 
     async def endpoint_access_open(
-        self, key_token: str, request_id: UUID, server: str, tool: str | None, reason: str,
-        note: str,
+        self, key_token: str, request_id: UUID, server: str, tool: str | None,
+        reason: str | None, note: str,
     ) -> UUID:
         """설치 키 주인의 권한 요청(같은 대상의 대기 요청이 있으면 그 번호)."""
 

@@ -121,14 +121,14 @@ class OutcomesBody(BaseModel):
 
 
 class AccessRequestBody(BaseModel):
-    """PC에서 여는 권한 요청. 사유 코드는 거부 응답의 코드(없으면 승인 없음으로 본다)."""
+    """PC에서 여는 권한 요청. 사유 코드는 거부 응답의 코드(없으면 DB가 활성 차단 여부로 정한다)."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     request_id: UUID
     server: str = Field(min_length=1, max_length=128)
     tool: str | None = Field(default=None, min_length=1, max_length=256)
-    reason_code: str = Field(default="APPROVAL_ABSENT", pattern=r"^[A-Z][A-Z_]{2,63}$")
+    reason_code: str | None = Field(default=None, pattern=r"^[A-Z][A-Z_]{2,63}$")
     note: str = Field(default="", max_length=500)
 
 
@@ -917,7 +917,7 @@ def make_router(
 
         runtime = ready()
         body = await _body(request, AccessRequestBody)
-        if body.reason_code not in SUGGESTED:
+        if body.reason_code is not None and body.reason_code not in SUGGESTED:
             raise HTTPException(status_code=422, detail="this reason cannot be requested")
         who = principal_factory(auth, instance_id=runtime.config.instance_id)
         if who.key_id is None:
