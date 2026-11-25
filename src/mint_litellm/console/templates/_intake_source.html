@@ -1,0 +1,7 @@
+{% import "macros.html" as m %}
+{% if source.waiting %}<div class="effect">검사 중입니다 · 보통 몇 분 걸리며 자동으로 다시 시도합니다.</div>{% endif %}
+<table class="checklist"><thead><tr><th>점검</th><th>판정</th><th>핵심 값</th></tr></thead><tbody>
+{% for r in source.rows %}<tr><td class="nowrap">{{ r.label }}</td><td>{{ m.status_badge(r.status) }}</td><td>{{ r.value }}{% if r.link and i.status in ('passed', 'indeterminate', 'failed') %} <a href="{{ r.link }}">승인 때 좁히기</a>{% endif %}{% if r.more %}<details><summary>펼치기</summary><ul>{% for x in r.more %}<li>{{ x }}</li>{% endfor %}</ul></details>{% endif %}</td></tr>{% endfor %}
+</tbody></table>
+<h2>원본 검사 표</h2>
+{% include "_intake_checks.html" %}

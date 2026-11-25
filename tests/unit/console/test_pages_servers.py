@@ -22,7 +22,7 @@ def test_suspending_from_the_screen_is_one_confirmation_and_shows_the_effect(wor
     add_approval(world)
     html = admin.get("/servers/srv-ok").text
     assert "영향받는 MCP 서버 1개, 유효 승인 1건" in html
-    assert 'data-confirm="srv-ok"' not in html and "danger" in html
+    assert html.count('data-confirm="srv-ok"') == 1 and "danger" in html  # 폐기 창만 이름을 묻는다
     version = world.query("SELECT state_version FROM mint.servers WHERE server_id = 'srv-ok'")[0][0]
     ok = form_post(world, admin, "/servers/srv-ok/suspend", state_version=version)
     assert ok.status_code == 303 and ok.headers["location"] == "/servers/srv-ok?ok=suspended"

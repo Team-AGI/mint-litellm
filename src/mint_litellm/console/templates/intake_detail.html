@@ -18,7 +18,7 @@
 {% if server_url %}<p>{{ server_url }}</p>{% endif %}<p>MCP 서버 식별자 {{ m.ident(i.server_id) }} <button type="button" class="copy" data-copy="{{ i.server_id }}">복사</button></p>
 {% if cause %}<div class="banner error" role="alert">원인: {{ cause }}</div>{% endif %}
 <ol class="steps" aria-label="진행 단계">{% for level, text in progress %}<li class="{{ level }}"><span class="icon" aria-hidden="true">{{ ICONS[level] }}</span>{{ text }}</li>{% endfor %}</ol>
-{% if delivery %}<ol class="steps" aria-label="적용 단계">{% for level, text in delivery %}<li class="{{ level }}"><span class="icon" aria-hidden="true">{{ ICONS[level] }}</span>{{ text }}</li>{% endfor %}</ol>{% endif %}
+{% if delivery %}<ol class="steps" aria-label="적용 단계">{% for level, text in delivery %}<li class="{{ level }}"><span class="icon" aria-hidden="true">{{ ICONS[level] }}</span>{{ text }}{% if stuck and loop.index0 == stuck.index %} · {{ stuck.text }}{% if stuck.href %} <a class="button" href="{{ stuck.href }}">대상 바꾸기</a>{% endif %}{% endif %}</li>{% endfor %}</ol>{% endif %}
 {% if hold %}<div class="effect">두 번째 승인 대기 · 요청자 {{ hold.first_name }} · 만료 {{ hold.expires_at | when }}</div>{% endif %}
 {% if provider_blocked %}<div class="banner error">제공자가 허용되지 않았습니다. <a href="/access?tab=allowlists">제공자 허용</a> 후 {% if i.status == "indeterminate" %}재검사하세요.{% else %}<a href="/intakes/new?server_id={{ i.server_id | urlencode }}">다시 신청</a>하세요.{% endif %}</div>{% endif %}
 {% if inspect.open %}<div class="effect">단말 검사 대기 · 남은 시간 {{ inspect.left }}</div>
@@ -53,19 +53,15 @@
   <dt>결정 사유</dt><dd>{{ i.decision_reason | blank }}</dd>{% endif %}
 </dl>
 {% elif tab == 'pack' %}{% include "_intake_pack.html" %}
+{% elif tab == 'source' %}{% include "_intake_source.html" %}
 {% elif tab == 'evidence' %}
 {% set evidence_action = '/intakes/' ~ i.id ~ '/evidence' %}{% include "_evidence.html" %}
 {% else %}
-{% if checks %}
-{% set sbom_ok = checks | selectattr('check', 'equalto', 'sbom') | selectattr('result', 'equalto', 'pass') | list %}<div class="actions"><a class="button" href="/intakes/{{ i.id }}/checks.json" hx-boost="false" download>검사 결과 내려받기</a>{% if sbom_ok %}<a class="button" href="/intakes/{{ i.id }}/sbom.json" hx-boost="false" download>SBOM 내려받기</a>{% endif %}</div>
-<table><thead><tr><th>단계</th><th>결과</th><th>실행 시각</th><th>증거 만료</th><th>사유</th></tr></thead><tbody>
-{% for c in checks %}{% set skip = cause and c.check in ('description_scan', 'risk_grade') and c.reason_code in ('NO_DEFINITIONS', 'INPUT_MISSING') %}<tr{% if skip %} class="skipped"{% endif %}><td class="nowrap">{{ L.pick(L.CHECK, c.check) }}{% if c.method.startswith('endpoint:') %} <span class="badge off">단말 검사</span>{% endif %}</td><td>{{ m.badge(L.CHECK_RESULT, c.shown) }}</td><td class="nowrap">{{ c.ran_at | when }}</td><td class="nowrap">{{ c.evidence_valid_until | when }}</td><td>{% if skip %}도구 목록이 없어 건너뜀{% else %}{{ L.check_reason(c) }}{% endif %}{% set d = c.inputs.detail if c.inputs is mapping and c.inputs.detail is mapping else none %}{% if d %}<details><summary>오류 출력 보기</summary><p>{{ L.pick(L.INSPECTION_STAGE, d.stage) }}{% if d.exit_code is not none %} · 종료 코드 {{ d.exit_code }}{% endif %}</p>{% if d.stderr_tail %}<pre class="out">{{ d.stderr_tail }}</pre>{% endif %}</details>{% endif %}{% set found = ((c.inputs.findings or []) + (c.inputs.secret_findings or []) + (c.inputs.vuln_findings or []) + (c.inputs.misconfig_findings or []) + (c.inputs.license_findings or [])) if c.inputs is mapping else [] %}{% if found %}<details><summary>발견 {{ found | length }}건 보기</summary><ul>{% for f in found %}<li>{% if f.license %}라이선스 {{ f.license }} · {{ f.package }}{% elif f.package %}{{ f.id }} · {{ f.package }} {{ f.version }}{% elif f.id %}설정 오류 {{ f.id }} · {{ f.file }}{% elif f.severity %}{{ f.rule }} · {{ f.file }}{% if f.line %}:{{ f.line }}{% endif %}{% else %}비밀 의심 {{ f.rule }} · {{ f.file }}{% if f.line %}:{{ f.line }}{% endif %}{% endif %}{% if f.severity %} · {{ L.pick(L.RISK, f.severity) }}{% endif %}</li>{% endfor %}</ul></details>{% endif %}{% set src = c.inputs.source if c.inputs is mapping and c.inputs.source is mapping else none %}{% if src %}<small class="muted">소스 지문 {{ (src.tree_sha256 or '')[:12] }}{% if src.repo %} · {{ src.repo }}{% endif %}{% if src.commit %} · 커밋 {{ src.commit[:12] }}{% endif %}{% if src.license %} · 라이선스 {{ src.license }}{% endif %}</small>{% endif %}{% if c.check == 'sbom' and c.result == 'pass' %} <a class="button" href="/intakes/{{ i.id }}/sbom.json" hx-boost="false" download>SBOM 내려받기</a>{% elif c.check in ('code_scan', 'dependency_vulns') and c.inputs %} <a class="button" href="/intakes/{{ i.id }}/checks.json?check={{ c.check }}" hx-boost="false" download>결과 내려받기</a>{% endif %}</td></tr>{% endfor %}
-</tbody></table>
-{% else %}<p class="muted">아직 검사 결과가 없습니다.</p>{% endif %}
+{% include "_intake_checks.html" %}
 <h2>도구와 위험 등급</h2>
 {% if tools %}
-<table><thead><tr><th>도구</th><th>위험 등급</th><th>동작 유형</th><th>상태</th><th>제어</th><th></th></tr></thead><tbody>
-{% for t in tools %}<tr><td>{{ t.tool }}</td><td>{{ L.pick(L.RISK, t.risk_grade) }}</td><td>{{ L.pick(L.ACTION, t.action_type) }}</td><td>{{ '승인됨' if t.status == 'approved' else '후보' }}</td><td>{{ tc.state(t, ctl) }}</td><td class="nowrap">{{ tc.actions(t, ctl, actor, '/intakes/' ~ i.id) }}</td></tr>{% endfor %}
+<table><thead><tr><th>도구</th><th>위험 등급</th><th>동작 유형</th><th>상태</th><th>호출</th><th>차단</th><th>제어</th><th></th></tr></thead><tbody>
+{% for t in tool_rows %}{% if t.extra %}<tr><td>{{ t.tool }}</td><td colspan="3"><span class="badge wait">계약 밖</span></td><td class="num">{{ t.calls }}</td><td class="num">{{ t.blocked }}</td><td></td><td></td></tr>{% else %}<tr><td>{{ t.tool }}</td><td>{{ L.pick(L.RISK, t.risk_grade) }}</td><td>{{ L.pick(L.ACTION, t.action_type) }}</td><td>{{ '승인됨' if t.status == 'approved' else '후보' }}</td>{% if t.note %}<td colspan="2" class="muted" title="{{ '호출 집계는 있으나 이 도구는 불리지 않았습니다' if t.note == '미호출' else '승인 전이라 호출을 집계하지 않았습니다' }}">{{ t.note }}</td>{% else %}<td class="num">{{ t.calls }}</td><td class="num">{{ t.blocked }}</td>{% endif %}<td>{{ tc.state(t, ctl) }}</td><td class="nowrap">{{ tc.actions(t, ctl, actor, '/intakes/' ~ i.id) }}</td></tr>{% endif %}{% endfor %}
 </tbody></table>
 {% elif seen %}
 <table><thead><tr><th>발견된 도구</th><th>호출</th><th>차단</th></tr></thead><tbody>
@@ -97,6 +93,19 @@
 </form>
 {% endif %}
 
+{% if i.source == 'endpoint' %}
+<h2>PC에서 도구 목록 확인</h2>
+{% if inspect.open %}
+<p class="muted">단말 검사 대기 · 남은 시간 {{ inspect.left }}</p>
+<form method="post" action="/intakes/{{ i.id }}/inspect-revoke" class="inline">{{ m.csrf(actor) }}<input type="hidden" name="inspection_id" value="{{ inspect.open.id }}"><button type="submit">확인 요청 취소</button></form>
+{% else %}
+<form method="post" action="/intakes/{{ i.id }}/inspect" class="inline">{{ m.csrf(actor) }}<button type="submit"{% if inspect.can %} class="primary"{% else %} disabled{% endif %}>PC에서 도구 목록 확인 요청</button></form>
+{% if inspect.can %}<p class="muted">신청자 PC가 다음 보고 때 실행합니다.</p>
+{% elif i.status != 'indeterminate' %}<p class="muted">판별 불가일 때만 요청합니다(현재 {{ L.pick(L.INTAKE, i.status) }}).</p>
+{% else %}<p class="muted">실행 묶음을 준비하는 중입니다.</p>{% endif %}
+{% endif %}
+{% endif %}
+
 {% if i.status in ('passed', 'indeterminate', 'failed') %}
 <h2>결정</h2>
 <form method="post" action="/intakes/{{ i.id }}/decision" class="form" id="decision">
@@ -124,7 +133,21 @@
     <button type="submit" name="decision" value="reject">거부</button>
   </div>
 </form>
+<h2>예외 승인</h2>
+{% if i.status == 'indeterminate' and not hold %}
+<form method="post" action="/intakes/{{ i.id }}/decision" class="form" id="exception">
+  {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ i.state_version }}"><input type="hidden" name="decision" value="except">
+  <label>대상(사용자 식별자·팀){% if requester_name %} <small class="muted">{{ requester_name }}</small>{% endif %}<input name="scope_id" list="people" value="{{ default_target }}"{% if not default_target %} required{% endif %}></label>
+  <label>예외 사유(필수)<textarea name="reason" required maxlength="500"></textarea></label>
+  <p class="muted">최대 {{ max_exception_days }}일 · 판별하지 못한 검사를 건너뛰고 승인합니다.</p>
+  <button type="submit">예외 승인</button>
+</form>
+{% else %}
+<button type="button" disabled>예외 승인</button>
+{% if hold %}<p class="muted">두 번째 승인을 기다리고 있습니다.</p>{% else %}<p class="muted">판별 불가일 때만 할 수 있습니다(현재 {{ L.pick(L.INTAKE, i.status) }}).</p>{% endif %}
 {% endif %}
+{% endif %}
+{% include "_root_panel.html" ignore missing %}
 </aside>
 {% endif %}
 </div>

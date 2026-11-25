@@ -1,5 +1,7 @@
 """승인 한 번 화면: 결정 영역, 도구 사후 차단·호출별 검토, 시작하기, 신청 한 화면."""
 
+import re
+
 from console_pages_support import add_approval, form_post
 
 from .test_intake_contract_screens import add_intake
@@ -33,10 +35,16 @@ def test_the_approve_button_shows_for_every_decidable_state(world):
 
 
 def test_the_decision_scope_defaults_to_the_requester_and_has_no_period(world):
+    intake = add_intake(world, requested_by="human-9", source="staff")
+    html = world.session_client("admin").get(f"/intakes/{intake}").text
+    assert re.search(r'name="scope_id"[^>]*value="human-9"', html)
+    assert 'placeholder="기한 없음"' in html
+
+
+def test_an_operator_registered_intake_leaves_the_decision_scope_blank(world):
     intake = add_intake(world, requested_by="human-9")
     html = world.session_client("admin").get(f"/intakes/{intake}").text
-    assert 'name="scope_id" value="human-9"' in html
-    assert 'placeholder="기한 없음"' in html
+    assert not re.search(r'name="scope_id"[^>]*value="human-9"', html)
 
 
 def test_the_second_approval_tab_appears_only_with_a_pending_request(world):

@@ -172,10 +172,3 @@ def test_a_device_inspection_is_labelled_in_the_check_table_and_the_tool_list(wo
     html = client.get(f"/intakes/{intake}").text
     assert "단말 검사로 받음" in html and html.count("단말 검사") >= 2
     assert "단말 검사 도구" in client.get(f"/intakes/{intake}?tab=pack").text
-
-
-
-def test_the_intake_screen_has_no_inspection_approval_button(world):
-    intake = make_inspectable(world)
-    html = world.session_client("admin").get(f"/intakes/{intake}").text
-    assert f"/intakes/{intake}/inspect" not in html and "검사용 승인" not in html

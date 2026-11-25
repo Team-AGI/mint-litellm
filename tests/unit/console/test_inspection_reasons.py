@@ -35,7 +35,7 @@ def test_local_check_names_and_inspection_stages_are_translated():
 
 
 def cell(**inputs) -> str:
-    source = (ROOT / "src/mint_litellm/console/templates/intake_detail.html").read_text(
+    source = (ROOT / "src/mint_litellm/console/templates/_intake_checks.html").read_text(
         encoding="utf-8")
     start = source.index("<td>{% if skip %}")
     template = templates.env.from_string(source[start: source.index("</td>", start) + 5])

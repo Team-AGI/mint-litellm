@@ -1,0 +1,31 @@
+{# 서버 상세 오른쪽 「통제」 패널(C.7). 약한 통제부터 위에서 아래로. #}
+{% import "macros.html" as m %}
+{% set name = s.server_name or s.server_id %}
+{% set blocked_n = (ctl.blocked | length) + (ctl.actions | length) + (1 if ctl.whole else 0) %}
+<h2>통제</h2>
+{% if propagation %}<div class="effect" role="status">전파 상태 · MINT 판정 ✓ 즉시 · LiteLLM 키 권한 ◷ 최대 60초 · PC 실행기 정지 ◷ 다음 보고(약 20초){% if request.query_params.get('ok') == 'server_terminating' %} · 폐기를 시작했습니다. 남은 증빙을 이용 탭에서 확인하십시오.{% endif %}</div>{% endif %}
+<dl class="detail controls">
+  <dt>도구 차단</dt><dd>{% if blocked_n %}<span class="badge error">차단 {{ blocked_n }}건</span> {% endif %}<a class="button" href="/servers/{{ s.server_id | urlencode }}?tab=contract">계약 탭에서 관리</a></dd>
+  <dt>{{ '재개' if s.status == 'suspended' else '중지' }}</dt><dd>
+  {% if s.status == 'approved' %}
+  {% call m.confirm_dialog('stop-server', '중지', '서버 중지 — ' ~ name, '영향받는 MCP 서버 1개, 유효 승인 ' ~ active_approvals ~ '건. 모든 호출이 차단되며 재개로 되돌릴 수 있습니다.', '/servers/' ~ (s.server_id | urlencode) ~ '/suspend', actor, '서버 중지', trigger_class='danger-outline') %}
+  <input type="hidden" name="state_version" value="{{ s.state_version }}">
+  <dl class="detail"><dt>즉시</dt><dd>MINT 판정이 다음 호출부터 거부합니다.</dd><dt>늦게</dt><dd>LiteLLM 키 권한 최대 60초 · PC 실행기 정지는 다음 보고(약 20초)</dd><dt>취소 불가</dt><dd>이미 원격 서버로 보낸 호출은 끝까지 실행됩니다.</dd><dt>되돌리기</dt><dd>「재개」로 즉시 복귀</dd></dl>
+  <label>사유(필수)<textarea name="reason" required maxlength="500"></textarea></label>
+  {% endcall %}
+  {% elif s.status == 'suspended' %}
+  {% call m.confirm_dialog('resume-server', '재개', '서버 재개 — ' ~ name, '이 MCP 서버로 가는 호출이 승인 범위 안에서 다시 허용됩니다.', '/servers/' ~ (s.server_id | urlencode) ~ '/resume', actor, '서버 재개', danger=false) %}
+  <input type="hidden" name="state_version" value="{{ s.state_version }}">
+  {% endcall %}
+  {% else %}<button type="button" disabled title="승인된 서버만 중지합니다">중지</button> <small class="muted">승인된 서버만 중지할 수 있습니다(현재 {{ L.pick(L.SERVER, s.status) }}).</small>{% endif %}
+  </dd>
+  <dt>이용 종료</dt><dd><a class="button" href="/servers/{{ s.server_id | urlencode }}?tab=usage">이용 탭에서 종료</a></dd>
+  <dt>서버 폐기</dt><dd>
+  {% if s.status in ('approved', 'suspended') %}
+  {% call m.confirm_dialog('terminate-server', '서버 폐기', '서버 폐기 — ' ~ name, '영향: 서버 1개 · 유효 승인 ' ~ active_approvals ~ '건. 되돌릴 수 없습니다. 다시 설치해야 합니다.', '/servers/' ~ (s.server_id | urlencode) ~ '/terminate', actor, '서버 폐기', confirm_name=s.server_id, name_label='서버 식별자 입력') %}
+  <input type="hidden" name="state_version" value="{{ s.state_version }}">
+  <dl class="detail"><dt>즉시</dt><dd>MINT 판정이 다음 호출부터 거부하고 폐기 중으로 바뀝니다.</dd><dt>늦게</dt><dd>자격 삭제와 확인은 백그라운드 작업이 진행합니다.</dd><dt>취소 불가</dt><dd>이미 받은 결과와 파일은 남습니다.</dd></dl>
+  {% endcall %}
+  {% else %}<button type="button" disabled title="승인·중지 상태의 서버만 폐기합니다">서버 폐기</button> <small class="muted">승인·중지 상태의 서버만 폐기할 수 있습니다(현재 {{ L.pick(L.SERVER, s.status) }}).</small>{% endif %}
+  </dd>
+</dl>
