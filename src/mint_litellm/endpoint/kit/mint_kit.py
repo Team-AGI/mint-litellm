@@ -5146,6 +5146,22 @@ INTAKE_EXAMPLES = (
 INTAKE_LABELS = {"패키지": "판본·커밋 고정", "명령": "실행 명령", "주소": "주소"}
 
 
+def wrap_cells(text: str, width: int) -> list[str]:
+    """표시 폭에 맞춰 줄을 나눈다(가능하면 띄어쓰기에서). 긴 오류·명령이 잘리지 않게 한다."""
+    lines, cur = [], ""
+    for ch in text:
+        if cell_width(cur + ch) > width:
+            cut = cur.rfind(" ")
+            if cut > width // 3:
+                lines.append(cur[:cut])
+                cur = cur[cut + 1:]
+            else:
+                lines.append(cur)
+                cur = ""
+        cur += ch
+    return [*lines, cur]
+
+
 def render_intake(model: dict, form: dict, width: int = 80, height: int = 24,
                   color: bool = False) -> list[str]:
     """새 도입 신청 전용 화면. 1 입력 · 2 확인 · 3 결과. 앱 바·탭·키 안내는 다른 화면과 같다."""
@@ -5172,7 +5188,8 @@ def render_intake(model: dict, form: dict, width: int = 80, height: int = 24,
         rows = list(form["result"])
     if form.get("error"):
         rows += ["", "! " + form["error"]]
-    box = screen_box(title, [r for r in rows if r is not None], width, color)
+    wrapped = [part for r in rows if r is not None for part in wrap_cells(r, width - 4)]
+    box = screen_box(title, wrapped, width, color)
     bars = key_bar(keys, width, color)
     lines = [*top, "", *box][:max(0, height - len(bars))]
     lines += [""] * max(0, height - len(lines) - len(bars))

@@ -242,3 +242,15 @@ def test_new_request_is_a_three_step_screen_that_previews_then_submits_and_esc_c
     bad = [*"http://a.example.com/x", "enter", *"p", "enter", "esc"]  # 잘못된 주소
     kit_module.intake_screen(model, gateway, tmp_path, keys(bad), out)
     assert "https" in out.getvalue() and len(gateway.sent) == 1
+
+
+def test_a_long_error_is_wrapped_inside_the_box_not_cut():
+    model = {"connected": True, "servers": [], "intakes": [], "found": []}
+    error = ("실행 명령을 찾지 못했습니다. "
+             "`mint add 이름 -- uvx --from git+주소@커밋 실행이름`으로 신청하십시오")
+    form = {"step": 1, "focus": 0, "values": ["https://github.com/o/r", "목적"], "error": error,
+            "ok": False, "preview": [], "result": [], "request_id": RID}
+    screen = kit_module.render_intake(model, form, 60, 30)
+    assert all(kit_module.cell_width(line) <= 60 for line in screen)
+    text = "".join(line.strip("│ ") for line in screen)
+    assert "실행이름`으로" in text and "신청하십시오" in text
