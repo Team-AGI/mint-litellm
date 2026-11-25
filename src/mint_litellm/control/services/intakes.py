@@ -1003,8 +1003,8 @@ def decide(
 ) -> dict:
     """``approve``(통과), ``except``(판별 불가, 사유 필수·2인·유효 기간 90일 이내), ``reject``.
 
-    ``early``는 Root 강제 반려용이다. 접수·검사 중인 신청도 반려한다
-    (남은 검사는 결정을 보고 멈춘다).
+    ``early``는 Root 강제 조치용이다. 접수·검사 중인 신청도 반려하거나 검사를 생략하고 예외
+    승인한다(남은 검사는 결정을 보고 멈춘다).
     """
     require_role(ctx, f"intake {decision}")
     if decision not in ("approve", "except", "reject"):
@@ -1017,6 +1017,8 @@ def decide(
     if decision in ("except", "reject") and reason is None:
         raise ControlError("사유가 필요합니다(--reason).")
     with transact(ctx):
+        if early:  # Root 강제 조치: 검사 전·검사 중 결정을 막는 DB 불변식을 이 트랜잭션에서만 연다
+            ctx.conn.execute("SET LOCAL mint.root_force = 'on'")
         row = get(ctx, intake_id, lock=True)
         if expected_version is not None and row["state_version"] != expected_version:
             raise conflict(f"신청의 상태 버전이 요청({expected_version})과 다릅니다"
@@ -1026,7 +1028,7 @@ def decide(
             return row  # 같은 결정의 재전송·동시 클릭은 이미 내려진 결정을 그대로 돌려준다
         waiting = ("passed", "indeterminate", "failed")  # 검사 결과와 무관하게 관리자가 결정한다
         required = {"approve": waiting, "except": waiting, "reject": waiting}[decision]
-        if early and decision == "reject":
+        if early and decision in ("reject", "except"):
             required = (*waiting, "received", "checking")
         if row["status"] not in required:
             raise conflict(f"{row['status']} 상태의 신청은 {decision}할 수 없습니다.")

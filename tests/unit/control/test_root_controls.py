@@ -70,6 +70,17 @@ def test_root_rejects_an_intake_that_is_still_being_checked(world):
     assert actions(world) == ["intake_reject"]
 
 
+def test_root_rejects_an_intake_whose_checks_are_running(world):
+    """검사 중인 신청도 Root는 닫는다(QA-BUG-006). 일반 결정은 DB 불변식이 막는다."""
+    checking = world.create()
+    world.conn.execute("UPDATE mint.intakes SET status = 'checking' WHERE id = %s", (checking,))
+    world.conn.commit()
+    with pytest.raises(ControlError):
+        world.decide(checking, "reject", reason="이른 반려")
+    as_root(world, lambda ctx: root.force_reject(ctx, checking, "출처 불명"))
+    assert world.intake(checking)["decision"] == "rejected"
+
+
 def test_root_suspends_and_resumes_a_server_with_impact_recorded(world):
     identifier = world.create()
     world.drain()
@@ -172,3 +183,48 @@ def test_lockout_does_not_take_over_an_ordinary_user_block(world):
     as_admin(world, lambda ctx: root.unlock(ctx, "emp-1", "복직"))
     rows = fetchall(world.conn, "SELECT reason, lifted_at FROM mint.denials ORDER BY id")
     assert rows[0]["lifted_at"] is None and rows[1]["lifted_at"] is not None
+
+
+def test_root_skips_the_checks_and_approves_an_intake_as_an_exception(world):
+    identifier = world.create()
+    assert world.intake(identifier)["status"] == "received"
+    with pytest.raises(ControlError):  # 관리자는 검사 전 신청을 결정할 수 없다
+        world.decide(identifier, "except", reason="이른 승인")
+    as_root(world, lambda ctx: root.force_except(ctx, identifier, "긴급 업무"))
+    row = world.intake(identifier)
+    assert (row["status"], row["decision"]) == ("decided", "exception")
+    assert actions(world) == ["intake_except"]
+
+
+def test_cancel_runs_takes_back_pending_and_unused_call_approvals_only(world):
+    from mint_litellm.control import approvals as approval_domain
+
+    identifier = world.create()
+    world.drain()
+    world.decide(identifier, "approve", reason="심사 결과")
+    org = fetchone(world.conn, "SELECT org_id FROM mint.usage_relations"
+                   " WHERE server_id = 'srv-a'")["org_id"]
+
+    def ask(ctx, who):
+        return approval_domain.call_request(
+            ctx, org_id=org, principal_type="user", principal_id=who, server_id="srv-a",
+            tool="echo", args_fp="c" * 64, fp_key_version=1, policy_version_id=None,
+            expires_in_minutes=30, requested_by=who)
+
+    as_admin(world, lambda ctx: ask(ctx, "emp-1"))
+    as_admin(world, lambda ctx: ask(ctx, "emp-2"))
+    with pytest.raises(ControlError):
+        as_admin(world, lambda ctx: root.cancel_runs(ctx, "server", "srv-a", "사고 대응"))
+    as_root(world, lambda ctx: root.cancel_runs(ctx, "person", "emp-1", "사고 대응"))
+    statuses = {r["principal_id"]: r["status"] for r in fetchall(
+        world.conn, "SELECT principal_id, status FROM mint.call_approvals")}
+    assert statuses == {"emp-1": "cancelled", "emp-2": "pending"}
+    as_root(world, lambda ctx: root.cancel_runs(ctx, "server", "srv-a", "사고 대응"))
+    assert {r["status"] for r in fetchall(
+        world.conn, "SELECT status FROM mint.call_approvals")} == {"cancelled"}
+    done = fetchall(world.conn, "SELECT target, impact FROM mint.forced_actions"
+                    " WHERE action = 'run_cancel' ORDER BY created_at")
+    assert [(d["target"], d["impact"]["call_approvals"]) for d in done] == [
+        ("person:emp-1", 1), ("server:srv-a", 1)]
+    with pytest.raises(ControlError):
+        as_root(world, lambda ctx: root.cancel_runs(ctx, "team", "t1", "x"))

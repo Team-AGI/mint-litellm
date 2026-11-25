@@ -6,7 +6,7 @@
 
 import json
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from mint_litellm.control import approvals as approval_domain
@@ -202,6 +202,48 @@ def force_reject(ctx: Context, intake_id: str, reason: str) -> str:
     with transact(ctx):
         return record(
             ctx, "intake_reject", row["server_id"], reason, refs={"intake_id": str(intake_id)}
+        )
+
+
+FORCE_EXCEPT_DAYS = 30
+
+
+def force_except(ctx: Context, intake_id: str, reason: str) -> str:
+    """검사 생략 승인: 접수·검사 중을 포함해 예외 승인(기본 30일)으로 결정한다."""
+    require_root(ctx)
+    reason = _reason(reason)
+    until = datetime.now(UTC) + timedelta(days=FORCE_EXCEPT_DAYS)
+    row = intakes.decide(ctx, intake_id, "except", reason=reason, early=True, valid_until=until)
+    with transact(ctx):
+        return record(
+            ctx, "intake_except", row["server_id"], reason,
+            impact={"valid_days": FORCE_EXCEPT_DAYS}, refs={"intake_id": str(intake_id)},
+        )
+
+
+def cancel_runs(ctx: Context, kind: str, target: str, reason: str) -> str:
+    """진행 중 실행 취소: 그 서버나 사람의 승인 대기·미사용 호출별 승인을 취소한다.
+
+    이미 원격 서버로 보낸 호출은 취소할 수 없다. PC 로컬 서버를 멈추려면 서버 중지를 쓴다.
+    """
+    require_root(ctx)
+    reason = _reason(reason)
+    column = {"server": "server_id", "person": "principal_id"}.get(kind)
+    if column is None:
+        raise ControlError("취소 대상은 서버나 사람이어야 합니다.")
+    with transact(ctx):
+        calls = fetchall(
+            ctx.conn,
+            f"SELECT id FROM mint.call_approvals WHERE instance_id = %s AND {column} = %s"
+            " AND status IN ('pending', 'approved') ORDER BY id",
+            (ctx.instance_id, target),
+        )
+        for call in calls:
+            approval_domain.call_cancel(ctx, str(call["id"]))
+        return record(
+            ctx, "run_cancel", f"{kind}:{target}", reason,
+            impact={"call_approvals": len(calls),
+                    "not_cancellable": "이미 원격 서버로 보낸 호출"},  # fmt: skip
         )
 
 
