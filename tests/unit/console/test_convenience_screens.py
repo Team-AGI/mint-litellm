@@ -89,7 +89,10 @@ def test_revocation_and_denial_accept_an_empty_reason(world, admin):
 def test_solo_root_approval_notifications_are_optional(monkeypatch):
     monkeypatch.setattr(setup_state, "_count", lambda *args: 0)
     monkeypatch.setattr(setup_state, "mark_time", lambda *args: None)
-    actor = SimpleNamespace(config=SimpleNamespace(stage2=SimpleNamespace(webhook_urls=())),
+    monkeypatch.setattr(setup_state.webhook_store, "effective",
+                        lambda *args: SimpleNamespace(webhook_urls=()))
+    stage2 = SimpleNamespace(webhook_urls=())
+    actor = SimpleNamespace(config=SimpleNamespace(stage2=stage2), conn=None, instance="i",
                             role="admin")
     item = setup_state._approval_flow(actor)
     assert item["optional"] and setup_state.pending([item]) == 0
@@ -208,7 +211,10 @@ def test_service_accounts_do_not_count_as_human_operators(monkeypatch):
     seen = []
     monkeypatch.setattr(setup_state, "_count", lambda a, sql, *args: seen.append(args) or 0)
     monkeypatch.setattr(setup_state, "mark_time", lambda *args: None)
-    actor = SimpleNamespace(config=SimpleNamespace(stage2=SimpleNamespace(webhook_urls=())),
+    monkeypatch.setattr(setup_state.webhook_store, "effective",
+                        lambda *args: SimpleNamespace(webhook_urls=()))
+    stage2 = SimpleNamespace(webhook_urls=())
+    actor = SimpleNamespace(config=SimpleNamespace(stage2=stage2), conn=None, instance="i",
                             role="admin")
     setup_state._approval_flow(actor)
     assert ["mint-control", "mint-kit-issuer"] in seen[0]

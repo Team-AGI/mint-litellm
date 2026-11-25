@@ -19,7 +19,8 @@ def render(name: str, **ctx) -> str:
 def test_progress_shows_the_second_approval_and_dims_proof_when_the_cause_is_missing_tools():
     intake = {"status": "indeterminate"}
     assert servers.intake_progress(intake, ["a"], [], hold=True)[3] == ("wait", "두 번째 승인 대기")
-    assert servers.intake_progress(intake, ["a"], [])[2][0] == "error"
+    # 증빙 부족은 권고라서 빨간 오류가 아니라 대기 표시다.
+    assert servers.intake_progress(intake, ["a"], [])[2] == ("wait", "권장 증빙 1건")
     assert servers.intake_progress(intake, ["a"], [], cause=True)[2] == ("off", "증빙")
 
 

@@ -42,7 +42,9 @@ def test_admin_form_has_no_registry_selector():
 @pytest.mark.parametrize("existing", [True, False])
 def test_admin_submission_redirects_to_the_returned_application(monkeypatch, existing):
     monkeypatch.setattr(servers.intake_submission, "submit", lambda *args: ("request", existing))
-    response = servers.create_intake(Mock(), "https://docs.example.test/mcp", "문서 검색", Mock())
+    response = servers.create_intake(
+        Mock(), server_url="https://docs.example.test/mcp", purpose="문서 검색", step="", name="",
+        commit="", command="", owner_user_id="", local="", found="", actor=Mock())
     notice = "intake_existing" if existing else "intake_created"
     assert response.status_code == 303
     assert response.headers["location"] == f"/intakes/request?ok={notice}"
@@ -104,8 +106,13 @@ def test_staff_history_has_a_single_cancel_confirmation():
     assert 'name="state_version" value="2"' in html
     assert 'name="confirm" value="yes"' in html and 'name="reason" value="신청자 취소"' in html
     assert 'type="checkbox"' not in html and "required" not in html
-    assert "대기 취소" not in render("_staff_applications.html",
-                                   applications=[application("checking")])
+    # 진행 중(검사·관리자 결정 대기)에도 취소할 수 있고, 끝난 신청에는 취소가 없다.
+    for waiting in ("checking", "passed", "indeterminate"):
+        html = render("_staff_applications.html", applications=[application(waiting)])
+        assert "대기 취소" in html
+    for done in ("failed", "approved"):
+        html = render("_staff_applications.html", applications=[application(done)])
+        assert "대기 취소" not in html
 
 
 def test_staff_catalog_and_application_history_have_distinct_tabs():
