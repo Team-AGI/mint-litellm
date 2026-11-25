@@ -1176,8 +1176,11 @@ def npm_download(name: str, version: str) -> bytes:
 NODE_FLOOR = re.compile(r"^\s*(?:>=|\^|~)?\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?")
 
 
-def npm_node_floor(tarball: bytes) -> tuple[int, ...] | None:
-    """패키지가 적은 ``engines.node``의 최소 판본(첫 조건의 하한만). 없거나 못 읽으면 None."""
+def npm_node_floor(tarball: bytes) -> int | None:
+    """패키지가 적은 ``engines.node``의 최소 주 판본(``||`` 갈래 중 가장 낮은 하한). 없으면 None.
+
+    ``engines``는 권고라 주 판본만 본다(``>=20.18.1``이면 20).
+    """
     import io
     import tarfile
 
@@ -1185,21 +1188,23 @@ def npm_node_floor(tarball: bytes) -> tuple[int, ...] | None:
         with tarfile.open(fileobj=io.BytesIO(tarball), mode="r:gz") as archive:
             member = archive.extractfile("package/package.json")
             spec = json.loads(member.read(1024 * 1024)).get("engines", {}).get("node")
-    except (OSError, KeyError, ValueError, AttributeError, tarfile.TarError):
+        floors = [NODE_FLOOR.match(part) for part in str(spec).split("||")] if spec else []
+        majors = [int(found[1][:4]) for found in floors if found]
+        return min(majors) if majors and len(majors) == len(floors) else None
+    except Exception:  # 못 읽으면 확인하지 않는다(무결성은 이미 확인했다)
         return None
-    found = NODE_FLOOR.match(spec) if isinstance(spec, str) else None
-    return tuple(int(x or 0) for x in found.groups()) if found else None
 
 
-def installed_node_version() -> tuple[int, ...] | None:
+def installed_node_version() -> int | None:
+    """이 PC Node의 주 판본. 못 알면 None."""
     node = shutil.which("node")
     try:
-        out = subprocess.run([node, "--version"], capture_output=True, text=True, timeout=10,
+        out = subprocess.run([node, "--version"], capture_output=True, text=True, timeout=3,
                              check=False).stdout if node else ""
     except (OSError, subprocess.SubprocessError):
         return None
     found = NODE_FLOOR.match(out)
-    return tuple(int(x or 0) for x in found.groups()) if found else None
+    return int(found[1][:4]) if found else None
 
 
 def verify_npm(
@@ -1208,7 +1213,7 @@ def verify_npm(
     folder: str,
     download: Callable[[str, str], bytes] = npm_download,
     which: Callable[[str], str | None] = shutil.which,
-    node_version: Callable[[], tuple[int, ...] | None] = installed_node_version,
+    node_version: Callable[[], int | None] = installed_node_version,
 ) -> dict[str, Any]:
     """npm 계약을 시작 직전에 검증해 실제로 띄울 계약(받아 둔 tarball로 ``npx -y``)을 돌려준다."""
     ref = approved["npm"]
@@ -1248,9 +1253,14 @@ def verify_npm(
             raise Refuse(f"npm package cannot be stored ({type(exc).__name__})") from exc
     need, have = npm_node_floor(data), node_version()
     if need and have and have < need:
-        raise Refuse(f"Node.js {'.'.join(map(str, need))} 이상이 필요합니다"
-                     f"(이 PC {'.'.join(map(str, have))})")
+        raise Refuse(f"Node.js {need} 이상이 필요합니다(이 PC {have})")
     launch = ["-y", f"--package={path}", bin_name, *argv[2:]]
+    # Windows의 npx는 배치 파일(npx.cmd)이고 AppContainer 안의 cmd.exe는 「Access is denied.」로
+    # 끝난다(pj3 실측). 옆의 node.exe로 npm의 npx-cli.js를 바로 돌린다.
+    cli = os.path.join(os.path.dirname(runtime), "node_modules", "npm", "bin", "npx-cli.js")
+    node = os.path.join(os.path.dirname(runtime), "node.exe")
+    if runtime.lower().endswith((".cmd", ".bat")) and os.path.isfile(cli) and os.path.isfile(node):
+        runtime, launch = node, [cli, *launch]
     return {**approved, "executable": runtime, "argv": launch, "_pack_dir": directory}
 
 
@@ -1768,6 +1778,8 @@ def _wunder(path: str, base: str) -> bool:
 
 def win_runner_caches(contract: Mapping[str, Any], home: str) -> list[str]:
     name = re.sub(r"\.(exe|cmd|bat)$", "", ntpath.basename(str(contract["executable"])).lower())
+    if contract.get("npm") is not None:  # node.exe로 바로 돌려도 npx 캐시를 쓴다
+        name = "npx"
     first = (contract.get("argv") or [""])[:1]
     needs = RUNNER_ARGS.get(name)
     if name not in WIN_RUNNER_CACHES or (needs and (not first or first[0] not in needs)):
@@ -1784,6 +1796,7 @@ def win_grants(
     exists: Callable[[str], bool] = os.path.exists,
     real: Callable[[str], str] = os.path.realpath,
     read_text: Callable[[str], str] | None = None,
+    make: Callable[[str], None] = lambda path: os.makedirs(path, exist_ok=True),
 ) -> list[tuple[str, str, bool]]:
     """AppContainer에 줄 (경로, 권한, 선언한 경로인가). 권한은 ``R``읽기·``RX``읽고 실행·``M``수정.
 
@@ -1821,7 +1834,14 @@ def win_grants(
         add(ntpath.dirname(script), "R")
     if approved.get("cwd"):
         add(approved["cwd"], "R")
+    if approved.get("_pack_dir"):  # 받아 둔 묶음(npm tarball 등)은 읽기만
+        add(approved["_pack_dir"], "R")
     for cache in win_runner_caches(approved, home):
+        if not exists(cache):  # 처음 쓰는 PC에는 실행기 캐시가 아직 없다(없으면 권한을 못 준다)
+            try:
+                make(cache)
+            except OSError:
+                pass
         add(cache, "M")
     for entry in approved.get("file_access") or ():
         add(str(entry["path"]), "M" if entry.get("mode") == "rw" else "R", True)
@@ -2943,6 +2963,11 @@ def _failure_path(state_dir: str, server: str) -> str:
     return os.path.join(os.path.expanduser(state_dir), FAILED_DIR, f"{name}.json")
 
 
+def plain_reason(text: str) -> str:
+    """화면에 실을 사유에서 PC의 경로를 지운다."""
+    return re.sub(r"[A-Za-z]:[\\/]\S*|(?<![\w])/[\w.~-][^\s,)]*", "…", text)
+
+
 def record_start_failure(state_dir: str, server: str, reason: str) -> None:
     path = _failure_path(state_dir, server)
     try:
@@ -3324,6 +3349,8 @@ def run_server(
     elif approved.get("npm") is not None:
         approved = verify_npm(
             approved, folder=os.path.join(os.path.expanduser(state_dir or KIT_DIR), NPM_DIR))
+    if state_dir is not None:  # 검증을 통과했으면 지난 시작 실패는 지운다(실패하면 다시 남는다)
+        clear_start_failure(state_dir, server)
     executable = approved["executable"]
     try:
         fd = os.open(executable, os.O_RDONLY | getattr(os, "O_BINARY", 0))
@@ -3594,8 +3621,8 @@ def main(argv: list[str] | None = None) -> None:
                     pass
             os._exit(exc.code if isinstance(exc.code, int) else 0 if exc.code is None else 1)
         except Refuse as exc:
-            if args.server and not isinstance(exc, Paused):  # 화면에 「시작 실패 · 사유」로 보인다
-                record_start_failure(state_dir, args.server, str(exc))
+            if args.server and not isinstance(exc, (Paused, Unreachable)):  # 일시 장애는 빼고
+                record_start_failure(state_dir, args.server, plain_reason(str(exc)))
             _give_up(REFUSED, f"MINT refused to start the server: {exc}")
         except BaseException as exc:  # 어떤 예외도 시작으로 새지 않는다.
             _give_up(REFUSED, f"MINT launcher failed: {type(exc).__name__}")

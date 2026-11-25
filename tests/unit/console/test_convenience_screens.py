@@ -194,6 +194,14 @@ def test_a_start_failure_report_shows_the_reason_on_the_start_step():
     steps = delivery_progress(rows, local=True)
     assert steps[4] == ("error", "시작 실패 · 종료 코드 1")
     assert [lv for lv, _ in steps[5:]] == ["off", "off"]
+    # 잠깐 떴다가 끝난 프로세스의 「시작」 영수증이 실패를 가리지 않는다(pj1 실측)
+    flashed = delivery_progress([*rows, {"decision_version": 1, "stage": "started"}], local=True)
+    assert flashed[4] == ("error", "시작 실패 · 종료 코드 1")
+    found = delivery_progress([*rows, {"decision_version": 1, "stage": "discovered"}], local=True)
+    assert found[4][0] == "ok" and found[5][0] == "ok"  # 다른 PC에서 도구를 받았으면 성공
+    pcs = [{**r, "target": "a"} for r in rows] + [
+        {"decision_version": 1, "stage": "started", "target": "b"}]
+    assert delivery_progress(pcs, local=True)[4][0] == "ok"  # 다른 PC는 돌고 있다
 
 
 def test_service_accounts_do_not_count_as_human_operators(monkeypatch):
