@@ -215,11 +215,11 @@ def test_the_hook_shows_korean_guidance_on_http_401():
 
 
 @pytest.mark.parametrize(("fast", "tick", "gap"), [
-    (None, True, 6 * 3600),
+    (None, True, kit_module.REPORT_TICK_GAP),
     (None, False, 3600),
     (1100.0, True, 20),   # 짧은 주기 표식이 살아 있다
-    (900.0, True, 6 * 3600),  # 표식이 지났다
-    (1000.0 + 99999, True, 6 * 3600),  # 너무 먼 미래 값은 믿지 않는다
+    (900.0, True, kit_module.REPORT_TICK_GAP),  # 표식이 지났다
+    (1000.0 + 99999, True, kit_module.REPORT_TICK_GAP),  # 너무 먼 미래 값은 믿지 않는다
 ])
 def test_the_report_gap_is_short_only_while_something_awaits_approval(fast, tick, gap):
     assert kit_module.report_gap(fast, 1000.0, tick) == gap
@@ -229,13 +229,16 @@ def test_work_to_apply_keeps_the_short_gap_on():
     pack = {"contract": {"pack": {"sha256": "a"}}}
     assert kit_module.needs_fast({}, True, 1000.0)
     assert kit_module.needs_fast({"inspections": [{"id": "x"}]}, False, 1000.0)
+    # 웹으로 낸 신청이 진행 중이거나 방금 승인됐다(PC는 모른다): 짧은 주기로 받는다
+    assert kit_module.needs_fast({"awaiting": True}, False, 1000.0)
+    assert kit_module.REPORT_TICK_GAP <= 600
     assert kit_module.needs_fast({"desired": [pack]}, False, 1000.0)  # 허가 없음
     done = {**pack, "permit_until": "1970-01-01T01:00:00+00:00"}
     assert not kit_module.needs_fast({"desired": [done]}, False, 1000.0)
     assert not kit_module.needs_fast({"desired": [{"contract": {}}]}, False, 1000.0)
 
 
-def test_a_tick_reports_every_twenty_seconds_while_marked_and_every_six_hours_otherwise(
+def test_a_tick_reports_every_twenty_seconds_while_marked_and_every_ten_minutes_otherwise(
     tmp_path, monkeypatch, reports
 ):
     programs, home = stage(tmp_path, monkeypatch)
@@ -244,9 +247,9 @@ def test_a_tick_reports_every_twenty_seconds_while_marked_and_every_six_hours_ot
         programs, tick=True, sleep=lambda s: None, now=lambda: now[0])
     run()
     assert len(reports) == 1
-    now[0] += 3600
+    now[0] += 300
     run()
-    assert len(reports) == 1  # 6시간 전
+    assert len(reports) == 1  # 10분 전
     (home / ".cache/mint/fast_until").write_text(str(now[0] + 100))  # 사용자가 신청했다
     run()
     assert len(reports) == 2
@@ -256,7 +259,7 @@ def test_a_tick_reports_every_twenty_seconds_while_marked_and_every_six_hours_ot
     now[0] += 2
     run()
     assert len(reports) == 3
-    now[0] += 6 * 3600
+    now[0] += kit_module.REPORT_TICK_GAP
     run()
     assert len(reports) == 4
 

@@ -78,7 +78,7 @@ NL = chr(10)
 CRLF = chr(13) + NL
 REPORT_TIMEOUT = 5
 # 주기 보고: 간격(시), 시작 지연의 상한(초), 서버 실행기가 시작할 때 보고를 건너뛰는 최소 간격(초)
-REPORT_INTERVAL_HOURS = 6
+REPORT_TICK_GAP = 600  # 타이머 보고 간격(초): 웹으로 낸 신청의 진행 표지를 10분 안에 받는다
 REPORT_MIN_GAP = 3600
 FAST_GAP = 20  # 승인 반영을 기다리는 동안의 보고 간격(초)
 FAST_WINDOW = 600  # 반영할 일이 있다고 본 뒤 짧은 주기를 유지하는 시간(초)
@@ -308,10 +308,10 @@ def report_due(last: float | None, now: float, min_gap: int = REPORT_MIN_GAP) ->
 
 
 def report_gap(fast_until: float | None, now: float, tick: bool) -> int:
-    """보고 간격(초). 표식이 살아 있으면 20초, 아니면 타이머 호출 6시간, 그 밖은 1시간."""
+    """보고 간격(초). 표식이 살아 있으면 20초, 아니면 타이머 호출 10분, 그 밖은 1시간."""
     if fast_until is not None and now < fast_until <= now + FAST_WINDOW:
         return FAST_GAP
-    return REPORT_INTERVAL_HOURS * 3600 if tick else REPORT_MIN_GAP
+    return REPORT_TICK_GAP if tick else REPORT_MIN_GAP
 
 
 def fast_marked(folder: Path, home: Path | None) -> bool:
@@ -336,8 +336,8 @@ def mark_fast(folder: Path, now: float) -> None:
 
 def needs_fast(answer: dict, changed: bool, now: float) -> bool:
     """반영할 일이 남았나: 검사 권한, 방금 있었던 변화, 허가를 못 받은 묶음 서버."""
-    if changed or answer.get("inspections"):
-        return True
+    if changed or answer.get("inspections") or answer.get("awaiting"):
+        return True  # awaiting: 이 사람이 웹으로 낸 신청이 진행 중이거나 방금 승인됐다
     for item in answer.get("desired") or []:
         contract = item.get("contract") if isinstance(item, dict) else None
         if isinstance(contract, dict) and isinstance(contract.get("pack"), dict) and not (

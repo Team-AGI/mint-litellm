@@ -1351,6 +1351,10 @@ class PluginDatabase:
                 )
                 ignored = [r[0] for r in await cursor.fetchall()]
                 found = {"paused": row[2], "pause_gen": row[3], "ignored": ignored}
+                cursor = await conn.execute(  # 웹으로 낸 신청을 기다리는 중이면 짧은 주기로
+                    "SELECT mint.endpoint_user_awaiting(%s, %s)", (instance_id, key_token))
+                if (await cursor.fetchone())[0]:
+                    found["awaiting"] = True
                 if clients:
                     cursor = await conn.execute(
                         "UPDATE mint.endpoint_intake_requests SET sent_at = clock_timestamp()"
