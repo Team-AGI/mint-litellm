@@ -156,6 +156,10 @@ a.card:hover, a.card:focus-visible { border-color: var(--accent); }
 .grid > * { min-width: 0; }
 @media (min-width: 1800px) { .page.wide .grid.panels { grid-template-columns: repeat(4, 1fr); } }
 @media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } }
+/* 본문+결정 패널: 표가 있는 본문을 넓게, 결정 패널은 고정 폭. 좁으면 결정 패널을 위로 올린다. */
+.grid.with-aside { grid-template-columns: minmax(0, 1fr) 22rem; }
+.grid.with-aside > * { min-width: 0; }
+@media (max-width: 1360px) { .grid.with-aside { grid-template-columns: minmax(0, 1fr); } .grid.with-aside > aside { order: -1; } }
 .chart { height: 280px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
 .chart[data-height="200"] { height: 200px; }
 .chart[data-height="240"] { height: 240px; }

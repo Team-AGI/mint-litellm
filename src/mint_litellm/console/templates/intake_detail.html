@@ -32,7 +32,7 @@
   {{ m.kpi('높음 이상 도구', high_risk, note='낮음 ' ~ risk.low ~ ' · 보통 ' ~ risk.medium ~ ' · 높음 ' ~ risk.high ~ ' · 심각 ' ~ risk.critical, level='wait' if high_risk) }}
   {% if i.decision == 'withdrawn' %}{{ m.kpi('증빙', '승인 심사 종료') }}{% else %}{{ m.kpi('권장 증빙', proof[0] ~ ' / ' ~ proof[1], '?tab=evidence', level='wait' if lacking) }}{% endif %}
 </div>
-<div class="{{ 'grid' if can(actor, 'intake approve') }}">
+<div class="{{ 'grid with-aside' if can(actor, 'intake approve') }}">
 <div>
 {{ m.tabs(tabs, tab, '/intakes/' ~ i.id) }}
 {% if tab == 'info' %}
