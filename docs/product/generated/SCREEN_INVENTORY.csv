@@ -16,6 +16,7 @@ _approvals_rules.html,link,GET,/approvals,
 _approvals_second.html,link,GET,/intakes/{},
 _approvals_servers.html,link,GET,/servers/{},
 _evidence.html,form,POST,{},증빙 첨부
+_root_panel.html,link,GET,/root/actions,
 _server_actions.html,form,POST,/servers/{}/{},취소
 _server_actions.html,form,POST,/servers/{}/{},
 _server_actions.html,confirm,POST,/servers/{}/resume,재개
@@ -59,6 +60,7 @@ approval_new.html,form,POST,/servers/{}/tools/block,제한
 approval_new.html,link,GET,/servers/{},
 audit_report.html,form,GET,/reports/audit,조회
 base.html,form,POST,/logout,로그아웃
+base.html,link,GET,/root,
 base.html,link,GET,/staff,
 base.html,link,GET,/litellm/open,
 base.html,link,GET,/account/password,
@@ -72,7 +74,6 @@ endpoints.html,confirm,POST,*/{}/revoke,자격 회수
 endpoints.html,confirm,POST,/endpoints/{}/pause,관리 AI 연결 중지
 endpoints.html,link,GET,/endpoints,
 endpoints.html,link,GET,/intakes/new,
-error.html,link,GET,/,
 intake_detail.html,form,POST,/intakes/{}/withdraw,신청 철회
 intake_detail.html,form,POST,/intakes/{}/requester,지정
 intake_detail.html,form,POST,/intakes/{}/recheck,재검사
@@ -108,6 +109,11 @@ policy.html,form,POST,/policy/mode,
 policy.html,confirm,POST,/policy/shadow/apply,적용
 policy.html,link,GET,/reports/audit,
 policy.html,link,GET,/ledger,
+root.html,confirm,POST,/root/halt,전역 정지…
+root.html,link,GET,/root/actions,
+root_actions.html,form,GET,/root/actions,조회
+root_actions.html,form,POST,/root/actions/{}/verify,전파 다시 확인
+root_actions.html,link,GET,/root/actions,
 servers.html,link,GET,/servers/export,
 servers.html,link,GET,/servers{},
 servers.html,link,GET,/servers/{},

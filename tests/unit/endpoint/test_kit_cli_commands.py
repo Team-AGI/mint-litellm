@@ -47,7 +47,8 @@ def world(tmp_path, monkeypatch):
 
     def model(_kit, _state, gateway):
         status, me = gateway.json("GET", mint_kit.ME_PATH)
-        return {"servers": [dict(r) for r in ROWS], "intakes": me["intakes"]}
+        return {"servers": [dict(r) for r in ROWS], "intakes": me["intakes"],
+                "access_requests": mint_kit.access_rows(me)}
 
     monkeypatch.setattr(mint_kit, "build_model", model)
     monkeypatch.setattr(mint_kit.sys.stdin, "isatty", lambda: False)
@@ -193,16 +194,65 @@ def test_app_run_returns_the_exit_code_of_the_command_it_ran(world, monkeypatch,
     assert run(capsys, "app", "run", "bot", "--", "x")[0] == 7
 
 
-def test_access_and_cancel_say_they_are_not_available_yet(world, capsys):
-    ask = ["request", "access", "github_mcp", "delete_repo", "--reason", "정리"]
-    code, out, err = run(capsys, *ask)
-    assert code == mint_kit.EXIT_FAIL and out == ""
-    assert err.splitlines() == ["오류: 아직 이 기능을 쓸 수 없습니다.",
-                                "다음: 직원 화면 「내 MCP 서버」에서 권한을 요청하십시오."]
-    code, _, err = run(capsys, "request", "cancel", "3f2a9c1b", "--yes")
-    assert code == mint_kit.EXIT_FAIL and "「내 요청」" in err
+class AccessGate(Gate):
+    """권한 요청 경로를 흉내 내는 게이트웨이(보낸 본문과 취소 경로를 남긴다)."""
+
+    def __init__(self, answer=(201, {"id": "a1b2c3d4-0000", "reused": False})):
+        super().__init__()
+        self.answer = answer
+        self.me["access_requests"] = [
+            {"id": "a1b2c3d4-0000", "server_id": "github_mcp", "tool": "delete_repo",
+             "reason_code": "DENIED", "status": "open", "resolution": None,
+             "decision_note": None, "created_at": "2026-11-25T02:00:00Z"},
+            {"id": "e5f6a7b8-0000", "server_id": "docs_mcp", "tool": None,
+             "reason_code": "APPROVAL_ABSENT", "status": "resolved", "resolution": "grant",
+             "decision_note": None, "created_at": "2026-11-24T02:00:00Z"},
+        ]  # fmt: skip
+        self.paths = []
+
+    def json(self, method, path, body=None):
+        if method == "POST":
+            self.paths.append(path)
+            self.sent.append(body)
+            return (200, {"cancelled": True}) if path.endswith("/cancel") else self.answer
+        return super().json(method, path, body)
+
+
+def test_access_opens_a_request_through_the_kit_key(world, capsys):
+    world.gateway = AccessGate()
+    ask = ["request", "access", "github_mcp", "delete_repo", "--reason", " 저장소 정리 "]
+    code, out, _ = run(capsys, *ask)
+    assert code == mint_kit.EXIT_OK and "권한 요청을 보냈습니다: github_mcp/delete_repo" in out
+    body = world.gateway.sent[-1]
+    assert world.gateway.paths[-1] == mint_kit.ACCESS_PATH
+    assert body["server"] == "github_mcp" and body["tool"] == "delete_repo"
+    assert body["note"] == "저장소 정리" and "user" not in body and len(body["request_id"]) == 36
     code, _, err = run(capsys, "request", "access", "github_mcp", "--json", "--reason", "x")
-    assert json.loads(err)["error"]["code"] == "unavailable"
+    assert code == 0 and "tool" not in world.gateway.sent[-1]
+    world.gateway = AccessGate(answer=(201, {"id": "a1b2c3d4-0000", "reused": True}))
+    code, out, _ = run(capsys, *ask)
+    assert "이미 보낸 요청이 대기 중입니다" in out
+    world.gateway = AccessGate(answer=(404, {"detail": "MINT-NOTFOUND: no such server"}))
+    code, _, err = run(capsys, *ask)
+    assert code == mint_kit.EXIT_FAIL and "서버가 조직에 없습니다" in err
+    world.gateway = AccessGate(answer=(404, {"detail": "no such kit key"}))
+    assert run(capsys, *ask)[0] == mint_kit.EXIT_LINK
+
+
+def test_request_list_shows_access_requests_and_cancel_only_takes_open_ones(world, capsys):
+    world.gateway = AccessGate()
+    code, out, _ = run(capsys, "request", "list")
+    assert "권한 요청" in out and "github_mcp/delete_repo" in out and "승인 대기" in out
+    rows = json.loads(run(capsys, "request", "list", "--json")[1])["requests"]
+    asks = [r for r in rows if r["kind"] == "권한 요청"]
+    assert [r["state"] for r in asks] == ["승인 대기", "승인됨"]
+    assert asks[1]["reason"] == "사용 허용됨" and asks[1]["next"] == "바로 쓸 수 있습니다"
+    code, out, _ = run(capsys, "request", "cancel", "a1b2", "--yes")
+    assert code == 0 and world.gateway.paths[-1] == mint_kit.ACCESS_PATH + "/a1b2c3d4-0000/cancel"
+    code, _, err = run(capsys, "request", "cancel", "e5f6", "--yes")  # 이미 승인됨
+    assert code == mint_kit.EXIT_FAIL and "이미 끝난 요청" in err
+    code, _, err = run(capsys, "request", "cancel", "3f2a9c1b", "--yes")  # 서버 신청
+    assert code == mint_kit.EXIT_FAIL and "「서버 신청」" in err
 
 
 # --- 비대화형 ----------------------------------------------------------------------------------

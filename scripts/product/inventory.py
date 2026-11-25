@@ -6,6 +6,7 @@
 
 import csv
 import re
+import runpy
 import sys
 from pathlib import Path
 
@@ -76,6 +77,16 @@ def routes() -> list[dict]:
                     "templates": " ".join(templates),
                 }
             )
+    # PC 키트가 부르는 단말 경로: 이름은 routes.py 상수로 등록된다
+    endpoint = ROOT / "src" / "mint_litellm" / "endpoint"
+    names = runpy.run_path(str(endpoint / "routes.py"))
+    text = (endpoint / "decide.py").read_text(encoding="utf-8")
+    for m in re.finditer(r"@router\.(get|post|put|delete)\((\w+)", text):
+        path = names[m.group(2)]
+        fn = FUNC.search(text[m.end():])
+        rows.append({"method": m.group(1).upper(), "path": path, "key": norm(path),
+                     "file": "src/mint_litellm/endpoint/decide.py",
+                     "handler": (fn.group(1) or fn.group(2)) if fn else "", "templates": ""})
     return rows
 
 

@@ -1,0 +1,1 @@
+- PC에서 `mint request access <서버> [도구] --reason 사유`로 권한을 요청하고 `mint request cancel`로 취소하며, `mint request list`와 터미널 「내 요청」 탭에서 처리 결과를 봅니다. 승인이 모두 끝난 서버의 신청은 PC 목록에서 「이용 종료」로 보입니다(마이그레이션 100).

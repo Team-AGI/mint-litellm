@@ -13,11 +13,14 @@ PACKS_PATH = PACKS_PREFIX + "/{server_id}/{pack_sha256}/{file}"
 INSPECTIONS_PREFIX = "/mint/v1/endpoint/inspections"
 INSPECTION_START_PATH = INSPECTIONS_PREFIX + "/{inspection_id}/start"
 INSPECTION_RESULT_PATH = INSPECTIONS_PREFIX + "/{inspection_id}/result"
+ACCESS_REQUESTS_PATH = "/mint/v1/endpoint/access-requests"
+ACCESS_REQUEST_CANCEL_PATH = ACCESS_REQUESTS_PATH + "/{request_id}/cancel"
 
 # 설치 묶음의 사용자 키가 부를 수 있는 경로의 전부이다(LiteLLM 키의 ``allowed_routes``).
 KIT_KEY_ROUTES = (
     DECIDE_PATH, RESULT_PATH, REPORT_PATH, OUTCOMES_PATH, ME_PATH, INTAKES_PATH,
     PACKS_PREFIX + "/*", INSPECTIONS_PREFIX + "/*", APPS_PATH, APPS_PATH + "/*",
+    ACCESS_REQUESTS_PATH, ACCESS_REQUESTS_PATH + "/*",
 )
 
 # 게이트웨이 MCP 전용 키가 부를 수 있는 LiteLLM의 MCP 경로(접두 일치·와일드카드).

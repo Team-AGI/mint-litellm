@@ -308,3 +308,55 @@ def test_an_intake_may_carry_env_values_and_the_kit_key_may_call_the_new_paths(t
     assert scope["submit"][-1][2]["env"] == {"GHIDRA_INSTALL_DIR": "/opt/ghidra"}
     assert post(client, INTAKES, intake(env={"1x": "a"})).status_code == 422
     assert "/mint/v1/endpoint/inspections/*" in KIT_KEY_ROUTES
+
+
+ACCESS = "/mint/v1/endpoint/access-requests"
+
+
+def test_access_requests_go_to_the_db_with_the_calling_key_only(tmp_path, scope, monkeypatch):
+    from mint_litellm.endpoint.routes import KIT_KEY_ROUTES
+
+    seen = {}
+
+    async def open_(self, key_token, request_id, server, tool, reason, note):
+        seen["open"] = (key_token, request_id, server, tool, reason, note)
+        if server == "nope":
+            raise RuntimeError("MINT-NOTFOUND: no such server")
+        return request_id if server == "demo" else UUID(int=9)
+
+    async def cancel(self, key_token, request_id):
+        seen["cancel"] = (key_token, request_id)
+        return request_id == UUID(int=3)
+
+    async def mine(self, key_token):
+        return [{"id": UUID(int=3), "server_id": "demo", "tool": "t", "reason_code": "DENIED",
+                 "status": "open", "resolution": None, "decision_note": None,
+                 "created_at": UNTIL, "decided_at": None}]
+
+    async def live(self, key_token):
+        return set()  # demo 서버의 승인이 모두 끝났다
+
+    async def approved(self, instance_id, key_token):
+        return [{"id": UUID(int=1), "server_id": "demo", "status": "decided",
+                 "decision": "approved", "reason": None, "created_at": UNTIL}]
+
+    for name, fn in (("endpoint_access_open", open_), ("endpoint_access_cancel", cancel),
+                     ("endpoint_access_mine", mine), ("endpoint_live_servers", live),
+                     ("endpoint_my_intakes", approved)):
+        monkeypatch.setattr(FakeDatabase, name, fn, raising=False)
+    client, _ = build(tmp_path)
+    body = {"request_id": str(UUID(int=3)), "server": "demo", "tool": "t", "reason_code": "DENIED",
+            "note": "정리"}
+    answer = post(client, ACCESS, body)
+    assert answer.status_code == 201 and answer.json() == {"id": str(UUID(int=3)), "reused": False}
+    assert seen["open"] == (KEY, UUID(int=3), "demo", "t", "DENIED", "정리")
+    assert post(client, ACCESS, {**body, "server": "other"}).json()["reused"] is True
+    assert post(client, ACCESS, {**body, "server": "nope"}).status_code == 404
+    assert post(client, ACCESS, {**body, "reason_code": "MASTER_KEY"}).status_code == 422
+    assert post(client, ACCESS, {**body, "user_id": "u9"}).status_code == 422
+    assert post(client, ACCESS + f"/{UUID(int=3)}/cancel", None).status_code == 200
+    assert post(client, ACCESS + f"/{UUID(int=4)}/cancel", None).status_code == 404
+    me = client.get(ME, headers=KEY_HEADER).json()
+    assert me["access_requests"][0]["status"] == "open" and me["access_requests"][0]["tool"] == "t"
+    assert me["intakes"][0]["stage"] == "ended"  # QA-BUG-009
+    assert ACCESS in KIT_KEY_ROUTES and ACCESS + "/*" in KIT_KEY_ROUTES

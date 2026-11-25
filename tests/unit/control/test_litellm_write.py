@@ -266,7 +266,8 @@ def test_a_kit_key_is_limited_to_the_hook_routes_and_the_workers_client_cannot_m
         "/mint/v1/decide", "/mint/v1/result", "/mint/v1/endpoint/report",
         "/mint/v1/endpoint/outcomes", "/mint/v1/endpoint/me", "/mint/v1/endpoint/intakes",
         "/mint/v1/endpoint/packs/*", "/mint/v1/endpoint/inspections/*",
-        "/mint/v1/endpoint/apps", "/mint/v1/endpoint/apps/*"]
+        "/mint/v1/endpoint/apps", "/mint/v1/endpoint/apps/*",
+        "/mint/v1/endpoint/access-requests", "/mint/v1/endpoint/access-requests/*"]
     kit.generate_kit_key(user_id="u2", team_id=None, alias="mint-kit-cd34")
     assert "team_id" not in fake.generated[1]
     with pytest.raises(WriteRefused):
