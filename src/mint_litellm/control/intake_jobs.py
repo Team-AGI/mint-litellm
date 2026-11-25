@@ -234,9 +234,11 @@ def _staff_registry(client: Any, row: dict, contract: dict | None) -> None:
         client.provision_staff_server(row["server_id"], contract["url"], contract["transport"],
                                       str(row["id"]), contract["url_sha256"])
         entry = client.get_server(row["server_id"])
-    if (entry is None or not isinstance(entry.get("mcp_info"), dict)
-            or any(entry["mcp_info"].get(k) != v for k, v in expected.items())
-            or entry.get("allow_all_keys") is not False):
+    info = entry.get("mcp_info") if entry else None
+    ours = (isinstance(info, dict) and all(info.get(k) == v for k, v in expected.items())) or (
+        entry is not None  # LiteLLM 1.106은 읽기 응답에서 mcp_info 값을 지운다: 설명의 표지로 확인
+        and entry.get("description") == f"mint-intake:{row['id']}:{contract['url_sha256']}")
+    if entry is None or not ours or entry.get("allow_all_keys") is not False:
         raise StaffRegistryConflict("도입 신청과 다른 서버 등록이 있거나 "
                                     "비공개 상태를 확인하지 못했습니다.")
 

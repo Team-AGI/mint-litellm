@@ -32,6 +32,11 @@ MAX_TOOLS_BYTES = 2 * 1024 * 1024
 TOOLS_SECONDS = 10.0  # 정의 수집 전체(연결·응답 읽기)의 기한
 
 
+def staff_marker(intake_id: str, url_sha256: str) -> str:
+    """직원 도입 검증용 등록의 표지(이 신청·이 주소가 만든 등록인지 다시 확인할 때 쓴다)."""
+    return f"mint-intake:{intake_id}:{url_sha256}"
+
+
 class ResponseTooLarge(LiteLLMError):
     """응답이 상한(크기·중첩)을 넘었다."""
 
@@ -99,6 +104,8 @@ class LiteLLMControl(LiteLLMSync):
             "transport": transport, "auth_type": "none", "allow_all_keys": False,
             "rpm": 600, "max_concurrent_requests": 8, "timeout": 30,
             "mcp_info": {"mint_intake_id": intake_id, "mint_url_sha256": url_sha256},
+            # LiteLLM 1.106은 읽기 응답에서 mcp_info의 이 값을 지우므로 같은 표지를 설명에도 둔다
+            "description": staff_marker(intake_id, url_sha256),
         })
 
     def _post(
