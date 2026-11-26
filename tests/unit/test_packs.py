@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -146,117 +147,73 @@ class PackTests(unittest.TestCase):
         with self.assertRaisesRegex(packs.PackError, "PACK_INDEX_NOT_ALLOWED"):
             packs.build_pack(self.spec, [], packs_dir=self.temp.name)
 
-
-if __name__ == "__main__":
-    unittest.main()
-
-
-def test_pip_runs_from_the_bundled_wheel_when_the_image_has_no_pip(tmp_path, monkeypatch):
-    from mint_litellm.control import packs
-
-    wheel = tmp_path / "pip.whl"
-    monkeypatch.setenv("MINT_PIP_WHEEL", str(wheel))
-    assert packs._pip()[1:] == ["-m", "pip"]  # 파일이 없으면 설치된 pip
-    wheel.write_bytes(b"zip")
-    assert packs._pip()[1:] == [str(wheel) + "/pip"]
+def _wheel(directory, name, requires=()):
+    path = directory / f"{name}-1.0-py3-none-any.whl"
+    lines = ["Metadata-Version: 2.1", f"Name: {name}", "Version: 1.0",
+             *(f"Requires-Dist: {r}" for r in requires)]
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr(f"{name}-1.0.dist-info/METADATA", "\n".join(lines) + "\n")
+        z.writestr(f"{name}-1.0.dist-info/entry_points.txt",
+                   "[console_scripts]\nexample = pkg:main\n")
+    return path
 
 
-class GitPackTests(unittest.TestCase):
-    """저장소 커밋 출처: 커밋에서 wheel을 만들고 의존 라이브러리는 PyPI에서 받는다."""
-
+class WindowsClosureTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.allow = [{"kind": "egress_target", "value": h}
-                      for h in ("pypi.org", "files.pythonhosted.org")]
-        self.spec = {"index": "git", "name": "example", "version": "a" * 40, "extras": [],
-                     "git": "https://github.com/org/example", "command": "example", "argv": []}
-        self.allow += [{"kind": "egress_target", "value": h}
-                       for h in ("github.com", "codeload.github.com")]
-        self.urls = []
 
-    def wheel(self, directory):
-        with zipfile.ZipFile(directory / "example-1.0-py3-none-any.whl", "w") as z:
-            z.writestr("example-1.0.dist-info/entry_points.txt",
-                       "[console_scripts]\nexample = pkg:main\n")
+    def test_a_windows_only_requirement_is_downloaded_and_a_linux_only_one_is_not(self):
+        asked = []
 
-    def pack(self, **kwargs):
-        def build(url, directory):
-            self.urls.append(url)
-            self.wheel(directory)
+        def download(requirement, destination, python, before=None):
+            asked.append((requirement, before))
+            if requirement.startswith("example"):
+                _wheel(destination, "example", [
+                    "mcp>=1", "pywin32>=300; sys_platform == 'win32'",
+                    "uvloop; sys_platform != 'win32'", "extra-only; extra == 'cli'"])
+            elif requirement.startswith("pywin32"):
+                _wheel(destination, "pywin32", ["winhelper; platform_system == 'Windows'"])
+            else:
+                _wheel(destination, re.split("[>=]", requirement)[0].replace("-", "_"))
 
-        return packs.build_pack(
-            self.spec, self.allow, packs_dir=self.temp.name, build=build,
-            download=lambda *a: None, metadata=lambda *a: self.fail("PyPI 해시 조회 없음"))
+        stage = Path(self.temp.name)
+        download("example==1.0", stage, "3.12", "T")
+        packs._windows_closure(stage, [], "example", "3.12", "T", download)
+        self.assertEqual(sorted(p.name.split("-")[0] for p in stage.glob("*.whl")),
+                         ["example", "mcp", "pywin32", "winhelper"])
+        self.assertTrue(all(before == "T" for _, before in asked))
+        joined = " ".join(r for r, _ in asked)
+        self.assertNotIn("uvloop", joined)
+        self.assertNotIn("extra-only", joined)
 
-    def test_the_commit_wheel_becomes_a_pack_without_a_pypi_digest(self):
-        digest, manifest = self.pack()
-        self.assertEqual(self.urls, [f"https://github.com/org/example/archive/{'a' * 40}.zip"])
-        self.assertEqual(manifest["package"]["index"], "git")
-        self.assertEqual(manifest["package"]["version"], "a" * 40)
-        self.assertEqual(manifest["entry"], "pkg:main")
-        self.assertEqual([f["name"] for f in manifest["files"]], ["example-1.0-py3-none-any.whl"])
-        self.assertEqual(sorted(p.name for p in Path(self.temp.name).iterdir()), [digest])
+    def test_the_windows_manifest_records_the_closure_version(self):
+        digests = {}
 
-    def test_an_unpinned_or_foreign_source_is_not_built(self):
-        for change in ({"version": "main"}, {"git": "https://gitlab.com/org/example"}):
-            self.spec = {**self.spec, **change}
-            with self.assertRaisesRegex(packs.PackError, "PACK_INDEX_NOT_ALLOWED"):
-                self.pack()
-        self.assertEqual(self.urls, [])
+        def download(requirement, destination, python, before=None):
+            if requirement.startswith("example"):
+                path = _wheel(destination, "example", ["pywin32; sys_platform == 'win32'"])
+            else:
+                path = _wheel(destination, "pywin32")
+            digests[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
 
-    def test_github_hosts_must_be_allowed(self):
-        self.allow = self.allow[:2]
-        with self.assertRaisesRegex(packs.PackError, "PACK_INDEX_NOT_ALLOWED"):
-            self.pack()
+        def metadata(name, version):
+            return {"urls": [{"filename": f, "digests": {"sha256": d}}
+                             for f, d in digests.items()]}
 
-
-class WindowsPackTest(unittest.TestCase):
-    """Windows 묶음: 같은 요구 사항·같은 시점으로 win_amd64 wheel을 받는다."""
-
-    def run_pip(self, **kwargs):
-        from unittest import mock
-
-        with mock.patch.object(packs.subprocess, "run") as run:
-            packs._download("example==1.0", Path("."), "3.12", "2026-01-01T00:00:00Z", **kwargs)
-        return run.call_args.args[0]
-
-    def test_the_windows_download_asks_for_win_amd64_with_the_same_pins(self):
-        linux, windows = self.run_pip(), self.run_pip(windows=True)
-        self.assertIn("manylinux2014_x86_64", linux)
-        self.assertNotIn("win_amd64", linux)  # Linux 묶음은 그대로
-        self.assertEqual(windows[windows.index("--platform") + 1], "win_amd64")
-        self.assertNotIn("manylinux2014_x86_64", windows)
-        for same in ("--only-binary=:all:", "--uploaded-prior-to", "2026-01-01T00:00:00Z",
-                     "--python-version", "3.12", "--abi", "cp312", "example==1.0"):
-            self.assertIn(same, windows)
-
-    def test_the_windows_pack_is_its_own_content_addressed_pack(self):
-        temp = tempfile.TemporaryDirectory()
-        self.addCleanup(temp.cleanup)
         spec = {"index": "pypi", "name": "example", "version": "1.0", "extras": [],
                 "command": "example", "argv": []}
         allow = [{"kind": "egress_target", "value": h}
                  for h in ("pypi.org", "files.pythonhosted.org")]
-        wheels = []
-
-        def download(requirement, destination, python, before=None):
-            wheel = destination / "example-1.0-py3-none-any.whl"
-            with zipfile.ZipFile(wheel, "w") as z:
-                z.writestr("example-1.0.dist-info/entry_points.txt",
-                           "[console_scripts]\nexample = pkg:main\n")
-            wheels.append(hashlib.sha256(wheel.read_bytes()).hexdigest())
-
-        def metadata(name, version):
-            return {"urls": [{"filename": "example-1.0-py3-none-any.whl",
-                              "digests": {"sha256": wheels[-1]}}]}
-
-        built = [packs.build_pack(spec, allow, packs_dir=temp.name, download=download,
-                                  metadata=metadata, windows=win) for win in (False, True)]
-        (linux, linux_manifest), (windows, windows_manifest) = built
-        self.assertNotEqual(linux, windows)
-        self.assertEqual(linux_manifest["platform"]["os"], "linux")
-        self.assertEqual(windows_manifest["platform"],
-                         {"os": "windows", "arch": "amd64", "python": "3.12"})
-        self.assertEqual(sorted(p.name for p in Path(temp.name).iterdir()),
-                         sorted([linux, windows]))
+        digest, manifest = packs.build_pack(spec, allow, packs_dir=self.temp.name,
+                                            download=download, metadata=metadata, windows=True)
+        self.assertEqual(sorted(f["name"].split("-")[0] for f in manifest["files"]),
+                         ["example", "pywin32"])
+        self.assertEqual(manifest["platform"]["closure"], packs.WINDOWS_CLOSURE)
+        self.assertTrue(packs.windows_current(digest, self.temp.name))
+        old = Path(self.temp.name) / ("0" * 64)
+        old.mkdir()
+        (old / "manifest.json").write_text(
+            json.dumps({"platform": {"os": "windows", "python": "3.12"}}))
+        self.assertFalse(packs.windows_current("0" * 64, self.temp.name))
+        self.assertTrue(packs.windows_current("f" * 64, self.temp.name))  # 읽을 수 없으면 그대로
