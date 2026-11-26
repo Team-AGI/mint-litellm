@@ -126,10 +126,20 @@ def sha256_file(path: Path) -> str:
     return sha256_bytes(path.read_bytes())
 
 
+KIT_GONE: Path | None = None  # 실행 중인 보고기의 설치 폴더. 사라졌으면 그 아래에는 쓰지 않는다
+
+
+def keep_gone(folder: Path) -> None:
+    """제거된 키트 폴더(또는 그 아래)를 다시 만들 쓰기는 거절한다(``OSError``)."""
+    if KIT_GONE is not None and not KIT_GONE.exists() and KIT_GONE in (folder, *folder.parents):
+        raise FileNotFoundError(f"kit folder was removed: {KIT_GONE}")
+
+
 def write_atomic(path: Path, data: bytes, mode: int, owner: tuple[int, int] | None = None) -> None:
     """같은 폴더의 임시 파일에 쓰고 바꿔 넣는다. 기존 심볼릭 링크는 따라가지 않는다."""
     # 관리자 권한 설치기가 사용자 폴더(~/.cache/mint 등)를 처음 만들면 폴더도 그 사용자 것이어야
     # 사용자 보고기가 보고 시각을 남긴다(root 소유로 남으면 「아직 보고 없음」으로 보인다).
+    keep_gone(path.parent)
     missing = []
     folder = path.parent
     while not folder.exists():
@@ -340,6 +350,7 @@ def fast_marked(folder: Path, home: Path | None) -> bool:
 
 def mark_fast(folder: Path, now: float) -> None:
     try:
+        keep_gone(folder)
         folder.mkdir(parents=True, exist_ok=True)
         (folder / FAST_FILE).write_text(str(now + FAST_WINDOW))
     except OSError:
@@ -734,15 +745,21 @@ def win_sids():
     return of_process, of_name
 
 
+KIT_HELPER = re.compile(r"mint_(?:kit|agent)\.py")
+
+
 def classify_windows(rows, token_sid, container_sid) -> dict[str, str]:
     """서버별 실제 격리 상태. 실행기 프로세스의 직계 자식(서버)의 토큰이 그 실행기가 만든
     AppContainer이면 ``appcontainer``, 아니면 ``none``(하나라도 격리 밖이면 ``none``).
-    토큰을 읽지 못한 서버는 항목이 없다."""
+    토큰을 읽지 못한 서버는 항목이 없다. 실행기가 시작할 때 띄우는 묶음 자신의 보고기·도우미
+    (``mint_kit.py``·``mint_agent.py`` 실행)는 서버가 아니라서 세지 않는다."""
     launchers = {pid: name for pid, _, _, cmd in rows if (name := server_of(cmd))}
     found: dict[str, str] = {}
-    for pid, parent, image, _ in rows:
+    for pid, parent, image, cmd in rows:
         server = launchers.get(parent)
         if not server or pid in launchers or image.lower() == "conhost.exe":
+            continue
+        if image.lower().startswith("py") and KIT_HELPER.search(cmd):
             continue
         sid = token_sid(pid)
         if sid is None:
@@ -2914,6 +2931,7 @@ class Kit:
         for key in ("task", "sync_task", "net_task"):
             if state.get(key) and self.root is None:
                 capture(["schtasks", "/Delete", "/TN", state[key], "/F"])
+        self.stop_reporters()  # 도는 보고기가 폴더를 지운 뒤 상태를 다시 쓰지 못하게
         if state.get("mode") == "user":
             self.uninstall_user(state)
         if "codex_config_sha" in state:
@@ -2937,6 +2955,23 @@ class Kit:
             except OSError:
                 pass
         return {"mode": state.get("mode"), "kept": left, "kit_version": state.get("kit_version")}
+
+    def stop_reporters(self) -> None:
+        """Windows: 이 설치 폴더의 보고기·동기화(``mint_kit.py report|sync``)로 돌고 있는 프로세스를
+        끈다. 예약 작업을 지워도 이미 뜬 것은 계속 돌아, 폴더를 지운 뒤 상태 파일을 다시 쓴다."""
+        if not self.windows or self.root is not None or self.dry_run:
+            return
+        folder = str(self.logical_programs).replace("\\", "/").lower()
+        mine = {os.getpid()}
+        rows = process_entries(True)
+        for pid, parent, _ in rows:  # 이 제거 명령의 조상(부모 셸 등)은 끄지 않는다
+            if pid == os.getpid():
+                mine.add(parent)
+        for pid, _, command in rows:
+            text = command.replace("\\", "/").lower()
+            if (pid not in mine and "mint_kit.py" in text and folder in text
+                    and re.search(r"\s(report|sync)(\s|$)", text)):
+                self.kill(pid)
 
     def clean_servers(self) -> None:
         """제거 전에 실행기가 띄운 서버를 끄고 Windows의 AppContainer 프로필·ACE 흔적을 지운다."""
@@ -7400,6 +7435,7 @@ def report_installed(
     sleep(jitter_delay(jitter, rand))
 
     def write_stamp() -> None:
+        keep_gone(stamp.parent)
         stamp.parent.mkdir(parents=True, exist_ok=True)
         stamp.write_text(str(now()))  # 곧바로 기록해 동시에 뜬 실행기들이 한 번만 보내게 한다.
 
@@ -7451,6 +7487,7 @@ def report_installed(
         fast_file = stamp.parent / FAST_FILE
 
         def write_fast() -> None:
+            keep_gone(fast_file.parent)
             fast_file.parent.mkdir(parents=True, exist_ok=True)
             fast_file.write_text(str(now() + FAST_WINDOW))
 
@@ -7674,6 +7711,9 @@ def run_main(argv: list[str]) -> int:
     parser.add_argument("--root", help="시험용: 시스템 경로를 이 폴더 아래로 옮김")
     parser.add_argument("--kit", default=str(KIT), help="키트 폴더(기본: 설치된 위치)")
     args = parser.parse_args(argv)
+    if args.action in ("report", "sync"):
+        global KIT_GONE
+        KIT_GONE = Path(args.kit)  # 제거가 폴더를 지운 뒤에는 이 프로세스가 상태를 다시 쓰지 않는다
     if args.action == "report":
         def once() -> int:
             return report_installed(

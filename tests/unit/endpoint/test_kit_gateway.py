@@ -528,3 +528,39 @@ def test_uninstall_cleans_up_the_servers_while_the_launcher_file_still_exists(
     monkeypatch.setattr(kit_module.Kit, "clean_servers", clean)
     kit.uninstall()
     assert seen == [True]  # 실행기 파일이 지워진 뒤에는 정리 명령을 부를 수 없다
+
+
+def test_uninstall_ends_running_reporters_but_not_itself(tmp_path, reports, monkeypatch):
+    import os
+
+    kit = windows_managed(tmp_path, monkeypatch)
+    kit.install()
+    kit.root = None
+    here = r"C:\Program Files\MintEndpoint"
+    tool = here + r"\mint_kit.py"
+    rows = [
+        (10, 1, f'python.exe -I -B "{tool}" report --kit "{here}" --if-due'),
+        (11, 1, f'pythonw.exe -I -B "{tool}" sync --kit "{here}"'),
+        (12, 1, f'python.exe "{tool}" uninstall'),
+        (os.getpid(), 1, f'python.exe "{tool}" report --kit "{here}"'),
+        (14, 1, r'python.exe -I -B "D:\other\mint_kit.py" report --kit "D:\other"'),
+    ]
+    monkeypatch.setattr(kit_module, "process_entries", lambda windows: rows)
+    killed = []
+    monkeypatch.setattr(kit_module.Kit, "kill", lambda self, pid: killed.append(pid) or True)
+    kit.stop_reporters()
+    assert killed == [10, 11]  # 제거 명령 자신·다른 설치 폴더의 것은 끄지 않는다
+
+
+def test_a_reporter_that_outlives_the_uninstall_does_not_recreate_the_kit_folder(
+    tmp_path, monkeypatch
+):
+    folder = tmp_path / "MintEndpoint"
+    folder.mkdir()
+    monkeypatch.setattr(kit_module, "KIT_GONE", folder)
+    kit_module.write_atomic(folder / "state.json", b"{}", 0o644)  # 설치되어 있는 동안은 쓴다
+    kit_module.shutil.rmtree(folder)
+    with pytest.raises(OSError):
+        kit_module.write_atomic(folder / "state.json", b"{}", 0o644)
+    kit_module.mark_fast(folder, 1.0)  # 조용히 건너뛴다
+    assert not folder.exists()

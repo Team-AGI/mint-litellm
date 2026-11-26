@@ -608,6 +608,22 @@ def test_windows_token_status_maps_children_of_launchers():
     assert got == {"inside": "appcontainer", "outside": "none", "mixed": "none"}
 
 
+def test_windows_token_status_ignores_the_launchers_own_report_helper():
+    # 실행기는 시작할 때 보고기를 띄운다. 그 자식은 격리 밖에서 돌지만 서버가 아니다.
+    launch = r"python C:\k\mint_agent.py run --contracts c --server "
+    rows = [
+        (10, 1, "python.exe", launch + "npm"),
+        (11, 10, "node.exe", "server"),
+        (12, 10, "python.exe", r"python.exe -I -B C:\k\mint_kit.py report --kit C:\k --if-due"),
+        (20, 1, "python.exe", launch + "bare"),
+        (21, 20, "node.exe", "evil mint_kit.py"),  # 서버가 이름을 흉내 내도 격리 밖이면 none
+    ]
+    sids = {11: "S-IN", 12: "", 21: ""}
+    names = {kit.win_container_name("npm", 10): "S-IN"}
+    got = kit.classify_windows(rows, sids.get, lambda n: names.get(n, "S-X"))
+    assert got == {"npm": "appcontainer", "bare": "none"}
+
+
 def test_observed_token_status_beats_records_and_fills_the_admin_reporter(tmp_path, monkeypatch):
     monkeypatch.setattr(kit, "proc_start", lambda pid, windows: "t1")
     launched(tmp_path, "a", 1, "t1", "appcontainer")
