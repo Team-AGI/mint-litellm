@@ -74,11 +74,13 @@ def test_root_rejects_an_intake_whose_checks_are_running(world):
     """검사 중인 신청도 Root는 닫는다(QA-BUG-006). 일반 결정은 DB 불변식이 막는다."""
     checking = world.create()
     world.conn.execute("UPDATE mint.intakes SET status = 'checking' WHERE id = %s", (checking,))
+    world.conn.execute("UPDATE mint.servers SET status = 'validating' WHERE status = 'pending'")
     world.conn.commit()
     with pytest.raises(ControlError):
         world.decide(checking, "reject", reason="이른 반려")
     as_root(world, lambda ctx: root.force_reject(ctx, checking, "출처 불명"))
     assert world.intake(checking)["decision"] == "rejected"
+    assert world.server()["status"] == "rejected"  # QA-BUG-201: 서버가 「검사 중」에 남지 않는다
 
 
 def test_root_suspends_and_resumes_a_server_with_impact_recorded(world):

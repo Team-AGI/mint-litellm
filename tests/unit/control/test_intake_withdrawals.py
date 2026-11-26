@@ -72,6 +72,15 @@ def test_empty_reason_cannot_withdraw_but_a_stuck_check_can(world):
     assert withdraw(world, identifier)["decision"] == "withdrawn"
 
 
+def test_withdrawing_while_the_server_is_validating_closes_the_server_too(world):
+    """검사 중(서버 validating)에도 철회되고, 서버가 「검사 중」에 남지 않는다(QA-BUG-201)."""
+    identifier = world.create()
+    world.conn.execute("UPDATE mint.intakes SET status='checking' WHERE id=%s", (identifier,))
+    world.conn.execute("UPDATE mint.servers SET status='validating' WHERE status='pending'")
+    assert withdraw(world, identifier)["decision"] == "withdrawn"
+    assert world.server()["status"] == "rejected"
+
+
 def test_leased_validation_job_blocks_withdrawal_even_before_checking(world):
     identifier = world.create()
     world.conn.execute(

@@ -43,6 +43,10 @@
 {% else %}{% call m.confirm_dialog('end-sessions', '세션 종료…', '세션 종료 — ' ~ who, four('콘솔 세션 ' ~ s.sessions.admin ~ '개 · 직원 세션 ' ~ s.sessions.staff ~ '개', '이 사람은 다음 요청부터 다시 로그인해야 합니다.', '없음', '끝난 세션은 되살릴 수 없습니다. 키와 MCP 호출은 그대로입니다.', '다시 로그인하면 됩니다.'), '/people/' ~ (s.user_id | urlencode) ~ '/sessions/end', actor, '세션 종료') %}
 <label>사유(필수)<textarea name="reason" required maxlength="500"></textarea></label>
 {% endcall %}{% endif %}
+{% if is_root(actor) %}{% call m.confirm_dialog('run-cancel-person', '진행 중 실행 취소…', '진행 중 실행 취소 — ' ~ who, four('이 사람의 승인 대기·미사용 호출별 승인', '대기 중인 호출 승인을 취소합니다.', '없음', '이미 원격 서버로 보낸 호출은 끝까지 실행됩니다.', '없음(다시 요청해야 합니다)'), '/root/actions', actor, '실행 취소') %}
+<input type="hidden" name="action" value="person_run_cancel"><input type="hidden" name="target" value="{{ s.user_id }}">
+<label>사유(필수)<textarea name="reason" required maxlength="500"></textarea></label>
+{% endcall %}{% endif %}
 </div>
 {% if not s.operators %}
 <form method="post" action="/people/operator" class="row-actions" hx-boost="false">{{ m.csrf(actor) }}<input type="hidden" name="user_id" value="{{ s.user_id }}">

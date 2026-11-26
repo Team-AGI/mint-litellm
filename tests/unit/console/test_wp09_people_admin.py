@@ -195,3 +195,13 @@ def test_signup_decisions_use_dialogs_and_show_a_result_band(world, admin):
     assert "가입 요청을 거절했습니다" in admin.get(done.headers["location"]).text
     again = form_post(world, admin, f"/signup-requests/{rid}/reject", reason="")
     assert again.status_code == 404 and "처리할 가입 요청이 없습니다" in again.text
+
+
+def test_root_sees_the_run_cancel_action_in_the_person_drawer(world, boss):
+    """QA-BUG-202: 사람 서랍에 Root만 「진행 중 실행 취소…」(사람 단위)를 본다."""
+    add_person(world, "u-2", "lee@acme.test")
+    html = boss.get("/people?open=u-2").text
+    assert 'value="person_run_cancel"' in html and 'value="u-2"' in html
+    assert "진행 중 실행 취소…" in html
+    world.query("UPDATE mint.settings SET root_operators = ARRAY['root']")  # 이제 Root가 아니다
+    assert "person_run_cancel" not in boss.get("/people?open=u-2").text
