@@ -33,12 +33,11 @@ BLOCKED_GUIDANCE = (
     "정책상 차단되었으니 같은 호출을 재시도하지 마십시오. 해결: 직원 화면 「내 MCP 서버」에서 "
     "권한을 요청하거나 관리자에게 문의하십시오. Blocked by policy: do not retry the same call."
 )
-# 관리자의 사후 차단: 해제되면 같은 호출을 다시 할 수 있다(정책 차단과 다르다).
-ADMIN_BLOCK_RETRY_AFTER = 1
+# 관리자의 사후 차단: 명시 거부라 재시도 안내를 싣지 않는다. 해제는 권한 요청으로 받는다.
 ADMIN_BLOCK_GUIDANCE = (
     "[막힘] 관리자가 막은 도구입니다. 해결: 직원 화면 「내 MCP 서버」에서 권한을 요청하십시오"
-    "(터미널: mint request access <서버> <도구>). 해제되면 바로 다시 호출하십시오. "
-    "Blocked by an administrator; call again once unblocked."
+    "(터미널: mint request access <서버> <도구>). 해제되기 전에는 같은 호출을 재시도하지 마십시오. "
+    "Blocked by an administrator: do not retry until unblocked."
 )
 # 사용자 본인 확인이 필요한 호출. 확인 링크를 연 사람이 본인일 때만 확인된다.
 CONFIRMATION_GUIDANCE = (
@@ -232,15 +231,6 @@ def error_for_reason(
             guidance=APPROVAL_GUIDANCE,
             retry_after=APPROVAL_RETRY_AFTER,
         )
-    if family is Reason.DENIED:
-        return MintError(
-            code=error_code(reason_code),
-            dispatch_state=DispatchState.NOT_DISPATCHED,
-            retry_safe=True,
-            reference=reference,
-            guidance=ADMIN_BLOCK_GUIDANCE,
-            retry_after=ADMIN_BLOCK_RETRY_AFTER,
-        )
     name = policy_detect_name(reason_code)
     guidance = {
         Reason.POLICY_DETECT: (
@@ -249,6 +239,7 @@ def error_for_reason(
             "문의하십시오. 같은 인자로는 재시도하지 마십시오. "
             "Blocked by policy: do not retry the same call."
         ),
+        Reason.DENIED: ADMIN_BLOCK_GUIDANCE,
         Reason.CALL_APPROVAL_DENIED: DENIAL_GUIDANCE,
         Reason.CONFIRMATION_REQUIRED: CONFIRMATION_GUIDANCE,
         Reason.CONFIRMATION_STALE: CONFIRMATION_GUIDANCE,

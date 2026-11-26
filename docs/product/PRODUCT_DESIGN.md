@@ -422,7 +422,7 @@ GitHub 저장소로 등록한 서버 하나를 끝까지 씁니다. 시작 상�
 
 | 예 | 문구 |
 |---|---|
-| 관리자 차단 | [막힘] github_mcp의 delete_repo 도구 — 관리자가 막았습니다(사유: 삭제 도구 검토 중). 이 도구만 막혔고 다른 도구는 됩니다. 해결: `mint request access github_mcp delete_repo` 또는 직원 화면 「권한 요청」. 해제되면 바로 다시 호출하십시오. |
+| 관리자 차단 | [막힘] github_mcp의 delete_repo 도구 — 관리자가 막았습니다(사유: 삭제 도구 검토 중). 이 도구만 막혔고 다른 도구는 됩니다. 해결: `mint request access github_mcp delete_repo` 또는 직원 화면 「권한 요청」. 해제되기 전에는 재시도하지 마십시오. |
 | 승인 없음 | [막힘] github_mcp — 이 서버를 쓸 승인이 없습니다. 해결: `mint request access github_mcp`. |
 | 호출별 승인 | [승인 대기] github_mcp의 create_issue — 관리자 승인을 요청했습니다. 약 30초 뒤 같은 호출을 다시 하십시오. 진행: 직원 화면 「내 요청」. |
 | 서버 중지 | [막힘] github_mcp — 관리자가 서버를 중지했습니다(사유: …). 재개되면 자동으로 다시 됩니다. 다시 시도하지 마십시오. |

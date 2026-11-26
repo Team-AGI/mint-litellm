@@ -3,6 +3,7 @@
 import asyncio
 import json
 
+import pytest
 from plugin_helpers import (
     NOW,
     approval,
@@ -39,12 +40,24 @@ def test_the_three_refusal_kinds_tell_the_agent_what_to_do():
     assert blocked["retry_safe"] is False and "retry_after" not in blocked
     assert "재시도하지 마십시오" in blocked["guidance"] and "do not retry" in blocked["guidance"]
     admin = body("DENIED")
-    assert admin["retry_safe"] is True and admin["retry_after"] <= 5
+    assert admin["retry_safe"] is False and "retry_after" not in admin
     assert "관리자가 막은 도구" in admin["guidance"] and len(admin["guidance"].split(".")[0]) < 40
+    assert "재시도하지 마십시오" in admin["guidance"]
     transient = body("DEPENDENCY_FAILURE", dependency=Dependency.OPA)
     assert transient["retry_safe"] is True and transient["retry_after"] > 0
     assert "일시 오류" in transient["guidance"] and "Temporary error" in transient["guidance"]
     assert transient["reference"] == pending["reference"] == blocked["reference"] == REF
+
+
+@pytest.mark.parametrize(
+    "code",
+    ["DENIED", "SERVER_NOT_APPROVED", "CALL_APPROVAL_DENIED",
+     "POLICY_DETECT_POL-E-07", "GLOBAL_HALT",
+     "MASTER_KEY_FORBIDDEN", "CONFIRMATION_REQUIRED"],
+)
+def test_explicit_refusals_never_carry_a_retry_hint(code):
+    refusal = body(code)
+    assert refusal["retry_safe"] is False and "retry_after" not in refusal
 
 
 def call(h):
