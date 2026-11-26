@@ -148,7 +148,7 @@ def to_json(value: Any) -> str:
 templates.env.filters.update(
     span=span, when=when, blank=blank, join=join, to_json=to_json, clip=clip, yes_no=yes_no,
     masked=masked, tool_names=tool_names,
-    who=labels.actor, countdown=countdown,
+    who=labels.actor, who_short=labels.actor_short, countdown=countdown,
 )
 templates.env.globals.update(can=can)
 templates.env.tests["can_attach"] = lambda key, actor: can_attach(actor, key)

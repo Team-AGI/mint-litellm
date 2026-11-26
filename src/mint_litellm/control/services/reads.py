@@ -537,8 +537,9 @@ def ledger(
         conn,
         f"SELECT event_id, inserted_at, kind, source_key, {LEDGER_ACTOR} AS actor,"
         " COALESCE(payload->>'resolved_server_id', payload->>'server_id') AS server_id,"
-        " payload->>'enforced_action' AS result, payload->>'outcome' AS outcome, payload"
-        f" FROM mint.events WHERE {where} ORDER BY inserted_at DESC, event_id DESC"
+        " payload->>'enforced_action' AS result, payload->>'outcome' AS outcome,"
+        f" payload->>'tool' AS tool, payload FROM mint.events WHERE {where}"
+        " ORDER BY inserted_at DESC, event_id DESC"
         " LIMIT %s OFFSET %s",
         (*params, size, offset),
     )

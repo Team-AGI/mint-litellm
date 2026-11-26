@@ -340,3 +340,22 @@ def test_the_ledger_shows_and_filters_the_caller_of_a_decision(world, admin):
     html = admin.get("/ledger").text
     assert "caller@example.com" in html
     assert "caller@example.com" in admin.get("/ledger?actor=caller@example.com").text
+
+
+def test_the_ledger_list_shows_the_person_the_tool_and_a_korean_offline_outcome(world, admin):
+    user = "0192f7a0-7c1e-7a10-8000-0123456789ab"
+    world.query(
+        "INSERT INTO mint.directory_users (instance_id, user_id, email, litellm_role, team_ids)"
+        " VALUES (%s, %s, 'kim@example.com', 'internal_user', '[]'::jsonb)",
+        INSTANCE, user)
+    world.query(
+        "INSERT INTO mint.events (event_id, instance_id, kind, source_key, actor, payload)"
+        " VALUES (%s, %s, 'endpoint_offline_call', %s, %s, %s::jsonb)",
+        uuid.uuid4(), INSTANCE, f"endpoint:{uuid.uuid4()}", user,
+        json.dumps({"server_id": "srv-ok", "tool": "echo_tool",
+                    "outcome": "allowed_by_endpoint_offline"}))
+    html = admin.get("/ledger").text
+    assert "kim@example.com" in html and f'title="{user}"' in html
+    assert "<td>echo_tool</td>" in html and "<th>도구</th>" in html
+    assert "장애 중 단말 판단으로 통과" in html
+    assert "allowed_by_endpoint_offline" not in html

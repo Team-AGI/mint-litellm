@@ -479,6 +479,22 @@ def _spend_records(config, payload) -> list[dict]:
         return []
 
 
+def person_labels(actor: Actor, ids: set) -> dict[str, str]:
+    """주체 식별자 -> 명부의 이메일. 명부에 있는 사람만 담는다."""
+    ids = {i for i in ids if i}
+    if not ids:
+        return {}
+    emails = {
+        r["user_id"]: r["email"] for r in fetchall(
+            actor.conn,
+            "SELECT user_id, email FROM mint.directory_users WHERE instance_id = %s"
+            " AND user_id = ANY(%s) AND email IS NOT NULL",
+            (actor.instance, list(ids)),
+        )
+    }
+    return emails
+
+
 @router.get("/ledger")
 def ledger(
     request: Request,
@@ -566,6 +582,8 @@ def ledger(
         row["targets"] = ledger_targets(row, subjects.get(str(row["event_id"]), {}))
         row["reason_text"] = ledger_reason(row)
     more = more and not bad_filter
+    filters = reads.ledger_filters(actor.conn, actor.instance)
+    people = person_labels(actor, {r["actor"] for r in rows} | set(filters["actors"]))
     query = {
         "since": since,
         "until": until,
@@ -616,10 +634,12 @@ def ledger(
             else None
         )
         shown["spend_records"] = _spend_records(actor.config, shown.get("payload"))
+        people = person_labels(actor, {shown["actor"]})
     ctx = {
         "rows": rows,
         "more": more,
-        "filters": reads.ledger_filters(actor.conn, actor.instance),
+        "filters": filters,
+        "people": people,
         "q": query,
         "start": start,
         "start_day": start.strftime("%Y-%m-%d"),

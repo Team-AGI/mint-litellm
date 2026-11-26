@@ -439,6 +439,7 @@ OUTCOME = {
     "tool_error": "도구 오류",
     "output_blocked": "결과 차단",
     "unknown": "결과 불명",
+    "allowed_by_endpoint_offline": "장애 중 단말 판단으로 통과",
 }
 RESULT_FILTER = {"allow": "허용", "deny": "차단", "transform": "변환", "observe": "관측"}
 OBSERVATION = {
@@ -888,6 +889,12 @@ def pick(mapping: dict[str, str] | dict[str, Status], value: str | None) -> str:
 def actor(value: str | None) -> str:
     """사건·기록의 주체 이름. 사람이 아닌 주체는 한국어 이름으로 바꾼다."""
     return pick(SYSTEM_ACTOR, value)
+
+
+def actor_short(value: str | None) -> str:
+    """주체 이름. 명부에 없는 긴 식별자는 앞 8자만 보인다(전체는 호출 쪽이 툴팁으로 단다)."""
+    text = actor(value)
+    return text[:8] + "…" if text == value and value and len(value) > 16 else text
 
 
 def worst(levels: list[str]) -> str:
