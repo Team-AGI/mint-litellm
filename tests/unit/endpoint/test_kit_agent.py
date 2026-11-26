@@ -272,6 +272,20 @@ def test_without_a_policy_an_outage_keeps_the_common_contract(world, sealed, wir
     assert len(offline_lines(world)) == 1
 
 
+def test_a_pass_that_cannot_be_recorded_is_refused(world, sealed):
+    os.makedirs(os.path.join(world.state, agent.OFFLINE_FILE))  # 기록 자리를 디렉터리로 막는다
+    with pytest.raises(agent.Refuse, match="기록") as caught:
+        decide(world, down)
+    assert not isinstance(caught.value, agent.Unreachable)
+
+
+def test_a_managed_install_is_sealed_and_a_user_install_is_not(world, sealed):
+    assert agent.sealed_install() is True
+    with open(os.path.join(sealed, "state.json"), "w") as handle:
+        json.dump({"mode": "user"}, handle)
+    assert agent.sealed_install() is False
+
+
 def test_a_certificate_verification_failure_is_a_refusal_and_not_an_outage(world, sealed):
     import ssl
     import urllib.error

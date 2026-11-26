@@ -137,6 +137,8 @@ DENIED_TEXT = ("관리자가 이 도구를 막아 둔 상태입니다. 결정 �
                "이미 걸린 차단은 유지됩니다.")
 BUILTIN_DENIED_TEXT = ("관리자가 이 AI 도구의 기본 기능을 막아 둔 상태입니다. 결정 서버에 닿지 "
                        "못해도 이미 걸린 차단은 유지됩니다.")
+RECORD_TEXT = ("MINT 결정 서버에 닿지 못했고 통과 기록을 남기지 못해 막았습니다. "
+               "모든 호출은 기록되어야 합니다. 잠시 뒤 다시 호출하십시오.")
 REVIEW_TEXT = ("이 도구는 호출마다 승인을 받아야 하는데 결정 서버에 닿지 못해 승인을 받을 수 "
                "없어 막았습니다. 연결이 돌아오면 다시 호출하십시오.")
 
@@ -193,12 +195,13 @@ def policy_refusal(server: str, tool: str, local: bool, policy: Mapping[str, Any
     return None
 
 
-def record_offline(state_dir: str, server: str, tool: str, harness: str) -> None:
-    """장애 중 통과한 호출을 남긴다(인자 값은 남기지 않는다). 못 남겨도 호출은 그대로다."""
+def record_offline(state_dir: str, server: str, tool: str, harness: str) -> bool:
+    """장애 중 통과한 호출을 남긴다(인자 값은 남기지 않는다). 남겼으면 참. 못 남기면 거짓이며
+    호출자는 통과시키지 않는다(모든 호출은 기록된다)."""
     path = os.path.join(os.path.expanduser(state_dir), OFFLINE_FILE)
     try:
         if os.path.exists(path) and os.path.getsize(path) > OFFLINE_MAX:
-            return  # ponytail: 상한을 넘으면 더 쌓지 않는다(보고되면 비워진다)
+            return False  # ponytail: 상한을 넘으면 더 쌓지 않고 막는다(보고되면 비워진다)
         os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
         line = json.dumps({
             "server": server[:128], "tool": tool[:128], "harness": harness[:32],
@@ -207,7 +210,8 @@ def record_offline(state_dir: str, server: str, tool: str, harness: str) -> None
         with open(path, "a", encoding="utf-8") as handle:
             handle.write(line + "\n")
     except OSError:
-        pass
+        return False
+    return True
 
 
 def sha256_fd(fd: int) -> str:
@@ -825,7 +829,8 @@ def decide(
         )
         if refusal is not None:
             raise refusal from None
-        record_offline(state_dir, payload["server"], payload["tool"], harness)
+        if not record_offline(state_dir, payload["server"], payload["tool"], harness):
+            raise Refuse(RECORD_TEXT) from None
         return
     # 호출 뒤 훅이 결과를 보고할 수 있게 판정 참조를 호출 식별자로 남긴다.
     if isinstance(tool_use_id, str) and SAFE_ID.match(tool_use_id) and answer.get("reference"):
@@ -3332,7 +3337,8 @@ def mediator_for(
             refusal = offline_refusal(server, tool, contracts, state_dir, str(exc))
             if refusal is not None:
                 raise refusal from None
-            record_offline(state_dir, server, tool, client)
+            if not record_offline(state_dir, server, tool, client):
+                raise Refuse(RECORD_TEXT) from None
             return None
         reference = answer.get("reference")
         return str(reference) if reference else None
@@ -3706,10 +3712,11 @@ def main(argv: list[str] | None = None) -> None:
                     os.path.expanduser(state_dir), BROKER_SOCKET)
 
                 def post(url: str, headers: dict, body: bytes, timeout: float) -> tuple[int, bytes]:
-                    try:
-                        return broker_post(sock_path, url, headers, body, timeout)
-                    except BrokerDown:
-                        start_broker(os.path.expanduser(state_dir), args.contracts, ca)
+                    if not sealed_install():  # 관리형은 직원 소유 중계를 거치지 않는다
+                        try:
+                            return broker_post(sock_path, url, headers, body, timeout)
+                        except BrokerDown:
+                            start_broker(os.path.expanduser(state_dir), args.contracts, ca)
                     return http_post(url, headers, body, timeout, ca)
 
                 mediator = mediator_for(
@@ -3759,7 +3766,8 @@ def main(argv: list[str] | None = None) -> None:
         if blocking and server and folder and offline_allowed(
             server, late.get("tool", ""), contracts, folder
         ):
-            record_offline(folder, server, late.get("tool", ""), args.harness)
+            if not record_offline(folder, server, late.get("tool", ""), args.harness):
+                _give_up(2, notice)
             if args.command == "cursor-pre":
                 print('{"permission": "allow"}')
                 sys.stdout.flush()
@@ -3785,7 +3793,8 @@ def main(argv: list[str] | None = None) -> None:
         sock_path = os.path.join(state_dir, BROKER_SOCKET)
 
         def post(url: str, headers: dict, body: bytes, timeout: float) -> tuple[int, bytes]:
-            if not args.no_keepalive:
+            # 관리형은 중계를 쓰지 않는다: 중계 소켓은 직원 소유라 가짜 응답을 믿게 될 수 있다.
+            if not args.no_keepalive and not sealed_install():
                 try:
                     return broker_post(sock_path, url, headers, body, timeout)
                 except BrokerDown:

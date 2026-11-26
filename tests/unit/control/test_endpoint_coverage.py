@@ -53,6 +53,7 @@ def test_offline_calls_become_one_event_each_and_the_same_report_is_the_same_eve
     assert [e.kind for e in first] == [EventKind.ENDPOINT_OFFLINE_CALL]
     assert first[0].source_key == again[0].source_key
     assert first[0].payload["server_id"] == "s" and first[0].payload["count"] == 2
+    assert first[0].actor == "u" and first[0].payload["contract"] == "outage"
 
 
 def test_kept_offline_calls_dedupe_and_survive_a_report_without_the_list():

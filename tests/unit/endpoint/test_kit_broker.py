@@ -115,7 +115,7 @@ def test_without_a_broker_the_hook_may_send_directly_but_a_failed_forward_is_an_
         send(sock, "http://localhost:1/mint/v1/decide")
 
 
-def test_the_hook_process_reuses_the_connection_through_the_broker(tmp_path, server):
+def test_a_managed_hook_sends_directly_and_does_not_use_the_employee_owned_broker(tmp_path, server):
     world, srv = World(tmp_path), server()
     key = tmp_path / "key"
     key.write_text("sk-k")
@@ -135,7 +135,7 @@ def test_the_hook_process_reuses_the_connection_through_the_broker(tmp_path, ser
             done = subprocess.run([*base, "pre", *common], input=json.dumps(event).encode(),
                                   capture_output=True, timeout=10)  # fmt: skip
             assert done.returncode == 0, done.stderr
-        assert (srv.requests, srv.connections) == (3, 1)
+        assert srv.requests == 3 and srv.connections == 3  # 관리형은 중계를 거치지 않는다
     finally:
         daemon.wait(10)
 

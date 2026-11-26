@@ -47,7 +47,7 @@ def remediation_events(
                 inserted_at=at,
                 kind=EventKind.ENDPOINT_REMEDIATED,
                 source_key=f"endpoint:{digest}:{int(at.timestamp())}:endpoint_remediated",
-                actor=ACTOR,
+                actor=user_id,  # 키를 쓴 사람이 주체다(단말 키 이름이 아니다)
                 subject={"user_id": user_id, "key_alias": key_alias, "server_id": item["server"]},
                 payload={
                     "kind": item["kind"],
@@ -102,7 +102,7 @@ def offline_call_events(
                 inserted_at=at,
                 kind=EventKind.ENDPOINT_OFFLINE_CALL,
                 source_key=f"endpoint:{digest}:{int(when.timestamp())}:endpoint_offline_call",
-                actor=ACTOR,
+                actor=user_id,  # 키를 쓴 사람이 주체다(단말 키 이름이 아니다)
                 subject={"user_id": user_id, "key_alias": key_alias, "server_id": item["server"]},
                 payload={
                     "server_id": item["server"],
@@ -111,6 +111,8 @@ def offline_call_events(
                     "at": str(item["at"]),
                     "count": item["count"],
                     "outcome": "allowed_by_endpoint_offline",
+                    "contract": "outage",  # 결정 서버 장애 계약으로 단말이 통과시켰다
+                    "principal_id": user_id,
                 },
             )
         )
