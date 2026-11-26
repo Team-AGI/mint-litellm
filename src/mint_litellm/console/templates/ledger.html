@@ -1,4 +1,5 @@
 {% extends "base.html" %}{% import "macros.html" as m %}{% import "audit_macros.html" as a %}
+{% macro person(id) %}<span title="{{ id }}">{{ (people or {}).get(id) or (id | who_short) }}</span>{% endmacro %}
 {% block title %}호출 기록 · MINT{% endblock %}
 {% block page_class %}wide{% endblock %}
 {% block body %}
@@ -19,7 +20,7 @@
   <label>시작<input type="date" name="since" value="{{ q.since }}" min="2000-01-01"></label>
   <label>끝<input type="date" name="until" value="{{ q.until }}" min="2000-01-01"></label>
   <label>종류<select name="kind"><option value="">전체</option>{% for k in filters.kinds %}<option value="{{ k }}"{% if q.kind == k %} selected{% endif %}>{{ L.pick(L.EVENT_KIND, k) }}</option>{% endfor %}</select></label>
-  <label>주체<select name="actor"><option value="">전체</option>{% for a in filters.actors %}<option value="{{ a }}"{% if q.actor == a %} selected{% endif %}>{{ a | who }}</option>{% endfor %}</select></label>
+  <label>주체<select name="actor"><option value="">전체</option>{% for a in filters.actors %}<option value="{{ a }}"{% if q.actor == a %} selected{% endif %}>{{ (people or {}).get(a) or (a | who_short) }}</option>{% endfor %}</select></label>
   <label>MCP 서버<select name="server_id"><option value="">전체</option>{% for s in servers %}<option value="{{ s }}"{% if q.server_id == s %} selected{% endif %}>{{ s }}</option>{% endfor %}</select></label>
   <input type="hidden" name="result" value="{{ q.result }}">
   <details><summary>고급 필터</summary>
@@ -31,21 +32,21 @@
   <a class="button" href="/api/v1/ledger/export?format=json&amp;{{ export_qs }}" hx-boost="false">JSON 내보내기</a>
 </form>
 {% if rows %}
-<table class="clickable compact"><thead><tr><th>시각</th><th>종류</th><th>주체</th><th>MCP 서버</th><th>결과</th><th>내용</th><th>조치</th></tr></thead><tbody>
+<table class="clickable compact"><thead><tr><th>시각</th><th>종류</th><th>주체</th><th>MCP 서버</th><th>도구</th><th>결과</th><th>내용</th><th>조치</th></tr></thead><tbody>
 {% for e in rows %}<tr>
-<td class="nowrap"><a href="/ledger?{{ qs ~ '&' if qs }}open={{ e.event_id }}">{{ e.inserted_at | when }}</a></td><td class="nowrap">{{ L.pick(L.EVENT_KIND, e.kind) }}{% if e.kind in ('alert_opened', 'alert_resolved') and (e.get('payload') or {}).get('kind') in L.ALERT_KIND %} · {{ L.ALERT_KIND[e.payload.kind] }}{% endif %}</td><td>{{ e.actor | who }}</td>
-<td>{{ e.server_id | blank }}</td><td>{{ L.pick(L.OUTCOME, e.outcome) if e.outcome else L.pick(L.RESULT, e.result) }}</td>
+<td class="nowrap"><a href="/ledger?{{ qs ~ '&' if qs }}open={{ e.event_id }}">{{ e.inserted_at | when }}</a></td><td class="nowrap">{{ L.pick(L.EVENT_KIND, e.kind) }}{% if e.kind in ('alert_opened', 'alert_resolved') and (e.get('payload') or {}).get('kind') in L.ALERT_KIND %} · {{ L.ALERT_KIND[e.payload.kind] }}{% endif %}</td><td>{{ person(e.actor) }}</td>
+<td>{{ e.server_id | blank }}</td><td>{{ e.tool | blank }}</td><td>{{ L.pick(L.OUTCOME, e.outcome) if e.outcome else L.pick(L.RESULT, e.result) }}</td>
 <td>{% if e.kind == 'call_response_received' %}{% for line in L.response_notes(e.get('payload')) %}<div>{{ line }}</div>{% else %}—{% endfor %}{% elif e.reason_text %}{{ e.reason_text }}{% else %}—{% endif %}</td>
 <td class="actions">{% if can(actor, 'deny') and e.targets %}
 {% for target, name in [('tool', '이 도구 차단'), ('user', '이 사용자 차단')] %}{% if e.targets[target] %}
 {% set effect %}<dl class="detail">
-<dt>영향</dt><dd>{% if target == 'tool' %}{{ e.server_id }}의 {{ e.targets.tool }} 도구가 모든 직원에게 막힙니다.{% else %}{{ e.actor | who }}이(가) {{ e.server_id }}의 모든 도구를 호출할 수 없습니다.{% endif %}</dd>
+<dt>영향</dt><dd>{% if target == 'tool' %}{{ e.server_id }}의 {{ e.targets.tool }} 도구가 모든 직원에게 막힙니다.{% else %}{{ (people or {}).get(e.actor) or (e.actor | who_short) }}이(가) {{ e.server_id }}의 모든 도구를 호출할 수 없습니다.{% endif %}</dd>
 <dt>즉시</dt><dd>MINT 판정이 다음 호출부터 거부합니다.</dd>
 <dt>늦게</dt><dd>LiteLLM 반영 최대 60초</dd>
 <dt>취소 불가</dt><dd>이미 원격 서버로 보낸 호출은 끝까지 실행됩니다.</dd>
 <dt>되돌리기</dt><dd>차단 직후 「되돌리기」 또는 접근 통제의 「해제」로 즉시 복귀합니다.</dd>
 </dl>{% endset %}
-{% call m.confirm_dialog('block-' ~ e.event_id ~ '-' ~ target, name, name ~ ' — ' ~ (e.targets.tool if target == 'tool' else (e.actor | who)), effect, '/ledger/' ~ e.event_id ~ '/block', actor, '차단', danger=false, trigger_class='danger-outline') %}<input type="hidden" name="target" value="{{ target }}"><input type="hidden" name="back" value="{{ back }}">{% endcall %}{% endif %}{% endfor %}
+{% call m.confirm_dialog('block-' ~ e.event_id ~ '-' ~ target, name, name ~ ' — ' ~ (e.targets.tool if target == 'tool' else ((people or {}).get(e.actor) or (e.actor | who_short))), effect, '/ledger/' ~ e.event_id ~ '/block', actor, '차단', danger=false, trigger_class='danger-outline') %}<input type="hidden" name="target" value="{{ target }}"><input type="hidden" name="back" value="{{ back }}">{% endcall %}{% endif %}{% endfor %}
 {% endif %}</td>
 </tr>{% endfor %}
 </tbody></table>
@@ -56,7 +57,7 @@
 <dl class="detail">
   <dt>시각</dt><dd>{{ ev.inserted_at | when }}</dd>
   <dt>종류</dt><dd>{{ L.pick(L.EVENT_KIND, ev.kind) }}</dd>
-  <dt>주체</dt><dd>{{ ev.actor | who }}</dd>
+  <dt>주체</dt><dd>{{ person(ev.actor) }}</dd>
   <dt>MCP 서버</dt><dd>{{ ev.server_id | blank }}</dd>
   {% if ev.tool %}<dt>도구</dt><dd>{{ ev.tool }}</dd>{% endif %}
   {% if ev.kind == 'decision_evaluated' %}

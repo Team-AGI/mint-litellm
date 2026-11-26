@@ -580,11 +580,9 @@ def logout(request: Request, actor: StaffActor = Depends(staff_actor)) -> Respon
 
 
 def name_servers(actor: StaffActor, *groups: list[dict]) -> None:
-    """행의 ``server_name``에 LiteLLM 별칭을 넣는다(없으면 식별자)."""
-    names = server_names(actor.config.litellm_admin)
+    """행의 ``server_name``(LiteLLM 별칭, 없으면 식별자)과 ``server_url``을 채운다."""
     for rows in groups:
-        for row in rows:
-            row["server_name"] = names.get(row["server_id"]) or row["server_id"]
+        name_intakes(actor, rows)
 
 
 def event_label(row: dict) -> str:
@@ -890,8 +888,12 @@ def servers_page(request: Request, actor: StaffActor, error=None, status=200, fo
     tab = request.query_params.get("tab", "servers")
     tab = tab if tab in ("servers", "applications", "records", "calls") else "servers"
     search = request.query_params.get("q", "").strip()[:256]
-    catalog = [r for r in rows if search.casefold() in
-               f"{r['server_name']} {r['org_name']}".casefold()]
+    def found(r: dict) -> bool:  # 식별자·이름·주소·조직 어디든 부분 일치(대소문자 무시)
+        text = f"{r['server_id']} {r['server_name']} {r.get('server_url') or ''} {r['org_name']}"
+        return search.casefold() in text.casefold()
+
+    catalog = [r for r in rows if found(r)]
+    org_found = [r for r in orgs if found(r)]
     records = [
         {"at": e["inserted_at"], "label": event_label(e)}
         for e in staff.list_events(actor.sctx, RECENT_RECORDS)
@@ -921,7 +923,7 @@ def servers_page(request: Request, actor: StaffActor, error=None, status=200, fo
         "expiring": sum(r["expiring"] for r in rows),
         "selected": selected,
         "selected_org": selected_org,
-        "org_servers": orgs,
+        "org_servers": org_found,
         "open_requests": {f"{k[0]}|{k[1]}": v for k, v in open_requests.items()},
         "tools_table": tool_table(actor, selected, recent_calls) if selected else [],
         "preset": preset,

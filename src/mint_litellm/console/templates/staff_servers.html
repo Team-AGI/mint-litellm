@@ -58,9 +58,9 @@
 {% if r.preparing and r.progress %}<a class="button" href="{{ r.progress }}">진행 상황 보기</a>{% endif %}
 {{ stop_use(r, loop.index, '') }}</div>
 </article>{% endfor %}</div>
-{% elif search %}{{ m.empty('조건에 맞는 MCP 서버가 없습니다', '/staff', '검색 지우기') }}
+{% elif search %}{% if not org_servers %}{{ m.empty('조건에 맞는 MCP 서버가 없습니다', '/staff', '검색 지우기') }}{% endif %}
 {% else %}{% if pending_calls %}<p>처리 대기 중인 호출 요청이 {{ pending_calls }}건 있습니다. <a href="/staff/confirmations?tab=mine">요청 상태 확인</a></p>{% endif %}{{ m.empty('쓸 수 있는 MCP 서버가 없습니다', '/staff/intakes/new', 'MCP 서버 신청') }}{% endif %}
-{% if org_servers and not search %}<section class="org-servers"><h2>조직에서 쓰는 서버</h2>
+{% if org_servers %}<section class="org-servers"><h2>조직에서 쓰는 서버</h2>
 <p class="muted">내 사용 권한이 없는 서버입니다.</p>
 <div class="catalog">{% for r in org_servers %}<article class="catalog-card">
 <h2>{{ r.server_name }}</h2><div class="muted">{{ r.org_name }}</div>

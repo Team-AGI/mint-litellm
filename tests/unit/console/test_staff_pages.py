@@ -1108,3 +1108,15 @@ def test_a_missing_kit_setting_makes_no_code_and_tells_staff_and_admin_apart(kit
         kits.app.state.config, endpoint_url="https://mint.test")
     assert anonymous.get(f"/kit/{code}/install.sh").status_code == 200
     assert kits.query("SELECT used_at IS NOT NULL FROM mint.kit_codes") == [(True,)]
+
+
+def test_searching_an_exact_server_id_finds_it_in_every_section(sworld):
+    add_approval(sworld, "user", STAFFER, tools=("echo",))
+    mine = logged_in(sworld).get("/staff?q=SRV-OK")
+    assert "MCP 서버 보기" in mine.text or "동의 확인" in mine.text
+    assert "조건에 맞는 MCP 서버가 없습니다" not in mine.text
+    sworld.query("DELETE FROM mint.approvals")
+    org = logged_in(sworld).get("/staff?q=srv-ok")
+    assert "조직에서 쓰는 서버" in org.text and "사용 요청" in org.text
+    none = logged_in(sworld).get("/staff?q=nothing-like-this")
+    assert "조건에 맞는 MCP 서버가 없습니다" in none.text
