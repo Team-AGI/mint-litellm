@@ -1068,6 +1068,9 @@ def kick_notify(args: Sequence[str]) -> None:
         pass
 
 
+SERVER_TZ = "Etc/UTC"
+
+
 def launch_env(approved: Mapping[str, Any], inherited: Mapping[str, str]) -> dict[str, str]:
     """상속한 환경에서 위험한 변수를 빼고 승인된 환경 값을 얹는다.
 
@@ -1078,8 +1081,9 @@ def launch_env(approved: Mapping[str, Any], inherited: Mapping[str, str]) -> dic
     env = {k: v for k, v in inherited.items()
            if not ENV_DENIED.match(k) and not (app_key and v == app_key)}
     # 서버가 보는 시간대를 PC와 무관하게 고정한다. 시간대를 도구 정의에 넣는 서버(시간 서버 등)가
-    # PC·운영체제마다 다른 정의를 내놓아 승인 계약과 어긋나지 않게(Linux 격리 안은 원래 UTC다).
-    env["TZ"] = "UTC"
+    # PC·운영체제마다 다른 정의를 내놓아 승인 계약과 어긋나지 않게. 승인 때 도구 정의를 받는 검사
+    # 컨테이너의 시간대(Etc/UTC)와 같은 이름이어야 한다(「UTC」와 글자가 달라도 변경으로 잡힌다).
+    env["TZ"] = SERVER_TZ
     env.update({str(k): str(v) for k, v in (approved.get("env") or {}).items()})
     return env
 

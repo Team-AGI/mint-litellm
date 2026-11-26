@@ -165,11 +165,11 @@ def test_a_server_started_from_an_app_script_never_gets_the_app_key():
         "OPENAI_BASE_URL": "https://mint.test/v1", "GITHUB_TOKEN": "user-own", "PATH": "/bin"})
     assert SECRET not in env.values()
     assert env == {"OPENAI_BASE_URL": "https://mint.test/v1", "GITHUB_TOKEN": "user-own",
-                   "PATH": "/bin", "TZ": "UTC", "A": "1"}
+                   "PATH": "/bin", "TZ": "Etc/UTC", "A": "1"}
 
 
 def test_servers_see_utc_unless_the_approved_contract_sets_a_timezone():
     """시간대를 도구 정의에 넣는 서버가 PC마다 다른 정의를 내놓지 않게 한다."""
     agent = load("mint_agent")
-    assert agent.launch_env({}, {"TZ": "Asia/Seoul", "PATH": "/bin"})["TZ"] == "UTC"
+    assert agent.launch_env({}, {"TZ": "Asia/Seoul", "PATH": "/bin"})["TZ"] == "Etc/UTC"
     assert agent.launch_env({"env": {"TZ": "Asia/Seoul"}}, {})["TZ"] == "Asia/Seoul"
