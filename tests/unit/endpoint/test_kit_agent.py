@@ -401,7 +401,7 @@ def test_the_launcher_starts_the_approved_server_with_a_clean_environment(world)
     }  # fmt: skip
     ((target, argv, env),) = launch(world, environ)
     assert argv == [str(world.exe), str(world.script)]
-    assert env == {"PATH": "/usr/bin", "MODE": "ro"}  # 승인된 값이 이긴다.
+    assert env == {"PATH": "/usr/bin", "TZ": "UTC", "MODE": "ro"}  # 승인된 값이 이긴다.
     assert isinstance(target, int)
 
 
