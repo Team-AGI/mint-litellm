@@ -57,6 +57,14 @@ def start_failed(check: dict) -> bool:
     return check["reason_code"] == "INSPECTION_FAILED" and stage == "start"
 EXCEPTION_MAX_DAYS = 90
 PASSED_REASON = "검사를 통과해 승인했습니다."  # 사유를 적지 않은 일반 승인의 기록 문구
+REVIEWED_REASON = "검사를 통과하지 못한 신청을 관리자가 결과를 보고 승인했습니다."
+
+
+def default_reason(row: dict) -> str:
+    """사유 없이 승인했을 때 남기는 문구. 통과하지 않은 신청을 통과로 적지 않는다."""
+    return PASSED_REASON if row["status"] == "passed" else REVIEWED_REASON
+
+
 # 기한을 정하지 않은 승인은 만료되지 않는다(관리자가 명시한 기한만 만료).
 NO_EXPIRY = datetime(2999, 12, 31, tzinfo=UTC)
 SYSTEM_ACTOR = "intake_run"
@@ -1061,11 +1069,6 @@ def decide(
             required = (*waiting, "received", "checking")
         if row["status"] not in required:
             raise conflict(f"{row['status']} 상태의 신청은 {decision}할 수 없습니다.")
-        if decision == "approve" and row["status"] in ("indeterminate", "failed"):
-            raise ControlError(
-                "검사가 통과하지 않은 신청은 「승인」할 수 없습니다. 사유를 적은 「예외 승인」"
-                f"(유효 기간 {EXCEPTION_MAX_DAYS}일 이내)으로만 허용할 수 있습니다."
-            )
         second_info = _require_separation(ctx, row, second, decision == "except")
         checks = latest_checks(ctx.conn, ctx.instance_id, row["id"])
         if decision == "reject":
@@ -1158,7 +1161,7 @@ def _approve(
                if decision == "except" else [])
     updated = _decided(
         ctx, row, "exception" if decision == "except" else "approved",
-        reason or PASSED_REASON,
+        reason or default_reason(row),
         {"second_approver": None if second_info is None else second_info["name"],
          **({"missing_evidence": lacking} if lacking else {})},
     )
@@ -1228,7 +1231,7 @@ def _approve(
         allowed_hosts=allowed_hosts,
     )
     basis = {
-        "text": reason or PASSED_REASON,
+        "text": reason or default_reason(row),
         "intake_id": str(row["id"]),
         "allowlist_ids": allowlist_ids,
     }
@@ -1377,7 +1380,8 @@ def _approve_local(
     lacking = ([e["key"] for e in evidence.missing(ctx, "approve", "intake", str(row["id"]))]
                if decision == "except" else [])
     updated = _decided(
-        ctx, row, "exception" if decision == "except" else "approved", reason or PASSED_REASON,
+        ctx, row, "exception" if decision == "except" else "approved",
+        reason or default_reason(row),
         {"second_approver": None if second_info is None else second_info["name"],
          **({"missing_evidence": lacking} if lacking else {})},
         explicit_network=narrow_network is not None,  # 관리자가 정한 차단은 값으로 남는다
@@ -1428,7 +1432,7 @@ def _approve_local(
     conditions = build_conditions(
         high_risk_tools=[], business_hours_only=False, business_hours=None,
         require_consent=None)
-    basis = {"text": reason or PASSED_REASON, "intake_id": str(row["id"]),
+    basis = {"text": reason or default_reason(row), "intake_id": str(row["id"]),
              "allowlist_ids": allowlist_ids}
     if second_info:
         basis["second_approver"] = second_info["name"]

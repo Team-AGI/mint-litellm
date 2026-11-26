@@ -89,7 +89,7 @@
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ i.state_version }}">
   {% if i.status == 'decided' %}<label>새 배포 주소<input name="url" placeholder="https://"{% if address_pending %} disabled{% endif %}></label>
   <label>전송 방식<input name="transport"{% if address_pending %} disabled{% endif %}></label>
-  {% if address_pending %}<p class="muted">게이트웨이가 바뀐 주소를 아직 보고하지 않아 주소를 입력할 수 없습니다. LiteLLM에서 주소를 바꿨다면 1~2분 안에 입력칸이 열립니다.</p>{% endif %}{% endif %}
+  {% if address_pending %}<p class="muted">바뀐 주소가 보고되면 1~2분 안에 입력칸이 열립니다.</p>{% endif %}{% endif %}
   <button type="submit" class="{{ 'primary' if stale else '' }}">재검사</button>
 </form>
 {% endif %}
@@ -130,23 +130,22 @@
   <label>사유(선택)<textarea name="reason" maxlength="500">{{ decision_form.reason or "" }}</textarea></label>
   </details>
   <div class="actions">
-    {% if i.status == 'passed' %}<button type="submit" name="decision" value="approve" class="primary"{% if provider_blocked %} disabled title="제공자를 먼저 허용하십시오"{% endif %}>승인</button>
-    {% else %}<button type="button" disabled title="검사가 통과하지 않아 예외 승인으로만 허용할 수 있습니다">승인</button>{% endif %}
+    <button type="submit" name="decision" value="approve" class="primary"{% if provider_blocked %} disabled title="제공자를 먼저 허용하십시오"{% endif %}>승인</button>
     <button type="submit" name="decision" value="reject">거부</button>
   </div>
 </form>
 <h2>예외 승인</h2>
-{% if i.status in ('indeterminate', 'failed') and not hold %}
+{% if i.status == 'indeterminate' and not hold %}
 <form method="post" action="/intakes/{{ i.id }}/decision" class="form" id="exception">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ i.state_version }}"><input type="hidden" name="decision" value="except">
   <label>대상(사용자 식별자·팀){% if requester_name %} <small class="muted">{{ requester_name }}</small>{% endif %}<input name="scope_id" list="people" value="{{ default_target }}"{% if not default_target %} required{% endif %}></label>
   <label>예외 사유(필수)<textarea name="reason" required maxlength="500"></textarea></label>
-  <p class="muted">최대 {{ max_exception_days }}일 · 검사가 통과하지 않은 신청을 사유를 남기고 승인합니다.</p>
+  <p class="muted">최대 {{ max_exception_days }}일 · 판별하지 못한 검사를 건너뛰고 승인합니다.</p>
   <button type="submit">예외 승인</button>
 </form>
 {% else %}
 <button type="button" disabled>예외 승인</button>
-{% if hold %}<p class="muted">두 번째 승인을 기다리고 있습니다.</p>{% else %}<p class="muted">판별 불가·검사 실패일 때만 할 수 있습니다(현재 {{ L.pick(L.INTAKE, i.status) }}).</p>{% endif %}
+{% if hold %}<p class="muted">두 번째 승인을 기다리고 있습니다.</p>{% else %}<p class="muted">판별 불가일 때만 할 수 있습니다(현재 {{ L.pick(L.INTAKE, i.status) }}).</p>{% endif %}
 {% endif %}
 {% endif %}
 {% include "_root_panel.html" ignore missing %}

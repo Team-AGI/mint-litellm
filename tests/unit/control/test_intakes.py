@@ -921,6 +921,8 @@ def test_approve_works_on_an_indeterminate_intake_and_needs_a_future_expiry(worl
         world.decide(indeterminate, "approve", valid_until=expired)
     world.decide(indeterminate, "approve", valid_until=FUTURE)  # 판별 불가도 한 번에 승인한다
     assert world.intake(indeterminate)["decision"] == "approved"
+    reason = world.intake(indeterminate)["decision_reason"]
+    assert "통과해" not in reason and "수용검증" not in reason  # 통과로 적지 않는다
     assert fetchone(world.conn, "SELECT class FROM mint.approvals")["class"] == "standard"
 
 
