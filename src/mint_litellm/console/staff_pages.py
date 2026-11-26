@@ -287,6 +287,12 @@ def intake_probe(
     return intake_form(request, actor, {**form, "probe": text, "probe_ok": found["state"] == "ok"})
 
 
+# 폐기·반려된 서버의 옛 신청은 「이미 신청한 서버」로 돌려보내지 않는다(다시 신청할 수 있어야 한다).
+LIVE_SERVER = (" AND NOT EXISTS (SELECT 1 FROM mint.servers s WHERE s.instance_id = i.instance_id"
+               " AND s.server_id = i.server_id"
+               " AND s.status IN ('terminating', 'terminated', 'rejected'))")
+
+
 @router.get("/staff/intakes/new")
 def intake_new(request: Request, actor: StaffActor = Depends(staff_actor)):
     return intake_form(request, actor)
@@ -312,6 +318,7 @@ def intake_submit(
             "SELECT i.id FROM mint.intakes i WHERE i.instance_id = %s AND i.requested_by = %s"
             " AND i.source IN ('staff', 'endpoint')"
             " AND (i.status <> 'decided' OR i.decision IN ('approved', 'exception'))"
+            + LIVE_SERVER +
             " AND EXISTS (SELECT 1 FROM mint.deployment_contracts d WHERE d.instance_id ="
             " i.instance_id AND d.server_id = i.server_id AND d.url = %s)"
             " ORDER BY i.created_at DESC LIMIT 1",
@@ -367,7 +374,7 @@ def my_prior_local_intake(actor: StaffActor, form: dict) -> str | None:
         " LEFT JOIN mint.deployment_contracts d ON d.instance_id = i.instance_id AND d.id = i.id"
         " WHERE i.instance_id = %s AND i.requested_by = %s AND i.server_id = %s"
         " AND i.source = 'endpoint' AND (i.status <> 'decided' OR i.decision IN"
-        " ('approved', 'exception')) ORDER BY i.created_at DESC LIMIT 1",
+        " ('approved', 'exception'))" + LIVE_SERVER + " ORDER BY i.created_at DESC LIMIT 1",
         (actor.sctx.instance_id, actor.user_id, payload["server_id"]),
     )
     if row and (row["version"] is None or version is None or row["version"] == version):

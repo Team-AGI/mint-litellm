@@ -64,6 +64,27 @@ def test_a_new_form_for_the_same_address_opens_the_existing_application(sworld):
     assert sworld.query("SELECT purpose FROM mint.intakes") == [("공개 문서 조회",)]
 
 
+def test_a_retired_server_can_be_requested_again_instead_of_opening_the_old_application(sworld):
+    client = staff_tests.logged_in(sworld)
+    original = form(client)
+    assert client.post("/staff/intakes", data=original).status_code == 303
+    for step in ("checking", "passed"):
+        sworld.query("UPDATE mint.intakes SET status = %s", step)
+    sworld.query("UPDATE mint.intakes SET status = 'decided', decision = 'approved',"
+                 " decided_by = 'admin', decided_at = now()")
+    chain = ["pending", "validating", "awaiting_approval", "approved", "terminating", "terminated"]
+    mine = "server_id = (SELECT server_id FROM mint.intakes)"
+    (current,), = sworld.query(f"SELECT status FROM mint.servers WHERE {mine}")
+    for step in chain[chain.index(current) + 1:]:  # 승인된 서버를 폐기한다
+        sworld.query(f"UPDATE mint.servers SET status = %s WHERE {mine}", step)
+    again = client.post("/staff/intakes", data=form(client, purpose="다시 쓰려고"))
+    assert again.status_code == 303
+    assert again.headers["location"].endswith("ok=intake_created")  # 옛 신청으로 보내지 않는다
+    assert sworld.query("SELECT count(*) FROM mint.intakes") == [(2,)]
+    names = [r[0] for r in sworld.query("SELECT server_id FROM mint.intakes ORDER BY created_at")]
+    assert names[1] == names[0] + "_2"  # 폐기된 서버가 쥔 이름 대신 새 이름
+
+
 def test_my_application_history_can_cancel_a_waiting_request(sworld):
     client = staff_tests.logged_in(sworld)
     values = form(client)

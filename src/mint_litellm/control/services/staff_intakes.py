@@ -134,6 +134,22 @@ def validate(form: dict, allowed_ports: tuple[int, ...] = (443, 8443)) -> tuple[
     return payload, contract
 
 
+def _name_after_retired(sctx: staff.StaffContext, sid: str) -> str:
+    """폐기된 서버가 쥔 이름이면 뒤에 번호를 붙인 빈 이름(다시 신청할 수 있게). 아니면 그대로."""
+    def status(name: str) -> str | None:
+        row = fetchone(sctx.control, "SELECT status FROM mint.servers"
+                       " WHERE instance_id = %s AND server_id = %s", (sctx.instance_id, name))
+        return row["status"] if row else None
+
+    if status(sid) not in ("terminating", "terminated"):
+        return sid
+    for n in range(2, 100):
+        candidate = f"{sid[:120]}_{n}"
+        if status(candidate) is None:
+            return candidate
+    return sid
+
+
 def submit(
     sctx: staff.StaffContext, session_id_hash: str, request_id: str, form: dict,
     allowed_ports: tuple[int, ...] = (443, 8443),
@@ -149,6 +165,7 @@ def submit(
         (sctx.instance_id, old),
     ):
         payload["server_id"] = old  # 예전 이름으로 이미 있는 서버는 그 서버로 잇는다
+    payload["server_id"] = _name_after_retired(sctx, payload["server_id"])
     staff._active_session(sctx, session_id_hash)
     try:
         with staff._staff_transaction(sctx, session_id_hash) as conn:
