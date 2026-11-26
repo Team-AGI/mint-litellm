@@ -1077,6 +1077,9 @@ def launch_env(approved: Mapping[str, Any], inherited: Mapping[str, str]) -> dic
     app_key = inherited.get("MINT_APP_KEY")
     env = {k: v for k, v in inherited.items()
            if not ENV_DENIED.match(k) and not (app_key and v == app_key)}
+    # 서버가 보는 시간대를 PC와 무관하게 고정한다. 시간대를 도구 정의에 넣는 서버(시간 서버 등)가
+    # PC·운영체제마다 다른 정의를 내놓아 승인 계약과 어긋나지 않게(Linux 격리 안은 원래 UTC다).
+    env["TZ"] = "UTC"
     env.update({str(k): str(v) for k, v in (approved.get("env") or {}).items()})
     return env
 
