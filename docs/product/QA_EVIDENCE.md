@@ -86,6 +86,16 @@
 | QA-DIRECTORY-310 | FM-03 사람·팀·키 자동 연결 | GPT-6.2 Sol | LiteLLM 시험 직원·팀·키 생성, 명부 동기화 | 연결 통과, 주기 실패(QA-BUG-304) | 1550a409·9a8d4be7 | sol-qa-1126d/evidence/resume-directory-in-team.json |
 | QA-ERROR-311 | FM-19 거부 첫 줄 | GPT-6.2 Sol | 승인 대기·관리자 차단·정책 차단 실측 | 부분(일시 오류는 격리) | 1550a409·9a8d4be7 | sol-qa-1126d/evidence/resume-19-policy-real.json |
 | QA-TEAM-312 | FM-09 팀 범위 자동 회수 | GPT-6.2 Sol | 팀 범위 승인 → 팀 이탈 → 동기화 뒤 거부 | 통과(동기화 뒤) | 1550a409·9a8d4be7 | sol-qa-1126d/evidence/resume-09-after-sync-pre-hook.json |
+| QA-INTAKE-401 | QA-BUG-301 실행 중 검사 철회 | GPT-6.2 Sol | 직원 상세 철회, 작업 종료 뒤 원장 | 통과 | 114b6c9b | sol-qa-1126e/evidence/301-after.json |
+| QA-ENDPOINT-402 | QA-BUG-302 연결 중지 | GPT-6.2 Sol | pj1 열린 MCP 세션 초 단위 중지·재개 | 통과, 첫 거절 0.36초 | 114b6c9b | sol-qa-1126e/evidence/302-measurements.json |
+| QA-CONTRACT-403 | QA-BUG-303 주소 변경 재승인 | GPT-6.2 Sol | LiteLLM UI 변경 두 번, 재검사·등록 | 실패(QA-BUG-401) | 114b6c9b | sol-qa-1126e/evidence/303-explicit-recheck-post.json |
+| QA-DIRECTORY-404 | QA-BUG-304 명부 주기 | GPT-6.2 Sol | 정기 작업과 고정 직원 시각 | 실패(QA-BUG-403, #411 수정) | 114b6c9b | sol-qa-1126e/evidence/304-cadence-stable.json |
+| QA-WINDOWS-405 | FM-49 Windows npm | GPT-6.2 Sol | pj3 키트 설치·실제 호출·제거 | 호출 통과, 격리 경보 QA-BUG-402, 제거 뒤 파일 QA-BUG-404 | 114b6c9b | sol-qa-1126e/evidence/49-real-call.json |
+| QA-ORG-406 | FM-68 조직 연결 제안 | GPT-6.2 Sol | 시험 팀 제안 적용·무시 | 통과 | 114b6c9b | sol-qa-1126e/evidence/68-suggestions-results.json |
+| QA-ALERT-407 | FM-18 경보 확인 | GPT-6.2 Sol | 시험 경보 서랍 확인 처리 | 통과 | 114b6c9b | sol-qa-1126e/evidence/18-qa-1-after.json |
+| QA-POLICY-408 | FM-70 정책 모드 | GPT-6.2 Sol | 환경 상한 표시, 시험 판본 조회 | 상한 표시 통과, 시험 적용 미시험 | 114b6c9b | sol-qa-1126e/evidence/70-mode.json |
+| QA-ACCESS-409 | FM-67 승인 재확인 | GPT-6.2 Sol | 시험 승인 3건 재확인 | 통과 | 114b6c9b | sol-qa-1126e/evidence/67-recert-results.json |
+| QA-CONSENT-410 | FM-39 개별 동의 | GPT-6.2 Sol | 직원 동의·철회·중단·재개 | 통과 | 114b6c9b | sol-qa-1126e/evidence/39-resume-post.json |
 
 ## 결함 (QA-BASE-01 기준선)
 
@@ -109,7 +119,8 @@
 | QA-BUG-105 | 중간 | 종료된 로컬 서버가 계약 파일에 남아 CLI에 준비 중으로 보임 | FM-27 FM-45 | 수정 확인(QA-REG-02) |
 | QA-BUG-201 | 중간 | 검사 중 강제 반려·철회 뒤 서버가 「검사 중」에 남음(검사 중 철회 409 포함) | FM-54 FM-56 | 수정 확인(QA-REG-03) |
 | QA-BUG-202 | 중간 | 사람 서랍에 사람 단위 진행 중 실행 취소가 없음 | FM-58 | 수정 확인(QA-REG-03) |
-| QA-BUG-301 | 중간 | 검사 작업이 실행 중일 때 직원 철회가 409 | FM-36 | 수정(재검증 대기) |
-| QA-BUG-302 | 중간 | 연결 중지 직후 열린 실행기의 호출이 한 번 더 통과 | FM-32 | 수정(재검증 대기) |
-| QA-BUG-303 | 중간 | 배포 변경 뒤 재승인 경로가 열리지 않음 | FM-66 | 수정(재검증 대기): 게이트웨이 신원 보고 60초·동기화 관측, 재승인 등록·키 복귀는 실기기 재검증 |
-| QA-BUG-304 | 낮음 | 명부 동기화 간격이 15분이 아니라 최대 20분 | FM-03 | 수정(재검증 대기) |
+| QA-BUG-301 | 중간 | 검사 작업이 실행 중일 때 직원 철회가 409 | FM-36 | 수정 확인(QA-REG-04) |
+| QA-BUG-302 | 중간 | 연결 중지 직후 열린 실행기의 호출이 한 번 더 통과 | FM-32 | 수정 확인(QA-REG-04) |
+| QA-BUG-303 | 중간 | 배포 변경 뒤 재승인 경로가 열리지 않음 | FM-66 | 재발(QA-REG-04) → QA-BUG-401로 이어서 수정 중 |
+| QA-BUG-304 | 낮음 | 명부 동기화 간격이 15분이 아니라 최대 20분 | FM-03 | 부분(QA-REG-04): 남은 원인 QA-BUG-403 → #411 수정(재검증 대기) |
+| QA-BUG-403 | 낮음 | 직원 로그인이 명부 정기 동기화를 뒤로 미룸 | FM-03 | 수정 #411(재검증 대기) |
