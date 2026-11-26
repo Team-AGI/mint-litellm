@@ -58,6 +58,22 @@
 | QA-CLI-102 | PC 권한 요청과 취소 | GPT-6.2 Sol | pj1 JSON과 웹 대조 | 통과, 사유 분류 결함(QA-BUG-104) | 581b15f2 | sol-qa-1126b/evidence/terminal/ |
 | QA-SCREEN-101 | 시트의 IMPLEMENTED 화면 동작 62개 | GPT-6.2 Sol | 실제 브라우저 클릭·제출 | 통과 23·부분 10·실패 1·미시험 28 | 581b15f2 | sol-qa-1126b/evidence/SCREEN_ACTION_RESULTS.md |
 | QA-CLEANUP-101 | 시험 자료·정지 원복 | GPT-6.2 Sol | UI·조회 SQL·pj1 CLI | 원복 확인 | 581b15f2 | sol-qa-1126b/evidence/cleanup/ |
+| QA-E2E-201 | E2E-01~13 회귀(qa3_ 로컬·원격) | GPT-6.2 Sol | 웹·pj1·Claude Code 실제 흐름 | 통과 13/13 | 91e8328a | sol-qa-1126c/evidence/e2e/ |
+| QA-E2E-209 | 같은 세션 복귀(PC CLI 요청 경로) | GPT-6.2 Sol | pj1 차단→CLI 요청→웹 해제→재호출 | 통과 | 91e8328a | sol-qa-1126c/evidence/claude/ |
+| QA-E2E-213 | 중지·전역 정지→새 세션 유지→해제 뒤 복귀 | GPT-6.2 Sol | 두 하네스 새 세션 | 통과, 해제 17.92초 이내 | 91e8328a | sol-qa-1126c/evidence/controls/ |
+| QA-REG-206 | 검사 중 Root 반려·검사 생략 승인 | GPT-6.2 Sol | 제출과 DB 결정·승인 원장 | 통과, 서버 상태는 QA-BUG-201 | 91e8328a | sol-qa-1126c/evidence/controls/ |
+| QA-CLI-201 | 계약 수신 전 CLI·터미널 | GPT-6.2 Sol | pj1 CLI와 PTY | 통과(QA-BUG-101 수정 확인) | 91e8328a | sol-qa-1126c/evidence/terminal/ |
+| QA-CLI-202 | 원격 승인 PC 목록·상세·탭 | GPT-6.2 Sol | pj1 CLI·PTY, 중지 뒤 제외 | 통과(QA-BUG-102 수정 확인) | 91e8328a | sol-qa-1126c/evidence/terminal/ |
+| QA-MCP-203 | 중지된 원격 도구 거부 안내 | GPT-6.2 Sol | 열린 Claude 세션 | 통과, 「[막힘]」(QA-BUG-103 수정 확인) | 91e8328a | sol-qa-1126c/evidence/claude/ |
+| QA-CLI-204 | PC 요청 사유 분류 | GPT-6.2 Sol | 차단·승인 없음 두 경우 | 통과(QA-BUG-104 수정 확인) | 91e8328a | sol-qa-1126c/evidence/terminal/ |
+| QA-CLI-205 | 폐기 서버 계약 정리 | GPT-6.2 Sol | pj1 계약·목록·새 Claude 세션 | 통과(QA-BUG-105 수정 확인) | 91e8328a | sol-qa-1126c/evidence/terminal/ |
+| QA-WSL-203 | Python 판본 불일치 안내 | GPT-6.2 Sol | 격리 사용자 수준 실행기 | 통과(QA-BUG-003 수정 확인) | 91e8328a | sol-qa-1126c/evidence/claude/ |
+| QA-USAGE-207 | 사용량 비용 표시 | GPT-6.2 Sol | 관리자·직원 화면, 격리 렌더 분기 | 통과, 유료 실호출 미시험(QA-BUG-007) | 91e8328a | sol-qa-1126c/evidence/actions/ |
+| QA-ROOT-201 | 진행 중 실행 취소(서버) | GPT-6.2 Sol | 실제 대기 호출 취소 | 통과, 사람 단위는 QA-BUG-202 | 91e8328a | sol-qa-1126c/evidence/actions/ |
+| QA-PEOPLE-202 | 세션 종료·전체 차단 키 회수 | GPT-6.2 Sol | 직원 세션, PC·앱 키 200→401 | 통과 | 91e8328a | sol-qa-1126c/evidence/actions/ |
+| QA-ERROR-201 | 「[승인 대기]」·「[일시 오류]」 첫 줄 | GPT-6.2 Sol | 실제 원격 대기, 격리 의존성 오류 | 승인 대기 통과, 일시 오류 부분(격리) | 91e8328a | sol-qa-1126c/evidence/claude/ |
+| QA-SCREEN-201 | 화면 동작 63행 | GPT-6.2 Sol | 실제 브라우저 클릭·제출 | 통과 35·부분 10·미시험 18 | 91e8328a | sol-qa-1126c/evidence/SCREEN_ACTION_RESULTS.md |
+| QA-CLEANUP-201 | 시험 자료·정지 원복 | GPT-6.2 Sol | 보호 대상 상태 비교 | 원복 확인 | 91e8328a | sol-qa-1126c/evidence/cleanup/ |
 
 ## 결함 (QA-BASE-01 기준선)
 
@@ -65,17 +81,19 @@
 |---|---|---|---|---|
 | QA-BUG-001 | 높음 | 직원이 차단된 도구의 권한을 요청할 수 없음 | FM-19 FM-60 FM-64 | 수정 확인(QA-REG-01) |
 | QA-BUG-002 | 높음 | 사용자 수준 설치는 승인된 로컬 MCP를 자동 등록하지 않음 | FM-10 FM-42 FM-50 | 수정 확인(QA-REG-01) |
-| QA-BUG-003 | 높음 | 검사 통과한 GitHub 묶음이 단말의 Python 판본 차이로 시작 실패 | FM-28 FM-49 FM-50 FM-53 | 부분 재발(QA-REG-01) → 안내 경로 수정 #400(재검증 대기) |
+| QA-BUG-003 | 높음 | 검사 통과한 GitHub 묶음이 단말의 Python 판본 차이로 시작 실패 | FM-28 FM-49 FM-50 FM-53 | 수정 확인(QA-REG-02) |
 | QA-BUG-004 | 중간 | 직원 카탈로그가 도구 발견 전에 사용 가능한 것처럼 표시 | FM-08 FM-42 | 수정 확인(QA-REG-01) |
 | QA-BUG-005 | 중간 | 같은 GitHub 신청이 기존 상세 대신 409로 끝남 | FM-07 FM-37 | 수정 확인(QA-REG-01) |
-| QA-BUG-006 | 높음 | root가 검사 중인 신청을 강제로 결정할 경로가 없음 | FM-06 FM-56 | 재발(QA-REG-01, 검사 중 400) → #398 수정(재검증 대기) |
-| QA-BUG-007 | 중간 | 관리자와 직원의 사용량에 비용이 없음 | FM-16 | 수정(재검증 대기): LiteLLM 일별 지출로 비용·0·미집계 구분 |
+| QA-BUG-006 | 높음 | root가 검사 중인 신청을 강제로 결정할 경로가 없음 | FM-06 FM-56 | 수정 확인(QA-REG-02) |
+| QA-BUG-007 | 중간 | 관리자와 직원의 사용량에 비용이 없음 | FM-16 | 수정 확인(QA-REG-02) |
 | QA-BUG-008 | 중간 | 계약이 있는 신청의 도구별 호출·차단 수를 볼 수 없음 | FM-08 FM-16 | 수정 확인(QA-REG-01) |
 | QA-BUG-009 | 중간 | 이용 종료 후에도 PC 신청 목록은 「승인」으로 표시 | FM-27 FM-45 FM-63 | 수정 확인(QA-REG-01) |
 | QA-BUG-010 | 낮음 | mint TUI에서 Ctrl+C를 누르면 트레이스백이 뜸 | FM-04 FM-63 | 수정 확인(QA-REG-01) |
 | QA-BUG-011 | 중간 | 최상위 CLI 도움말에 직원 명령이 빠지고 인자 오류가 영어로 나옴 | FM-27 FM-63 | 수정 확인(QA-REG-01) |
-| QA-BUG-101 | 높음 | 승인 직후 PC가 계약을 받기 전 CLI 조회·터미널이 예외로 종료 | FM-27 FM-63 | 수정 #396(재검증 대기) |
-| QA-BUG-102 | 중간 | 승인된 원격 MCP가 PC 서버 목록에 보이지 않음 | FM-27 FM-63 | 수정(재검증 대기): 응답에 원격 서버를 더해 PC 목록·상세·화면에 「원격」으로 표시 |
-| QA-BUG-103 | 중간 | 중지된 원격 MCP 거부가 해결 안내 없이 영어로 반환 | FM-55 FM-56 | 수정 #400·D-014(재검증 대기) |
-| QA-BUG-104 | 중간 | PC에서 차단된 도구의 권한을 요청하면 승인 없음으로 분류 | FM-60 FM-63 | 수정 #400(재검증 대기) |
-| QA-BUG-105 | 중간 | 종료된 로컬 서버가 계약 파일에 남아 CLI에 준비 중으로 보임 | FM-27 FM-45 | 수정(재검증 대기): 폐기 보고 때 계약 파일 정리, 정리 전에는 「이용 종료」 |
+| QA-BUG-101 | 높음 | 승인 직후 PC가 계약을 받기 전 CLI 조회·터미널이 예외로 종료 | FM-27 FM-63 | 수정 확인(QA-REG-02) |
+| QA-BUG-102 | 중간 | 승인된 원격 MCP가 PC 서버 목록에 보이지 않음 | FM-27 FM-63 | 수정 확인(QA-REG-02) |
+| QA-BUG-103 | 중간 | 중지된 원격 MCP 거부가 해결 안내 없이 영어로 반환 | FM-55 FM-56 | 수정 확인(QA-REG-02) |
+| QA-BUG-104 | 중간 | PC에서 차단된 도구의 권한을 요청하면 승인 없음으로 분류 | FM-60 FM-63 | 수정 확인(QA-REG-02) |
+| QA-BUG-105 | 중간 | 종료된 로컬 서버가 계약 파일에 남아 CLI에 준비 중으로 보임 | FM-27 FM-45 | 수정 확인(QA-REG-02) |
+| QA-BUG-201 | 중간 | 검사 중 강제 반려·철회 뒤 서버가 「검사 중」에 남음(검사 중 철회 409 포함) | FM-54 FM-56 | 수정 #404(재검증 대기), 남은 행 정리 |
+| QA-BUG-202 | 중간 | 사람 서랍에 사람 단위 진행 중 실행 취소가 없음 | FM-58 | 수정 #404(재검증 대기) |
