@@ -73,13 +73,13 @@ def test_a_managed_install_writes_settings_hooks_launchers_and_the_key(folder, t
     # 시간 상한은 HTTP 대기 < 훅 내부 상한 < 하네스 시간 제한 순서이다.
     assert agent.HTTP_TIMEOUT < agent.HOOK_DEADLINE < before["timeout"]
     args = before["args"]
-    assert args[:2] == ["/usr/local/lib/mint-endpoint/mint_agent.py", "pre"]
+    assert args[:3] == ["-I", "/usr/local/lib/mint-endpoint/mint_agent.py", "pre"]  # 격리 실행
     assert args[args.index("--key-file") + 1] == "~/.config/mint/key"
     assert args[args.index("--contracts") + 1] == "/usr/local/lib/mint-endpoint/contracts.json"
     mcp = json.loads((etc / "managed-mcp.json").read_text())["mcpServers"]
     assert sorted(mcp) == ["srv-1", "srv-2"]
     assert mcp["srv-1"]["args"] == [
-        "/usr/local/lib/mint-endpoint/mint_agent.py", "run", "--contracts",
+        "-I", "/usr/local/lib/mint-endpoint/mint_agent.py", "run", "--contracts",
         "/usr/local/lib/mint-endpoint/contracts.json", "--server", "srv-1",
     ]  # fmt: skip
     listed = json.loads((programs / "contracts.json").read_text())["servers"]
@@ -204,7 +204,7 @@ def test_a_managed_codex_install_limits_servers_and_hooks_every_call(tmp_path, r
     line = before["hooks"][0]["command"]
     assert "/usr/local/lib/mint-endpoint/mint_agent.py pre --url https://mint.test" in line
     servers = tomllib.loads((codex / "managed_config.toml").read_text(encoding="utf-8"))
-    assert servers["mcp_servers"]["srv-2"]["args"][1:] == [
+    assert servers["mcp_servers"]["srv-2"]["args"][2:] == [
         "run", "--contracts", "/usr/local/lib/mint-endpoint/contracts.json", "--server", "srv-2",
     ]  # fmt: skip
     assert not (tmp_path / "root/etc/claude-code").exists()  # 고르지 않은 도구는 건드리지 않는다.
@@ -309,7 +309,7 @@ def test_a_managed_windows_install_uses_program_files_and_powershell_hooks(
     root = tmp_path / "root"
     settings = json.loads((root / "C/Program Files/ClaudeCode/managed-settings.json").read_text())
     before = settings["hooks"]["PreToolUse"][0]["hooks"][0]
-    assert before["args"][0] == "C:/Program Files/MintEndpoint/mint_agent.py"
+    assert before["args"][:2] == ["-I", "C:/Program Files/MintEndpoint/mint_agent.py"]
     assert before["onFailure"] == "block" and settings["allowManagedHooksOnly"] is True
     requirements = tomllib.loads(
         (root / "C/ProgramData/OpenAI/Codex/requirements.toml").read_text(encoding="utf-8")
