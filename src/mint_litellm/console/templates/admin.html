@@ -33,9 +33,11 @@
 {% else %}{% call m.confirm_dialog('root-off-' ~ loop.index, 'Root 해제', 'Root 해제 — ' ~ o.name, '이 사람은 Root 전용 조치를 할 수 없게 됩니다. 관리자 역할은 그대로입니다. 「Root 지정」으로 되돌릴 수 있습니다.', '/admin/operators/' ~ (o.name | urlencode) ~ '/root', actor, 'Root 해제') %}
 <input type="hidden" name="on" value="0"><label>사유(필수)<textarea name="reason" required maxlength="500"></textarea></label>
 {% endcall %}{% endif %}{% endif %}
-{% call m.confirm_dialog('remove-' ~ loop.index, '운영자 삭제', '운영자 삭제', '토큰이 끝나고 이 사용자의 콘솔 세션이 폐기됩니다.', '/operators/' ~ (o.name | urlencode) ~ '/remove', actor, '운영자 삭제', confirm_name=o.name) %}
+{% if o.name == 'root' %}{{ m.blocked_button('운영자 삭제', '기본 계정은 삭제할 수 없습니다') }}
+{% elif o.root and not me_root %}{{ m.blocked_button('운영자 삭제', 'Root 운영자는 Root만 삭제할 수 있습니다') }}
+{% else %}{% call m.confirm_dialog('remove-' ~ loop.index, '운영자 삭제', '운영자 삭제', '토큰이 끝나고 이 사용자의 콘솔 세션이 폐기됩니다.', '/operators/' ~ (o.name | urlencode) ~ '/remove', actor, '운영자 삭제', confirm_name=o.name) %}
 <input type="hidden" name="state_version" value="{{ o.state_version }}">
-{% endcall %}</div>
+{% endcall %}{% endif %}</div>
 {% endif %}</td></tr>{% endfor %}
 </tbody></table>
 {% else %}{{ m.empty('등록된 운영자가 없습니다', '/setup', '시작하기') }}{% endif %}

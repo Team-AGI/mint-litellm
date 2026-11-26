@@ -755,3 +755,28 @@ def test_the_cli_token_path_still_approves_an_exception_directly(world):
     ok = decide(world, intake, decision="except", reason="수동 확인함",
                 second_approver_token=TOKENS["approver"])
     assert ok.status_code == 200, ok.text
+
+
+@pytest.mark.parametrize("status", ["indeterminate", "failed"])
+def test_a_plain_approve_is_refused_when_inspection_did_not_pass(world, status):
+    intake = add_intake(world, status=status, result="indeterminate")
+    refused = decide(world, intake, decision="approve")
+    assert refused.status_code == 400 and "예외 승인" in refused.json()["message"]
+    assert "수용검증" not in refused.text
+    assert world.query("SELECT status FROM mint.intakes")[0][0] == status
+    html = world.session_client("admin").get(f"/intakes/{intake}").text
+    assert 'name="decision" value="approve"' not in html
+    assert 'id="exception"' in html
+
+
+def test_exception_approve_still_works_and_a_passed_approve_states_a_true_reason(world):
+    intake = add_intake(world, status="failed", result="indeterminate")
+    ok = decide(world, intake, role="approver", decision="except", reason="수동 확인함",
+                second_approver_token=TOKENS["admin"])
+    assert ok.status_code == 200, ok.text
+    assert world.query("SELECT decision, decision_reason FROM mint.intakes")[0] == (
+        "exception", "수동 확인함")
+    passed = add_intake(world, server="srv-ok")
+    assert decide(world, passed, decision="approve").status_code == 200
+    reason = world.query("SELECT decision_reason FROM mint.intakes WHERE id = %s", passed)[0][0]
+    assert reason == "검사를 통과해 승인했습니다." and "수용검증" not in reason
