@@ -216,3 +216,24 @@ def test_an_npm_contract_runs_the_exact_pinned_package_without_a_path_or_file_ha
             npm_contract(**change)
     with pytest.raises(ValidationError):  # npx는 3판에서만 경로 없이 받는다
         contract(executable="npx")
+
+
+def test_a_contract_carries_both_packs_and_an_old_one_stays_valid():
+    old = pack_contract()
+    assert "windows" not in old.document()["pack"]  # 이전 계약의 문서·해시는 그대로다
+    both = pack_contract(pack={**old.document()["pack"], "windows": {"sha256": "cd" * 32}})
+    assert both.pack.windows.sha256 == "cd" * 32 and both.pack.sha256 == HEX
+    assert both.document()["pack"]["windows"] == {"sha256": "cd" * 32}
+    assert both.sha256() != old.sha256()  # 승인은 두 해시에 묶인다
+    none = pack_contract(pack={**old.document()["pack"], "windows": {"unavailable": True}})
+    assert none.document()["pack"]["windows"] == {"unavailable": True}
+    plain = {k: v for k, v in both.document().items() if k != "identity_kind"}
+    assert ExecContract.model_validate(plain).sha256() == both.sha256()
+
+
+@pytest.mark.parametrize("windows", [{}, {"sha256": "xyz"}, {"unavailable": False},
+                                     {"sha256": "cd" * 32, "unavailable": True}, {"x": 1}])
+def test_a_windows_pack_is_a_hash_or_unavailable_and_nothing_else(windows):
+    with pytest.raises(ValueError):
+        pack_contract(pack={"sha256": HEX, "runtime": "python3", "python": "3.12",
+                            "entry": "a.b:c", "windows": windows})

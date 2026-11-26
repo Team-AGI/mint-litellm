@@ -10,6 +10,7 @@ from mint_litellm.control import intake_checks as checks
 from mint_litellm.control import intake_jobs, packs
 
 DIGEST = "ab" * 32
+WIN_DIGEST = "ef" * 32
 MANIFEST = {
     "entry": "pkg:main",
     "platform": {"python": "3.12"},
@@ -67,7 +68,8 @@ class Fake:
         stored = [checks.tool_definition(TOOL)]
         monkeypatch.setattr(intake_jobs, "_stored_definitions", lambda *_: stored)
         monkeypatch.setattr(intake_jobs, "transact", lambda ctx: contextlib.nullcontext())
-        monkeypatch.setattr(packs, "build_pack", build or (lambda *a, **k: (DIGEST, MANIFEST)))
+        monkeypatch.setattr(packs, "build_pack", build or (
+            lambda *a, windows=False, **k: (WIN_DIGEST if windows else DIGEST, MANIFEST)))
         monkeypatch.setattr(
             intake_jobs.inspection, "inspect_pack",
             inspect or (lambda *a, **k: {"status": "ok", "complete": True, "tools": [TOOL]}))
@@ -90,7 +92,7 @@ def test_all_six_checks_pass_and_pack_is_recorded(monkeypatch):
     assert contract["schema_version"] == 2 and contract["executable"] == "/opt/py3"
     assert "executable_sha256" not in contract and contract["identity_kind"] == "stdio"
     assert contract["pack"] == {"sha256": DIGEST, "runtime": "python3", "python": "3.12",
-                                "entry": "pkg:main"}
+                                "entry": "pkg:main", "windows": {"sha256": WIN_DIGEST}}
     assert contract["allowed_hosts"] == ["a.example", "b.example"]
     assert contract["file_access"] == [{"path": "/data", "mode": "ro"}]
 
@@ -221,3 +223,30 @@ def test_an_npm_request_gets_a_pack_less_contract_and_registry_based_supply_chai
     contract = json.loads(fake.updates[0][0])
     assert contract["schema_version"] == 3 and contract["npm"]["bin"] == "srv"
     assert contract["argv"] == ["-y", "@o/srv@1.2.3", "/data"] and "pack" not in contract
+
+
+def test_a_dependency_without_a_windows_build_leaves_the_linux_pack_working(monkeypatch):
+    def only_linux(*args, windows=False, **kwargs):
+        if windows:
+            raise packs.PackError("PACK_RESOLVE_FAILED")
+        return DIGEST, MANIFEST
+
+    fake = Fake()
+    fake.install(monkeypatch, build=only_linux)
+    assert {result for _, result, _ in fake.run()} == {"pass"}
+    contract = json.loads(fake.updates[0][2])
+    assert contract["pack"]["sha256"] == DIGEST
+    assert contract["pack"]["windows"] == {"unavailable": True}
+
+
+def test_the_windows_pack_is_built_from_the_same_spec(monkeypatch):
+    seen = []
+
+    def record(spec, allowlists, python="3.12", windows=False, **kwargs):
+        seen.append((spec["name"], spec["version"], python, windows))
+        return (WIN_DIGEST if windows else DIGEST), MANIFEST
+
+    fake = Fake()
+    fake.install(monkeypatch, build=record)
+    fake.run()
+    assert seen == [("pkg", "1.0", "3.12", False), ("pkg", "1.0", "3.12", True)]

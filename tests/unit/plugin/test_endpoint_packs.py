@@ -375,3 +375,38 @@ def test_access_requests_go_to_the_db_with_the_calling_key_only(tmp_path, scope,
     assert me["access_requests"][0]["status"] == "open" and me["access_requests"][0]["tool"] == "t"
     assert me["intakes"][0]["stage"] == "ended"  # QA-BUG-009
     assert ACCESS in KIT_KEY_ROUTES and ACCESS + "/*" in KIT_KEY_ROUTES
+
+
+WIN = "d" * 64
+WIN_WHEEL = "demo-1.0-cp312-cp312-win_amd64.whl"
+
+
+def test_a_windows_pack_is_sent_for_the_hash_the_approved_contract_names(
+        tmp_path, scope, monkeypatch):
+    folder = tmp_path / "packs" / WIN
+    folder.mkdir()
+    (folder / "manifest.json").write_text(json.dumps({"files": [{"name": WIN_WHEEL}]}))
+    (folder / WIN_WHEEL).write_bytes(b"win")
+    (folder / "secret.txt").write_text("no")
+    pack_ref = {**CONTRACT["pack"], "windows": {"sha256": WIN}}
+    monkeypatch.setitem(ROW, "exec_contract", {**CONTRACT, "pack": pack_ref})
+    client, _ = build(tmp_path)
+    assert pack(client, sha=WIN, file=WIN_WHEEL).content == b"win"
+    assert WIN_WHEEL in pack(client, sha=WIN).text
+    assert pack(client, sha=WIN, file="secret.txt").status_code == 404  # manifest에 없는 파일
+    assert pack(client, sha=WIN, file=WHEEL).status_code == 404  # Linux wheel은 이 묶음에 없다
+    assert pack(client, sha=PACK, file=WHEEL).content == b"whl"  # Linux 묶음은 그대로
+    assert pack(client, sha=OTHER).status_code == 404
+    assert pack(client, sha="e" * 64).status_code == 404  # 계약에 없는 해시
+    assert pack(client, sha=WIN, headers=HEADERS).status_code == 404  # 범위 밖 키
+    served = client.get(ME, headers=KEY_HEADER).json()["servers"][0]
+    assert served["pack_windows"] == {"sha256": WIN}
+
+
+def test_me_says_when_the_contract_has_no_windows_build(tmp_path, scope, monkeypatch):
+    pack_ref = {**CONTRACT["pack"], "windows": {"unavailable": True}}
+    monkeypatch.setitem(ROW, "exec_contract", {**CONTRACT, "pack": pack_ref})
+    client, _ = build(tmp_path)
+    assert client.get(ME, headers=KEY_HEADER).json()["servers"][0]["pack_windows"] == {
+        "unavailable": True}
+    assert pack(client, sha="e" * 64).status_code == 404

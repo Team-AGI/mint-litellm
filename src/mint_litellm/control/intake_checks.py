@@ -22,7 +22,7 @@ from mint_litellm.control.db.connection import fetchone
 from mint_litellm.control.litellm_admin import LiteLLMError
 from mint_litellm.control.litellm_control import ResponseTooLarge, ResponseTooSlow
 from mint_litellm.control.packs import PackError
-from mint_litellm.types.exec_contract import ExecContract, FileAccess, NpmRef, PackRef
+from mint_litellm.types.exec_contract import ExecContract, FileAccess, NpmRef, PackRef, WinPackRef
 
 CHECKS = (
     "url_guard",
@@ -677,7 +677,7 @@ def npm_exec_contract(spec: dict, legacy_network: bool = False) -> dict:
 
 
 def local_exec_contract(spec: dict, digest: str, manifest: dict, executable: str,
-                        legacy_network: bool = False) -> dict:
+                        legacy_network: bool = False, windows: dict | None = None) -> dict:
     """묶음으로 만든 실행 계약(판 2)의 저장 형식. 승인 때 읽는 형식과 같다(`document()`).
 
     실행 파일은 조직 런타임이고 해시 대신 묶음을 가리킨다. 형식이 어긋나면 묶음 오류로 본다.
@@ -690,7 +690,8 @@ def local_exec_contract(spec: dict, digest: str, manifest: dict, executable: str
             schema_version=2,
             executable=executable,
             pack=PackRef(sha256=digest, runtime="python3",
-                         python=manifest["platform"]["python"], entry=manifest["entry"]),
+                         python=manifest["platform"]["python"], entry=manifest["entry"],
+                         windows=WinPackRef(**windows) if windows else None),
             argv=tuple(spec.get("argv", [])),
             env=dict(spec.get("env") or {}),
             file_access=tuple(FileAccess(path=f["path"], mode=f.get("mode", "ro"))

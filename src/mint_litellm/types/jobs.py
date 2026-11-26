@@ -38,6 +38,11 @@ def intake_run_job_key(intake_id: UUID, attempt: int) -> str:
     return f"intake_run:{intake_id}:{attempt}"
 
 
+def intake_winpack_job_key(intake_id: UUID) -> str:
+    """승인된 서버의 Windows 묶음 만들기: ``intake_run:<intake_id>:winpack``(신청마다 하나)."""
+    return f"intake_run:{intake_id}:winpack"
+
+
 def intake_reject_job_key(intake_id: UUID) -> str:
     """LiteLLM 제출 거절 전달: ``intake_run:<intake_id>:reject``. 신청마다 한 작업으로 수렴한다."""
     return f"intake_run:{intake_id}:reject"
