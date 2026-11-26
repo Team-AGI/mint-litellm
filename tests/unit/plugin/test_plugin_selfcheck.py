@@ -450,7 +450,7 @@ def make_runtime(
     ready=True,
     store=None,
     stopped=None,
-    grace=0.05,
+    grace=2.0,
     ready_delay=0.0,
     database_delay=0.0,
 ):
@@ -565,7 +565,7 @@ def test_a_failure_that_resolves_within_the_grace_period_does_not_stop(tmp_path)
 
 def test_a_non_required_runtime_stays_blocked_and_recovers_later(tmp_path):
     runtime, store, stopped, state = make_runtime(
-        tmp_path, v=view(strict_guardrail_modes=False), required=False
+        tmp_path, v=view(strict_guardrail_modes=False), required=False, grace=0.05
     )
 
     async def scenario():
@@ -890,7 +890,7 @@ class TestVerifiedEvent:
 
     def test_a_worker_that_passes_later_records_the_verification_once(self, tmp_path):
         runtime, store, stopped, state = make_runtime(
-            tmp_path, v=view(strict_guardrail_modes=False), required=False
+            tmp_path, v=view(strict_guardrail_modes=False), required=False, grace=0.05
         )
 
         async def scenario():

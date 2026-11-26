@@ -52,15 +52,14 @@ def test_every_reason_maps_to_a_pre_dispatch_error():
         err = error_for_reason(code, REF)
         assert re.fullmatch(r"MINT-[A-Z0-9-]+", err.code)
         assert err.dispatch_state is DispatchState.NOT_DISPATCHED
-        # 전송 전 취소, 호출별 승인 대기(승인 뒤 같은 호출), 관리자 사후 차단(해제 뒤 같은 호출)만
-        # 다시 보내도 안전하다.
+        # 전송 전 취소와 호출별 승인 대기(승인 뒤 같은 호출)만 다시 보내도 안전하다.
+        # 관리자 차단을 포함한 명시 거부는 재시도 금지다.
         assert err.retry_safe is (
             reason
             in (
                 Reason.CANCELLED,
                 Reason.CALL_APPROVAL_REQUIRED,
                 Reason.CALL_APPROVAL_STALE,
-                Reason.DENIED,
             )
         )
         assert err.reference == REF
