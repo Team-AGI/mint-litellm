@@ -193,7 +193,7 @@ def test_http_401_prints_korean_guidance(monkeypatch, capsys):
     def refuse(*args, **kw):
         raise urllib.error.HTTPError("http://x", 401, "no", {}, io.BytesIO())
 
-    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", refuse)
     assert kit_module.post("http://x", "k", {}, None) is None
     assert "한 줄 설치 명령" in capsys.readouterr().err
 

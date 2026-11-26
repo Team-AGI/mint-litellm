@@ -388,3 +388,35 @@ def test_the_answer_carries_the_offline_policy_for_the_calling_key(tmp_path, sto
     client, _ = build(tmp_path)
     assert post(client, REPORT, report()).json()["offline_policy"] == policy
     assert seen == [KEY]
+
+
+def test_an_action_denial_is_expanded_into_the_tool_names_of_the_approved_contract():
+    from datetime import UTC, datetime
+
+    from mint_litellm.plugin.snapshot import offline_policy_doc
+
+    at = datetime(2026, 11, 26, tzinfo=UTC)
+    contracts = [("mem", "create", "write"), ("mem", "read_graph", "read"),
+                 ("mem", "drop", "write")]
+    doc = offline_policy_doc(None, [("user", "u", "mem", ["action:write"])], [], (), at,
+                             contracts=contracts)
+    assert doc["blocked"] == {"mem": ["create", "drop"]}
+    unknown = offline_policy_doc(None, [("user", "u", "other", ["action:write", "x"])], [], (), at,
+                                 contracts=contracts)
+    assert unknown["blocked"] == {"other": ["*"]}  # 분류를 모르면 막는다
+    builtin = offline_policy_doc(None, [("user", "u", "builtin:claude", ["action:write"])], [], (),
+                                 at)
+    assert builtin["blocked"] == {}
+    every = offline_policy_doc(None, [("org", "o", None, ["action:write"])], [], (), at,
+                               contracts=contracts)
+    assert every["blocked"] == {"mem": ["create", "drop"]}
+
+
+def test_a_server_wide_negative_state_blocks_the_whole_server():
+    from datetime import UTC, datetime
+
+    from mint_litellm.plugin.snapshot import offline_policy_doc
+
+    doc = offline_policy_doc(None, [], [], (), datetime(2026, 11, 26, tzinfo=UTC),
+                             whole=["suspended-srv", "ended-srv"])
+    assert doc["blocked"] == {"ended-srv": ["*"], "suspended-srv": ["*"]}

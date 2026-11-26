@@ -479,3 +479,31 @@ def test_the_offline_policy_holds_what_the_decision_path_would_deny_for_that_per
     assert other["blocked"] == {"builtin:claude": ["Write"]}
     assert mine["review"] == other["review"] == {"*": ["Grep"], "builtin:claude": ["Edit"]}
     assert mine["halt"] is None and none is None
+
+
+def test_the_offline_policy_blocks_a_suspended_server_and_an_ended_relation(fresh_db, plugin_dsn):
+    pytest.importorskip("psycopg_pool")
+    with psycopg.connect(fresh_db) as admin:
+        admin.execute("SET session_replication_role = replica")  # 상태 전이 검사를 건너뛴다
+        admin.execute("INSERT INTO mint.orgs (instance_id, org_id, name) VALUES (%s, 'alpha', 'a')",
+                      (INSTANCE,))
+        admin.execute(
+            "INSERT INTO mint.settings (instance_id, default_org_id) VALUES (%s, 'alpha')"
+            " ON CONFLICT (instance_id) DO UPDATE SET default_org_id = 'alpha'", (INSTANCE,))
+        admin.execute(
+            "INSERT INTO mint.endpoint_installs (instance_id, key_token, user_id, team_id,"
+            " key_alias, issued_by) VALUES (%s, 'tok-a', 'u1', 't1', 'mint-kit-a', 'a')",
+            (INSTANCE,))
+        admin.execute(
+            "INSERT INTO mint.servers (id, instance_id, server_id, status, url_sha256, transport,"
+            " auth_type, registered_by) VALUES (gen_random_uuid(), %s, 'down-srv', 'suspended',"
+            " repeat('a', 64), 'http', 'none', 'a')", (INSTANCE,))
+
+    async def run():
+        database = PluginDatabase(plugin_dsn)
+        try:
+            return await database.offline_policy(INSTANCE, "tok-a")
+        finally:
+            await database.close()
+
+    assert asyncio.run(run())["blocked"] == {"down-srv": ["*"]}
