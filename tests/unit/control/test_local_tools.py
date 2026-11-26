@@ -6,7 +6,7 @@ MINT_TEST_DATABASE_URL이 없으면 건너뛴다.
 import json
 
 import pytest
-from ctl_fixtures import INSTANCE
+from ctl_fixtures import INSTANCE, make_ctx
 
 psycopg = pytest.importorskip("psycopg")
 from psycopg.types.json import Jsonb  # noqa: E402
@@ -103,3 +103,54 @@ def test_approving_turns_the_provisional_contract_into_an_approved_one(local, ct
     with pytest.raises(ControlError):
         contracts.approve_provisional(ctx, "missing")
     assert json.loads(contract["canonical_text"])["name"] == "read_file"
+
+
+OTHER = {"type": "object", "properties": {"q": {}}}
+
+
+def _drift(conn):
+    return {r["tool"]: r["drift"] for r in fetchall(
+        conn, "SELECT tool, drift FROM mint.tool_contracts WHERE status='approved'")}
+
+
+def test_returning_to_the_approved_definition_is_cleared_only_by_an_admin(local, conn):
+    report(conn, tools("read_file", "list_dir"))
+    local_tools.consume(local)
+    contracts.approve_provisional(local, "loc")
+    report(conn, tools("read_file", "list_dir", schema=OTHER))
+    local_tools.consume(local)
+    assert _drift(conn) == {"read_file": "input_schema", "list_dir": "input_schema"}
+    # list_dir만 승인본으로 돌아왔다. 스스로 풀리지는 않는다.
+    report(conn, tools("list_dir") + tools("read_file", schema=OTHER))
+    local_tools.consume(local)
+    assert _drift(conn)["list_dir"] == "input_schema"
+    assert [t["tool"] for t in contracts.returned_tools(local, "loc")] == ["list_dir"]
+    viewer = make_ctx(conn, "v", "viewer", "viewer-user")
+    with pytest.raises(ControlError):
+        contracts.acknowledge_return(viewer, "loc")
+    assert _drift(conn)["list_dir"] == "input_schema"
+    done = contracts.acknowledge_return(local, "loc", reason="환경 이름만 달랐음")
+    assert done["cleared"] == ["list_dir"]
+    assert _drift(conn) == {"read_file": "input_schema", "list_dir": "none"}
+    event = fetchone(
+        conn, "SELECT payload FROM mint.events WHERE payload->>'source'='drift_return'")
+    assert event["payload"]["tool"] == "list_dir" and event["payload"]["reason"]
+    with pytest.raises(ControlError):  # 아직 다른 정의인 도구만 남아 더 풀 것이 없다
+        contracts.acknowledge_return(local, "loc")
+
+
+def test_the_local_change_summary_ignores_fields_the_pc_never_reports(local, conn):
+    report(conn, tools("read_file"))
+    local_tools.consume(local)
+    contracts.approve_provisional(local, "loc")
+    info = contracts.diff(local, "loc")
+    assert info["server"]["identity_kind"] == "stdio"
+    approved = json.loads(info["tools"][0]["canonical_text"])
+    approved.update(annotations={"readOnlyHint": True}, output_schema={"type": "object"})
+    info["tools"][0]["canonical_text"] = json.dumps(approved)
+    seen = {"name": "read_file", "description": "d", "input_schema": SCHEMA}
+    info["observations"] = [{"kind": "tool", "scope": "server", "name": "read_file",
+                             "change_summary": "주석 변경", "canonical_text": json.dumps(seen)}]
+    assert compare.changes(info) == []
+    info["observations"][0]["canonical_text"] = json.dumps({**seen, "description": "x"})
+    assert [r["summary"] for r in compare.changes(info)] == ["설명 변경"]

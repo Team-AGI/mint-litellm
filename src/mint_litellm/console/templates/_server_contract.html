@@ -13,12 +13,19 @@
 </form>
 {% endif %}
 {% endif %}
-{% if provisional and not c.provisional and not c.rows and not c.cand.tools and not c.cand.deployments %}
+{% if provisional and not c.provisional and not c.returned and not c.rows and not c.cand.tools and not c.cand.deployments %}
 {{ m.empty('승인된 계약이 없습니다', '/intakes', '도입 신청 보기') }}
 {% else %}
 <dl class="detail">
   <dt>재승인 계획</dt><dd>{% if c.plan %}{{ m.badge(L.PLAN, c.plan.status) }} · 요청자 {{ c.plan.requested_by }}{% else %}—{% endif %}</dd>
 </dl>
+{% if c.returned and s.status == 'approved' and can(actor, 'contract reapprove') %}
+<form method="post" action="/contracts/{{ s.server_id | urlencode }}/ack-return" class="form cols">
+  {{ m.csrf(actor) }}
+  <div class="effect full">도구 {{ c.returned | length }}개가 승인본으로 돌아왔습니다</div>
+  <div class="actions full"><button type="submit" class="primary">확인하고 차단 해제</button></div>
+</form>
+{% endif %}
 {% if c.rows %}
 <table><thead><tr><th>항목</th><th>변경</th><th>변경 요약</th><th></th></tr></thead><tbody>
 {% for r in c.rows %}<tr{% if c.chosen and c.chosen.name == r.name and c.chosen.scope == r.scope %} class="selected"{% endif %}>

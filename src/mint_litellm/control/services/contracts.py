@@ -34,7 +34,7 @@ from mint_litellm.types.ids import new_uuid7
 def show(ctx: Context, server_id: str) -> dict:
     server = fetchone(
         ctx.conn,
-        "SELECT server_id,contract_status,state_version,last_observed_at,"
+        "SELECT server_id,identity_kind,contract_status,state_version,last_observed_at,"
         " deployment_drift,deployment_drift_fields FROM mint.servers"
         " WHERE instance_id=%s AND server_id=%s",
         (ctx.instance_id, server_id),
@@ -135,6 +135,55 @@ def approve_provisional(
             (ctx.instance_id, server_id, approved),
         )
         return {"server_id": server_id, "approved": approved}
+
+
+_STICKY = ("input_schema", "description")
+_RETURNED_SQL = (
+    "SELECT id,tool,version,drift FROM mint.tool_contracts WHERE instance_id=%s AND server_id=%s"
+    " AND status='approved' AND drift = ANY(%s) AND observed_sha256 IS NOT NULL"
+    " AND observed_sha256 = pin_sha256 ORDER BY tool"
+)
+
+
+def returned_tools(ctx: Context, server_id: str) -> list[dict]:
+    """차단이 남아 있지만 마지막 관측이 승인본과 같아진 승인 도구(읽기 전용)."""
+    return fetchall(ctx.conn, _RETURNED_SQL, (ctx.instance_id, server_id, list(_STICKY)))
+
+
+def acknowledge_return(ctx: Context, server_id: str, *, reason: str = "") -> dict:
+    """승인본으로 돌아온 도구의 입력·설명 변경 차단을 푼다(자동으로는 풀지 않는다).
+
+    마지막 관측이 승인 지문과 같은 도구만 대상이다. 다른 도구는 그대로 막힌다. 드리프트 값이
+    바뀌면 세대가 올라 플러그인이 다음 호출부터 새 상태를 읽는다.
+    """
+    require_role(ctx, "contract reapprove")
+    reason = reason.strip() or "승인본으로 돌아온 변경 확인"
+    with transact(ctx):
+        server = fetchone(
+            ctx.conn,
+            "SELECT status FROM mint.servers WHERE instance_id=%s AND server_id=%s FOR UPDATE",
+            (ctx.instance_id, server_id),
+        )
+        if server is None:
+            raise not_found("서버가 없습니다.")
+        if server["status"] != "approved":
+            raise conflict("승인된 서버만 확인할 수 있습니다.")
+        rows = fetchall(ctx.conn, _RETURNED_SQL + " FOR UPDATE",
+                        (ctx.instance_id, server_id, list(_STICKY)))
+        if not rows:
+            raise conflict("승인본으로 돌아온 도구가 없습니다.")
+        for row in rows:
+            version = fetchone(
+                ctx.conn,
+                "UPDATE mint.tool_contracts SET drift='none' WHERE id=%s RETURNING version",
+                (row["id"],),
+            )["version"]
+            ctx.emit(
+                EventKind.CONTRACT_APPROVED, row["id"], version,
+                {"server_id": server_id, "tool": row["tool"], "source": "drift_return",
+                 "was": row["drift"], "reason": reason},
+            )
+        return {"server_id": server_id, "cleared": [r["tool"] for r in rows]}
 
 
 @service("contract diff")
