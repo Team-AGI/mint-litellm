@@ -1,6 +1,7 @@
 """PyPI wheel을 검증하고 내용 주소로 저장한다."""
 
 import configparser
+import email.parser
 import errno
 import functools
 import hashlib
@@ -78,6 +79,78 @@ def _download(requirement: str, destination: Path, python: str, before: str | No
         capture_output=True,
         timeout=300,
     )
+
+
+# Windows 묶음 의존 라이브러리 닫힘 판본: 이전에 만든 묶음은 Windows 전용 요구가 빠졌을 수 있다.
+WINDOWS_CLOSURE = 1
+
+_WINDOWS_ENV = {
+    "sys_platform": "win32", "platform_system": "Windows", "os_name": "nt",
+    "platform_machine": "AMD64", "implementation_name": "cpython",
+    "platform_python_implementation": "CPython", "platform_release": "",
+    "platform_version": "",
+}
+
+
+def _packaging():
+    try:
+        import packaging.markers as markers
+        import packaging.requirements as requirements
+        import packaging.utils as utils
+    except ImportError:  # 이미지에는 pip가 없으므로 묶음 만들기용 pip wheel의 것을 쓴다
+        wheel = os.environ.get("MINT_PIP_WHEEL", PIP_WHEEL)
+        if os.path.isfile(wheel) and wheel not in sys.path:
+            sys.path.insert(0, wheel)
+        from pip._vendor.packaging import markers, requirements, utils
+    return markers, requirements, utils
+
+
+def windows_current(digest: str, root: str | Path | None = None) -> bool:
+    """Windows 묶음이 닫힘 판본인가. 폴더를 읽을 수 없으면 참(다시 만들지 않는다)."""
+    base = Path(root or os.environ.get("MINT_PACKS_DIR", "/var/lib/mint/packs"))
+    try:
+        manifest = json.loads((base / digest / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return True
+    return int(manifest.get("platform", {}).get("closure", 0)) >= WINDOWS_CLOSURE
+
+
+def _windows_closure(stage: Path, extras: list[str], name: str, python: str, before, download,
+                     rounds: int = 8) -> None:
+    """pip는 표식을 Linux 기준으로 평가해 Windows 전용 요구(예: pywin32)를 건너뛴다.
+    받은 wheel의 Requires-Dist를 Windows 환경으로 다시 평가해 빠진 것을 같은 조건으로 더 받는다."""
+    _, requirements, utils = _packaging()
+    env = {**_WINDOWS_ENV, "python_version": python, "python_full_version": python + ".0",
+           "implementation_version": python + ".0"}
+    wanted = {utils.canonicalize_name(name): set(extras)}
+    for _ in range(rounds):
+        have = {utils.canonicalize_name(w.name.split("-")[0]) for w in stage.glob("*.whl")}
+        missing: dict[str, str] = {}
+        for wheel in sorted(stage.glob("*.whl")):
+            with zipfile.ZipFile(wheel) as z:
+                meta = next((n for n in z.namelist()
+                             if n.endswith(".dist-info/METADATA") and n.count("/") == 1), None)
+                text = z.read(meta).decode("utf-8", "replace") if meta else ""
+            owner = utils.canonicalize_name(wheel.name.split("-")[0])
+            for line in email.parser.Parser().parsestr(text).get_all("Requires-Dist") or []:
+                try:
+                    req = requirements.Requirement(line)
+                except requirements.InvalidRequirement:
+                    continue
+                if req.marker and not any(
+                        req.marker.evaluate({**env, "extra": extra})
+                        for extra in {"", *wanted.get(owner, ())}):
+                    continue
+                key = utils.canonicalize_name(req.name)
+                wanted.setdefault(key, set()).update(req.extras)
+                if key not in have:
+                    tag = "[" + ",".join(sorted(req.extras)) + "]" if req.extras else ""
+                    missing[key] = f"{req.name}{tag}{req.specifier}"
+        if not missing:
+            return
+        for requirement in missing.values():
+            download(requirement, stage, python, before)
+    raise PackError("PACK_RESOLVE_FAILED")  # 닫히지 않는다
 
 
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
@@ -213,7 +286,9 @@ def build_pack(
                                    python)
             else:
                 download(requirement, stage, python, before)
-        except (OSError, subprocess.SubprocessError):
+            if windows:
+                _windows_closure(stage, extras, name, python, before, download)
+        except (OSError, subprocess.SubprocessError, zipfile.BadZipFile):
             if git:
                 raise PackError("PACK_RESOLVE_FAILED") from None
             try:
@@ -272,7 +347,8 @@ def build_pack(
                 "extras": sorted(extras),
                 **({"git": spec["git"]} if git else {}),
             },
-            "platform": ({"os": "windows", "arch": "amd64", "python": python} if windows else
+            "platform": ({"os": "windows", "arch": "amd64", "python": python,
+                                                    "closure": WINDOWS_CLOSURE} if windows else
                          {"os": "linux", "arch": "x86_64", "glibc": "2.28", "python": python}),
             "entry": entry,
             "files": files,

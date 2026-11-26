@@ -38,9 +38,11 @@ def intake_run_job_key(intake_id: UUID, attempt: int) -> str:
     return f"intake_run:{intake_id}:{attempt}"
 
 
-def intake_winpack_job_key(intake_id: UUID) -> str:
-    """승인된 서버의 Windows 묶음 만들기: ``intake_run:<intake_id>:winpack``(신청마다 하나)."""
-    return f"intake_run:{intake_id}:winpack"
+def intake_winpack_job_key(intake_id: UUID, closure: int = 0) -> str:
+    """승인된 서버의 Windows 묶음 만들기: ``intake_run:<intake_id>:winpack``(신청마다 하나).
+
+    닫힘 판본 이전의 Windows 묶음을 다시 만들 때는 판본마다 하나(``:winpack:<closure>``)."""
+    return f"intake_run:{intake_id}:winpack" + (f":{closure}" if closure else "")
 
 
 def intake_reject_job_key(intake_id: UUID) -> str:

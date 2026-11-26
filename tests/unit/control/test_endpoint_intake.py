@@ -716,6 +716,41 @@ def test_a_missing_windows_build_is_recorded_and_a_recheck_can_fill_it_in_later(
     assert now["exec_contract"]["pack"]["windows"] == {"sha256": "d" * 64}
 
 
+def test_a_windows_pack_built_before_the_closure_is_rebuilt_and_a_current_one_is_left_alone(
+        seeded, monkeypatch):
+    from types import SimpleNamespace
+
+    from mint_litellm.control import intake_jobs, packs
+
+    world = seeded
+    request_id, row, ctx = _start_failed_after_approval(world)
+    monkeypatch.setattr(intake_jobs, "_allowlists", lambda *a: [])
+    job = SimpleNamespace(conn=world.conn, instance_id=INSTANCE, checkpoint=lambda: None)
+    monkeypatch.setattr(packs, "build_pack", lambda *a, **k: ("c" * 64, {}))
+    assert intake_jobs._winpack_run(job, ctx, row) is True
+    approved = fetchone(world.conn, "SELECT * FROM mint.deployment_contracts"
+                        " WHERE status = 'approved'")
+
+    def winpack_jobs():
+        return [j for j in world.jobs("intake_run") if j["target_ref"].endswith("/winpack")]
+
+    monkeypatch.setattr(packs, "windows_current", lambda digest: True)
+    before = len(winpack_jobs())
+    intake_jobs.local_pack_retry(job)
+    assert len(winpack_jobs()) == before  # 현재 판본이면 건드리지 않는다
+    assert intake_jobs._winpack_run(job, ctx, row) is False
+
+    monkeypatch.setattr(packs, "windows_current", lambda digest: False)
+    intake_jobs.local_pack_retry(job)
+    assert len(winpack_jobs()) == before + 1  # 옛 판본이면 다시 만들기를 등록한다
+    monkeypatch.setattr(packs, "build_pack", lambda *a, **k: ("e" * 64, {}))
+    assert intake_jobs._winpack_run(job, ctx, row) is True
+    now = fetchone(world.conn, "SELECT * FROM mint.deployment_contracts WHERE status = 'approved'")
+    assert now["exec_contract"]["pack"]["windows"] == {"sha256": "e" * 64}
+    assert now["pack_sha256"] == approved["pack_sha256"]  # Linux 묶음은 그대로
+    assert world.intake(request_id)["decision"] == "approved"
+
+
 # --- 저장소 주소로 화면에서 만드는 로컬 신청 -------------------------------------------------
 
 SHA = "d" * 40

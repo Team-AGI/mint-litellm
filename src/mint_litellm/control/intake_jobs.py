@@ -566,8 +566,9 @@ def _winpack_run(job: JobContext, ctx: Context, row: dict) -> bool:
     pack = ((approved or {}).get("exec_contract") or {}).get("pack")
     if not spec or not isinstance(pack, dict) or spec.get("index") == "npm":
         return False
-    if (pack.get("windows") or {}).get("sha256"):
-        return False
+    built = (pack.get("windows") or {}).get("sha256")
+    if built and packs.windows_current(built):
+        return False  # 닫힘 판본 이전 묶음은 Windows 전용 요구가 빠졌을 수 있다
     windows = _windows_pack(spec, _allowlists(job, row["org_id"]))
     if windows == pack.get("windows"):
         return False
@@ -717,10 +718,12 @@ def local_pack_retry(job: JobContext) -> None:
                         intake_run_job_key(row["id"], attempt))
         else:
             intakes.enqueue_run(ctx, intakes.get(ctx, str(row["id"])))
-    # 이전에 승인된 묶음 서버(Windows 묶음이 계약에 없음)는 스스로 Windows 묶음을 얻는다
+    # 이전에 승인된 묶음 서버(Windows 묶음이 계약에 없음)는 스스로 Windows 묶음을 얻는다.
+    # 닫힘 판본 이전에 만든 Windows 묶음도 같은 길로 다시 만든다(Linux 묶음과 승인은 그대로).
     for row in fetchall(
         job.conn,
-        "SELECT DISTINCT ON (i.server_id) i.id FROM mint.intakes i"
+        "SELECT DISTINCT ON (i.server_id) i.id, d.exec_contract -> 'pack' AS pack"
+        " FROM mint.intakes i"
         " JOIN mint.deployment_contracts d ON d.instance_id = i.instance_id"
         " AND d.server_id = i.server_id AND d.status = 'approved'"
         " JOIN mint.servers s ON s.instance_id = i.instance_id AND s.server_id = i.server_id"
@@ -728,13 +731,16 @@ def local_pack_retry(job: JobContext) -> None:
         " WHERE i.instance_id = %s AND i.source = 'endpoint' AND i.status = 'decided'"
         " AND i.decision IN ('approved', 'exception') AND d.pack_spec IS NOT NULL"
         " AND d.pack_spec ->> 'index' IN ('pypi', 'git') AND d.exec_contract -> 'pack' IS NOT NULL"
-        " AND NOT ((d.exec_contract -> 'pack') ? 'windows')"
         " ORDER BY i.server_id, i.decided_at DESC, i.id DESC",
         (job.instance_id,),
     ):
         job.checkpoint()
+        windows = (row["pack"] or {}).get("windows")
+        built = (windows or {}).get("sha256")
+        if (windows is not None and not built) or (built and packs.windows_current(built)):
+            continue  # 못 만든 경우는 재검사가, 현재 판본은 그대로
         enqueue_job(ctx, "intake_run", f"{row['id']}/winpack",
-                    intake_winpack_job_key(row["id"]))
+                    intake_winpack_job_key(row["id"], packs.WINDOWS_CLOSURE if built else 0))
 
 
 # --- evidence_expiry_scan -------------------------------------------------------------------
