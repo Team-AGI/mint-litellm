@@ -2313,3 +2313,68 @@ def test_approving_an_intake_runs_the_same_scope_and_litellm_permission_check_as
     assert seen == [("admin", "srv-a", "acme", "user", "u1")]
     assert world.intake(intake_id)["status"] == "passed"  # 거부되면 아무것도 남지 않는다
     assert fetchone(world.conn, "SELECT count(*) AS n FROM mint.approvals")["n"] == 0
+
+
+# --- 서버 주소 변경 관측(QA-BUG-401) --------------------------------------------------------------
+
+
+def test_an_address_report_is_taken_without_waiting_for_the_observation_period(world):
+    """플러그인 사건은 관측 주기(여기서는 한 시간)와 무관하게 짧은 주기의 작업이 받는다."""
+    approved_world(world)
+    hashes = plugin_observed_hashes("http://moved.test:9000/mcp")
+    hashes.pop("transport", None)
+    world.conn.execute(
+        "INSERT INTO mint.events (event_id, instance_id, kind, source_key, payload)"
+        " VALUES (gen_random_uuid(), %s, 'server_identity_mismatch_observed', 'selfcheck:2', %s)",
+        (INSTANCE, json.dumps({"server_id": "srv-a", "fields": ["url_sha256"],
+                               "observed_hashes": hashes})),
+    )
+    assert svc.observed_identity(world.conn, INSTANCE, "srv-a") == {}
+    assert jobs.SCHEDULES["identity_observe"](object()) <= 30
+    with psycopg.connect(world.url) as conn:
+        base.enqueue_job(make_ctx(conn), "identity_observe", "identity_observe", "t1")
+        conn.commit()
+    world.drain()
+    assert svc.observed_identity(world.conn, INSTANCE, "srv-a") == hashes
+    assert svc.awaiting_address_report(world.conn, INSTANCE, "srv-a") is False
+
+
+def test_the_address_field_stays_closed_until_a_changed_address_is_reported(world):
+    """배포 변경 표지는 관측이 생긴 뒤에야 켜진다: 표지가 없어도, 승인된 주소와 같은 옛 관측만
+    있어도 입력칸은 닫혀 있다."""
+    approved = approved_world(world)
+    assert svc.awaiting_address_report(world.conn, INSTANCE, "srv-a") is True
+    row = fetchone(world.conn, "SELECT url_sha256 FROM mint.deployment_contracts"
+                               " WHERE status = 'approved'")
+    from mint_litellm.types.canonical import sha256
+
+    world.conn.execute(
+        "INSERT INTO mint.contract_observations (instance_id, server_id, kind, scope, name,"
+        " entity_id, observed_sha256, canonical_text, change_seq)"
+        " VALUES (%s, 'srv-a', 'deployment', 'server', 'identity', gen_random_uuid(), %s, %s, 1)",
+        (INSTANCE, "a" * 64, json.dumps({"url_sha256": sha256(row["url_sha256"])})),
+    )
+    assert svc.awaiting_address_report(world.conn, INSTANCE, "srv-a") is True
+    with psycopg.connect(world.url) as conn, pytest.raises(ControlError, match="아직 보고하지"):
+        svc.recheck(make_ctx(conn), approved, url="http://moved.test:9000/mcp")
+
+
+def test_the_default_port_spelling_is_one_hash_on_the_plugin_and_the_recheck_side(world):
+    """주소 표기는 정규화하지 않는다: 기본 포트를 적은 주소는 다른 주소로 관측되고, 같은 표기만
+    받는다. 플러그인의 관측 해시와 재검사의 대조 해시가 같은 식이어야 한다."""
+    intake_id = approved_world(world)
+    explicit, plain = "http://moved.test:80/mcp", "http://moved.test/mcp"
+    seen = [plugin_observed_hashes(u)["url_sha256"] for u in (explicit, plain)]
+    assert seen[0] != seen[1]
+    world.allow("provider", "moved.test")
+    world.allow("egress_target", "moved.test")
+    identity_drift(world, explicit)
+    with psycopg.connect(world.url) as conn, pytest.raises(ControlError, match="해시 불일치"):
+        svc.recheck(make_ctx(conn), intake_id, url=plain)
+    with psycopg.connect(world.url) as conn:
+        svc.recheck(make_ctx(conn), intake_id, url=explicit)
+        conn.commit()
+    world.drain()
+    cand = fetchone(world.conn, "SELECT url FROM mint.deployment_contracts"
+                                " WHERE status = 'candidate'")
+    assert cand["url"] == explicit

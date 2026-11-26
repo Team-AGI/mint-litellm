@@ -1201,3 +1201,11 @@ def test_a_managed_local_server_absent_from_the_registry_is_not_a_mismatch(tmp_p
     asyncio.run(runtime.run_checks())
     assert runtime.last_mismatches == []
     assert store.of_kind("server_identity_mismatch_observed") == []
+
+
+def test_identity_watch_period_keeps_the_address_report_within_a_minute_or_two():
+    """주소 변경 관측: 플러그인 보고 60초 + 사건을 받는 작업 30초 + LiteLLM 등록부 재적재 30초."""
+    from mint_litellm.control.jobs import IDENTITY_OBSERVE_SECONDS
+    from mint_litellm.plugin.selfcheck import IDENTITY_WATCH_SECONDS
+
+    assert IDENTITY_WATCH_SECONDS + IDENTITY_OBSERVE_SECONDS + 30 <= 120
