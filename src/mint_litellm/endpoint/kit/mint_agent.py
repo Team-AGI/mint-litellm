@@ -122,9 +122,9 @@ PAUSED_FILE = "paused"  # 보고기가 쓴다: 관리자가 이 PC의 관리 AI 
 OFFLINE_FILE = "offline.jsonl"  # 장애 중 단말 판단으로 통과한 호출(보고기가 보내고 비운다)
 OFFLINE_MAX = 256 * 1024
 CLIENTS_DIR = "clients"  # 실행기를 띄운 AI 도구별 마지막 시작 시각(재시작 필요 표시용)
-DOWN_FILE = "unreachable_until"  # 결정 서버에 방금 닿지 못했다: 이 시각까지는 다시 묻지 않는다
-# 한계: 닿지 못한 뒤 이 시간(초) 동안은 묻지 않고 장애 계약대로 처리한다(호출마다 연결 시간 초과를
-# 기다리지 않게). 그 사이 결정 서버가 돌아와도 새 차단은 이 시간만큼 늦게 반영된다.
+DOWN_FILE = "unreachable_until"  # 결정 서버에 방금 닿지 못했다: 이 시각까지는 짧게만 기다린다
+PROBE_TIMEOUT = 0.5  # 표식이 있을 때의 대기(표식은 직원이 쓸 수 있어 묻기를 건너뛸 근거가 못 된다)
+# 닿지 못한 뒤 이 시간(초) 동안은 묻되 짧게만 기다린다(호출마다 연결 시간 초과를 다 기다리지 않게).
 DOWN_HOLD = 10.0
 PAUSED_TEXT = "관리자가 이 PC의 관리 AI 연결을 중지했습니다. 재개되면 바로 다시 호출하십시오."
 OUTAGE_TEXT = ("MINT 결정 서버에 닿지 못했고 승인 목록에서 확인되지 않은 서버라 막았습니다. "
@@ -636,12 +636,15 @@ def ask_decision(
 
 
 def ask_or_hold(payload: dict[str, Any], *, state_dir: str, **options: Any) -> dict[str, Any]:
-    """``ask_decision``과 같다. 방금 닿지 못했으면 다시 묻지 않고 곧바로 ``Unreachable``이다."""
+    """``ask_decision``과 같다. 방금 닿지 못했으면 짧게만 기다린다(장애 중 호출마다 시간 초과를
+    다 기다리지 않게). 표식이 있어도 반드시 묻는다: 표식 파일은 직원이 고칠 수 있으므로, 결정 서버가
+    살아 있으면 표식과 상관없이 그 판정을 따른다."""
     path = os.path.join(os.path.expanduser(state_dir), DOWN_FILE)
     try:
         with open(path, encoding="utf-8") as handle:
             if time.time() < float(handle.read(32)):
-                raise Unreachable("decision service was unreachable moments ago")
+                timeout = options.get("http_timeout", HTTP_TIMEOUT)
+                options["http_timeout"] = min(PROBE_TIMEOUT, timeout)
     except (OSError, ValueError):
         pass
     try:

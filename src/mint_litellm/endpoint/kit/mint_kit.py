@@ -2014,13 +2014,14 @@ class Kit:
     def hook_commands(self, python: str, agent: str, contracts: str) -> dict:
         common = self.hook_common(contracts, "claude")
         before = {
-            "type": "command", "command": python, "args": [agent, "pre", *common],
+            "type": "command", "command": python, "args": ["-I", agent, "pre", *common],
             "timeout": 3, "onFailure": "block",
         }  # fmt: skip
         after = {
-            "type": "command", "command": python, "args": [agent, "post", *common], "timeout": 5,
+            "type": "command", "command": python, "args": ["-I", agent, "post", *common],
+            "timeout": 5,
         }  # fmt: skip
-        failed = {**after, "args": [agent, "post-failure", *common]}
+        failed = {**after, "args": ["-I", agent, "post-failure", *common]}
         hooks = {"PreToolUse": before, "PostToolUse": after, "PostToolUseFailure": failed}
         return {
             event: [{"matcher": CLAUDE_MATCHER, "hooks": [hook]}] for event, hook in hooks.items()
@@ -2030,8 +2031,8 @@ class Kit:
         """Codex에는 실패 호출 훅이 없다. 보고되지 않은 호출은 MINT가 결과 미확인으로 남긴다."""
         common = self.hook_common(contracts, "codex")
         return {
-            "PreToolUse": (self.shell_line([python, agent, "pre", *common]), 3),
-            "PostToolUse": (self.shell_line([python, agent, "post", *common]), 5),
+            "PreToolUse": (self.shell_line([python, "-I", agent, "pre", *common]), 3),
+            "PostToolUse": (self.shell_line([python, "-I", agent, "post", *common]), 5),
         }
 
     def check_python(self, python: str) -> None:
@@ -2189,7 +2190,7 @@ class Kit:
         mcp = {
             name: {
                 "command": python,
-                "args": [agent, "run", "--contracts", contracts, "--server", name],
+                "args": ["-I", agent, "run", "--contracts", contracts, "--server", name],
             }
             for name in sorted(servers)
         }
@@ -2596,7 +2597,7 @@ class Kit:
     def hook_line(self, python: str, agent: str, command: str, contracts: str) -> str:
         """Cursor·Grok가 셸로 실행하는 훅 한 줄(Windows 셸 종류는 공식 문서에 없어 cmd 규칙)."""
         harness = command.removesuffix("-pre")  # cursor-pre -> cursor, grok-pre -> grok
-        parts = [python, agent, command, *self.hook_common(contracts, harness)]
+        parts = [python, "-I", agent, command, *self.hook_common(contracts, harness)]
         return subprocess.list2cmdline(parts) if self.windows else shlex.join(parts)
 
     def own_new_dirs(self, path: Path) -> None:
@@ -2706,7 +2707,7 @@ class Kit:
             for name in names:
                 if name in listed and not is_ours_entry(listed[name], name):
                     continue  # 같은 이름의 사용자 항목은 건드리지 않는다
-                args = [agent, "run", "--contracts", contracts, "--server", name,
+                args = ["-I", agent, "run", "--contracts", contracts, "--server", name,
                         "--mediate", "--client", client, *common]  # fmt: skip
                 listed[name] = client_entry(client, python, args)
                 put.append(name)
@@ -3021,7 +3022,8 @@ class Kit:
         agent = f"{self.logical_programs}/{AGENT}"
         mcp = {
             name: {"command": python,
-                   "args": [agent, "run", "--contracts", f"{self.logical_programs}/contracts.json",
+                   "args": ["-I", agent, "run",
+                            "--contracts", f"{self.logical_programs}/contracts.json",
                             "--server", name]}
             for name in sorted(listing.get("servers") or {}) if name not in retired
         }  # fmt: skip
@@ -3643,7 +3645,7 @@ class Kit:
         mcp = {
             name: {
                 "command": python,
-                "args": [agent, "run", "--contracts", logical, "--server", name],
+                "args": ["-I", agent, "run", "--contracts", logical, "--server", name],
             }
             for name in sorted(todo)
         }

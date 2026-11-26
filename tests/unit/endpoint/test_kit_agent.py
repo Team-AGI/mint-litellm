@@ -591,15 +591,15 @@ def test_the_result_hook_returns_the_held_decision_version(world, monkeypatch, t
 
 
 def test_after_an_outage_the_next_calls_do_not_wait_for_another_timeout(world):
-    calls = []
+    waits = []
 
-    def slow_down(*args):
-        calls.append(1)
+    def slow_down(url, headers, body, timeout):
+        waits.append(timeout)
         raise OSError("refused")
 
     decide(world, slow_down)
     decide(world, slow_down, tool_use_id="toolu_2")
-    assert len(calls) == 1  # 두 번째 호출은 묻지 않고 장애 계약대로 처리했다
+    assert waits == [agent.HTTP_TIMEOUT, agent.PROBE_TIMEOUT]  # 두 번째는 짧게만 묻는다
     assert len(offline_lines(world)) == 2
     hold = os.path.join(world.state, agent.DOWN_FILE)
     with open(hold, "w") as handle:
@@ -607,3 +607,17 @@ def test_after_an_outage_the_next_calls_do_not_wait_for_another_timeout(world):
     wire = Wire()
     decide(world, wire, tool_use_id="toolu_3")
     assert len(wire.requests) == 1
+
+
+def test_a_forged_outage_mark_does_not_skip_a_live_decision_service(world):
+    """직원이 표식 파일에 먼 미래 시각을 적어도 살아 있는 결정 서버의 차단을 피하지 못한다."""
+    os.makedirs(world.state, exist_ok=True)
+    with open(os.path.join(world.state, agent.DOWN_FILE), "w") as handle:
+        handle.write("9999999999")
+    deny = Wire({"decision": "deny", "reference": "r", "error": {"code": "MINT-DENIED"}})
+    with pytest.raises(agent.Refuse, match="MINT-DENIED"):
+        decide(world, deny)
+    with pytest.raises(agent.Refuse, match="MINT-DENIED"):
+        decide(world, deny, tool_name="Bash", tool_input={"command": "id"})
+    assert len(deny.requests) == 2
+    assert offline_lines(world) == []
