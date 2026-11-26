@@ -154,9 +154,7 @@ def _wheel(directory, name, requires=()):
     with zipfile.ZipFile(path, "w") as z:
         z.writestr(f"{name}-1.0.dist-info/METADATA", "\n".join(lines) + "\n")
         z.writestr(f"{name}-1.0.dist-info/entry_points.txt",
-                   "[console_scripts]
-example = pkg:main
-")
+                   "[console_scripts]\nexample = pkg:main\n")
     return path
 
 
