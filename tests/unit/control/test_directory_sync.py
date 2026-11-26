@@ -168,17 +168,19 @@ def test_sync_moves_a_kit_installs_team_and_queues_the_gateway_key_resync(conn):
     assert state() == ([(None,)], [(None,)])
 
 
-def test_a_sync_due_a_few_seconds_early_still_runs_on_the_five_minute_tick(conn, monkeypatch):
-    """QA-BUG-304: 5분마다 도는 점검이 15분에서 몇 초 모자란 차례를 놓쳐 20분이 되지 않는다."""
-    directory.record_login(conn, INSTANCE, "u1", KEY1, user("u1"))
+def test_the_sync_keeps_its_own_fifteen_minute_cadence(conn, monkeypatch):
+    """QA-BUG-304·403: 5분 점검에서 몇 초 모자란 차례를 놓치지 않고, 로그인이 다음 동기화를
+    밀지 않는다(정기 동기화 시각을 사람별 갱신 시각과 따로 둔다)."""
     ran = []
     monkeypatch.setattr(directory, "sync", lambda *a: ran.append(a) or "synced")
 
     def last_sync(ago: str) -> None:
-        conn.execute(f"UPDATE mint.directory_users SET synced_at = now() - interval '{ago}'")
+        conn.execute("UPDATE mint.directory_sync SET synced_at = now() - %s::interval", (ago,))
 
+    assert directory.sync_if_due(conn, INSTANCE, FakeLiteLLM([])) == "synced"  # 처음
     last_sync("14 minutes 45 seconds")
+    directory.record_login(conn, INSTANCE, "u1", KEY1, user("u1"))  # 방금 로그인이 있어도
     assert directory.sync_if_due(conn, INSTANCE, FakeLiteLLM([])) == "synced"
     last_sync("10 minutes")
     assert directory.sync_if_due(conn, INSTANCE, FakeLiteLLM([])) is None
-    assert len(ran) == 1
+    assert len(ran) == 2
