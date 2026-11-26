@@ -1185,6 +1185,12 @@ def ready_state(folder: str, managed: bool) -> dict[str, str]:
     return found
 
 
+def pack_path_code(folder: str) -> str:
+    """묶음 폴더를 맨 앞 경로로 두고 그 안의 ``.pth``도 처리하는 시작 코드(pywin32 등)."""
+    return (f"import sys, site; site.addsitedir({folder!r}); sys.path.remove({folder!r}); "
+            f"sys.path.insert(0, {folder!r}); ")
+
+
 def verify_pack(
     server: str,
     approved: Mapping[str, Any],
@@ -1235,12 +1241,12 @@ def verify_pack(
     module, function = match.groups()
     if function == "__main__":
         code = (
-            f"import sys; sys.path[:0] = [{folder!r}]; import runpy; "
+            f"{pack_path_code(folder)}import runpy; "
             f"runpy.run_module({module!r}, run_name='__main__', alter_sys=True)"
         )
     else:
         code = (
-            f"import sys; sys.path[:0] = [{folder!r}]; from {module} import {function}; "
+            f"{pack_path_code(folder)}from {module} import {function}; "
             f"sys.exit({function}())"
         )
     return {
