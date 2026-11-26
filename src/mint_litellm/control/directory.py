@@ -255,14 +255,26 @@ def sync(conn: psycopg.Connection, instance_id: str, admin: LiteLLMAdmin) -> Syn
 def sync_if_due(
     conn: psycopg.Connection, instance_id: str, admin: LiteLLMAdmin
 ) -> SyncResult | None:
-    """마지막 동기화가 오래됐을 때만 ``sync``를 돌린다."""
-    last = fetchone(
-        conn, "SELECT max(synced_at) AS at FROM mint.directory_users WHERE instance_id = %s",
-        (instance_id,),
-    )["at"]
+    """마지막 정기 동기화가 오래됐을 때만 ``sync``를 돌린다.
+
+    기준은 정기 동기화 표시다. 로그인도 사람별 ``synced_at``을 갱신하므로 그 값을 쓰면
+    로그인이 있을 때마다 다음 동기화가 밀린다(QA-BUG-403).
+    """
+    row = fetchone(conn, "SELECT synced_at FROM mint.directory_sync WHERE instance_id = %s",
+                   (instance_id,))
+    if row is None:  # 첫 정기 동기화 전(업그레이드 직후): 예전처럼 사람별 시각으로 본다
+        row = fetchone(conn, "SELECT max(synced_at) AS synced_at FROM mint.directory_users"
+                       " WHERE instance_id = %s", (instance_id,))
+    last = row["synced_at"] if row else None
     if last is not None and datetime.now(UTC) - last < SYNC_INTERVAL - SYNC_SLACK:
         return None
-    return sync(conn, instance_id, admin)
+    result = sync(conn, instance_id, admin)
+    conn.execute(
+        "INSERT INTO mint.directory_sync (instance_id, synced_at) VALUES (%s, now())"
+        " ON CONFLICT (instance_id) DO UPDATE SET synced_at = EXCLUDED.synced_at",
+        (instance_id,),
+    )
+    return result
 
 
 def credentials_of(conn: psycopg.Connection, instance_id: str, user_id: str) -> list[dict]:
