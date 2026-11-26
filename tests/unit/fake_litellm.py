@@ -168,7 +168,10 @@ class FakeLiteLLM:
                 return 200, {k: v for k, v in copy.deepcopy(server).items() if k != "tools"}
             if method == "POST" and action == "pin":
                 server["pinned"] = True
-                return 200, copy.deepcopy(server["tools"])
+                hidden = server.get("pin_hides") or []  # 일시로 빠지는 도구, 호출당 한 묶음
+                omit = hidden.pop(0) if hidden else ()
+                return 200, {k: v for k, v in copy.deepcopy(server["tools"]).items()
+                             if k not in omit}
             if method == "DELETE" and action == "pin":
                 server["pinned"] = False
                 return 200, {"server_id": server_id, "status": "unpinned"}
