@@ -724,8 +724,8 @@ def test_an_outage_mark_does_not_shorten_the_wait_and_is_neither_read_nor_writte
 def test_the_decision_request_ignores_the_proxy_environment(monkeypatch):
     import urllib.request
 
-    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
-    monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:9")
+    monkeypatch.setenv("http_proxy", "http://proxy.invalid:9")
     seen = []
 
     def spy(*handlers):
