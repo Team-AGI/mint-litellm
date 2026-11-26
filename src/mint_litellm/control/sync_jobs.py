@@ -9,6 +9,7 @@
 import functools
 import hmac
 import json
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -648,6 +649,11 @@ def _finalize_plan(ctx: JobContext, client: LiteLLMSync, server_id: str) -> None
     resolve_alert(ctx.conn, ctx.instance_id, key)
 
 
+# 승인 계약의 도구가 고정 응답에서 빠졌을 때 다시 고정하는 횟수와 간격(초)
+PIN_RETRIES = 3
+PIN_RETRY_SECONDS = 2.0
+
+
 def _pin_mismatch(expected: dict[str, str], response: dict) -> list[str]:
     """고정 응답이 승인 계약과 다른 도구(집합 차이와 해시 차이)."""
     different = sorted(set(expected) ^ set(response))
@@ -779,6 +785,28 @@ class ControlKeyMismatch(WaitForOperator):
     code = "control_key_mismatch"
 
 
+def _drifting(conn: psycopg.Connection, instance_id: str, server_id: str) -> bool:
+    """서버나 승인 계약이 드리프트로 막혀 있는가(막힌 서버는 다시 고정하지 않는다)."""
+    row = fetchone(
+        conn,
+        "SELECT (s.deployment_drift OR EXISTS (SELECT 1 FROM mint.tool_contracts t"
+        " WHERE t.instance_id = s.instance_id AND t.server_id = s.server_id"
+        " AND t.status = 'approved' AND t.drift <> 'none')) AS drift"
+        " FROM mint.servers s WHERE s.instance_id = %s AND s.server_id = %s",
+        (instance_id, server_id),
+    )
+    return bool(row and row["drift"])
+
+
+def _pin_due(conn: psycopg.Connection, instance_id: str, server_id: str) -> bool:
+    """고정이 아직 맞지 않은 관리 서버이고 드리프트로 막히지 않아 고정을 다시 시도할 수 있는가."""
+    if not expected_pin(conn, instance_id, server_id):
+        return False
+    if pin_satisfied(conn, instance_id, server_id):
+        return False
+    return not _drifting(conn, instance_id, server_id)
+
+
 def _pin_step(ctx: JobContext, client: LiteLLMSync, server_id: str) -> bool:
     """계약을 관리하는 서버의 도구를 LiteLLM에 고정한다. 새로 맞췄으면 참.
 
@@ -790,15 +818,7 @@ def _pin_step(ctx: JobContext, client: LiteLLMSync, server_id: str) -> bool:
     expected = expected_pin(conn, inst, server_id)
     if not expected:  # 관리 서버가 아니거나 승인 계약이 없다(없으면 조건이 거짓이다)
         return False
-    drift = fetchone(
-        conn,
-        "SELECT (s.deployment_drift OR EXISTS (SELECT 1 FROM mint.tool_contracts t"
-        " WHERE t.instance_id = s.instance_id AND t.server_id = s.server_id"
-        " AND t.status = 'approved' AND t.drift <> 'none')) AS drift"
-        " FROM mint.servers s WHERE s.instance_id = %s AND s.server_id = %s",
-        (inst, server_id),
-    )
-    if drift["drift"]:
+    if _drifting(conn, inst, server_id):
         return False
     digest = sha256(expected)
     row = fetchone(
@@ -829,6 +849,15 @@ def _pin_step(ctx: JobContext, client: LiteLLMSync, server_id: str) -> bool:
     resolve_alert(conn, inst, "control_key_mismatch")
     response = client.pin(server_id)
     different = _pin_mismatch(expected, response)
+    # LiteLLM은 고정할 때 도구마다 가드레일 판정을 거치고, 판정이 일시적으로 실패하면 그 도구를
+    # 응답에서 뺀다(실패 시 닫힘). 승인 계약의 도구가 응답에서 빠지기만 했을 때는 업스트림 변경이
+    # 아니라 일시 오류일 수 있어 몇 번 다시 고정한 뒤에 판단한다. 해시가 다르면 다시 하지 않는다.
+    for _ in range(PIN_RETRIES):
+        if not different or any(t in response or t not in expected for t in different):
+            break
+        time.sleep(PIN_RETRY_SECONDS)
+        response = client.pin(server_id)
+        different = _pin_mismatch(expected, response)
     if not different:
         with conn.transaction():
             grant = upsert_grant(conn, inst, "server", server_id, "pin", server_id, tools=None,
@@ -1188,7 +1217,28 @@ def _check_identity(ctx: JobContext, server_id: str, server: dict) -> None:
         " AND status NOT IN ('rejected', 'terminating', 'terminated')",
         (inst, server_id),
     )
-    if row is None or not server.get("url"):
+    if row is None:
+        return
+    # 이 점검은 제어 평면이 LiteLLM에서 서버를 읽은 뒤에만 돈다. 일부 워커가 새로 등록된 서버를
+    # 아직 못 읽어 올린 「레지스트리에 없음」 표지는 서버가 실제로 있으면 틀린 것이라 푼다.
+    held = list(row["deployment_drift_fields"] or ())
+    if "registry_missing" in held:
+        held = [f for f in held if f != "registry_missing"]
+        conn.execute(
+            "UPDATE mint.servers SET deployment_drift = %s, deployment_drift_fields = %s"
+            " WHERE instance_id = %s AND server_id = %s",
+            (bool(held), held or None, inst, server_id),
+        )
+        row = {**row, "deployment_drift": bool(held), "deployment_drift_fields": held or None}
+        for alert in fetchall(
+            conn,
+            "SELECT dedup_key FROM mint.alerts WHERE instance_id = %s AND kind = 'contract_drift'"
+            " AND status <> 'resolved' AND subject->>'server_id' = %s"
+            " AND subject->'fields' = '[\"registry_missing\"]'::jsonb",
+            (inst, server_id),
+        ):
+            resolve_alert(conn, inst, alert["dedup_key"])
+    if not server.get("url"):
         return
     now = {"url_sha256": url_sha256(server["url"]), "transport": server.get("transport"),
            "auth_type": normalize_auth_type(server.get("auth_type"))}
@@ -1248,7 +1298,7 @@ def _reconcile_server(ctx: JobContext, client: LiteLLMSync, server_id: str) -> N
     )
     if status == "active":
         resolve_alert(conn, inst, key)
-        if grant is None or grant["observed"] is not True:
+        if grant is None or grant["observed"] is not True or _pin_due(conn, inst, server_id):
             enqueue_job(_actor_context(ctx), "sync_server", server_id)
         return
     raise_alert(conn, inst, kind="sync_divergence", severity="high", dedup_key=key,

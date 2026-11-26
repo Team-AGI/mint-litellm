@@ -13,6 +13,7 @@ psycopg = pytest.importorskip("psycopg")
 from psycopg.types.json import Jsonb  # noqa: E402
 
 from mint_litellm.control import sync_jobs, sync_state  # noqa: E402
+from mint_litellm.control.alerts import raise_alert  # noqa: E402
 from mint_litellm.control.context import Context, Operator  # noqa: E402
 from mint_litellm.control.db.connection import fetchone  # noqa: E402
 from mint_litellm.control.services import contracts  # noqa: E402
@@ -566,3 +567,78 @@ def test_a_control_key_that_differs_from_the_workers_key_alerts_and_waits(admin,
     assert pin_calls(fake)
     assert not [a for a in alerts(admin)
                 if a["kind"] == "control_key_mismatch" and a["status"] != "resolved"]
+
+
+@pytest.fixture(autouse=True)
+def _no_pin_retry_wait(monkeypatch):
+    monkeypatch.setattr(sync_jobs, "PIN_RETRY_SECONDS", 0)
+
+
+def test_tools_the_guardrail_hid_from_one_pin_do_not_lock_the_server(admin, fake, worker):
+    """승인 직후 가드레일이 일부 도구를 일시적으로 뺀 고정 응답은 업스트림 변경이 아니다."""
+    tools = {"read": TOOL, "ask": TOOL, "list": TOOL}
+    add_server(admin)
+    make_managed(admin)
+    fake.add_server("srv-1", tools=tools)
+    for name in tools:
+        add_contract(admin, name)
+    approval = add_approval(admin, "user", "u1", status="pending")
+    fake.servers["srv-1"]["pin_hides"] = [["ask", "list"], ["list"]]
+    enqueue(admin, "sync_server", "srv-1")
+    drain(worker)
+    assert len(pin_calls(fake)) == 3 and pin_calls(fake, "DELETE") == []
+    assert alerts(admin, "sync_divergence") == []
+    server = fetchone(admin, "SELECT deployment_drift, deployment_drift_fields FROM mint.servers")
+    assert server["deployment_drift"] is False
+    assert fetchone(admin, "SELECT count(*) AS n FROM mint.tool_contracts WHERE drift <> 'none'"
+                    )["n"] == 0
+    assert sync_state.pin_satisfied(admin, INSTANCE, "srv-1") is True
+    assert approval_status(admin, approval) == "active"
+
+
+def test_tools_missing_from_every_pin_are_still_a_mismatch(admin, fake, worker):
+    tools = {"read": TOOL, "ask": TOOL}
+    add_server(admin)
+    make_managed(admin)
+    fake.add_server("srv-1", tools=tools)
+    for name in tools:
+        add_contract(admin, name)
+    add_approval(admin, "user", "u1", status="pending")
+    fake.servers["srv-1"]["pin_hides"] = [["ask"]] * 9
+    enqueue(admin, "sync_server", "srv-1")
+    drain(worker)
+    assert len(pin_calls(fake)) == 1 + sync_jobs.PIN_RETRIES
+    assert alerts(admin, "sync_divergence")[0]["subject"]["tools"] == ["ask"]
+
+
+def test_a_stuck_pin_is_tried_again_once_the_drift_marker_is_gone(admin, fake, worker):
+    approval = managed_world(admin, fake)
+    admin.execute("UPDATE mint.servers SET deployment_drift = true,"
+                  " deployment_drift_fields = ARRAY['pin_reapproval']")
+    admin.execute("UPDATE mint.tool_contracts SET drift = 'removed'")
+    enqueue(admin, "sync_server", "srv-1")
+    drain(worker)
+    assert pin_calls(fake) == []
+    admin.execute("UPDATE mint.servers SET deployment_drift = false,"
+                  " deployment_drift_fields = NULL")
+    admin.execute("UPDATE mint.tool_contracts SET drift = 'none'")
+    admin.execute("UPDATE mint.litellm_grants SET observed = true"
+                  " WHERE item = 'server_approval'")
+    test_sync.reconcile(admin)
+    drain(worker)
+    assert len(pin_calls(fake)) == 1
+    assert approval_status(admin, approval) == "active"
+
+
+def test_a_registry_missing_mark_is_lifted_when_litellm_has_the_server(admin, fake, worker):
+    managed_world(admin, fake)
+    admin.execute("UPDATE mint.servers SET deployment_drift = true,"
+                  " deployment_drift_fields = ARRAY['registry_missing'], identity_kind = 'remote'")
+    raise_alert(admin, INSTANCE, kind="contract_drift", severity="critical", dedup_key="cd:1",
+                subject={"kind": "deployment", "server_id": "srv-1",
+                         "fields": ["registry_missing"]})
+    test_sync.reconcile(admin)
+    drain(worker)
+    server = fetchone(admin, "SELECT deployment_drift, deployment_drift_fields FROM mint.servers")
+    assert server["deployment_drift"] is False and server["deployment_drift_fields"] is None
+    assert alerts(admin, "contract_drift")[0]["status"] == "resolved"
