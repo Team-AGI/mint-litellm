@@ -191,3 +191,41 @@ def test_mint_get_on_windows_fetches_the_windows_pack_or_says_why_not(monkeypatc
     ready = gateway_with({"pack_windows": {"sha256": "b" * 64}})
     kit_module.run_get(FakeKit(), ready, "s", out=out.append)
     assert asked == ["b" * 64]
+
+
+def test_the_admin_reporter_opens_the_packs_folder_to_sandboxed_servers_once(monkeypatch, tmp_path):
+    """격리 서버는 직원 권한 실행기가 권한을 못 바꾸는 설치 폴더의 묶음을 읽어야 한다."""
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return type("Done", (), {"returncode": 0})()
+
+    monkeypatch.setattr(kit_module, "WINDOWS", True)
+    monkeypatch.setattr(kit_module.subprocess, "run", run)
+    packs = tmp_path / "packs"
+    kit_module.open_packs_to_sandbox(packs)
+    kit_module.open_packs_to_sandbox(packs)
+    assert calls == [["icacls", str(packs), "/grant", "*S-1-15-2-1:(OI)(CI)(RX)", "/T", "/Q"]]
+    assert (packs / kit_module.SANDBOX_ACL_MARK).exists()
+
+
+def test_linux_does_not_touch_the_packs_folder_acl(monkeypatch, tmp_path):
+    monkeypatch.setattr(kit_module, "WINDOWS", False)
+    monkeypatch.setattr(kit_module.subprocess, "run", lambda *a, **k: pytest.fail("ran"))
+    kit_module.open_packs_to_sandbox(tmp_path / "packs")
+    assert not (tmp_path / "packs").exists()
+
+
+def test_the_pack_start_code_processes_pth_files_in_the_pack(tmp_path):
+    """pywin32처럼 .pth로 경로를 더하는 의존 라이브러리도 격리 시작에서 불러온다."""
+    import subprocess
+
+    agent = load("mint_agent")
+    (tmp_path / "extra").mkdir()
+    (tmp_path / "extra" / "hidden_mod.py").write_text("X = 7\n")
+    (tmp_path / "demo.pth").write_text("extra\n")
+    (tmp_path / "toplevel.py").write_text("import hidden_mod\nprint('loaded', hidden_mod.X)\n")
+    code = agent.pack_path_code(str(tmp_path)) + "import sys, toplevel; print(sys.path[0])"
+    done = subprocess.run([sys.executable, "-I", "-B", "-c", code], capture_output=True, text=True)
+    assert done.stdout.splitlines() == ["loaded 7", str(tmp_path)], done.stderr

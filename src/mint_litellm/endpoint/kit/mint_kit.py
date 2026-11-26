@@ -3968,6 +3968,7 @@ class Kit:
         gateway = Gateway(url, key, self.config.get("ca_pem"))
         errors = self.pack_errors()
         made: list[str] = []
+        open_packs_to_sandbox(self.programs / PACKS)
         for name, contract in sorted(self.desired_items(desired, dropped).items())[:MAX_FETCH]:
             digest = pack_digest(contract.get("pack"))
             if digest is None:
@@ -4320,6 +4321,31 @@ def check_blobs(digest: str, blobs: dict) -> dict:
         if size != item["size"] or sha.hexdigest() != item["sha256"]:
             raise PackError(f"파일이 목록과 다릅니다: {item['name'][:60]}")
     return manifest
+
+
+# Windows 격리(AppContainer) 서버가 관리자 소유 설치 폴더의 묶음을 읽고 .pyd를 불러오게 하는 권한.
+# 실행기는 직원 권한이라 이 폴더의 권한을 바꾸지 못하므로, 묶음을 푸는 관리자 권한 보고기가 준다.
+ALL_APP_PACKAGES = "*S-1-15-2-1"
+SANDBOX_ACL_MARK = ".sandbox-acl"
+
+
+def open_packs_to_sandbox(packs: Path) -> None:
+    """묶음 폴더에 모든 AppContainer의 읽기·실행을 상속 권한으로 준다(이미 받은 묶음까지 한 번)."""
+    if not WINDOWS:
+        return
+    mark = packs / SANDBOX_ACL_MARK
+    if mark.exists():
+        return
+    try:
+        packs.mkdir(parents=True, exist_ok=True)
+        done = subprocess.run(
+            ["icacls", str(packs), "/grant", f"{ALL_APP_PACKAGES}:(OI)(CI)(RX)", "/T", "/Q"],
+            capture_output=True, text=True, timeout=300, errors="replace",
+        )
+        if done.returncode == 0:
+            mark.write_text("1", encoding="utf-8")
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def install_blobs(digest: str, blobs: dict, packs: Path) -> Path:
@@ -6017,7 +6043,8 @@ def inspect_launch(contract: dict, folder: str, home: str, bwrap: str) -> tuple[
         if function == "__main__"
         else f"from {module} import {function}; sys.exit({function}())"
     )
-    code = f"import sys; sys.path[:0] = [{folder!r}]; {run}"
+    code = (f"import sys, site; site.addsitedir({folder!r}); sys.path.remove({folder!r}); "
+            f"sys.path.insert(0, {folder!r}); {run}")  # 묶음 안의 .pth도 처리한다
     argv = [runtime, "-I", "-B", "-c", code, *[str(a) for a in contract.get("argv") or []]]
     cmd = [bwrap, "--unshare-all", "--unshare-net", "--die-with-parent", "--new-session",
            "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"]  # fmt: skip
