@@ -651,6 +651,28 @@ def store_deployment_candidate(
     return True
 
 
+def observed_identity(conn: Any, instance_id: str, server_id: str) -> dict:
+    """게이트웨이가 보고한 서버 신원 해시(``url_sha256``·``transport``). 보고 전에는 빈 사전."""
+    row = fetchone(
+        conn,
+        "SELECT canonical_text FROM mint.contract_observations WHERE instance_id = %s"
+        " AND server_id = %s AND kind = 'deployment' AND scope = 'server' AND name = 'identity'",
+        (instance_id, server_id),
+    )
+    return json.loads(row["canonical_text"]) if row else {}
+
+
+def awaiting_address_report(conn: Any, instance_id: str, server_id: str) -> bool:
+    """배포 변경이 표시됐지만 새 주소의 관측 해시가 아직 없어 주소를 받을 수 없는가."""
+    row = fetchone(
+        conn,
+        "SELECT deployment_drift FROM mint.servers WHERE instance_id = %s AND server_id = %s",
+        (instance_id, server_id),
+    )
+    return bool(row and row["deployment_drift"]
+                and observed_identity(conn, instance_id, server_id).get("url_sha256") is None)
+
+
 def _operator_deployment_candidate(
     ctx: Context, server_id: str, url: str | None, transport: str | None
 ) -> None:
@@ -660,15 +682,10 @@ def _operator_deployment_candidate(
     if not server_free_of_plan(ctx, server_id):
         raise conflict("재승인 계획이 진행 중이라 새 주소를 받을 수 없습니다.")
     approved = approved_deployment(ctx.conn, ctx.instance_id, server_id)
-    observed = fetchone(
-        ctx.conn,
-        "SELECT canonical_text FROM mint.contract_observations WHERE instance_id = %s"
-        " AND server_id = %s AND kind = 'deployment' AND scope = 'server' AND name = 'identity'",
-        (ctx.instance_id, server_id),
-    )
-    hashes = json.loads(observed["canonical_text"]) if observed else {}
+    hashes = observed_identity(ctx.conn, ctx.instance_id, server_id)
     if approved is None or hashes.get("url_sha256") is None:
-        raise ControlError("관측된 배포 URL 해시가 없어 주소를 받을 수 없습니다.")
+        raise ControlError("게이트웨이가 새 주소를 아직 보고하지 않아 주소를 받을 수 없습니다."
+                           " 보고 주기(기본 1분)가 지난 뒤 다시 시도하십시오.")
     # 플러그인은 레지스트리 값(이미 URL 해시)의 정규 해시를 기록한다(전송 방식과 같은 규칙)
     if sha256(url_sha256(url)) != hashes["url_sha256"]:
         raise ControlError("입력한 주소가 관측된 배포 URL과 다릅니다(해시 불일치).")

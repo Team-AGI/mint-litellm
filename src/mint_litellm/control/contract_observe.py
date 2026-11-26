@@ -267,46 +267,54 @@ def consume_deployment_events(ctx: Context) -> None:
     for event in rows:
         with transact(ctx):
             payload = event["payload"]
-            server_id = payload.get("server_id")
-            server = fetchone(
-                ctx.conn,
-                "SELECT * FROM mint.servers WHERE instance_id=%s AND server_id=%s FOR UPDATE",
-                (ctx.instance_id, server_id),
-            )
             receipt = ctx.conn.execute(
                 "INSERT INTO mint.contract_observation_receipts"
                 " (instance_id,event_id) VALUES (%s,%s) ON CONFLICT DO NOTHING",
                 (ctx.instance_id, event["event_id"]),
             )
-            if receipt.rowcount != 1 or not server or server["contract_status"] != "managed":
-                continue
-            hashes = payload.get("observed_hashes", {})
-            if (
-                not isinstance(hashes, dict)
-                or not hashes
-                or any(
-                    key
-                    not in {"url_sha256", "transport", "auth_type", "issuer", "registry_missing"}
-                    or not isinstance(value, str)
-                    or not re.fullmatch("[0-9a-f]{64}", value)
-                    for key, value in hashes.items()
-                )
-            ):
-                continue
-            if server["identity_kind"] != "remote":
-                # 로컬 서버는 LiteLLM 레지스트리에 없다: 레지스트리 부재는 변경이 아니다
-                hashes = {k: v for k, v in hashes.items() if k != "registry_missing"}
-                if not hashes:
-                    continue
-            contract = fetchone(
-                ctx.conn,
-                "SELECT * FROM mint.deployment_contracts"
-                " WHERE instance_id=%s AND server_id=%s AND status='approved'",
-                (ctx.instance_id, server_id),
-            )
-            if contract is None:
-                continue
-            _deployment_drift(ctx, server, contract, "identity", hashes, sorted(hashes))
+            if receipt.rowcount == 1:
+                record_identity_drift(ctx, payload.get("server_id"), payload.get("observed_hashes"))
+
+
+def record_identity_drift(ctx: Context, server_id: Any, hashes: Any) -> None:
+    """관리 서버의 관측된 주소·전송·인증 해시(``observed_hashes``)를 배포 드리프트로 기록한다.
+
+    단말 플러그인의 자가 점검 사건과 동기화 작업의 서버 대조가 같은 경로를 쓴다. 승인 판독
+    (``recheck --url``)이 이 관측의 ``url_sha256``과 대조하므로, 어느 쪽이 먼저 알아채도 같은
+    관측이 남아야 재승인 경로가 열린다.
+    """
+    server = fetchone(
+        ctx.conn,
+        "SELECT * FROM mint.servers WHERE instance_id=%s AND server_id=%s FOR UPDATE",
+        (ctx.instance_id, server_id),
+    )
+    if not server or server["contract_status"] != "managed":
+        return
+    if (
+        not isinstance(hashes, dict)
+        or not hashes
+        or any(
+            key not in {"url_sha256", "transport", "auth_type", "issuer", "registry_missing"}
+            or not isinstance(value, str)
+            or not re.fullmatch("[0-9a-f]{64}", value)
+            for key, value in hashes.items()
+        )
+    ):
+        return
+    if server["identity_kind"] != "remote":
+        # 로컬 서버는 LiteLLM 레지스트리에 없다: 레지스트리 부재는 변경이 아니다
+        hashes = {k: v for k, v in hashes.items() if k != "registry_missing"}
+        if not hashes:
+            return
+    contract = fetchone(
+        ctx.conn,
+        "SELECT * FROM mint.deployment_contracts"
+        " WHERE instance_id=%s AND server_id=%s AND status='approved'",
+        (ctx.instance_id, server_id),
+    )
+    if contract is None:
+        return
+    _deployment_drift(ctx, server, contract, "identity", hashes, sorted(hashes))
 
 
 # 연속으로 이만큼 읽지 못해야 차단한다(일시적 장애는 경보만)

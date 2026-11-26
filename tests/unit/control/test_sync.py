@@ -1363,3 +1363,31 @@ def test_a_restored_url_lifts_the_url_lock_but_keeps_other_locks(admin, fake, wo
     drain(worker)
     assert fetchone(admin, "SELECT deployment_drift FROM mint.servers"
                            " WHERE server_id = 'srv-1'")["deployment_drift"] is True
+
+
+def test_a_visible_address_change_leaves_the_same_observation_the_gateway_would(
+    admin, fake, worker
+):
+    """QA-BUG-303: 동기화가 바뀐 주소를 보면 배포 변경 표지와 주소 해시 관측을 함께 남긴다."""
+    from mint_litellm.control.services import intakes
+    from mint_litellm.types.canonical import sha256
+
+    identity_world(admin, fake)
+    admin.execute("INSERT INTO mint.deployment_contracts (id, instance_id, server_id, status,"
+                  " canonical_text, sha256, url, url_sha256, transport, auth_type, version)"
+                  " VALUES (gen_random_uuid(), %s, 'srv-1', 'candidate', '{}', %s,"
+                  " 'https://good.example/mcp', %s, 'http', 'none', 1)",
+                  (INSTANCE, HEX, sync_url_hash("https://good.example/mcp")))
+    admin.execute("UPDATE mint.deployment_contracts SET status = 'approved'"
+                  " WHERE server_id = 'srv-1'")
+    admin.execute("UPDATE mint.servers SET contract_status = 'managed' WHERE server_id = 'srv-1'")
+    fake.servers["srv-1"]["url"] = "https://moved.example/mcp"
+    reconcile(admin)
+    drain(worker)
+    assert intakes.awaiting_address_report(admin, INSTANCE, "srv-1") is False
+    hashes = intakes.observed_identity(admin, INSTANCE, "srv-1")
+    assert hashes == {"url_sha256": sha256(sync_url_hash("https://moved.example/mcp"))}
+    server = fetchone(admin, "SELECT deployment_drift, deployment_drift_fields FROM mint.servers"
+                             " WHERE server_id = 'srv-1'")
+    assert server["deployment_drift"] is True
+    assert server["deployment_drift_fields"] == ["url_sha256"]

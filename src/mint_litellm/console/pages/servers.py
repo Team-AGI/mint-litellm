@@ -1043,6 +1043,8 @@ def intake_page(
         "checks": [{**c, "shown": shown_result(c)} for c in checks],
         "tools": tools,
         "stale": stale,
+        "address_pending": intake["status"] == "decided"
+        and intake_service.awaiting_address_report(actor.conn, actor.instance, intake["server_id"]),
         "expires": min(expiries) if expiries else None,
         "days": api.STRICT_DAYS if strict else api.STANDARD_DAYS,
         "strict_days": api.STRICT_DAYS,

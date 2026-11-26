@@ -63,6 +63,9 @@ REQUIRED_MODES = ("pre_call", "pre_mcp_call", "post_mcp_call")
 CONTROLLED_SERVER_STATUSES = frozenset({"approved", "suspended"})
 CONTRACT_FIELDS = ("url_sha256", "transport", "auth_type")
 REGISTRY_MISSING = "registry_missing"
+# 서버 신원(주소·전송·인증) 대조 주기. LiteLLM에서 바뀐 주소는 제어 평면이 알 수 없어(레지스트리
+# 응답에 주소가 없다) 이 보고가 재승인 경로(주소를 명시한 재검사)를 여는 유일한 관측이다.
+IDENTITY_WATCH_SECONDS = 60
 MODERN_MCP_VERSION = "2026-07-28"
 
 
@@ -714,7 +717,7 @@ class PluginRuntime:
 
     async def _observe_contracts(self) -> None:
         while True:
-            await asyncio.sleep(self.config.observe_seconds)
+            await asyncio.sleep(min(self.config.observe_seconds, IDENTITY_WATCH_SECONDS))
             if not self.verified:
                 continue
             try:
