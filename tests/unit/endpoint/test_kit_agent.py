@@ -189,6 +189,123 @@ def test_a_retired_server_or_a_paused_pc_stays_blocked_during_an_outage(world):
     assert offline_lines(world) == []
 
 
+def write_policy(folder, **fields):
+    os.makedirs(folder, exist_ok=True)
+    doc = {"halt": None, "blocked": {}, "review": {}} | fields
+    with open(os.path.join(folder, agent.POLICY_FILE), "w") as handle:
+        json.dump(doc, handle)
+
+
+@pytest.fixture
+def sealed(world, monkeypatch):
+    """관리형 설치: 설치 폴더는 따로 있고 사용자 캐시(world.state)와 다르다."""
+    kit_dir = world.tmp / "kit"
+    kit_dir.mkdir()
+    monkeypatch.setattr(agent, "KIT_DIR", str(kit_dir))
+    return str(kit_dir)
+
+
+@pytest.mark.parametrize(
+    ("policy", "text"),
+    [
+        ({"blocked": {"srv-1": ["search"]}}, "막아 둔"),
+        ({"blocked": {"srv-1": ["*"]}}, "막아 둔"),
+        ({"blocked": {"*": ["search"]}}, "막아 둔"),
+        ({"review": {"srv-1": ["search"]}}, "호출마다 승인"),
+        ({"review": {"*": ["search"]}}, "호출마다 승인"),
+        ({"halt": "all"}, "전역 정지"),
+        ({"halt": "local"}, "전역 정지"),
+    ],
+)
+def test_a_control_set_before_the_outage_still_holds_during_it(world, sealed, policy, text):
+    write_policy(sealed, **policy)
+    with pytest.raises(agent.Refuse, match=text) as caught:
+        decide(world, down)
+    assert not isinstance(caught.value, agent.Unreachable)
+    assert offline_lines(world) == []
+
+
+def test_a_blocked_builtin_tool_and_a_global_stop_refuse_builtins_during_an_outage(world, sealed):
+    write_policy(sealed, blocked={"builtin:claude": ["WebFetch"]})
+    with pytest.raises(agent.Refuse, match="기본 기능"):
+        decide(world, down, tool_name="WebFetch", tool_input={"url": "u"})
+    decide(world, down, tool_name="Bash", tool_input={"command": "ls"})  # 다른 기본 도구는 통과
+    write_policy(sealed, halt="all")
+    with pytest.raises(agent.Refuse, match="전역 정지"):
+        decide(world, down, tool_name="Bash", tool_input={"command": "ls"})
+    assert [x["tool"] for x in offline_lines(world)] == ["Bash"]
+
+
+def test_a_local_only_stop_leaves_builtin_tools_alone(world, sealed):
+    write_policy(sealed, halt="local")
+    decide(world, down, tool_name="Bash", tool_input={"command": "ls"})
+
+
+def test_an_unblocked_approved_tool_still_passes_and_is_recorded_with_a_policy(world, sealed):
+    write_policy(sealed, blocked={"srv-1": ["drop"], "other": ["*"]}, review={"srv-1": ["wipe"]})
+    decide(world, down)
+    assert [x["tool"] for x in offline_lines(world)] == ["search"]
+
+
+def test_a_managed_install_ignores_a_policy_in_the_employee_writable_cache(world, sealed):
+    write_policy(world.state, halt="all", blocked={"srv-1": ["*"]})  # 직원이 쓸 수 있는 캐시
+    decide(world, down)
+    assert len(offline_lines(world)) == 1
+
+
+def test_a_user_level_install_reads_the_policy_from_the_user_cache(world, sealed):
+    with open(os.path.join(sealed, "state.json"), "w") as handle:
+        json.dump({"mode": "user"}, handle)
+    write_policy(world.state, blocked={"srv-1": ["search"]})
+    with pytest.raises(agent.Refuse, match="막아 둔"):
+        decide(world, down)
+
+
+def test_a_policy_does_not_apply_while_the_decision_service_answers(world, sealed):
+    write_policy(sealed, halt="all")
+    decide(world, Wire())  # 닿으면 결정 서버의 판정을 따른다
+
+
+@pytest.mark.parametrize("wire", [Wire(status=503), down], ids=["5xx", "unreachable"])
+def test_without_a_policy_an_outage_keeps_the_common_contract(world, sealed, wire):
+    decide(world, wire)
+    assert len(offline_lines(world)) == 1
+
+
+def test_a_pass_that_cannot_be_recorded_is_refused(world, sealed):
+    os.makedirs(os.path.join(world.state, agent.OFFLINE_FILE))  # 기록 자리를 디렉터리로 막는다
+    with pytest.raises(agent.Refuse, match="기록") as caught:
+        decide(world, down)
+    assert not isinstance(caught.value, agent.Unreachable)
+
+
+def test_a_managed_install_is_sealed_and_a_user_install_is_not(world, sealed):
+    assert agent.sealed_install() is True
+    with open(os.path.join(sealed, "state.json"), "w") as handle:
+        json.dump({"mode": "user"}, handle)
+    assert agent.sealed_install() is False
+
+
+def test_a_certificate_verification_failure_is_a_refusal_and_not_an_outage(world, sealed):
+    import ssl
+    import urllib.error
+
+    def bad_ca(*args):
+        raise urllib.error.URLError(ssl.SSLCertVerificationError("self signed"))
+
+    with pytest.raises(agent.Refuse, match="certificate") as caught:
+        decide(world, bad_ca)
+    assert not isinstance(caught.value, agent.Unreachable)
+    assert offline_lines(world) == []
+
+    def direct(*args):
+        raise ssl.SSLCertVerificationError("bad")
+
+    with pytest.raises(agent.Refuse) as caught:
+        decide(world, direct)
+    assert not isinstance(caught.value, agent.Unreachable)
+
+
 def test_a_refusal_status_still_blocks_and_is_not_an_outage(world):
     with pytest.raises(agent.Refuse, match="HTTP 401") as caught:
         decide(world, Wire(status=401))

@@ -87,6 +87,7 @@ FAST_WINDOW = 600  # 반영할 일이 있다고 본 뒤 짧은 주기를 유지�
 FAST_FILE = "fast_until"
 LAST_REPORT = "last_report"
 REPORTER_KEY = "reporter.key"  # Windows 관리형: SYSTEM 보고기가 읽는 키 사본
+POLICY_FILE = "offline_policy.json"  # 마지막 보고 응답의 오프라인 정책(훅이 장애 중에도 지킨다)
 RETIRED_FILE = "retired.json"  # 마지막 보고 응답의 폐기 서버 목록(실행기가 읽는다)
 LAUNCHED = "launched"  # 실행기가 띄운 서버 프로세스의 기록
 PAUSED_FILE = "paused"  # 관리 연결 중지 표지(값은 중지 세대). 실행기·훅이 장애 중에도 지킨다
@@ -1699,6 +1700,41 @@ def save_retired(home: Path, names: list[str], now: float, folder: Path | None =
         write_atomic(
             (folder or home / STATE_REL) / RETIRED_FILE,
             json.dumps({"servers": names, "at": now}).encode(), 0o644 if folder else 0o600,
+        )
+    except OSError:
+        return
+
+
+def clean_offline_policy(raw: object) -> dict | None:
+    """응답의 오프라인 정책에서 훅이 읽는 항목만 남긴다(모양이 다르면 None)."""
+    if not isinstance(raw, dict):
+        return None
+
+    def table(value: object) -> dict[str, list[str]]:
+        found = value if isinstance(value, dict) else {}
+        return {
+            k[:128]: [t[:128] for t in v if isinstance(t, str)][:512]
+            for k, v in list(found.items())[:512]
+            if isinstance(k, str) and isinstance(v, list)
+        }
+
+    halt = raw.get("halt")
+    return {
+        "halt": halt if halt in ("all", "local") else None,
+        "blocked": table(raw.get("blocked")), "review": table(raw.get("review")),
+        "at": raw.get("at") if isinstance(raw.get("at"), str) else None,
+    }
+
+
+def save_offline_policy(
+    home: Path, policy: dict, now: float, folder: Path | None = None
+) -> None:
+    """응답의 오프라인 정책을 ``retired.json`` 옆에 쓴다(기본은 사용자 캐시, SYSTEM은 설치 폴더).
+    쓰지 못해도 보고는 계속한다."""
+    try:
+        write_atomic(
+            (folder or home / STATE_REL) / POLICY_FILE,
+            json.dumps({**policy, "saved": now}).encode(), 0o644 if folder else 0o600,
         )
     except OSError:
         return
@@ -7466,6 +7502,9 @@ def report_installed(
         run(lambda: save_retired(home, names, now(), folder if system else None))
         changed = bool(kit.remediate(state, names))
         changed = bool(kit.drop_contracts(state, names)) or changed
+    policy = clean_offline_policy(kit.answer.get("offline_policy"))
+    if policy is not None:
+        run(lambda: save_offline_policy(home, policy, now(), folder if system else None))
     revoke = kit.answer.get("revoke")
     if isinstance(revoke, list):
         gone = [n for n in revoke if isinstance(n, str) and SERVER_NAME.match(n)][:MAX_PENDING]
