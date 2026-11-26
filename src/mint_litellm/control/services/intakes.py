@@ -662,15 +662,22 @@ def observed_identity(conn: Any, instance_id: str, server_id: str) -> dict:
     return json.loads(row["canonical_text"]) if row else {}
 
 
+def observed_new_address(conn: Any, instance_id: str, server_id: str) -> str | None:
+    """게이트웨이가 보고한, 승인된 배포 계약과 다른 주소의 관측 해시. 없으면 None.
+
+    승인된 주소와 같은 해시(재승인 뒤 남은 관측)는 바뀐 주소가 아니다. 배포 변경 표지는 이 관측이
+    생긴 뒤에야 켜지므로 표지로는 판단할 수 없다.
+    """
+    approved = approved_deployment(conn, instance_id, server_id)
+    seen = observed_identity(conn, instance_id, server_id).get("url_sha256")
+    if approved is None or seen is None or seen == sha256(approved["url_sha256"]):
+        return None
+    return seen
+
+
 def awaiting_address_report(conn: Any, instance_id: str, server_id: str) -> bool:
-    """배포 변경이 표시됐지만 새 주소의 관측 해시가 아직 없어 주소를 받을 수 없는가."""
-    row = fetchone(
-        conn,
-        "SELECT deployment_drift FROM mint.servers WHERE instance_id = %s AND server_id = %s",
-        (instance_id, server_id),
-    )
-    return bool(row and row["deployment_drift"]
-                and observed_identity(conn, instance_id, server_id).get("url_sha256") is None)
+    """바뀐 주소의 관측 해시가 아직 없어 주소를 받을 수 없는가(입력칸을 닫는 조건)."""
+    return observed_new_address(conn, instance_id, server_id) is None
 
 
 def _operator_deployment_candidate(
@@ -683,9 +690,9 @@ def _operator_deployment_candidate(
         raise conflict("재승인 계획이 진행 중이라 새 주소를 받을 수 없습니다.")
     approved = approved_deployment(ctx.conn, ctx.instance_id, server_id)
     hashes = observed_identity(ctx.conn, ctx.instance_id, server_id)
-    if approved is None or hashes.get("url_sha256") is None:
+    if approved is None or observed_new_address(ctx.conn, ctx.instance_id, server_id) is None:
         raise ControlError("게이트웨이가 새 주소를 아직 보고하지 않아 주소를 받을 수 없습니다."
-                           " 보고 주기(기본 1분)가 지난 뒤 다시 시도하십시오.")
+                           " 1~2분 뒤 다시 시도하십시오.")
     # 플러그인은 레지스트리 값(이미 URL 해시)의 정규 해시를 기록한다(전송 방식과 같은 규칙)
     if sha256(url_sha256(url)) != hashes["url_sha256"]:
         raise ControlError("입력한 주소가 관측된 배포 URL과 다릅니다(해시 불일치).")

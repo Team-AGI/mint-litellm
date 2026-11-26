@@ -37,6 +37,7 @@ KINDS: dict[str, JobKind] = {
     "intake_run": JobKind(),
     "endpoint_inspection": JobKind(),
     "contract_observe": JobKind(convergent=True),
+    "identity_observe": JobKind(),
     "sync_server": JobKind(convergent=True, external_write=True),
     "sync_target": JobKind(convergent=True, external_write=True),
     "sync_reconcile": JobKind(external_write=True),
@@ -338,6 +339,12 @@ def _contract_observe(job: JobContext) -> None:
     handle(job)
 
 
+def _identity_observe(job: JobContext) -> None:
+    from mint_litellm.control.contract_observe import handle_identity
+
+    handle_identity(job)
+
+
 def _sync(name: str) -> Callable[[JobContext], None]:
     """권한 동기화 처리기(``sync_jobs``)를 부를 때 불러온다(모듈 순환을 피한다)."""
 
@@ -383,6 +390,7 @@ HANDLERS: dict[str, Callable[[JobContext], None]] = {
     "approval_expiry_scan": _approval_expiry_scan,
     "endpoint_result_scan": _endpoint_result_scan,
     "contract_observe": _contract_observe,
+    "identity_observe": _identity_observe,
     "sync_server": _sync("sync_server"),
     "sync_target": _sync("sync_target"),
     "sync_reconcile": _sync("sync_reconcile"),
@@ -415,11 +423,15 @@ HANDLERS: dict[str, Callable[[JobContext], None]] = {
     "operational_check": _operational_check,
 }
 
+IDENTITY_OBSERVE_SECONDS = 30
+
 # 일정(주기 작업): 종류 -> 설정에서 주기(초)를 얻는 함수. 처리기가 있는 종류만 일정을 만든다.
 SCHEDULES: dict[str, Callable[[Any], int]] = {
     "approval_expiry_scan": lambda s: 60,
     "endpoint_result_scan": lambda s: 60,
     "contract_observe": lambda s: s.observe_seconds,
+    # 단말 플러그인이 올린 서버 신원(주소·전송·인증) 사건은 관측 주기를 기다리지 않고 받는다.
+    "identity_observe": lambda s: IDENTITY_OBSERVE_SECONDS,
     "seal": lambda s: 60,
     "submission_poll": lambda s: s.submission_poll_seconds,
     "sync_reconcile": lambda s: s.reconcile_seconds,

@@ -590,6 +590,12 @@ def compare_instances(ctx: Context, grace_seconds: int = 0) -> int:
     return mismatched
 
 
+def handle_identity(job) -> None:
+    """플러그인이 올린 서버 신원 사건만 받아 관측으로 남긴다(관측 주기와 따로 자주 돈다)."""
+    operator = Operator("contract-observer", "admin", None)
+    consume_deployment_events(Context(job.conn, job.instance_id, operator))
+
+
 def handle(job) -> None:
     from mint_litellm.control import local_tools
     from mint_litellm.types.canonical import credential_scope
