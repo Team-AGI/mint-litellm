@@ -552,7 +552,8 @@ PAUSED_GUIDANCE = (
     "관리자가 이 PC의 관리 AI 연결을 중지했습니다. 재개되면 바로 다시 호출하십시오."
 )
 # 판정마다 DB를 읽지 않도록 키별로 잠깐 기억한다(중지·재개는 이 초만큼 늦게 닿는다).
-_PAUSE_TTL = 5.0
+# 중지 직후 열린 실행기의 호출이 한 번 더 지나가는 틈을 줄이려 짧게 둔다(QA-BUG-302).
+_PAUSE_TTL = 1.0
 _pause_seen: dict[str, tuple[float, bool]] = {}
 
 

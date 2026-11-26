@@ -33,6 +33,9 @@ ADMIN_ROLE = "proxy_admin"
 # LiteLLM이 화면 세션용으로 만드는 키의 팀. 사람의 개인 키가 아니다.
 DASHBOARD_TEAM = "litellm-dashboard"
 SYNC_INTERVAL = timedelta(minutes=15)
+# 점검 작업이 5분마다 돌아 「15분 미만이면 건너뜀」만으로는 15분에서 몇 초 모자란
+# 차례를 놓쳐 20분이 된다(QA-BUG-304).
+SYNC_SLACK = timedelta(seconds=60)
 
 
 def kind_of(key_token: str) -> str:
@@ -257,7 +260,7 @@ def sync_if_due(
         conn, "SELECT max(synced_at) AS at FROM mint.directory_users WHERE instance_id = %s",
         (instance_id,),
     )["at"]
-    if last is not None and datetime.now(UTC) - last < SYNC_INTERVAL:
+    if last is not None and datetime.now(UTC) - last < SYNC_INTERVAL - SYNC_SLACK:
         return None
     return sync(conn, instance_id, admin)
 
