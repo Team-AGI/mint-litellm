@@ -38,11 +38,14 @@ def test_the_control_panel_has_stop_with_reason_block_usage_and_terminate(world,
     assert "전파 상태" not in html
 
 
-def test_the_panel_disables_stop_and_terminate_with_a_reason_for_a_waiting_server(world, admin):
+def test_a_waiting_server_shows_no_controls_but_where_to_decide(world, admin):
+    """승인 전 서버에는 쓸 수 없는 통제 단추·재승인 대신 결정할 곳(신청 상세)을 한 줄로 보인다."""
     html = admin.get("/servers/srv-wait").text
-    assert "승인된 서버만 중지할 수 있습니다" in html
-    assert "승인·중지 상태의 서버만 폐기할 수 있습니다" in html
-    assert "/servers/srv-wait/terminate" not in html
+    assert "아직 승인되지 않은 서버라 통제할 호출이 없습니다" in html
+    assert "/servers/srv-wait/terminate" not in html and "/servers/srv-wait/suspend" not in html
+    assert "이용 탭에서 종료" not in html
+    contract = admin.get("/servers/srv-wait?tab=contract").text
+    assert "재승인 계획 등록" not in contract
 
 
 def test_terminate_needs_the_exact_server_id_and_starts_termination(world, admin):
