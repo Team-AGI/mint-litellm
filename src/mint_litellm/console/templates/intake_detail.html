@@ -16,7 +16,8 @@
 {% endif %}
 {% if i.decision == 'withdrawn' %}<div class="effect">철회된 신청입니다. 사유: {{ i.decision_reason }} · 승인이나 사용 권한은 부여되지 않았습니다.</div>{% endif %}
 {% if server_url %}<p>{{ server_url }}</p>{% endif %}<p>MCP 서버 식별자 {{ m.ident(i.server_id) }} <button type="button" class="copy" data-copy="{{ i.server_id }}">복사</button></p>
-{% if cause %}<div class="banner error" role="alert">원인: {{ cause }}</div>{% endif %}
+{% if cause %}<div class="banner error" role="alert">원인: {{ cause }}</div>
+{% elif first_run %}<div class="banner" role="status">도구 목록은 승인 뒤 신청자 PC가 처음 실행할 때 확인합니다. 지금 결정할 수 있습니다.</div>{% endif %}
 <ol class="steps" aria-label="진행 단계">{% for level, text in progress %}<li class="{{ level }}"><span class="icon" aria-hidden="true">{{ ICONS[level] }}</span>{{ text }}</li>{% endfor %}</ol>
 {% if delivery %}<ol class="steps" aria-label="적용 단계">{% for level, text in delivery %}<li class="{{ level }}"><span class="icon" aria-hidden="true">{{ ICONS[level] }}</span>{{ text }}{% if stuck and loop.index0 == stuck.index %} · {{ stuck.text }}{% if stuck.href %} <a class="button" href="{{ stuck.href }}">대상 바꾸기</a>{% endif %}{% endif %}</li>{% endfor %}</ol>{% endif %}
 {% if hold %}<div class="effect">두 번째 승인 대기 · 요청자 {{ hold.first_name }} · 만료 {{ hold.expires_at | when }}</div>{% endif %}
@@ -94,7 +95,7 @@
 </form>
 {% endif %}
 
-{% if i.source == 'endpoint' %}
+{% if i.source == 'endpoint' and not first_run %}
 <h2>PC에서 도구 목록 확인</h2>
 {% if inspect.open %}
 <p class="muted">단말 검사 대기 · 남은 시간 {{ inspect.left }}</p>

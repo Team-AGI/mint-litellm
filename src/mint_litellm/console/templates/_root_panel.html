@@ -1,8 +1,10 @@
 {# Root 전용 강제 조치 구역. 신청·서버 상세가 root_target(kind: intake|server, id, status)을 넘기고 포함한다. #}
 {% import "macros.html" as m %}
 {% macro four(impact, now, later, cannot, undo) %}<dl class="detail"><dt>영향</dt><dd>{{ impact }}</dd><dt>즉시</dt><dd>{{ now }}</dd><dt>늦게</dt><dd>{{ later }}</dd><dt>취소 불가</dt><dd>{{ cannot }}</dd><dt>되돌리기</dt><dd>{{ undo }}</dd></dl>{% endmacro %}
-{% if root_target and is_root(actor) %}
 {% set t = root_target %}
+{% set has_action = t and ((t.kind == 'intake' and t.status != 'decided')
+  or (t.kind == 'server' and t.status in ('approved', 'suspended'))) %}
+{% if root_target and is_root(actor) and has_action %}
 <section class="root-panel">
   <h3>강제 조치(Root)</h3>
   <div class="actions">

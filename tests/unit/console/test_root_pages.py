@@ -149,3 +149,6 @@ def test_the_root_panel_partial_renders_by_target(world, boss, admin):
     assert 'value="server_run_cancel"' in html
     assert draw(boss, {"kind": "intake", "id": "abc", "status": "decided"}).count("<dialog") == 0
     assert "<section" not in draw(boss, None)
+    # 할 수 있는 조치가 없으면 빈 「강제 조치(Root)」 구역을 그리지 않는다
+    waiting = {"kind": "server", "id": "srv-ok", "status": "awaiting_approval"}
+    assert "<section" not in draw(boss, waiting)

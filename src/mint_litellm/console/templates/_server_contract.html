@@ -53,7 +53,10 @@
 </tbody></table>
 {% endif %}
 
-{% if can(actor, 'contract reapprove') and (c.cand.tools or c.cand.deployments) %}
+{% if s.status not in ('approved', 'suspended') %}
+<p class="muted">승인 전이라 재승인할 계약이 없습니다.</p>
+<p class="muted">{% if latest_intake %}<a href="/intakes/{{ latest_intake.id }}">신청 상세</a>{% else %}신청 상세{% endif %}에서 결정합니다.</p>
+{% elif can(actor, 'contract reapprove') and (c.cand.tools or c.cand.deployments) %}
 <h2>재승인</h2>
 <form method="post" action="/contracts/{{ s.server_id | urlencode }}/reapprove" class="form cols">
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ s.state_version }}">
