@@ -226,6 +226,10 @@ def server_page(
         "propagation": request.query_params.get("ok", "") in PROPAGATING
         or row["status"] in ("suspended", "terminating"),
         "root_target": {"kind": "server", "id": server_id, "status": row["status"]},
+        # 승인 전 서버의 결정은 신청 상세에서 한다: 가장 최근 신청으로 안내한다
+        "latest_intake": fetchone(
+            actor.conn, "SELECT id FROM mint.intakes WHERE instance_id = %s AND server_id = %s"
+            " ORDER BY created_at DESC LIMIT 1", (actor.instance, server_id)),
         "impact": relation_impacts(actor, row["relations"]) if tab == "usage" else {},
         "proof": relation_proofs(actor, row["relations"]) if tab == "usage" else {},
         "c": contract_context(request, actor, server_id) if tab == "contract" else None,
@@ -996,7 +1000,8 @@ def intake_page(
     bad = next((c for c in checks if c["check"] == "inspection" and c["result"] != "pass"), None)
     why = labels.pick(labels.CHECK_REASON, bad["reason_code"]) if bad else ""
     lost = bad and not tools and not seen
-    cause = f"검사로 도구 목록을 받지 못했습니다 · {why}" if lost else None
+    first_run = bool(bad) and bad["reason_code"] == "INSPECT_ON_FIRST_RUN"
+    cause = f"검사로 도구 목록을 받지 못했습니다 · {why}" if lost and not first_run else None
     answered = approved and usage_reader.has_response(  # 성공 응답이 돌아온 호출만
         actor.conn, actor.instance, intake["server_id"])
     refused = next((t for t in seen if t["blocked"]), None)
@@ -1075,6 +1080,7 @@ def intake_page(
         "progress": intake_progress(intake, lacking, checks, hold is not None, cause is not None,
                                  len(seen)),
         "cause": cause,
+        "first_run": first_run,
         "retry": intake_service.retry_state(actor.conn, actor.instance, intake),
         "job_error": intake_job_error(actor.conn, actor.instance, intake),
         "decision_form": decision_form or {},

@@ -13,6 +13,7 @@ from mint_litellm.control.operators import SERVICE_ACCOUNTS
 DONE = Status("완료", "ok")
 OPEN = Status("미완료", "wait")
 CHECK = Status("확인 필요", "error")
+CHOICE = Status("선택", "off")  # 하지 않아도 되는 항목: 미완료로 보이지 않게
 
 
 def _count(actor: Actor, sql: str, *args) -> int:
@@ -270,7 +271,7 @@ def _accounts(actor: Actor) -> dict:
 
 def steps(actor: Actor, default_password: bool = False) -> list[dict]:
     workers = control_status.enforcement_states(actor.ctx)
-    return [
+    items = [
         _password(default_password),
         _accounts(actor),
         _endpoints(actor),
@@ -281,6 +282,10 @@ def steps(actor: Actor, default_password: bool = False) -> list[dict]:
         _alerts(actor),
         *_optional(actor),
     ]
+    for item in items:
+        if item.get("optional") and item["status"] is OPEN:
+            item["status"] = CHOICE
+    return items
 
 
 def pending(items: list[dict]) -> int:

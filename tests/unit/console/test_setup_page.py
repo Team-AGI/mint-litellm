@@ -19,7 +19,7 @@ def row_of(html: str, key: str) -> str:
 
 
 def state(html: str, key: str) -> str:
-    return re.search(r"</span>(완료|미완료|확인 필요)</span>", row_of(html, key)).group(1)
+    return re.search(r"</span>(완료|미완료|확인 필요|선택)</span>", row_of(html, key)).group(1)
 
 
 def verified(world, passed=True, litellm=None):
@@ -67,8 +67,8 @@ def test_a_fresh_install_shows_what_is_missing(world, admin):
     assert state(html, "policy") == "미완료"
     assert state(html, "servers") == "완료" and state(html, "password") == "완료"
     assert state(html, "accounts") == "미완료"
-    assert state(html, "approval") == "완료" and state(html, "alerts") == "미완료"
-    assert state(html, "rule") == state(html, "report") == "미완료"
+    assert state(html, "approval") == "완료" and state(html, "alerts") == "선택"
+    assert state(html, "rule") == state(html, "report") == "선택"  # 선택 항목은 미완료로 안 보임
     # 설치 명령에 필요한 서버 설정이 빠졌으면 관리자에게 정확한 원인을 보인다.
     endpoint = row_of(html, "endpoint")
     assert state(html, "endpoint") == "확인 필요"
@@ -121,7 +121,7 @@ def test_optional_items_follow_rules_and_the_audit_report(world, admin):
         INSTANCE,
     )
     html = admin.get("/setup").text
-    assert state(html, "rule") == "완료" and state(html, "report") == "미완료"
+    assert state(html, "rule") == "완료" and state(html, "report") == "선택"
     assert admin.get("/reports/audit").status_code == 200
     assert state(admin.get("/setup").text, "report") == "완료"
 

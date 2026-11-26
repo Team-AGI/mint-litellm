@@ -4,6 +4,9 @@
 {% set blocked_n = (ctl.blocked | length) + (ctl.actions | length) + (1 if ctl.whole else 0) %}
 <h2>통제</h2>
 {% if propagation %}<div class="effect" role="status">전파 상태 · MINT 판정 ✓ 즉시 · LiteLLM 키 권한 ◷ 최대 60초 · PC 실행기 정지 ◷ 다음 보고(약 20초){% if request.query_params.get('ok') == 'server_terminating' %} · 폐기를 시작했습니다. 남은 증빙을 이용 탭에서 확인하십시오.{% endif %}</div>{% endif %}
+{% if s.status not in ('approved', 'suspended') %}
+<p class="muted">{% if s.status in ('terminating', 'terminated') %}폐기된 서버입니다. 남은 증빙은 이용 탭에서 봅니다.{% else %}아직 승인되지 않은 서버라 통제할 호출이 없습니다(현재 {{ L.pick(L.SERVER, s.status) }}). {% if latest_intake %}<a href="/intakes/{{ latest_intake.id }}">신청 상세</a>에서 결정하면{% else %}신청을 결정하면{% endif %} 여기서 중지·차단·폐기합니다.{% endif %}</p>
+{% else %}
 <dl class="detail controls">
   <dt>도구 차단</dt><dd>{% if blocked_n %}<span class="badge error">차단 {{ blocked_n }}건</span> {% endif %}<a class="button" href="/servers/{{ s.server_id | urlencode }}?tab=contract">계약 탭에서 관리</a></dd>
   <dt>{{ '재개' if s.status == 'suspended' else '중지' }}</dt><dd>
@@ -29,3 +32,4 @@
   {% else %}<button type="button" disabled title="승인·중지 상태의 서버만 폐기합니다">서버 폐기</button> <small class="muted">승인·중지 상태의 서버만 폐기할 수 있습니다(현재 {{ L.pick(L.SERVER, s.status) }}).</small>{% endif %}
   </dd>
 </dl>
+{% endif %}
