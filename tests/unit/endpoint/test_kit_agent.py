@@ -707,7 +707,7 @@ def test_the_result_hook_returns_the_held_decision_version(world, monkeypatch, t
     assert wire.requests[0][2]["decision_version"] == 3
 
 
-def test_after_an_outage_the_next_calls_do_not_wait_for_another_timeout(world):
+def test_an_outage_mark_does_not_shorten_the_wait_and_is_neither_read_nor_written(world):
     waits = []
 
     def slow_down(url, headers, body, timeout):
@@ -716,20 +716,32 @@ def test_after_an_outage_the_next_calls_do_not_wait_for_another_timeout(world):
 
     decide(world, slow_down)
     decide(world, slow_down, tool_use_id="toolu_2")
-    assert waits == [agent.HTTP_TIMEOUT, agent.PROBE_TIMEOUT]  # 두 번째는 짧게만 묻는다
-    assert len(offline_lines(world)) == 2
-    hold = os.path.join(world.state, agent.DOWN_FILE)
-    with open(hold, "w") as handle:
-        handle.write(str(time.time() - 1))  # 유지 시간이 지나면 다시 묻는다
-    wire = Wire()
-    decide(world, wire, tool_use_id="toolu_3")
-    assert len(wire.requests) == 1
+    assert waits == [agent.HTTP_TIMEOUT, agent.HTTP_TIMEOUT]  # 두 번째도 평소 시간 제한
+    assert not hasattr(agent, "DOWN_FILE")
+    assert not os.path.exists(os.path.join(world.state, "unreachable_until"))
+
+
+def test_the_decision_request_ignores_the_proxy_environment(monkeypatch):
+    import urllib.request
+
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:9")
+    monkeypatch.setenv("http_proxy", "http://proxy.invalid:9")
+    seen = []
+
+    def spy(*handlers):
+        seen.extend(handlers)
+        raise OSError("stop")
+
+    monkeypatch.setattr(urllib.request, "build_opener", spy)
+    with pytest.raises(OSError):
+        agent.http_post("http://decision.test/x", {}, b"{}", 1.0)
+    assert any(isinstance(h, urllib.request.ProxyHandler) and h.proxies == {} for h in seen)
 
 
 def test_a_forged_outage_mark_does_not_skip_a_live_decision_service(world):
     """직원이 표식 파일에 먼 미래 시각을 적어도 살아 있는 결정 서버의 차단을 피하지 못한다."""
     os.makedirs(world.state, exist_ok=True)
-    with open(os.path.join(world.state, agent.DOWN_FILE), "w") as handle:
+    with open(os.path.join(world.state, "unreachable_until"), "w") as handle:
         handle.write("9999999999")
     deny = Wire({"decision": "deny", "reference": "r", "error": {"code": "MINT-DENIED"}})
     with pytest.raises(agent.Refuse, match="MINT-DENIED"):

@@ -301,9 +301,12 @@ def post(url: str, key: str, payload: dict, ca_file: str | None) -> dict | None:
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         method="POST",
     )
-    context = ssl.create_default_context(cafile=ca_file) if url.startswith("https:") else None
+    handlers: list = [urllib.request.ProxyHandler({})]  # 환경 프록시를 쓰지 않는다
+    if url.startswith("https:"):
+        context = ssl.create_default_context(cafile=ca_file)
+        handlers.append(urllib.request.HTTPSHandler(context=context))
     try:
-        with urllib.request.urlopen(request, timeout=REPORT_TIMEOUT, context=context) as reply:
+        with urllib.request.build_opener(*handlers).open(request, timeout=REPORT_TIMEOUT) as reply:
             if reply.status != 200:
                 return None
             try:
@@ -7492,6 +7495,7 @@ def report_installed(
             run(lambda: marker.write_text("1"))
         return 1
     run(lambda: marker.unlink(missing_ok=True))
+    sealed = (system or target is not None) and state.get("mode") == "managed"
     retired = kit.answer.get("retired")
     names: list[str] = []
     changed = False
@@ -7499,12 +7503,17 @@ def report_installed(
     kit.drop_to = target
     if isinstance(retired, list):
         names = [n for n in retired if isinstance(n, str)][:MAX_PENDING]
+        if sealed:  # 관리자 권한 보고기: 직원이 못 고치는 설치 폴더에 쓴다(root 소유, 읽기만 허용)
+            save_retired(home, names, now(), folder)
         run(lambda: save_retired(home, names, now(), folder if system else None))
         changed = bool(kit.remediate(state, names))
         changed = bool(kit.drop_contracts(state, names)) or changed
     policy = clean_offline_policy(kit.answer.get("offline_policy"))
     if policy is not None:
-        run(lambda: save_offline_policy(home, policy, now(), folder if system else None))
+        if sealed:
+            save_offline_policy(home, policy, now(), folder)
+        else:
+            run(lambda: save_offline_policy(home, policy, now(), folder if system else None))
     revoke = kit.answer.get("revoke")
     if isinstance(revoke, list):
         gone = [n for n in revoke if isinstance(n, str) and SERVER_NAME.match(n)][:MAX_PENDING]

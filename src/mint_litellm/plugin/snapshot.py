@@ -364,14 +364,45 @@ def offline_policy_doc(
     review: Sequence[Sequence[Any]],
     review_all: Sequence[str],
     at: datetime,
+    contracts: Sequence[Sequence[Any]] = (),
+    whole: Sequence[str] = (),
 ) -> dict[str, Any]:
     """오프라인 정책 문서. ``denials``는 (범위 종류, 범위 식별자, 서버, 도구 목록 또는 None) 행,
     ``review``는 (서버, 도구) 행이다. 서버를 정하지 않은 항목은 ``*``(모든 서버), 도구 목록이 없는
     거부는 서버의 모든 도구(``*``)다. 정지 범위 freeze(새 승인·배포)는 호출을 막지 않는다."""
+    # 승인된 도구 계약의 행위 분류: 서버 -> {도구: 행위 유형}
+    kinds: dict[str, dict[str, str]] = {}
+    for server, tool, action in contracts:
+        kinds.setdefault(server, {})[tool] = action
+
+    def expand(server: str, tools: Sequence[str] | None) -> set[str]:
+        """``action:<유형>``을 그 서버의 도구 이름으로 펼친다. 분류가 없는 서버는 서버 전체."""
+        if not tools:
+            return {"*"}
+        out = {t for t in tools if not t.startswith("action:")}
+        wanted = {t[7:] for t in tools if t.startswith("action:")}
+        if wanted:
+            if server.startswith("builtin:"):
+                return out  # 기본 기능은 행위 분류가 없어 행위 차단에 걸리지 않는다
+            known = kinds.get(server)
+            if not known:
+                return {"*"}  # 분류를 모르면 막는 쪽
+            out |= {tool for tool, action in known.items() if action in wanted}
+        return out
+
     blocked: dict[str, set[str]] = {}
     for scope_type, scope_id, server, tools in denials:
         server = server or (scope_id if scope_type == "server" else "*")
-        blocked.setdefault(server, set()).update(tools or ("*",))
+        if server == "*" and tools and any(t.startswith("action:") for t in tools):
+            for each in kinds:  # 서버를 정하지 않은 행위 차단은 분류를 아는 모든 서버에 건다
+                blocked.setdefault(each, set()).update(expand(each, tools))
+            tools = [t for t in tools if not t.startswith("action:")]
+            if not tools:
+                continue
+        blocked.setdefault(server, set()).update(
+            expand(server, tools) if server != "*" else (tools or ("*",)))
+    for server in whole:
+        blocked.setdefault(server, set()).add("*")
     held: dict[str, set[str]] = {}
     for server, tool in review:
         held.setdefault(server, set()).add(tool)
@@ -379,7 +410,7 @@ def offline_policy_doc(
         held.setdefault("*", set()).update(review_all)
     return {
         "halt": halt if halt in ("all", "local") else None,
-        "blocked": {k: sorted(v)[:512] for k, v in sorted(blocked.items())[:512]},
+        "blocked": {k: sorted(v)[:512] for k, v in sorted(blocked.items())[:512] if v},
         "review": {k: sorted(v)[:512] for k, v in sorted(held.items())[:512]},
         "at": at.isoformat(timespec="seconds"),
     }
@@ -1499,15 +1530,53 @@ class PluginDatabase:
                 args,
             )
             conditioned = await cur.fetchall()
-            return settings[0], denials, review, conditioned
+            cur = await conn.execute(
+                "SELECT server_id, tool, action_type FROM mint.tool_contracts"
+                " WHERE instance_id = %s AND status = 'approved' LIMIT 20000", (instance_id,))
+            contracts = await cur.fetchall()
+            cur = await conn.execute(  # 서버 전체를 쓰지 못하는 상태: 서버 자체
+                "SELECT server_id FROM mint.servers WHERE instance_id = %s"
+                " AND status IN ('rejected', 'suspended', 'terminating', 'terminated')"
+                " LIMIT 2048", (instance_id,))
+            whole = [r[0] for r in await cur.fetchall()]
+            cur = await conn.execute(  # 이 사람의 승인이 묶인 이용 관계가 끝났다
+                "SELECT DISTINCT server_id FROM mint.approvals WHERE instance_id = %(iid)s"
+                " AND status <> 'pending' AND relation_id IN (SELECT id FROM"
+                " mint.usage_relations WHERE instance_id = %(iid)s"
+                " AND status IN ('terminating', 'terminated'))" + scope + ") LIMIT 2048",
+                args,
+            )
+            whole += [r[0] for r in await cur.fetchall()]
+            cur = await conn.execute(  # 동의가 필요한 승인
+                "SELECT server_id, conditions->>'require_consent',"
+                " (basis->>'intake_id') IS NOT NULL AND requested_by = %(user)s"
+                " FROM mint.approvals"
+                " WHERE instance_id = %(iid)s AND status = 'active'"
+                " AND valid_from <= now() AND now() < valid_until AND org_id = %(org)s"
+                " AND jsonb_typeof(conditions->'require_consent') = 'string'" + scope
+                + ") LIMIT 2048",
+                args,
+            )
+            needs: dict[tuple[str, str], bool] = {}
+            for server, purpose, by_request in await cur.fetchall():
+                needs[(server, purpose)] = needs.get((server, purpose), False) or bool(by_request)
+            cur = await conn.execute(
+                "SELECT server_id, purpose FROM mint.consents WHERE instance_id = %s"
+                " AND human_user_id = %s AND org_id = %s AND revoked_at IS NULL"
+                " AND granted_at <= now() AND now() < valid_until LIMIT 2048",
+                (instance_id, user_id, org_id))
+            live = {(r[0], r[1]) for r in await cur.fetchall()}
+            whole += sorted({k[0] for k, by_request in needs.items()
+                             if not by_request and k not in live})
+            return settings[0], denials, review, conditioned, contracts, whole
 
         found = await self._run(read)
         if found is None:
             return None
-        halt, denials, review, conditioned = found
+        halt, denials, review, conditioned, contracts, whole = found
         return offline_policy_doc(
             halt, denials, [*review, *((s, t) for s, tools in conditioned for t in tools or ())],
-            review_tools, datetime.now(UTC),
+            review_tools, datetime.now(UTC), contracts=contracts, whole=whole,
         )
 
     async def record_delivery(

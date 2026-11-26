@@ -189,6 +189,34 @@ def test_a_privileged_report_does_every_home_access_as_the_user_and_never_chowns
     assert not hasattr(kit_module, "hand_over")
 
 
+def test_a_privileged_managed_report_writes_the_copies_into_the_install_folder(
+    tmp_path, monkeypatch
+):
+    policy = {"halt": None, "blocked": {"s": ["t"]}, "review": {}, "at": "x"}
+    answer = {"recorded": True, "retired": ["x"], "offline_policy": policy}
+    programs, home, sent = stage(tmp_path, monkeypatch, answer=answer)
+    monkeypatch.setattr(kit_module, "drop_target", lambda user: (1000, 1001))
+    monkeypatch.setattr(kit_module, "untrusted_run", lambda *a, **k: None)
+    monkeypatch.setattr(kit_module, "as_user", lambda uid, gid, fn: fn())
+    assert kit_module.report_installed(
+        programs, home=home, user="alice", sleep=lambda s: None, now=lambda: 7.0
+    ) == 0
+    saved = json.loads((programs / "offline_policy.json").read_text())
+    assert saved["blocked"] == {"s": ["t"]}
+    assert json.loads((programs / "retired.json").read_text())["servers"] == ["x"]
+    assert not (home / ".cache/mint/offline_policy.json").exists()  # 직원이 고칠 자리에 두지 않는다
+
+
+def test_a_user_level_report_keeps_the_policy_copy_in_the_user_cache(tmp_path, monkeypatch):
+    policy = {"halt": "all", "blocked": {}, "review": {}, "at": "x"}
+    programs, home, _ = stage(
+        tmp_path, monkeypatch, mode="user",
+        answer={"recorded": True, "offline_policy": policy})
+    assert kit_module.report_installed(programs, home=home, sleep=lambda s: None) == 0
+    assert json.loads((home / ".cache/mint/offline_policy.json").read_text())["halt"] == "all"
+    assert not (programs / "offline_policy.json").exists()
+
+
 def test_an_unprivileged_report_does_not_run_the_trust_check(tmp_path, monkeypatch):
     programs, home, sent = stage(tmp_path, monkeypatch, mode="user")
     monkeypatch.setattr(kit_module, "untrusted_run", lambda *a, **k: pytest.fail("not privileged"))
