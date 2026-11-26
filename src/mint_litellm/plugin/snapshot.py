@@ -35,7 +35,7 @@ from mint_litellm.endpoint.remediation import (
 from mint_litellm.plugin.buffer import ConsumeRequest, ConsumptionLost
 from mint_litellm.types.canonical import sha256
 from mint_litellm.types.events import Event, EventKind, control_source_key
-from mint_litellm.types.identity import OrgStatus, SubjectType
+from mint_litellm.types.identity import OrgStatus, SubjectType, derive_org
 from mint_litellm.types.reason_codes import OBSERVATION_CANDIDATES, Reason
 from mint_litellm.types.settings import Mode
 from mint_litellm.types.target import select_profile
@@ -356,6 +356,33 @@ class SettingsRow:
     require_separate_confirm_key: bool = True
     # Root 전역 정지 범위: all(모든 MCP 호출)·local(PC 로컬 서버)·freeze(새 승인·배포). None은 정상
     halt_scope: str | None = None
+
+
+def offline_policy_doc(
+    halt: str | None,
+    denials: Sequence[Sequence[Any]],
+    review: Sequence[Sequence[Any]],
+    review_all: Sequence[str],
+    at: datetime,
+) -> dict[str, Any]:
+    """오프라인 정책 문서. ``denials``는 (범위 종류, 범위 식별자, 서버, 도구 목록 또는 None) 행,
+    ``review``는 (서버, 도구) 행이다. 서버를 정하지 않은 항목은 ``*``(모든 서버), 도구 목록이 없는
+    거부는 서버의 모든 도구(``*``)다. 정지 범위 freeze(새 승인·배포)는 호출을 막지 않는다."""
+    blocked: dict[str, set[str]] = {}
+    for scope_type, scope_id, server, tools in denials:
+        server = server or (scope_id if scope_type == "server" else "*")
+        blocked.setdefault(server, set()).update(tools or ("*",))
+    held: dict[str, set[str]] = {}
+    for server, tool in review:
+        held.setdefault(server, set()).add(tool)
+    if review_all:
+        held.setdefault("*", set()).update(review_all)
+    return {
+        "halt": halt if halt in ("all", "local") else None,
+        "blocked": {k: sorted(v)[:512] for k, v in sorted(blocked.items())[:512]},
+        "review": {k: sorted(v)[:512] for k, v in sorted(held.items())[:512]},
+        "at": at.isoformat(timespec="seconds"),
+    }
 
 
 @dataclass(frozen=True)
@@ -1405,6 +1432,83 @@ class PluginDatabase:
         if found is None:
             raise LookupError("no such kit key")
         return found
+
+    async def offline_policy(
+        self, instance_id: str, key_token: str, review_tools: Sequence[str] = ()
+    ) -> dict[str, Any] | None:
+        """결정 서버에 닿지 못할 때 단말이 지킬 정책: 이 설치 키의 사람에게 걸린 차단(서버별 도구,
+        하네스 기본 기능 포함)·호출별 승인 도구·전역 정지. 판정 경로와 같은 표를 같은 범위 규칙
+        (키·사용자·팀·조직·서버)으로 읽는다. 키가 없으면 None."""
+
+        async def read(conn: Any) -> Any:
+            cur = await conn.execute(
+                "SELECT user_id, team_id FROM mint.endpoint_installs WHERE instance_id = %s"
+                " AND %s IN (key_token, mcp_key_token) AND revoked_at IS NULL LIMIT 1",
+                (instance_id, key_token),
+            )
+            who = await cur.fetchone()
+            if who is None:
+                return None
+            user_id, team_id = who
+            cur = await conn.execute(
+                "SELECT halt_scope, default_org_id FROM mint.settings WHERE instance_id = %s",
+                (instance_id,),
+            )
+            settings = await cur.fetchone() or (None, None)
+            cur = await conn.execute(
+                "SELECT subject_type, subject_id, org_id FROM mint.org_bindings"
+                " WHERE instance_id = %s AND ((subject_type = 'team' AND subject_id = %s)"
+                " OR (subject_type = 'user' AND subject_id = %s))",
+                (instance_id, team_id, user_id),
+            )
+            bindings = {(SubjectType(r[0]), r[1]): r[2] for r in await cur.fetchall()}
+            cur = await conn.execute(
+                "SELECT org_id, status FROM mint.orgs WHERE instance_id = %s", (instance_id,)
+            )
+            org_status = {r[0]: OrgStatus(r[1]) for r in await cur.fetchall()}
+            org_id = derive_org(
+                team_id=team_id, user_id=user_id, bindings=bindings,
+                default_org_id=settings[1], org_status=org_status,
+            ).org_id
+            scope = (
+                " AND ((scope_type = 'key' AND scope_id = %(key)s)"
+                " OR (scope_type = 'user' AND scope_id = %(user)s)"
+                " OR (scope_type = 'team' AND scope_id = %(team)s)"
+                " OR (scope_type = 'org' AND scope_id = %(org)s)"
+            )
+            args = {"iid": instance_id, "key": key_token, "user": user_id, "team": team_id,
+                    "org": org_id}
+            cur = await conn.execute(
+                "SELECT scope_type, scope_id, server_id, tools FROM mint.denials"
+                " WHERE instance_id = %(iid)s AND lifted_at IS NULL"
+                " AND (org_id IS NULL OR org_id = %(org)s)" + scope
+                + " OR scope_type = 'server') LIMIT 2048",
+                args,
+            )
+            denials = await cur.fetchall()
+            cur = await conn.execute(
+                "SELECT server_id, tool FROM mint.call_review_tools WHERE instance_id = %s"
+                " LIMIT 2048", (instance_id,),
+            )
+            review = await cur.fetchall()
+            cur = await conn.execute(
+                "SELECT server_id, conditions->'high_risk_tools' FROM mint.approvals"
+                " WHERE instance_id = %(iid)s AND status = 'active' AND recert_held_at IS NULL"
+                " AND valid_from <= now() AND now() < valid_until AND org_id = %(org)s"
+                " AND conditions ? 'high_risk_tools'" + scope + ") LIMIT 2048",
+                args,
+            )
+            conditioned = await cur.fetchall()
+            return settings[0], denials, review, conditioned
+
+        found = await self._run(read)
+        if found is None:
+            return None
+        halt, denials, review, conditioned = found
+        return offline_policy_doc(
+            halt, denials, [*review, *((s, t) for s, tools in conditioned for t in tools or ())],
+            review_tools, datetime.now(UTC),
+        )
 
     async def record_delivery(
         self, instance_id: str, key_token: str, stage: str, servers: Sequence[str],

@@ -428,3 +428,54 @@ def test_registering_an_unpinned_package_works_as_the_control_role(fresh_db, log
             "SELECT count(*) FROM mint.alerts WHERE kind = 'package_unpinned'").fetchone()
         control.rollback()
     assert opened[0] == 1
+
+
+def test_the_offline_policy_holds_what_the_decision_path_would_deny_for_that_person(
+    fresh_db, plugin_dsn
+):
+    pytest.importorskip("psycopg_pool")
+    with psycopg.connect(fresh_db) as admin:
+        for org in ("alpha", "beta"):
+            admin.execute(
+                "INSERT INTO mint.orgs (instance_id, org_id, name) VALUES (%s, %s, %s)",
+                (INSTANCE, org, org))
+        admin.execute(
+            "INSERT INTO mint.org_bindings (id, instance_id, org_id, subject_type, subject_id,"
+            " created_by) VALUES (gen_random_uuid(), %s, 'alpha', 'team', 't1', 'a')", (INSTANCE,))
+        for token_, user, team in (("tok-a", "u1", "t1"), ("tok-b", "u2", "t9")):
+            admin.execute(
+                "INSERT INTO mint.endpoint_installs (instance_id, key_token, user_id, team_id,"
+                " key_alias, issued_by) VALUES (%s, %s, %s, %s, %s, 'a')",
+                (INSTANCE, token_, user, team, f"mint-kit-{token_}"))
+        for org, scope, scope_id, server, tools, lifted in (
+            (None, "user", "u1", "builtin:claude", ["Bash"], False),
+            (None, "team", "t1", "builtin:claude", ["WebFetch"], False),
+            (None, "user", "u2", "builtin:claude", ["Write"], False),
+            (None, "user", "u1", "builtin:claude", ["Lifted"], True),
+            ("alpha", "org", "alpha", None, ["Danger"], False),
+            ("beta", "org", "beta", None, ["Beta"], False),
+            (None, "user", "u1", None, None, False),
+        ):
+            admin.execute(
+                "INSERT INTO mint.denials (id, instance_id, org_id, scope_type, scope_id,"
+                " server_id, tools, reason, created_by, lifted_at, lifted_by)"
+                " VALUES (gen_random_uuid(), %s, %s, %s, %s, %s, %s, 'r', 'a',"
+                " CASE WHEN %s THEN now() END, CASE WHEN %s THEN 'a' END)",
+                (INSTANCE, org, scope, scope_id, server, tools, lifted, lifted))
+        admin.execute(
+            "INSERT INTO mint.call_review_tools (instance_id, server_id, tool, created_by)"
+            " VALUES (%s, 'builtin:claude', 'Edit', 'a')", (INSTANCE,))
+
+    async def run():
+        database = PluginDatabase(plugin_dsn)
+        try:
+            return [await database.offline_policy(INSTANCE, name, ["Grep"])
+                    for name in ("tok-a", "tok-b", "tok-none")]
+        finally:
+            await database.close()
+
+    mine, other, none = asyncio.run(run())
+    assert mine["blocked"] == {"*": ["*", "Danger"], "builtin:claude": ["Bash", "WebFetch"]}
+    assert other["blocked"] == {"builtin:claude": ["Write"]}
+    assert mine["review"] == other["review"] == {"*": ["Grep"], "builtin:claude": ["Edit"]}
+    assert mine["halt"] is None and none is None

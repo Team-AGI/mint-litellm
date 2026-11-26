@@ -86,6 +86,7 @@ REFUSED = 126
 STATE_DIR = "~/.cache/mint"
 KIT_DIR = os.path.dirname(os.path.abspath(__file__))  # Windows SYSTEM 보고기는 목록을 여기 둔다
 RETIRED_FILE = "retired.json"
+POLICY_FILE = "offline_policy.json"  # 마지막 보고 응답의 오프라인 정책(장애 중에도 지킨다)
 VERSIONS_FILE = "versions.json"  # 보고기가 받아 둔 서버별 결정 버전(설치 폴더)
 LAUNCHED = "launched"
 # 연결 중계는 요청이 이 시간(초) 없으면 끝난다. 소켓 경로는 운영체제 상한 안이어야 한다.
@@ -129,6 +130,15 @@ DOWN_HOLD = 10.0
 PAUSED_TEXT = "관리자가 이 PC의 관리 AI 연결을 중지했습니다. 재개되면 바로 다시 호출하십시오."
 OUTAGE_TEXT = ("MINT 결정 서버에 닿지 못했고 승인 목록에서 확인되지 않은 서버라 막았습니다. "
                "잠시 뒤 다시 호출하십시오.")
+# 결정 서버에 닿지 못해도 장애 전에 걸려 있던 통제는 그대로 지킨다.
+HALT_TEXT = ("관리자가 MINT 전역 정지를 걸어 둔 상태라 호출을 막았습니다. "
+             "결정 서버에 닿지 못해도 정지는 유지됩니다. 해제되면 다시 호출하십시오.")
+DENIED_TEXT = ("관리자가 이 도구를 막아 둔 상태입니다. 결정 서버에 닿지 못해도 "
+               "이미 걸린 차단은 유지됩니다.")
+BUILTIN_DENIED_TEXT = ("관리자가 이 AI 도구의 기본 기능을 막아 둔 상태입니다. 결정 서버에 닿지 "
+                       "못해도 이미 걸린 차단은 유지됩니다.")
+REVIEW_TEXT = ("이 도구는 호출마다 승인을 받아야 하는데 결정 서버에 닿지 못해 승인을 받을 수 "
+               "없어 막았습니다. 연결이 돌아오면 다시 호출하십시오.")
 
 
 def paused(state_dir: str) -> bool:
@@ -137,6 +147,50 @@ def paused(state_dir: str) -> bool:
         os.path.exists(os.path.join(folder, PAUSED_FILE))
         for folder in (os.path.expanduser(state_dir), KIT_DIR)
     )
+
+
+def sealed_install() -> bool:
+    """관리형 설치인가(읽지 못하면 관리형으로 본다). 관리형은 설치 폴더만 믿는다."""
+    try:
+        with open(os.path.join(KIT_DIR, "state.json"), encoding="utf-8") as handle:
+            return json.load(handle).get("mode") != "user"
+    except (OSError, ValueError, AttributeError):
+        return True
+
+
+def load_offline_policy(state_dir: str) -> dict[str, Any] | None:
+    """마지막 보고 응답의 오프라인 정책. 관리형은 설치 폴더의 것만 읽는다(사용자 캐시는 직원이
+    쓸 수 있다). 사용자 설치는 사용자 캐시에서 읽는다(직원이 지울 수 있다는 한계가 있다).
+    없거나 읽을 수 없으면 None이며 그때는 공통 장애 계약만 따른다."""
+    folder = KIT_DIR if sealed_install() else os.path.expanduser(state_dir)
+    try:
+        with open(os.path.join(folder, POLICY_FILE), encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _listed(table: object, server: str, tool: str) -> bool:
+    if not isinstance(table, dict):
+        return False
+    for key in (server, "*"):
+        tools = table.get(key)
+        if isinstance(tools, list) and ("*" in tools or tool in tools):
+            return True
+    return False
+
+
+def policy_refusal(server: str, tool: str, local: bool, policy: Mapping[str, Any]) -> str | None:
+    """장애 전에 이미 걸려 있던 통제에 걸리면 사용자에게 보일 글, 아니면 None."""
+    halt = policy.get("halt")
+    if halt == "all" or (halt == "local" and local):
+        return HALT_TEXT
+    if _listed(policy.get("blocked"), server, tool):
+        return BUILTIN_DENIED_TEXT if server.startswith("builtin:") else DENIED_TEXT
+    if _listed(policy.get("review"), server, tool):
+        return REVIEW_TEXT
+    return None
 
 
 def record_offline(state_dir: str, server: str, tool: str, harness: str) -> None:
@@ -537,11 +591,21 @@ def _refusal_code(raw: bytes) -> str:
     return f", {code}" if ok else ""
 
 
+def _cert_failure(exc: BaseException) -> bool:
+    """인증서 검증 실패인가(요청 라이브러리가 감싼 것과 중계가 이름만 돌려준 것 포함)."""
+    reason = getattr(exc, "reason", None)
+    return any(
+        isinstance(item, ssl.SSLCertVerificationError) for item in (exc, reason)
+    ) or "SSLCertVerificationError" in str(exc)
+
+
 def _call(post: Post, base: str, path: str, key: str, payload: dict, timeout: float) -> dict:
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     try:
         status, raw = post(base.rstrip("/") + path, headers, json.dumps(payload).encode(), timeout)
     except (OSError, ValueError) as exc:
+        if _cert_failure(exc):  # 인증서 검증 실패는 장애가 아니다(잘못된 CA로 장애를 만들 수 없게)
+            raise Refuse("decision service certificate could not be verified") from exc
         raise Unreachable(f"decision service is unreachable ({type(exc).__name__})") from exc
     if status >= 500:
         raise Unreachable(f"decision service failed (HTTP {status}{_refusal_code(raw)})")
@@ -676,16 +740,31 @@ def outage_target(event: Mapping[str, Any], contracts: str, harness: str) -> dic
     return {"server": server, "tool": tool}
 
 
-def offline_allowed(server: str, contracts: str, state_dir: str) -> bool:
-    """결정 서버에 닿지 못할 때 단말이 스스로 통과시켜도 되는 호출인가(공통 장애 계약).
+def offline_refusal(
+    server: str, tool: str, contracts: str, state_dir: str, cause: str = ""
+) -> Refuse | None:
+    """결정 서버에 닿지 못할 때 단말이 스스로 통과시켜도 되는 호출이면 None, 아니면 막는 사유(공통
+    장애 계약).
 
-    관리 연결이 중지됐으면 아니다. 내장 도구와 승인 목록에 있고 폐기되지 않은 서버만 그렇다.
+    관리 연결이 중지됐거나, 장애 전에 받아 둔 정책(전역 정지·도구 차단·기본 기능 차단·호출별
+    승인)에 걸리면 막는다. 그 밖에는 내장 도구와 승인 목록에 있고 폐기되지 않은 서버만 통과다.
     """
     if paused(state_dir):
-        return False
+        return Refuse(PAUSED_TEXT)
+    local = not server.startswith("builtin:") and server in known_servers(contracts)
+    policy = load_offline_policy(state_dir)
+    text = policy_refusal(server, tool, local, policy) if policy else None
+    if text:
+        return Refuse(text)
     if server.startswith("builtin:"):
-        return True
-    return server in known_servers(contracts) and server not in load_retired(state_dir)
+        return None
+    if local and server not in load_retired(state_dir):
+        return None
+    return Unreachable(f"{OUTAGE_TEXT}\n{cause}")  # 하네스는 앞부분만 보여 준다
+
+
+def offline_allowed(server: str, tool: str, contracts: str, state_dir: str) -> bool:
+    return offline_refusal(server, tool, contracts, state_dir) is None
 
 
 def decide(
@@ -741,10 +820,11 @@ def decide(
             http_timeout=http_timeout, on_pending=on_pending,
         )
     except Unreachable as exc:
-        if not offline_allowed(payload["server"], contracts, state_dir):
-            if paused(state_dir):
-                raise Refuse(PAUSED_TEXT) from None
-            raise Unreachable(f"{OUTAGE_TEXT}\n{exc}") from None  # 하네스는 앞부분만 보여 준다
+        refusal = offline_refusal(
+            payload["server"], payload["tool"], contracts, state_dir, str(exc)
+        )
+        if refusal is not None:
+            raise refusal from None
         record_offline(state_dir, payload["server"], payload["tool"], harness)
         return
     # 호출 뒤 훅이 결과를 보고할 수 있게 판정 참조를 호출 식별자로 남긴다.
@@ -3249,10 +3329,9 @@ def mediator_for(
                 http_timeout=http_timeout,
             )
         except Unreachable as exc:
-            if not offline_allowed(server, contracts, state_dir):
-                if paused(state_dir):
-                    raise Refuse(PAUSED_TEXT) from None
-                raise Unreachable(f"{OUTAGE_TEXT}\n{exc}") from None
+            refusal = offline_refusal(server, tool, contracts, state_dir, str(exc))
+            if refusal is not None:
+                raise refusal from None
             record_offline(state_dir, server, tool, client)
             return None
         reference = answer.get("reference")
@@ -3677,7 +3756,9 @@ def main(argv: list[str] | None = None) -> None:
         """
         server, folder = late.get("server"), late.get("state_dir")
         contracts = os.path.expanduser(args.contracts)
-        if blocking and server and folder and offline_allowed(server, contracts, folder):
+        if blocking and server and folder and offline_allowed(
+            server, late.get("tool", ""), contracts, folder
+        ):
             record_offline(folder, server, late.get("tool", ""), args.harness)
             if args.command == "cursor-pre":
                 print('{"permission": "allow"}')

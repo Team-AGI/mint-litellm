@@ -374,3 +374,17 @@ def test_the_pc_name_and_os_are_stored_and_control_characters_are_refused(tmp_pa
     assert post(client, REPORT, report(host="pj3", os="Windows 11")).status_code == 200
     assert (stored[0][2]["host"], stored[0][2]["os"]) == ("pj3", "Windows 11")
     assert post(client, REPORT, report(host="pj\n3")).status_code == 422
+
+
+def test_the_answer_carries_the_offline_policy_for_the_calling_key(tmp_path, stored, monkeypatch):
+    seen = []
+    policy = {"halt": None, "blocked": {"srv-1": ["drop"]}, "review": {}, "at": "t"}
+
+    async def offline_policy(self, instance_id, key_token, review_tools=()):
+        seen.append(key_token)
+        return policy
+
+    monkeypatch.setattr(FakeDatabase, "offline_policy", offline_policy, raising=False)
+    client, _ = build(tmp_path)
+    assert post(client, REPORT, report()).json()["offline_policy"] == policy
+    assert seen == [KEY]

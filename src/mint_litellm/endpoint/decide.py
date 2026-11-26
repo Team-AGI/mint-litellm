@@ -812,6 +812,14 @@ def make_router(
                 runtime.config.instance_id, who.key_id, "clients" in (body.capabilities or ())))
         except Exception:
             log.exception("endpoint control state could not be read")  # 싣지 않으면 단말은 유지
+        try:
+            policy = await runtime.database.offline_policy(
+                runtime.config.instance_id, who.key_id,
+                sorted(getattr(runtime.config, "high_risk_tools", ()) or ()))
+            if policy is not None:
+                answer["offline_policy"] = policy
+        except Exception:
+            log.exception("offline policy could not be built")  # 단말은 마지막 정책 유지
         bundle = kit_sign.update_bundle()
         if bundle:
             answer["kit_version"] = bundle["version"]
