@@ -6,7 +6,8 @@ import json
 from typing import Any
 
 from mint_litellm.control import change_summary
-from mint_litellm.control.contract_observe import drift_kind
+from mint_litellm.control.contract_observe import drift_kind, reported_view
+from mint_litellm.types.canonical import canonical_text
 
 DEPLOYMENT = "(배포)"
 # 줄 비교 상한: 한쪽이라도 이 줄 수(정규화 JSON)나 바이트 수를 넘으면 줄 비교를 하지 않는다.
@@ -24,6 +25,14 @@ def _pretty(text: str | None) -> list[str]:
         return text.split("\n")
 
 
+def _reported(text: str | None) -> str | None:
+    """단말이 보고하는 필드만 남긴 승인본(주석·출력 정의는 보고되지 않아 비교에서 뺀다)."""
+    try:
+        return canonical_text(reported_view(json.loads(text)))
+    except (ValueError, TypeError, AttributeError):
+        return text
+
+
 def _differs(approved: str, observed: str) -> bool:
     """관측기가 변경으로 치는 차이만 센다(서버 목록·상세 카드와 같은 판정)."""
     if approved == observed:
@@ -36,8 +45,11 @@ def _differs(approved: str, observed: str) -> bool:
 
 def changes(info: dict[str, Any]) -> list[dict[str, Any]]:
     """``contract diff`` 결과에서 추가·삭제·변경된 항목(도구와 배포)을 낸다."""
+    local = (info.get("server") or {}).get("identity_kind") == "stdio"
     approved = {
-        (c["credential_scope"], c["tool"]): c for c in info["tools"] if c["status"] == "approved"
+        (c["credential_scope"], c["tool"]): (
+            {**c, "canonical_text": _reported(c["canonical_text"])} if local else c)
+        for c in info["tools"] if c["status"] == "approved"
     }
     observed = {
         (o["scope"], o["name"]): o for o in info["observations"] if o["kind"] == "tool"
@@ -58,7 +70,8 @@ def changes(info: dict[str, Any]) -> list[dict[str, Any]]:
             "scope": key[0], "name": key[1], "change": kind,
             "approved": a["canonical_text"] if a else None,
             "observed": o["canonical_text"] if o else None,
-            "summary": (o or {}).get("change_summary") or change_summary.tool_summary(
+            "summary": ((o or {}).get("change_summary") if not local else "")
+            or change_summary.tool_summary(
                 a["canonical_text"] if a else None, o["canonical_text"] if o else None),
         })
     deployment = next((d for d in info["deployments"] if d["status"] == "approved"), None)

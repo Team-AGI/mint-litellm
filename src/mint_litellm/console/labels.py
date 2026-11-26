@@ -769,6 +769,7 @@ NOTICES = {
     "exception_rejected": "예외 승인 요청을 거절했습니다.",
     "reapproval_planned": "재승인 계획을 등록했습니다.",
     "provisional_approved": "임시 계약을 승인된 도구 계약으로 바꿨습니다.",
+    "drift_return_acked": "차단을 풀었습니다.",
     "operator_removed": "운영자를 삭제했습니다.",
     "root_set": "Root로 지정했습니다.",
     "root_unset": "Root 표지를 풀었습니다.",

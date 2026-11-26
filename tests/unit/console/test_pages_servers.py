@@ -110,3 +110,33 @@ def test_the_contract_tab_shows_provisional_contracts_and_converts_them(world, a
     assert world.query("SELECT status FROM mint.tool_contracts WHERE tool = 'read_file'") == [
         ("approved",)]
     assert world.query("SELECT count(*) FROM mint.provisional_contracts")[0][0] == 0
+
+
+def test_the_contract_tab_offers_unblock_only_for_a_tool_back_at_its_pin(world, admin):
+    world.query(
+        "INSERT INTO mint.servers (id, instance_id, server_id, status, identity_kind,"
+        " exec_contract_sha256, exec_contract_version, transport, auth_type, registered_by)"
+        " VALUES (gen_random_uuid(), %s, 'loc', 'awaiting_approval', 'stdio', %s, 1, 'stdio',"
+        " 'none', 'admin')", INSTANCE, "ab" * 32)
+    world.query("UPDATE mint.servers SET status = 'approved' WHERE server_id = 'loc'")
+    for tool, observed in (("back", "b" * 64), ("still", "c" * 64)):
+        world.query(
+            "INSERT INTO mint.tool_contracts (id, instance_id, server_id, credential_scope, tool,"
+            " canonical_text, sha256, pin_sha256, source) VALUES (gen_random_uuid(), %s, 'loc',"
+            " 'server', %s, '{}', %s, %s, 'observed')", INSTANCE, tool, "a" * 64, "b" * 64)
+        world.query(
+            "UPDATE mint.tool_contracts SET action_type='read', risk_grade='low' WHERE tool = %s",
+            tool)
+        world.query("UPDATE mint.tool_contracts SET status='approved' WHERE tool = %s", tool)
+        world.query(
+            "UPDATE mint.tool_contracts SET drift='input_schema', observed_at = now(),"
+            " observed_sha256 = %s"
+            " WHERE tool = %s", observed, tool)
+    html = admin.get("/servers/loc?tab=contract").text
+    assert "도구 1개가 승인본으로 돌아왔습니다" in html and "확인하고 차단 해제" in html
+    assert "승인된 계약이 없습니다" not in html
+    done = form_post(world, admin, "/contracts/loc/ack-return")
+    assert done.status_code == 303 and "ok=drift_return_acked" in done.headers["location"]
+    assert dict(world.query("SELECT tool, drift FROM mint.tool_contracts")) == {
+        "back": "none", "still": "input_schema"}
+    assert "확인하고 차단 해제" not in admin.get("/servers/loc?tab=contract").text

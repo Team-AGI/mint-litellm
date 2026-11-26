@@ -95,6 +95,7 @@ ROUTE_ROLES: dict[str, str] = {
     "/intakes/{intake_id}/decision": APPROVER,
     "/contracts/{server_id}/reapprove": ADMIN,
     "/contracts/{server_id}/approve-provisional": ADMIN,
+    "/contracts/{server_id}/ack-return": ADMIN,
 }
 
 _ALLOWED = {ADMIN: {"admin"}, APPROVER: {"admin", "approver"}, ANY: {"admin", "approver", "viewer"}}

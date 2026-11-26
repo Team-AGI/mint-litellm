@@ -185,8 +185,7 @@ def record_tools(
             observation, changed = _observe(
                 ctx, server_id, "tool", scope, name, entity, value, is_drift=drift != "none",
                 summary=(
-                    change_summary.tool_summary(contract["canonical_text"] if contract else None,
-                                                value)
+                    change_summary.tool_summary(known, value)
                     if drift != "none" else None
                 ),
             )

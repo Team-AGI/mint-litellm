@@ -190,6 +190,7 @@ def contract_context(request: Request, actor: Actor, server_id: str) -> dict:
         "plan": reads.reapproval_plan(actor.conn, actor.instance, server_id),
         "cand": reads.candidates(actor.conn, actor.instance, server_id),
         "provisional": reads.provisional_contracts(actor.conn, actor.instance, server_id),
+        "returned": contract_service.returned_tools(actor.ctx, server_id),
     }
 
 
@@ -1376,6 +1377,21 @@ def reapprove_contracts(
             expected_version=state_version,
         ),
         "reapproval_planned",
+        f"/servers/{server_id}?tab=contract",
+        lambda **kw: server_page(request, actor, server_id, tab="contract", **kw),
+    )
+
+
+@router.post("/contracts/{server_id}/ack-return")
+def ack_returned_contracts(
+    server_id: str,
+    request: Request,
+    actor: Actor = Depends(page_actor),
+):
+    return act(
+        actor,
+        lambda: contract_service.acknowledge_return(actor.ctx, server_id),
+        "drift_return_acked",
         f"/servers/{server_id}?tab=contract",
         lambda **kw: server_page(request, actor, server_id, tab="contract", **kw),
     )
