@@ -89,7 +89,10 @@ def test_withdrawing_while_the_server_is_validating_closes_the_server_too(world)
     assert world.server()["status"] == "rejected"
 
 
-def test_leased_validation_job_blocks_withdrawal_even_before_checking(world):
+def test_a_running_validation_job_does_not_block_withdrawal_and_then_stops(world):
+    """QA-BUG-301: 검사 작업이 실행 중이어도 철회되고, 그 검사는 판정 없이 멈추며 후보를 거둔다."""
+    from mint_litellm.control.services import intakes as svc
+
     identifier = world.create()
     world.conn.execute(
         "UPDATE mint.jobs SET status='running',lease_owner='test',"
@@ -97,9 +100,13 @@ def test_leased_validation_job_blocks_withdrawal_even_before_checking(world):
         " AND target_ref=%s",
         (identifier,),
     )
-    with pytest.raises(ControlError):
-        withdraw(world, identifier)
-    assert world.intake(identifier)["status"] == "received"
+    world.conn.execute("UPDATE mint.intakes SET status='checking' WHERE id=%s", (identifier,))
+    assert withdraw(world, identifier)["decision"] == "withdrawn"
+    verdict = world.call(
+        lambda ctx: svc.conclude(ctx, identifier, needs_registry_credentials=False))
+    assert verdict == "decided"  # 실행 중이던 검사가 끝나도 결정을 뒤집지 않는다
+    row = world.intake(identifier)
+    assert (row["status"], row["decision"]) == ("decided", "withdrawn")
 
 
 def test_incomplete_input_cannot_enter_checking_but_requester_can_withdraw(world):

@@ -24,7 +24,7 @@
 </dl>
 {% if actor.role == 'admin' %}<div class="actions">
 {% if p.paused %}<form method="post" action="/endpoints/{{ r.key_alias }}/resume" hx-boost="false">{{ m.csrf(actor) }}<input type="hidden" name="client" value="{{ client }}"><button type="submit" class="primary">재개</button></form>
-{% else %}{{ m.confirm_dialog('pause-' ~ r.key_alias ~ client, '관리 AI 연결 중지', '관리 AI 연결 중지', (r.person or r.user_id) ~ ' 단말의 로컬 서버·내장 도구 호출이 거절되고 실행기가 띄운 서버가 멈춥니다. 원격 MCP 게이트웨이 키는 그대로입니다. 재개하면 바로 다시 사용할 수 있습니다.', '/endpoints/' ~ r.key_alias ~ '/pause', actor, '중지') }}{% endif %}
+{% else %}{{ m.confirm_dialog('pause-' ~ r.key_alias ~ client, '관리 AI 연결 중지', '관리 AI 연결 중지', (r.person or r.user_id) ~ ' 단말의 로컬 서버·내장 도구 호출이 1~2초 안에 거절되고, 실행기가 띄운 서버는 PC 다음 보고 때 멈춥니다. 원격 MCP 게이트웨이 키는 그대로입니다. 재개하면 바로 다시 사용할 수 있습니다.', '/endpoints/' ~ r.key_alias ~ '/pause', actor, '중지') }}{% endif %}
 </div>{% endif %}
 {% endmacro %}
 {% block body %}

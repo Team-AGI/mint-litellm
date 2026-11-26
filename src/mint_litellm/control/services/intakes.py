@@ -885,6 +885,10 @@ def conclude(ctx: Context, intake_id: str, *, needs_registry_credentials: bool) 
                        intake_checks.LOCAL_CHECKS if row["source"] == "endpoint"
                        else intake_checks.CHECKS)
                    else "passed")
+        if row["status"] == "decided" and row["decision"] in ("rejected", "withdrawn"):
+            # 검사 중 철회·강제 반려: 남은 검사는 결정을 보고 멈추고, 그 사이 만든 후보는 거둔다
+            _supersede_candidates(ctx, row["server_id"])
+            return "decided"
         if row["status"] != "checking":
             raise conflict(f"checking이 아닌 신청({row['status']})은 판정할 수 없습니다.")
         ctx.conn.execute(
