@@ -41,7 +41,7 @@ def test_the_control_panel_has_stop_with_reason_block_usage_and_terminate(world,
 def test_a_waiting_server_shows_no_controls_but_where_to_decide(world, admin):
     """승인 전 서버에는 쓸 수 없는 통제 단추·재승인 대신 결정할 곳(신청 상세)을 한 줄로 보인다."""
     html = admin.get("/servers/srv-wait").text
-    assert "아직 승인되지 않은 서버라 통제할 호출이 없습니다" in html
+    assert "승인 전 서버입니다" in html
     assert "/servers/srv-wait/terminate" not in html and "/servers/srv-wait/suspend" not in html
     assert "이용 탭에서 종료" not in html
     contract = admin.get("/servers/srv-wait?tab=contract").text

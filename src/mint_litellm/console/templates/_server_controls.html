@@ -5,7 +5,9 @@
 <h2>통제</h2>
 {% if propagation %}<div class="effect" role="status">전파 상태 · MINT 판정 ✓ 즉시 · LiteLLM 키 권한 ◷ 최대 60초 · PC 실행기 정지 ◷ 다음 보고(약 20초){% if request.query_params.get('ok') == 'server_terminating' %} · 폐기를 시작했습니다. 남은 증빙을 이용 탭에서 확인하십시오.{% endif %}</div>{% endif %}
 {% if s.status not in ('approved', 'suspended') %}
-<p class="muted">{% if s.status in ('terminating', 'terminated') %}폐기된 서버입니다. 남은 증빙은 이용 탭에서 봅니다.{% else %}아직 승인되지 않은 서버라 통제할 호출이 없습니다(현재 {{ L.pick(L.SERVER, s.status) }}). {% if latest_intake %}<a href="/intakes/{{ latest_intake.id }}">신청 상세</a>에서 결정하면{% else %}신청을 결정하면{% endif %} 여기서 중지·차단·폐기합니다.{% endif %}</p>
+{% if s.status in ('terminating', 'terminated') %}<p class="muted">폐기된 서버입니다. 남은 증빙은 이용 탭에서 봅니다.</p>
+{% else %}<p class="muted">승인 전 서버입니다(현재 {{ L.pick(L.SERVER, s.status) }}).</p>
+<p class="muted">{% if latest_intake %}<a href="/intakes/{{ latest_intake.id }}">신청 상세</a>{% else %}신청 상세{% endif %}에서 결정한 뒤 여기서 통제합니다.</p>{% endif %}
 {% else %}
 <dl class="detail controls">
   <dt>도구 차단</dt><dd>{% if blocked_n %}<span class="badge error">차단 {{ blocked_n }}건</span> {% endif %}<a class="button" href="/servers/{{ s.server_id | urlencode }}?tab=contract">계약 탭에서 관리</a></dd>
