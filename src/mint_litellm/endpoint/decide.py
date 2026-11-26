@@ -906,7 +906,8 @@ def make_router(
             "user": who.principal_id if who.principal_type == "user" else None,
             "servers": [
                 {"server_id": r["server_id"], "pack_sha256": r["pack_sha256"],
-                 "permit_until": _iso(r["permit_until"]), "status": "approved"}
+                 "permit_until": _iso(r["permit_until"]), "status": "approved",
+                 **({"pack_windows": w} if (w := _windows_ref(r)) else {})}
                 for r in scope
             ],
             "remote_servers": remote,
@@ -1087,7 +1088,9 @@ def make_router(
         row = next(
             (r for r in scope if r["server_id"] == server_id and r["pack_sha256"] == pack_sha256),
             None,
-        )
+        ) or _windows_row(
+            next((r for r in scope if r["server_id"] == server_id
+                  and _windows_sha(r) == pack_sha256), None))
         if row is None:  # 범위가 아니면 이 키·이 묶음의 유효한 검사용 승인이 있는가
             try:
                 row = await runtime.database.endpoint_inspection_pack(
@@ -1120,6 +1123,32 @@ def _install_principal(
 
 def _iso(value: Any) -> Any:
     return value.isoformat() if hasattr(value, "isoformat") else value
+
+
+def _windows_ref(row: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """계약의 Windows 묶음 항목(해시 또는 「없음」 표시). 없으면 ``None``."""
+    pack = (row.get("exec_contract") or {}).get("pack")
+    windows = pack.get("windows") if isinstance(pack, Mapping) else None
+    return windows if isinstance(windows, Mapping) else None
+
+
+def _windows_sha(row: Mapping[str, Any]) -> str | None:
+    """계약에 적힌 Windows 묶음 해시(없으면 ``None``)."""
+    sha = (_windows_ref(row) or {}).get("sha256")
+    return sha if isinstance(sha, str) and _SHA256.fullmatch(sha) else None
+
+
+def _windows_row(row: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """계약의 Windows 묶음을 Linux 묶음과 같은 모양의 행으로(manifest는 저장소 디스크의 것)."""
+    sha = _windows_sha(row) if row else None
+    if sha is None:
+        return None
+    root = Path(os.environ.get(PACKS_ROOT_ENV, DEFAULT_PACKS_ROOT)).resolve()
+    try:
+        manifest = json.loads((root / sha / "manifest.json").read_bytes())
+    except (OSError, ValueError):
+        return None
+    return {**row, "pack_sha256": sha, "pack_manifest": manifest}
 
 
 def _pack_path(row: Mapping[str, Any] | None, file: str) -> Path | None:

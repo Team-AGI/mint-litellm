@@ -209,3 +209,54 @@ class GitPackTests(unittest.TestCase):
         self.allow = self.allow[:2]
         with self.assertRaisesRegex(packs.PackError, "PACK_INDEX_NOT_ALLOWED"):
             self.pack()
+
+
+class WindowsPackTest(unittest.TestCase):
+    """Windows 묶음: 같은 요구 사항·같은 시점으로 win_amd64 wheel을 받는다."""
+
+    def run_pip(self, **kwargs):
+        from unittest import mock
+
+        with mock.patch.object(packs.subprocess, "run") as run:
+            packs._download("example==1.0", Path("."), "3.12", "2026-01-01T00:00:00Z", **kwargs)
+        return run.call_args.args[0]
+
+    def test_the_windows_download_asks_for_win_amd64_with_the_same_pins(self):
+        linux, windows = self.run_pip(), self.run_pip(windows=True)
+        self.assertIn("manylinux2014_x86_64", linux)
+        self.assertNotIn("win_amd64", linux)  # Linux 묶음은 그대로
+        self.assertEqual(windows[windows.index("--platform") + 1], "win_amd64")
+        self.assertNotIn("manylinux2014_x86_64", windows)
+        for same in ("--only-binary=:all:", "--uploaded-prior-to", "2026-01-01T00:00:00Z",
+                     "--python-version", "3.12", "--abi", "cp312", "example==1.0"):
+            self.assertIn(same, windows)
+
+    def test_the_windows_pack_is_its_own_content_addressed_pack(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        spec = {"index": "pypi", "name": "example", "version": "1.0", "extras": [],
+                "command": "example", "argv": []}
+        allow = [{"kind": "egress_target", "value": h}
+                 for h in ("pypi.org", "files.pythonhosted.org")]
+        wheels = []
+
+        def download(requirement, destination, python, before=None):
+            wheel = destination / "example-1.0-py3-none-any.whl"
+            with zipfile.ZipFile(wheel, "w") as z:
+                z.writestr("example-1.0.dist-info/entry_points.txt",
+                           "[console_scripts]\nexample = pkg:main\n")
+            wheels.append(hashlib.sha256(wheel.read_bytes()).hexdigest())
+
+        def metadata(name, version):
+            return {"urls": [{"filename": "example-1.0-py3-none-any.whl",
+                              "digests": {"sha256": wheels[-1]}}]}
+
+        built = [packs.build_pack(spec, allow, packs_dir=temp.name, download=download,
+                                  metadata=metadata, windows=win) for win in (False, True)]
+        (linux, linux_manifest), (windows, windows_manifest) = built
+        self.assertNotEqual(linux, windows)
+        self.assertEqual(linux_manifest["platform"]["os"], "linux")
+        self.assertEqual(windows_manifest["platform"],
+                         {"os": "windows", "arch": "amd64", "python": "3.12"})
+        self.assertEqual(sorted(p.name for p in Path(temp.name).iterdir()),
+                         sorted([linux, windows]))

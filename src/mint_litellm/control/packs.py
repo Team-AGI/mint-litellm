@@ -2,6 +2,7 @@
 
 import configparser
 import errno
+import functools
 import hashlib
 import json
 import os
@@ -44,7 +45,8 @@ def _pip() -> list[str]:
     return [sys.executable, "-m", "pip"]
 
 
-def _download(requirement: str, destination: Path, python: str, before: str | None = None) -> None:
+def _download(requirement: str, destination: Path, python: str, before: str | None = None,
+              windows: bool = False) -> None:
     # 의존 라이브러리는 고정 판본이 나온 시점까지의 것으로 풀어, 이후에 나온 호환 안 되는 판본을
     # 피한다(pip 26.1 이상의 옵션).
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith("PIP_")}
@@ -56,10 +58,8 @@ def _download(requirement: str, destination: Path, python: str, before: str | No
             "--only-binary=:all:",
             "--index-url",
             "https://pypi.org/simple",
-            "--platform",
-            "manylinux2014_x86_64",
-            "--platform",
-            "manylinux_2_28_x86_64",
+            *(["--platform", "win_amd64"] if windows else [
+                "--platform", "manylinux2014_x86_64", "--platform", "manylinux_2_28_x86_64"]),
             "--python-version",
             python,
             "--implementation",
@@ -166,8 +166,12 @@ def build_pack(
     download=None,
     metadata=None,
     build=None,
+    windows: bool = False,
 ) -> tuple[str, dict]:
     """네트워크 경계는 시험에서 download·metadata·build로 대체할 수 있다.
+
+    ``windows``이면 같은 고정 판본·같은 시점의 의존 라이브러리를 win_amd64 wheel로 받는다
+    (Linux 묶음과 같은 요구 사항, 플랫폼만 다르다).
 
     ``index``가 ``git``이면 GitHub 저장소의 고정 커밋(40자)을 wheel로 만들고, 의존 라이브러리는
     PyPI에서 받는다.
@@ -194,7 +198,8 @@ def build_pack(
         or not re.fullmatch(r"3\.\d+", python)
     ):
         raise PackError("PACK_RESOLVE_FAILED")
-    download, metadata = download or _download, metadata or _metadata
+    download = download or (functools.partial(_download, windows=True) if windows else _download)
+    metadata = metadata or _metadata
     root = Path(packs_dir or os.environ.get("MINT_PACKS_DIR", "/var/lib/mint/packs"))
     root.mkdir(parents=True, exist_ok=True)
     requirement = name + ("[" + ",".join(sorted(extras)) + "]" if extras else "") + "==" + version
@@ -267,7 +272,8 @@ def build_pack(
                 "extras": sorted(extras),
                 **({"git": spec["git"]} if git else {}),
             },
-            "platform": {"os": "linux", "arch": "x86_64", "glibc": "2.28", "python": python},
+            "platform": ({"os": "windows", "arch": "amd64", "python": python} if windows else
+                         {"os": "linux", "arch": "x86_64", "glibc": "2.28", "python": python}),
             "entry": entry,
             "files": files,
         }

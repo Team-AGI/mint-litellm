@@ -3935,9 +3935,8 @@ class Kit:
             return []
         made = []
         for name, contract in sorted(self.local_contracts().items()):
-            pack = contract.get("pack") if isinstance(contract, dict) else None
-            digest = pack.get("sha256") if isinstance(pack, dict) else None
-            if not isinstance(digest, str) or not SHA256_HEX.match(digest):
+            digest = pack_digest(contract.get("pack") if isinstance(contract, dict) else None)
+            if digest is None:
                 continue
             if ready_status(self.programs / PACKS / digest[:16], digest) == "ok":
                 continue
@@ -3970,9 +3969,8 @@ class Kit:
         errors = self.pack_errors()
         made: list[str] = []
         for name, contract in sorted(self.desired_items(desired, dropped).items())[:MAX_FETCH]:
-            pack = contract.get("pack") if isinstance(contract.get("pack"), dict) else {}
-            digest = pack.get("sha256")
-            if not isinstance(digest, str) or not SHA256_HEX.match(digest):
+            digest = pack_digest(contract.get("pack"))
+            if digest is None:
                 continue
             if ready_cached(self.programs / PACKS / digest[:16], digest,
                             self.programs / PACK_VERIFIED, write=True) == "ok":
@@ -4099,9 +4097,12 @@ PACK_MAX_WHEELS = 256
 MANIFEST_MAX = 1 << 20
 PACK_FILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,200}\.whl$")
 SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
+WINDOWS = sys.platform == "win32"  # 묶음은 OS별로 받는다: 계약의 pack.windows(Windows)·pack(Linux)
 S_NEED, S_WORK, S_READY = "받기 필요", "준비 중", "사용 가능"
 S_EXPIRED, S_NOPROG = "실행 허가 만료", "필요한 프로그램 없음"
 S_BAD, S_WAIT = "묶음 불일치", "반영 대기"
+S_NOWIN = "Windows용 묶음 준비 필요"  # 이 PC는 Windows인데 승인 계약에 Windows용 묶음이 아직 없다
+S_NOBUILD = "Windows 미지원"  # 의존 라이브러리에 Windows용 빌드가 없어 Windows용 묶음을 못 만들었다
 S_ENDED = "이용 종료"  # 승인이 끝나 폐기 목록에 오른 서버(계약 파일이 정리되기 전)
 REMOTE_NEXT = "하네스의 게이트웨이 연결(litellm_gateway)로 씁니다"
 S_PYVER = "Python 판본 다름"  # 승인 묶음은 조직 런타임 한 판본용이다
@@ -4111,6 +4112,20 @@ STEP_NAMES = ("시작 검증 통과", "도구 목록 받음", "첫 호출 성공
 
 class PackError(Exception):
     """묶음을 받거나 풀 수 없는 사유(사람이 읽는 문장)."""
+
+
+def pack_digest(pack: object) -> str | None:
+    """이 PC가 받아 쓸 묶음의 해시. Windows 계약에 Windows용 묶음이 없으면 None.
+
+    서버의 정체성과 시작 허가는 ``pack.sha256``(Linux 묶음)에 묶이고, 준비 폴더·받기는 이 값이다.
+    """
+    if not isinstance(pack, dict):
+        return None
+    found = pack.get("sha256")
+    if WINDOWS:
+        built = pack.get("windows")
+        found = built.get("sha256") if isinstance(built, dict) else None
+    return found if isinstance(found, str) and SHA256_HEX.match(found) else None
 
 
 def manifest_digest(manifest: object) -> str:
@@ -4410,11 +4425,19 @@ def pack_state(
     pack = contract.get("pack")
     if not isinstance(pack, dict):
         return S_READY
-    digest = str(pack.get("sha256", ""))
-    if not os.path.exists(str(contract.get("executable", ""))):
+    identity = str(pack.get("sha256", ""))
+    digest, runtime = identity, str(contract.get("executable", ""))
+    if WINDOWS:  # 계약의 실행 경로는 Linux 것이다: Windows는 이 키트를 돌리는 관리형 Python을 쓴다
+        built = pack.get("windows")
+        if not isinstance(built, dict):
+            return S_NOWIN
+        digest, runtime = str(built.get("sha256") or ""), sys.executable
+        if not SHA256_HEX.match(digest):
+            return S_NOBUILD
+    if not os.path.exists(runtime):
         return S_NOPROG
     wanted = str(pack.get("python") or "")
-    if wanted and runtime_version(str(contract["executable"])) not in (wanted, ""):
+    if wanted and runtime_version(runtime) not in (wanted, ""):
         return S_PYVER
     found = ready_cached(programs / PACKS / digest[:16], digest, programs / PACK_VERIFIED)
     if found == "bad":
@@ -4423,7 +4446,7 @@ def pack_state(
         return S_WORK if (staged / digest[:16]).is_dir() else S_NEED
     permit = permits.get(name) if isinstance(permits.get(name), dict) else {}
     until = parse_time(permit.get("permit_until"))
-    if permit.get("pack_sha256") != digest or until is None or until <= now:
+    if permit.get("pack_sha256") != identity or until is None or until <= now:
         return S_EXPIRED
     return S_READY
 
@@ -5182,6 +5205,8 @@ def intake_label(status: object, decision: object) -> str:
     return names.get(str(status), str(status or "-"))
 
 
+NEXT_NOWIN = "관리자에게 이 서버의 재검사를 요청하십시오(재검사가 Windows용 묶음을 만듭니다)"
+NEXT_NOBUILD = "의존 라이브러리에 Windows용 빌드가 없어 이 PC에서는 쓸 수 없습니다"
 NEXT_BY_STATE = {
     S_NEED: "곧 자동으로 받습니다. 급하면 s 키",
     S_FAILED: "s 키로 다시 받으십시오",
@@ -5190,6 +5215,7 @@ NEXT_BY_STATE = {
     S_EXPIRED: "r 키로 다시 보고하십시오",
     S_NOPROG: "관리자에게 런타임 설치를 요청하십시오",
     S_PYVER: "승인된 Python 판본을 설치하도록 관리자에게 요청하십시오",
+    S_NOWIN: NEXT_NOWIN, S_NOBUILD: NEXT_NOBUILD,
     S_BAD: "s 키로 다시 받으십시오",
     S_ENDED: "이용이 끝났습니다. 다시 쓰려면 신청 탭에서 신청하십시오",
     S_WAIT: "r 키로 다시 보고하십시오",
@@ -5699,7 +5725,7 @@ def build_model(kit, state: dict, gateway: Gateway | None) -> dict:
             row_state = pack_state(name, contract, kit.programs, staged, permits, now)
             kind = "묶음" if contract.get("pack") else "로컬"
             failed = kit.pack_errors().get(name)
-            digest = (contract.get("pack") or {}).get("sha256")
+            digest = pack_digest(contract.get("pack"))
             if row_state in (S_NEED, S_WORK) and isinstance(failed, dict) and (
                     failed.get("sha256") == digest):
                 row_state = S_FAILED
@@ -6524,6 +6550,12 @@ def run_get(kit, gateway: Gateway | None, server: str, out=print, progress=None)
         None,
     )
     digest = entry.get("pack_sha256") if entry else None
+    if entry is not None and WINDOWS and isinstance(digest, str):  # Windows는 Windows용 묶음
+        built = entry.get("pack_windows")
+        if not (isinstance(built, dict) and built.get("sha256")):
+            out(NEXT_NOBUILD if isinstance(built, dict) else NEXT_NOWIN)
+            return 1
+        digest = built["sha256"]
     if entry is None and server in (me.get("remote_servers") or []):
         out(f"원격 서버라 받을 것이 없습니다 — {REMOTE_NEXT}")
         return 0
@@ -6959,7 +6991,8 @@ STATUS_FIELDS = ("mode", "user", "kit_version", "gateway", "key", "server_count"
 # 상태(받기 필요 등)는 「세부」로 따로 둔다. 신청 상태는 웹 신청 목록과 같다(H.5).
 SERVER_WORD = {S_READY: "사용 가능", S_ENDED: "이용 종료", S_FAILED: "시작 실패",
                S_BAD: "시작 실패",
-               S_NOPROG: "시작 실패", S_PYVER: "시작 실패"}  # fmt: skip
+               S_NOPROG: "시작 실패", S_PYVER: "시작 실패", S_NOBUILD: "시작 실패",
+               S_NOWIN: "준비 중"}  # fmt: skip
 REQUEST_WORD = {"approved": "승인됨", "ended": "이용 종료됨", "rejected": "거절됨",
                 "withdrawn": "철회됨",
                 "pack": "준비 중", "review": "승인 대기"}  # fmt: skip
@@ -6971,6 +7004,7 @@ CLI_NEXT = {
     S_WORK: "관리자 단계가 마칠 때까지 기다리십시오",
     S_NOPROG: "관리자에게 런타임 설치를 요청하십시오",
     S_PYVER: "승인된 Python 판본을 설치하도록 관리자에게 요청하십시오",
+    S_NOWIN: NEXT_NOWIN, S_NOBUILD: NEXT_NOBUILD,
     S_ENDED: "이용이 끝났습니다. 다시 쓰려면 mint server add로 신청하십시오",
 }  # fmt: skip
 PENDING_DONE = ("approved", "ended", "rejected", "withdrawn", "failed")

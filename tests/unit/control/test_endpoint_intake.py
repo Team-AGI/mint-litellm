@@ -601,7 +601,7 @@ def test_an_old_start_failure_record_is_retried_and_shows_the_retry_line(seeded)
     assert svc.retry_state(world.conn, INSTANCE, world.intake(request_id))["n"] == 1
     job = SimpleNamespace(conn=world.conn, instance_id=INSTANCE, checkpoint=lambda: None)
     intake_jobs.local_pack_retry(job)
-    assert world.jobs("intake_run")[-1]["target_ref"] == f"{request_id}/repack"
+    assert f"{request_id}/repack" in [j["target_ref"] for j in world.jobs("intake_run")]
 
 
 def test_an_old_failure_outside_the_start_stage_is_not_retried(seeded):
@@ -641,7 +641,9 @@ def test_the_pack_retry_rebuilds_the_pack_of_an_approved_request_whose_server_ca
     before = len(world.jobs("intake_run"))
     intake_jobs.local_pack_retry(job)
     queued = world.jobs("intake_run")
-    assert len(queued) == before + 1 and queued[-1]["target_ref"] == f"{request_id}/repack"
+    assert len(queued) == before + 2  # 다시 만들기 + 이전 승인에 Windows 묶음 더하기
+    assert sorted(j["target_ref"] for j in queued[before:]) == sorted(
+        [f"{request_id}/repack", f"{request_id}/winpack"])
 
 
 def test_a_repack_swaps_the_approved_contract_for_one_with_the_new_pack(seeded):
@@ -662,6 +664,56 @@ def test_a_repack_swaps_the_approved_contract_for_one_with_the_new_pack(seeded):
     assert now["exec_contract"]["pack"]["sha256"] == new
     assert world.server("pyg")["exec_contract_sha256"] == now["exec_contract_sha256"]
     assert world.intake(request_id)["decision"] == "approved"
+
+
+def test_an_approved_server_gets_its_windows_pack_without_changing_the_linux_pack(
+        seeded, monkeypatch):
+    from types import SimpleNamespace
+
+    from mint_litellm.control import intake_jobs, packs
+
+    world = seeded
+    request_id, row, ctx = _start_failed_after_approval(world)
+    approved = fetchone(world.conn, "SELECT * FROM mint.deployment_contracts"
+                        " WHERE status = 'approved'")
+    assert "windows" not in approved["exec_contract"]["pack"]  # 이전에 승인된 계약
+    monkeypatch.setattr(intake_jobs, "_allowlists", lambda *a: [])
+    job = SimpleNamespace(conn=world.conn, instance_id=INSTANCE)
+    win = "c" * 64
+    monkeypatch.setattr(packs, "build_pack", lambda *a, **k: (win, {}))
+    assert intake_jobs._winpack_run(job, ctx, row) is True
+    now = fetchone(world.conn, "SELECT * FROM mint.deployment_contracts WHERE status = 'approved'")
+    assert now["id"] != approved["id"] and now["pack_sha256"] == approved["pack_sha256"]
+    assert now["exec_contract"]["pack"]["windows"] == {"sha256": win}
+    assert now["exec_contract"]["pack"]["sha256"] == approved["pack_sha256"]
+    assert world.server("pyg")["exec_contract_sha256"] == now["exec_contract_sha256"]
+    assert world.intake(request_id)["decision"] == "approved"
+    assert intake_jobs._winpack_run(job, ctx, row) is False  # 이미 있으면 다시 만들지 않는다
+
+
+def test_a_missing_windows_build_is_recorded_and_a_recheck_can_fill_it_in_later(
+        seeded, monkeypatch):
+    from types import SimpleNamespace
+
+    from mint_litellm.control import intake_jobs, packs
+
+    world = seeded
+    request_id, row, ctx = _start_failed_after_approval(world)
+    monkeypatch.setattr(intake_jobs, "_allowlists", lambda *a: [])
+    job = SimpleNamespace(conn=world.conn, instance_id=INSTANCE)
+
+    def none(*args, **kwargs):
+        raise packs.PackError("PACK_RESOLVE_FAILED")
+
+    monkeypatch.setattr(packs, "build_pack", none)
+    assert intake_jobs._winpack_run(job, ctx, row) is True
+    now = fetchone(world.conn, "SELECT * FROM mint.deployment_contracts WHERE status = 'approved'")
+    assert now["exec_contract"]["pack"]["windows"] == {"unavailable": True}
+    assert intake_jobs._winpack_run(job, ctx, row) is False  # 같은 결과면 계약을 바꾸지 않는다
+    monkeypatch.setattr(packs, "build_pack", lambda *a, **k: ("d" * 64, {}))
+    assert intake_jobs._winpack_run(job, ctx, row) is True  # 재검사가 다시 만들어 채운다
+    now = fetchone(world.conn, "SELECT * FROM mint.deployment_contracts WHERE status = 'approved'")
+    assert now["exec_contract"]["pack"]["windows"] == {"sha256": "d" * 64}
 
 
 # --- 저장소 주소로 화면에서 만드는 로컬 신청 -------------------------------------------------

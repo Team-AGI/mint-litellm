@@ -1,0 +1,1 @@
+- PyPI·저장소 묶음 서버가 Windows PC에서도 시작됩니다: 묶음을 만들 때 같은 고정 판본으로 Windows용 묶음(win_amd64)을 하나 더 만들어 계약의 `pack.windows`에 적고(의존 라이브러리에 Windows용 빌드가 없으면 「없음」으로 표시), PC는 그 묶음을 받아 해시·준비 상태·시작 허가를 확인한 뒤 관리형 Python으로 AppContainer 격리 안에서 `python -I -B`로 시작하며, 이전에 승인된 서버는 주기 작업이나 재검사가 Windows 묶음을 더하고 그때까지 `mint server list`가 올바른 다음 할 일을 안내합니다.

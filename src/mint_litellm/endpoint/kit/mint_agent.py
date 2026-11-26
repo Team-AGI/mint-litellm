@@ -1096,7 +1096,14 @@ def verify_launch(approved: Mapping[str, Any], fd: int) -> None:
 _DOTTED = r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*"
 PACK_ENTRY = re.compile(rf"^({_DOTTED}):([A-Za-z_][A-Za-z0-9_]*)$")
 PACKS_DIR = os.path.join(KIT_DIR, "packs")
-PACK_PLATFORM = os.name != "nt"  # 묶음 서버는 Linux만(Windows는 다음 단계)
+WINDOWS = os.name == "nt"  # Windows는 계약의 Windows 묶음과 이 실행기의 Python을 쓴다
+WINDOWS_PACK_NONE = (
+    "이 서버는 아직 Windows용 묶음이 없어 시작하지 않았습니다. 관리자에게 이 서버의 재검사를 "
+    "요청하십시오(재검사가 Windows용 묶음을 만듭니다)"
+)
+WINDOWS_PACK_MISSING = (
+    "이 서버는 의존 라이브러리에 Windows용 빌드가 없어 이 PC(Windows)에서 쓸 수 없습니다"
+)
 PERMITS_FILE = "permits.json"
 READY_FILE = ".ready.json"
 SHA256_TEXT = re.compile(r"^[0-9a-f]{64}$")
@@ -1189,13 +1196,22 @@ def verify_pack(
 ) -> dict[str, Any]:
     """묶음 계약을 시작 직전에 검증해 실제로 띄울 계약(argv·준비 폴더 반영)을 돌려준다."""
     pack = approved["pack"]
-    if not isinstance(pack, Mapping) or not PACK_PLATFORM:
-        raise Refuse("이 서버(PyPI·저장소 묶음)는 아직 Windows PC에서 쓸 수 없습니다")
-    digest, entry, python = pack.get("sha256"), pack.get("entry"), pack.get("python")
-    match = PACK_ENTRY.match(entry) if isinstance(entry, str) else None
-    if not (isinstance(digest, str) and SHA256_TEXT.match(digest) and match and python):
+    if not isinstance(pack, Mapping):
         raise Refuse("pack contract is malformed")
-    runtime = check_runtime(approved["executable"], str(python), managed)
+    identity, entry, python = pack.get("sha256"), pack.get("entry"), pack.get("python")
+    match = PACK_ENTRY.match(entry) if isinstance(entry, str) else None
+    if not (isinstance(identity, str) and SHA256_TEXT.match(identity) and match and python):
+        raise Refuse("pack contract is malformed")
+    digest = identity  # 시작 허가는 서버의 정체성(Linux 묶음 해시)에 묶인다. 준비 폴더는 이 PC 것.
+    executable = approved["executable"]
+    if WINDOWS:
+        # 계약의 실행 경로는 Linux 것이다. Windows는 이 실행기를 돌리는 관리형 Python을 쓴다.
+        built = pack.get("windows")
+        digest = built.get("sha256") if isinstance(built, Mapping) else None
+        if not (isinstance(digest, str) and SHA256_TEXT.match(digest)):
+            raise Refuse(WINDOWS_PACK_MISSING if isinstance(built, Mapping) else WINDOWS_PACK_NONE)
+        executable = sys.executable
+    runtime = check_runtime(executable, str(python), managed)
     folder = os.path.join(packs_dir, digest[:16])
     try:
         with open(os.path.join(folder, READY_FILE), encoding="utf-8") as handle:
@@ -1214,7 +1230,7 @@ def verify_pack(
     except (OSError, ValueError, AttributeError):
         permit = {}
     until = parse_time(permit.get("permit_until"))
-    if permit.get("pack_sha256") != digest or until is None or until <= (now or time.time()):
+    if permit.get("pack_sha256") != identity or until is None or until <= (now or time.time()):
         raise NoPermit("start permit is missing or expired; wait for the next report")
     module, function = match.groups()
     if function == "__main__":
@@ -1230,6 +1246,7 @@ def verify_pack(
     return {
         **approved, "executable": runtime,
         "argv": ["-I", "-B", "-c", code, *(approved.get("argv") or [])], "_pack_dir": folder,
+        "_pack_exec": True,  # 격리가 묶음 폴더의 확장 모듈(.pyd)을 읽고 실행할 수 있어야 한다
     }
 
 
@@ -1929,8 +1946,8 @@ def win_grants(
         add(ntpath.dirname(script), "R")
     if approved.get("cwd"):
         add(approved["cwd"], "R")
-    if approved.get("_pack_dir"):  # 받아 둔 묶음(npm tarball 등)은 읽기만
-        add(approved["_pack_dir"], "R")
+    if approved.get("_pack_dir"):  # 받아 둔 묶음: tarball은 읽기, wheel은 .pyd 때문에 실행도
+        add(approved["_pack_dir"], "RX" if approved.get("_pack_exec") else "R")
     for cache in win_runner_caches(approved, home):
         if not exists(cache):  # 처음 쓰는 PC에는 실행기 캐시가 아직 없다(없으면 권한을 못 준다)
             try:

@@ -26,7 +26,7 @@ from mint_litellm.control.services import intake_inspections as inspections
 from mint_litellm.control.services.base import enqueue_job, transact
 from mint_litellm.types.exec_contract import ExecContract
 from mint_litellm.types.ids import new_uuid7
-from mint_litellm.types.jobs import intake_run_job_key
+from mint_litellm.types.jobs import intake_run_job_key, intake_winpack_job_key
 
 POLL_LIMIT = 500
 PACK_PYTHON = "3.12"
@@ -343,8 +343,18 @@ def _run_checks(
     return needs_credentials
 
 
+def _windows_pack(spec: dict, allowlists: list[dict]) -> dict:
+    """같은 요구 사항으로 Windows 묶음을 만든다. 못 만들면(의존 라이브러리에 Windows용 빌드가 없는
+    경우가 대부분) 계약에 「없음」으로 적어 PC가 이유를 보이게 한다. 재검사가 다시 만든다."""
+    try:
+        return {"sha256": packs.build_pack(spec, allowlists, python=PACK_PYTHON,
+                                           windows=True)[0]}
+    except packs.PackError:
+        return {"unavailable": True}  # ponytail: 일시 오류도 「없음」이 된다. 재검사로 복구한다
+
+
 def _record_pack(job: JobContext, ctx: Context, contract: dict, spec: dict,
-                 digest: str, manifest: dict) -> None:
+                 digest: str, manifest: dict, windows: dict | None = None) -> None:
     """같은 배포 계약 행에 묶음 해시·manifest·실행 계약(판 2)을 적는다. 다시 써도 같다."""
     python = getattr(job.settings, "local_python", None) or DEFAULT_LOCAL_PYTHON
     legacy = fetchone(job.conn, "SELECT network_legacy FROM mint.intakes WHERE id = %s",
@@ -355,7 +365,8 @@ def _record_pack(job: JobContext, ctx: Context, contract: dict, spec: dict,
             " exec_contract = %s::jsonb WHERE instance_id = %s AND id = %s",
             (digest, json.dumps(manifest), json.dumps(
                 checks.local_exec_contract(
-                    spec, digest, manifest, python, bool(legacy and legacy["network_legacy"]))),
+                    spec, digest, manifest, python, bool(legacy and legacy["network_legacy"]),
+                    windows)),
              job.instance_id, contract["id"]),
         )
         # 묶음·계약이 바뀌면 열린 검사용 승인은 쓸 수 없다
@@ -422,7 +433,7 @@ def _run_local_checks(job: JobContext, ctx: Context, row: dict, attempt: int) ->
         elif name == "pack_build":
             try:
                 pack = packs.build_pack(spec, allowlists, python=PACK_PYTHON)
-                _record_pack(job, ctx, contract, spec, *pack)
+                _record_pack(job, ctx, contract, spec, *pack, _windows_pack(spec, allowlists))
                 out = checks.pack_build_outcome(*pack)
             except packs.PackError as error:
                 out = checks.pack_build_failed(error.code)
@@ -486,6 +497,8 @@ def _evidence_run(job: JobContext, ctx: Context, row: dict, attempt: int) -> Non
     (증거 만료 재검사). 배포 드리프트면 레지스트리의 현재 값으로 배포 후보를 먼저 만든다.
     """
     persist = intakes.drift_pending(job.conn, job.instance_id, row["server_id"])
+    if not persist:
+        _winpack_run(job, ctx, row)  # 재검사가 Windows 묶음도 만든다(없거나 못 만들었을 때)
     if persist:
         server = fetchone(
             job.conn,
@@ -526,8 +539,10 @@ def _repack_run(job: JobContext, ctx: Context, row: dict, attempt: int) -> None:
     except packs.PackError as error:
         intakes.record_check(ctx, row, attempt, "pack_build", checks.pack_build_failed(error.code))
         return
-    if digest != approved["pack_sha256"]:
-        _swap_pack(job, ctx, approved, digest, manifest)
+    windows = _windows_pack(spec, _allowlists(job, row["org_id"]))
+    if digest != approved["pack_sha256"] or windows != approved["exec_contract"]["pack"].get(
+            "windows"):
+        _swap_pack(job, ctx, approved, digest, manifest, windows)
     out = checks.inspection_outcome(
         inspection.inspect_pack(digest, manifest["entry"], spec.get("argv", [])))
     intakes.record_check(ctx, row, attempt, "inspection", out)
@@ -540,12 +555,35 @@ def _repack_run(job: JobContext, ctx: Context, row: dict, attempt: int) -> None:
                              checks.risk_grade(defs, row["data_grade"], data))
 
 
+def _winpack_run(job: JobContext, ctx: Context, row: dict) -> bool:
+    """승인된 묶음 서버에 Windows 묶음이 없으면(이전 승인, 또는 만들지 못함) 만들어 계약에 더한다.
+
+    Linux 묶음과 승인된 권한은 그대로이고 계약만 같은 내용에 Windows 묶음이 더해진 것으로 바뀐다.
+    바꿨으면 참.
+    """
+    approved = intakes.approved_deployment(job.conn, job.instance_id, row["server_id"])
+    spec = approved and approved.get("pack_spec")
+    pack = ((approved or {}).get("exec_contract") or {}).get("pack")
+    if not spec or not isinstance(pack, dict) or spec.get("index") == "npm":
+        return False
+    if (pack.get("windows") or {}).get("sha256"):
+        return False
+    windows = _windows_pack(spec, _allowlists(job, row["org_id"]))
+    if windows == pack.get("windows"):
+        return False
+    _swap_pack(job, ctx, approved, approved["pack_sha256"], approved["pack_manifest"], windows)
+    return True
+
+
 def _swap_pack(job: JobContext, ctx: Context, approved: dict, digest: str,
-               manifest: dict) -> None:
+               manifest: dict, windows: dict | None = None) -> None:
     """승인된 배포 계약을 묶음만 다른 새 계약으로 대체하고 서버의 계약 값을 맞춘다."""
     document = {k: v for k, v in approved["exec_contract"].items() if k != "identity_kind"}
-    document["pack"] = {**document["pack"], "sha256": digest,
-                        "python": manifest["platform"]["python"], "entry": manifest["entry"]}
+    kept = document["pack"]  # Windows 묶음만 더할 때는 승인된 판본·진입점을 그대로 둔다
+    document["pack"] = {**kept, "sha256": digest,
+                        "python": manifest.get("platform", {}).get("python", kept["python"]),
+                        "entry": manifest.get("entry", kept["entry"]),
+                        **({"windows": windows} if windows else {})}
     contract = ExecContract.model_validate(document)
     keep = {k: v for k, v in approved.items() if k not in (
         "id", "status", "version", "pack_sha256", "pack_manifest", "exec_contract",
@@ -577,6 +615,9 @@ def intake_run(job: JobContext) -> None:
     row = intakes.get(ctx, target)
     if mode == "reject":
         _reject_at_litellm(job, row)
+        return
+    if mode == "winpack":
+        _winpack_run(job, ctx, row)
         return
     attempt = int(job.job["idempotency_key"].rsplit(":", 1)[1])
     if mode == "evidence":
@@ -676,6 +717,24 @@ def local_pack_retry(job: JobContext) -> None:
                         intake_run_job_key(row["id"], attempt))
         else:
             intakes.enqueue_run(ctx, intakes.get(ctx, str(row["id"])))
+    # 이전에 승인된 묶음 서버(Windows 묶음이 계약에 없음)는 스스로 Windows 묶음을 얻는다
+    for row in fetchall(
+        job.conn,
+        "SELECT DISTINCT ON (i.server_id) i.id FROM mint.intakes i"
+        " JOIN mint.deployment_contracts d ON d.instance_id = i.instance_id"
+        " AND d.server_id = i.server_id AND d.status = 'approved'"
+        " JOIN mint.servers s ON s.instance_id = i.instance_id AND s.server_id = i.server_id"
+        " AND s.status = 'approved'"
+        " WHERE i.instance_id = %s AND i.source = 'endpoint' AND i.status = 'decided'"
+        " AND i.decision IN ('approved', 'exception') AND d.pack_spec IS NOT NULL"
+        " AND d.pack_spec ->> 'index' IN ('pypi', 'git') AND d.exec_contract -> 'pack' IS NOT NULL"
+        " AND NOT ((d.exec_contract -> 'pack') ? 'windows')"
+        " ORDER BY i.server_id, i.decided_at DESC, i.id DESC",
+        (job.instance_id,),
+    ):
+        job.checkpoint()
+        enqueue_job(ctx, "intake_run", f"{row['id']}/winpack",
+                    intake_winpack_job_key(row["id"]))
 
 
 # --- evidence_expiry_scan -------------------------------------------------------------------

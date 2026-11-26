@@ -79,8 +79,36 @@ def network_hints(contract: "ExecContract") -> list[str]:
     return hints
 
 
+class WinPackRef(BaseModel):
+    """Windows PC용 묶음. 해시이거나, 의존 라이브러리에 Windows용 빌드가 없다는 표시이다."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    sha256: str | None = Field(default=None, pattern=_SHA256)
+    unavailable: bool = False
+
+    @model_validator(mode="after")
+    def _one_of(self) -> "WinPackRef":
+        if (self.sha256 is None) != self.unavailable:
+            raise ValueError("a windows pack is either a hash or unavailable")
+        return self
+
+    @model_serializer(mode="wrap")
+    def _omit_unset(self, handler):
+        data = handler(self)
+        if data.get("sha256") is None:
+            data.pop("sha256", None)
+        if not data.get("unavailable"):
+            data.pop("unavailable", None)
+        return data
+
+
 class PackRef(BaseModel):
-    """서버 쪽에서 만든 실행 묶음(wheel 모음)을 가리킨다. 묶음 해시가 정체성이다."""
+    """서버 쪽에서 만든 실행 묶음(wheel 모음)을 가리킨다. 묶음 해시가 정체성이다.
+
+    ``sha256``은 Linux 묶음이고 정체성이다. ``windows``는 같은 요구 사항으로 만든 Windows 묶음이다
+    (없으면 계약 문서에 나타나지 않아 이전 해시가 그대로다).
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -88,6 +116,14 @@ class PackRef(BaseModel):
     runtime: Literal["python3"]
     python: str = Field(pattern=r"^[0-9]{1,2}\.[0-9]{1,3}$")  # major.minor
     entry: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_]*$", max_length=256)
+    windows: WinPackRef | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_no_windows(self, handler):
+        data = handler(self)
+        if data.get("windows") is None:
+            data.pop("windows", None)
+        return data
 
 
 class NpmRef(BaseModel):

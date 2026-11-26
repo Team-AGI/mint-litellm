@@ -21,6 +21,13 @@ PYTHON = f"{sys.version_info[0]}.{sys.version_info[1]}"
 LATER = "2999-01-01T00:00:00Z"
 
 
+@pytest.fixture(autouse=True)
+def linux_packs(monkeypatch):
+    """이 파일은 Linux 묶음 경로를 본다(Windows 경로는 test_kit_pack_windows)."""
+    monkeypatch.setattr(kit_module, "WINDOWS", False)
+    monkeypatch.setattr(agent, "WINDOWS", False)
+
+
 def sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -179,7 +186,6 @@ def test_screen_states_follow_the_runtime_the_pack_the_permit_and_the_clock(tmp_
 
 
 def prepared(tmp_path, monkeypatch, python=PYTHON, until=LATER):
-    monkeypatch.setattr(agent, "PACK_PLATFORM", True)
     digest, blobs = pack_of(GOOD)
     packs = tmp_path / "packs"
     folder = kit_module.install_blobs(digest, blobs, packs)
@@ -277,13 +283,6 @@ def test_run_server_execs_the_verified_pack_launch_and_never_the_contract_argv(
     (argv,) = started
     assert argv[1:4] == ["-I", "-B", "-c"] and repr(str(folder)) in argv[4]
     Path(permits).write_text(json.dumps({"permits": {}}))
-    with pytest.raises(agent.Refuse):
-        agent.run_server("s", listing, {}, execve=lambda *a: None, packs_dir=packs)
-
-
-def test_pack_servers_are_refused_where_they_are_not_supported(tmp_path, monkeypatch):
-    digest, folder, contract, packs, permits, listing = prepared(tmp_path, monkeypatch)
-    monkeypatch.setattr(agent, "PACK_PLATFORM", False)
     with pytest.raises(agent.Refuse):
         agent.run_server("s", listing, {}, execve=lambda *a: None, packs_dir=packs)
 
