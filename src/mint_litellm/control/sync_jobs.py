@@ -18,6 +18,7 @@ from mint_litellm.control import ledger
 from mint_litellm.control.alerts import raise_alert
 from mint_litellm.control.alerts import resolve as resolve_alert
 from mint_litellm.control.context import Context, Operator
+from mint_litellm.control.contract_observe import record_identity_drift
 from mint_litellm.control.db.connection import fetchall, fetchone
 from mint_litellm.control.errors import AdminError, ControlError
 from mint_litellm.control.jobs import JobContext, PermanentFailure, WaitForOperator
@@ -1197,6 +1198,12 @@ def _check_identity(ctx: JobContext, server_id: str, server: dict) -> None:
         raise_alert(conn, inst, kind="sync_divergence", severity="high", dedup_key=key,
                     subject={"server_id": server_id, "reason": "server_replaced",
                              "fields": differing})
+        # 플러그인은 기동 때만 신원을 대조하므로, 운영 중 바뀐 주소는 여기서도 관측으로 남겨야
+        # 배포 변경 표시와 주소를 명시한 재검사(관측 해시 대조)가 열린다.
+        # 해시는 플러그인과 같은 식이다(레지스트리 값의 해시를 다시 해시한다).
+        with conn.transaction():
+            record_identity_drift(
+                _actor_context(ctx), server_id, {f: sha256(now[f]) for f in differing})
     else:
         resolve_alert(conn, inst, key)
     fields = list(row["deployment_drift_fields"] or ())

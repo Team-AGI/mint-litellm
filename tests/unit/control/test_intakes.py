@@ -1674,6 +1674,38 @@ def test_a_matching_url_input_becomes_the_deployment_candidate(world):
                     " WHERE status = 'candidate'")["url"] == new_url
 
 
+def test_a_moved_server_waits_for_the_gateway_report_then_reopens_the_reapproval_path(world):
+    """QA-BUG-303: 주소 변경 직후 배포 변경은 보이지만 게이트웨이 보고 전에는 주소를 받을 수 없다.
+    그 사실이 화면 판단 함수에 드러나고, 보고가 오면 재검사가 후보와 재승인 선택지로 이어진다."""
+    from mint_litellm.control.services import reads
+
+    intake_id = approved_world(world)
+    new_url = "http://moved.test:9000/mcp"
+    world.allow("provider", "moved.test")
+    world.allow("egress_target", "moved.test")
+    # 동기화의 고정 확인이 먼저 배포 변경 표지를 켠 상태(관측 해시는 아직 없다)
+    world.conn.execute("UPDATE mint.servers SET deployment_drift = true,"
+                       " deployment_drift_fields = ARRAY['pin_reapproval']"
+                       " WHERE server_id = 'srv-a'")
+    assert svc.awaiting_address_report(world.conn, INSTANCE, "srv-a") is True
+    with psycopg.connect(world.url) as conn, pytest.raises(ControlError, match="아직 보고하지"):
+        svc.recheck(make_ctx(conn), intake_id, url=new_url)
+    assert fetchall(world.conn, "SELECT 1 FROM mint.deployment_contracts"
+                    " WHERE status = 'candidate'") == []
+    identity_drift(world, new_url)  # 게이트웨이 보고
+    assert svc.awaiting_address_report(world.conn, INSTANCE, "srv-a") is False
+    with psycopg.connect(world.url) as conn:
+        svc.recheck(make_ctx(conn), intake_id, url=new_url)
+        conn.commit()
+    world.drain()
+    cand = fetchone(world.conn, "SELECT * FROM mint.deployment_contracts"
+                                " WHERE status = 'candidate'")
+    assert cand["url"] == new_url
+    offered = reads.candidates(world.conn, INSTANCE, "srv-a")
+    assert [str(d["id"]) for d in offered["deployments"]] == [str(cand["id"])]
+    assert offered["intakes"]  # 재승인 양식의 「재검사 증거가 있는 신청」 선택지가 비어 있지 않다
+
+
 def test_a_url_input_that_differs_from_the_observed_hash_is_refused(world):
     intake_id = approved_world(world)
     identity_drift(world, "http://moved.test:9000/mcp")
