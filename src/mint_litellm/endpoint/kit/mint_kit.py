@@ -988,6 +988,38 @@ def codex_requirements(
     )
 
 
+def reconcile_toml(text: str, commands: dict, runner) -> str:
+    """TOML 설정에서 MINT가 쓴 훅 명령과 서버 실행기 줄만 지금 형태로 바꾼다(나머지는 그대로).
+
+    ``commands``는 이벤트별 (명령 줄, 제한 시간), ``runner``는 서버 이름의 실행 항목을 돌려준다.
+    없는 훅 이벤트는 끝에 더한다.
+    """
+    found = re.findall(r'(?m)^\[mcp_servers\."([^"]+)"\]', text)
+    mine = {
+        f"[mcp_servers.{toml(n)}]": n
+        for n in found if codex_table_is_ours(codex_table(text, n) or "", n)
+    }
+    out, table, seen = [], "", set()
+    for line in text.splitlines(keepends=True):
+        bare = line.strip()
+        if bare.startswith("["):
+            table = bare
+        eol = line[len(line.rstrip("\r\n")) :]
+        hook = re.fullmatch(r"\[\[hooks\.(\w+)\.hooks\]\]", table)
+        if hook and hook[1] in commands and bare.startswith("command") and AGENT in bare:
+            line = f"command = {toml(commands[hook[1]][0])}{eol}"
+            seen.add(hook[1])
+        elif table in mine and bare.startswith(("command", "args")):
+            key = "command" if bare.startswith("command") else "args"
+            line = f"{key} = {toml(runner(mine[table])[key])}{eol}"
+        out.append(line)
+    text = "".join(out)
+    missing = {e: c for e, c in commands.items() if e not in seen}
+    if missing and text and not text.endswith(NL):
+        text += NL
+    return text + codex_hooks(missing)
+
+
 def strip_block(text: str) -> str:
     return re.sub(
         rf"(?:\r?\n)?{re.escape(BEGIN)}.*?{re.escape(END)}(?:\r?\n)?", "", text, flags=re.S
@@ -3129,6 +3161,87 @@ class Kit:
                 changed |= bool(self.run_as_user(lambda: self.edit_user_file(
                     state, self.codex_config(), "codex_config_sha", edit_toml(approve_user_config),
                 )))  # fmt: skip
+        if changed:
+            self.save_state(state)
+        return changed
+
+    def reconcile_commands(self, state: dict) -> bool:
+        """관리형 하네스 파일의 MINT 훅·서버 실행기 명령을 설치 코드가 지금 만드는 형태로 맞춘다.
+
+        자체 갱신으로 프로그램만 바뀐 PC도 새 설치와 같은 명령(격리 실행 ``-I``)을 쓰게 한다.
+        MINT 항목만 고치고 관리자가 더한 내용은 보존한다. 이미 맞으면 쓰지 않는다.
+        사용자 수준 설치와 사용자 설정 파일은 범위 밖이다(Windows Codex 사용자 설정의 서버 구간은
+        ``sync_codex_block``이 맞춘다).
+        """
+        python = state.get("python")
+        if not (self.managed and python):
+            return False
+        agent = f"{self.logical_programs}/{AGENT}"
+        contracts = f"{self.logical_programs}/contracts.json"
+
+        def runner(name: str) -> dict:
+            return {
+                "command": python,
+                "args": ["-I", agent, "run", "--contracts", contracts, "--server", name],
+            }
+
+        def claude_settings(text: str) -> str:
+            data = json.loads(text)
+            registered = data.setdefault("hooks", {})
+            for event, matchers in self.hook_commands(python, agent, contracts).items():
+                old = registered.get(event, [])
+                first = next((i for i, x in enumerate(old) if ours(x)), len(old))
+                rest = [x for x in old[first:] if not ours(x)]
+                registered[event] = [*old[:first], *matchers, *rest]  # 옛 항목 자리에 둔다
+            return json.dumps(data, indent=2)
+
+        def claude_mcp(text: str) -> str:
+            data = json.loads(text)
+            for name, entry in (data.get("mcpServers") or {}).items():
+                if is_ours_entry(entry, name):
+                    entry.update(runner(name))
+            return json.dumps(data, indent=2)
+
+        jobs = []
+        if "claude" in self.harnesses:
+            jobs += [
+                (self.managed_dir / "managed-settings.json",
+                 f"{self.claude_dir}/managed-settings.json", claude_settings),
+                (self.managed_dir / "managed-mcp.json",
+                 f"{self.claude_dir}/managed-mcp.json", claude_mcp),
+            ]  # fmt: skip
+        if "codex" in self.harnesses:
+            commands = self.codex_hook_commands(python, agent, contracts)
+            jobs.append((
+                self.codex_managed_dir / "requirements.toml",
+                f"{self.codex_dir}/requirements.toml",
+                lambda t: reconcile_toml(t, commands, runner),
+            ))  # fmt: skip
+            if not self.windows:
+                jobs.append((
+                    self.codex_managed_dir / "managed_config.toml",
+                    f"{self.codex_dir}/managed_config.toml",
+                    lambda t: reconcile_toml(t, {}, runner),
+                ))  # fmt: skip
+        if "cursor" in self.harnesses:
+            line = self.hook_line(python, agent, "cursor-pre", contracts)
+            jobs.append((
+                self.cursor_managed_dir / "hooks.json", f"{self.cursor_dir}/hooks.json",
+                lambda t: cursor_hooks_text(t, line, 5),
+            ))  # fmt: skip
+        if "grok" in self.harnesses and not self.windows:
+            jobs.append((
+                self.grok_managed_dir / "managed_config.toml",
+                f"{self.grok_dir}/managed_config.toml",
+                lambda t: reconcile_toml(t, {}, runner),
+            ))  # fmt: skip
+        changed = False
+        for path, logical, fn in jobs:
+            def edit(text: str, fn=fn) -> tuple[str, list[str]]:
+                new = fn(text)
+                return new, ([""] if new != text else [])
+
+            changed |= bool(self.edit_file(state, path, logical, edit)[0])
         if changed:
             self.save_state(state)
         return changed
@@ -7383,6 +7496,7 @@ def run_terminal(kit, state: dict, gateway: Gateway | None) -> int:
         if not kit.report(state, "installed"):
             return NO_GATEWAY
         kit.refresh_approvals(state)
+        kit.reconcile_commands(state)
         return "보고했습니다"
 
     def new_action(model, ui):
@@ -7532,6 +7646,7 @@ def report_installed(
             open_node_to_sandbox(kit.home)
         changed = bool(kit.promote_packs()) or changed
     changed = kit.refresh_approvals(state) or changed
+    changed = kit.reconcile_commands(state) or changed
     changed = apply_user_answer(kit, run, home, folder, target is not None or system) or changed
     if needs_fast(kit.answer, changed, now()):
         fast_file = stamp.parent / FAST_FILE
