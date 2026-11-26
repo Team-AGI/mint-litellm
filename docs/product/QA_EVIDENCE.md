@@ -74,6 +74,18 @@
 | QA-ERROR-201 | 「[승인 대기]」·「[일시 오류]」 첫 줄 | GPT-6.2 Sol | 실제 원격 대기, 격리 의존성 오류 | 승인 대기 통과, 일시 오류 부분(격리) | 91e8328a | sol-qa-1126c/evidence/claude/ |
 | QA-SCREEN-201 | 화면 동작 63행 | GPT-6.2 Sol | 실제 브라우저 클릭·제출 | 통과 35·부분 10·미시험 18 | 91e8328a | sol-qa-1126c/evidence/SCREEN_ACTION_RESULTS.md |
 | QA-CLEANUP-201 | 시험 자료·정지 원복 | GPT-6.2 Sol | 보호 대상 상태 비교 | 원복 확인 | 91e8328a | sol-qa-1126c/evidence/cleanup/ |
+| QA-INTAKE-301 | QA-BUG-201 수정 확인 | GPT-6.2 Sol | 검사 중 Root 반려, 남은 행 정리, 접수 단계 직원 철회 | 통과 | 1550a409·9a8d4be7 | sol-qa-1126d/evidence/resume-201-result.json |
+| QA-PEOPLE-302 | QA-BUG-202 수정 확인 | GPT-6.2 Sol | 역할별 노출, 실제 호출 ID 취소 | 통과 | 1550a409·9a8d4be7 | sol-qa-1126d/evidence/resume-202-result.json |
+| QA-INTAKE-303 | FM-36 검사 중 철회 | GPT-6.2 Sol | 실행 중 검사에서 철회, 검사 뒤 철회 | 실패(QA-BUG-301), 검사 뒤 통과 | 1550a409·9a8d4be7 | sol-qa-1126d/evidence/qa4_withcheck_1126d-timeline.json |
+| QA-ENDPOINT-304 | FM-29 전송 전 중재·FM-32 연결 중지 | GPT-6.2 Sol | pj1 같은 MCP 세션 차단·해제, 중지 직후 호출 | FM-29 통과, FM-32 실패(QA-BUG-302)·재개 통과 | 1550a409·9a8d4be7 | sol-qa-1126d/evidence/fm29-pj1-wire.json |
+| QA-PACKAGE-305 | FM-47 패키지 GUI 신청·FM-49 npm PC 시작 | GPT-6.2 Sol | npm·PyPI 직원 신청, pj1 npm MCP | 통과(pj3 단말 없음 미시험) | 1550a409·9a8d4be7 | sol-qa-1126d/evidence/fm49-pj1-wire.json |
+| QA-KEY-306 | FM-40 단말 연결 해제·FM-50 PC 여러 대 | GPT-6.2 Sol | 격리 단말 설치·회수, 키 독립 | 통과 | 1550a409·9a8d4be7 | sol-qa-1126d/evidence/fm50-final.json |
+| QA-OPS-307 | FM-18·24·38 운영 | GPT-6.2 Sol | 경보 필터, syslog 수신, 백업·내보내기 | FM-24 통과, FM-18·38 부분 | 1550a409·9a8d4be7 | sol-qa-1126d/evidence/fm24-receiver.json |
+| QA-CONTROL-308 | FM-65·67·68·69·70 통제 | GPT-6.2 Sol | 허용 목록·승인 철회·조직·내장 기능 전이·원복 | FM-65·67·69 통과, FM-68 부분, FM-70 미시험(환경 상한) | 1550a409·9a8d4be7 | sol-qa-1126d/evidence/fm69-compare.json |
+| QA-CONTRACT-309 | FM-66 서버 계약 | GPT-6.2 Sol | 잠정 계약 승인, 배포 변경 뒤 재승인 | 잠정 통과, 재승인 실패(QA-BUG-303) | 1550a409·9a8d4be7 | sol-qa-1126d/evidence/resume-66-explicit-recheck-response.json |
+| QA-DIRECTORY-310 | FM-03 사람·팀·키 자동 연결 | GPT-6.2 Sol | LiteLLM 시험 직원·팀·키 생성, 명부 동기화 | 연결 통과, 주기 실패(QA-BUG-304) | 1550a409·9a8d4be7 | sol-qa-1126d/evidence/resume-directory-in-team.json |
+| QA-ERROR-311 | FM-19 거부 첫 줄 | GPT-6.2 Sol | 승인 대기·관리자 차단·정책 차단 실측 | 부분(일시 오류는 격리) | 1550a409·9a8d4be7 | sol-qa-1126d/evidence/resume-19-policy-real.json |
+| QA-TEAM-312 | FM-09 팀 범위 자동 회수 | GPT-6.2 Sol | 팀 범위 승인 → 팀 이탈 → 동기화 뒤 거부 | 통과(동기화 뒤) | 1550a409·9a8d4be7 | sol-qa-1126d/evidence/resume-09-after-sync-pre-hook.json |
 
 ## 결함 (QA-BASE-01 기준선)
 
@@ -95,5 +107,9 @@
 | QA-BUG-103 | 중간 | 중지된 원격 MCP 거부가 해결 안내 없이 영어로 반환 | FM-55 FM-56 | 수정 확인(QA-REG-02) |
 | QA-BUG-104 | 중간 | PC에서 차단된 도구의 권한을 요청하면 승인 없음으로 분류 | FM-60 FM-63 | 수정 확인(QA-REG-02) |
 | QA-BUG-105 | 중간 | 종료된 로컬 서버가 계약 파일에 남아 CLI에 준비 중으로 보임 | FM-27 FM-45 | 수정 확인(QA-REG-02) |
-| QA-BUG-201 | 중간 | 검사 중 강제 반려·철회 뒤 서버가 「검사 중」에 남음(검사 중 철회 409 포함) | FM-54 FM-56 | 수정 #404(재검증 대기), 남은 행 정리 |
-| QA-BUG-202 | 중간 | 사람 서랍에 사람 단위 진행 중 실행 취소가 없음 | FM-58 | 수정 #404(재검증 대기) |
+| QA-BUG-201 | 중간 | 검사 중 강제 반려·철회 뒤 서버가 「검사 중」에 남음(검사 중 철회 409 포함) | FM-54 FM-56 | 수정 확인(QA-REG-03) |
+| QA-BUG-202 | 중간 | 사람 서랍에 사람 단위 진행 중 실행 취소가 없음 | FM-58 | 수정 확인(QA-REG-03) |
+| QA-BUG-301 | 중간 | 검사 작업이 실행 중일 때 직원 철회가 409 | FM-36 | 수정(재검증 대기) |
+| QA-BUG-302 | 중간 | 연결 중지 직후 열린 실행기의 호출이 한 번 더 통과 | FM-32 | 수정(재검증 대기) |
+| QA-BUG-303 | 중간 | 배포 변경 뒤 재승인 경로가 열리지 않음 | FM-66 | 열림(수정 중) |
+| QA-BUG-304 | 낮음 | 명부 동기화 간격이 15분이 아니라 최대 20분 | FM-03 | 수정(재검증 대기) |
