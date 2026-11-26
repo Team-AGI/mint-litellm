@@ -56,6 +56,15 @@ def start_failed(check: dict) -> bool:
     stage = ((inputs.get("detail") or {}).get("stage")) or inputs.get("stage")
     return check["reason_code"] == "INSPECTION_FAILED" and stage == "start"
 EXCEPTION_MAX_DAYS = 90
+PASSED_REASON = "검사를 통과해 승인했습니다."  # 사유를 적지 않은 일반 승인의 기록 문구
+REVIEWED_REASON = "검사를 통과하지 못한 신청을 관리자가 결과를 보고 승인했습니다."
+
+
+def default_reason(row: dict) -> str:
+    """사유 없이 승인했을 때 남기는 문구. 통과하지 않은 신청을 통과로 적지 않는다."""
+    return PASSED_REASON if row["status"] == "passed" else REVIEWED_REASON
+
+
 # 기한을 정하지 않은 승인은 만료되지 않는다(관리자가 명시한 기한만 만료).
 NO_EXPIRY = datetime(2999, 12, 31, tzinfo=UTC)
 SYSTEM_ACTOR = "intake_run"
@@ -1152,7 +1161,7 @@ def _approve(
                if decision == "except" else [])
     updated = _decided(
         ctx, row, "exception" if decision == "except" else "approved",
-        reason or "수용검증 통과",
+        reason or default_reason(row),
         {"second_approver": None if second_info is None else second_info["name"],
          **({"missing_evidence": lacking} if lacking else {})},
     )
@@ -1222,7 +1231,7 @@ def _approve(
         allowed_hosts=allowed_hosts,
     )
     basis = {
-        "text": reason or "수용검증 통과",
+        "text": reason or default_reason(row),
         "intake_id": str(row["id"]),
         "allowlist_ids": allowlist_ids,
     }
@@ -1371,7 +1380,8 @@ def _approve_local(
     lacking = ([e["key"] for e in evidence.missing(ctx, "approve", "intake", str(row["id"]))]
                if decision == "except" else [])
     updated = _decided(
-        ctx, row, "exception" if decision == "except" else "approved", reason or "수용검증 통과",
+        ctx, row, "exception" if decision == "except" else "approved",
+        reason or default_reason(row),
         {"second_approver": None if second_info is None else second_info["name"],
          **({"missing_evidence": lacking} if lacking else {})},
         explicit_network=narrow_network is not None,  # 관리자가 정한 차단은 값으로 남는다
@@ -1422,7 +1432,7 @@ def _approve_local(
     conditions = build_conditions(
         high_risk_tools=[], business_hours_only=False, business_hours=None,
         require_consent=None)
-    basis = {"text": reason or "수용검증 통과", "intake_id": str(row["id"]),
+    basis = {"text": reason or default_reason(row), "intake_id": str(row["id"]),
              "allowlist_ids": allowlist_ids}
     if second_info:
         basis["second_approver"] = second_info["name"]

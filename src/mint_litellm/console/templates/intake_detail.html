@@ -89,7 +89,7 @@
   {{ m.csrf(actor) }}<input type="hidden" name="state_version" value="{{ i.state_version }}">
   {% if i.status == 'decided' %}<label>새 배포 주소<input name="url" placeholder="https://"{% if address_pending %} disabled{% endif %}></label>
   <label>전송 방식<input name="transport"{% if address_pending %} disabled{% endif %}></label>
-  {% if address_pending %}<p class="muted">게이트웨이가 바뀐 주소를 아직 보고하지 않아 주소를 입력할 수 없습니다. LiteLLM에서 주소를 바꿨다면 1~2분 안에 입력칸이 열립니다.</p>{% endif %}{% endif %}
+  {% if address_pending %}<p class="muted">바뀐 주소가 보고되면 1~2분 안에 입력칸이 열립니다.</p>{% endif %}{% endif %}
   <button type="submit" class="{{ 'primary' if stale else '' }}">재검사</button>
 </form>
 {% endif %}

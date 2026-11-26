@@ -22,10 +22,11 @@ from mint_litellm.console.pages import (
     setup,
 )
 from mint_litellm.console.pages.common import see_other
+from mint_litellm.console.route_roles import enforce_route_role
 from mint_litellm.control import links
 from mint_litellm.control.errors import AdminCode, AdminError
 
-router = APIRouter(dependencies=[Depends(require_csrf)])
+router = APIRouter(dependencies=[Depends(require_csrf), Depends(enforce_route_role)])
 
 # 구 화면 경로 -> (새 경로, 고정 쿼리)
 LEGACY = {

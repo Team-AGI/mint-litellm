@@ -9,7 +9,7 @@ from mint_litellm.control.context import Context
 from mint_litellm.control.db.connection import fetchone
 from mint_litellm.control.errors import ControlError, conflict, not_found, separation_of_duties
 from mint_litellm.control.litellm_admin import LiteLLMAdmin
-from mint_litellm.control.services import console_sessions
+from mint_litellm.control.services import console_sessions, root_controls
 from mint_litellm.control.services.base import (
     Prefetched,
     lock_version,
@@ -105,6 +105,11 @@ def _end_sessions(ctx: Context, user_id: str | None, reason: str) -> None:
         )
 
 
+def target_is_root(ctx: Context, name: str) -> bool:
+    """이 운영자가 Root 표지(또는 기본 Root 계정)인가. 화면 단추도 같은 판정을 쓴다."""
+    return name == "root" or name in root_controls.root_names(ctx.conn, ctx.instance_id)
+
+
 @service("operator remove")
 def remove(ctx: Context, name: str, *, expected_version: int | None = None) -> None:
     """운영자를 삭제한다. 행은 남기고 만료시켜 토큰을 끝내며, 그 사용자의 콘솔 세션을 폐기한다."""
@@ -113,6 +118,11 @@ def remove(ctx: Context, name: str, *, expected_version: int | None = None) -> N
     target = _active(ctx, name)
     if target["name"] == ctx.operator.name:
         raise separation_of_duties("본인은 삭제할 수 없습니다.")
+    if target_is_root(ctx, name):
+        if name == "root":
+            raise separation_of_duties("기본 Root 계정은 삭제할 수 없습니다.")
+        if not root_controls.is_root(ctx):
+            raise separation_of_duties("Root 운영자는 Root만 삭제할 수 있습니다.")
     if target["role"] == "admin":
         _require_another_admin(ctx, name)
     row = fetchone(
