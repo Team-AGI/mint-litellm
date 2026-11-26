@@ -426,12 +426,14 @@ def test_an_injected_description_is_recorded_as_a_failed_scan_not_approved(pendi
     run_job(world)
     assert latest(world, "description_scan")["result"] == "fail"
     assert world.intake(world.request_id)["status"] == "indeterminate"
-    # 검사 실패도 관리자가 승인할 수 있다(검사 결과는 근거로 남는다)
+    # 검사가 통과하지 않은 신청은 일반 승인이 아니라 예외 승인으로만 허용한다
+    from mint_litellm.control.errors import ControlError
     from mint_litellm.control.services import intakes
 
-    world.call(lambda ctx: intakes.decide(ctx, str(world.request_id), "approve"),
-               name="boss", user="boss-1", role="approver")
-    assert world.intake(world.request_id)["decision"] == "approved"
+    with pytest.raises(ControlError, match="예외 승인"):
+        world.call(lambda ctx: intakes.decide(ctx, str(world.request_id), "approve"),
+                   name="boss", user="boss-1", role="approver")
+    assert world.intake(world.request_id)["decision"] is None
 
 
 def test_a_duplicate_tool_name_or_an_empty_list_makes_no_candidates(pending):

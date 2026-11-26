@@ -29,9 +29,12 @@ def test_the_approve_button_shows_for_every_decidable_state(world):
             world, status=status, result=result, requested_by="admin-1", server=server
         )
         html = admin.get(f"/intakes/{intake}").text
-        assert 'name="decision" value="approve"' in html and 'value="reject"' in html
-        assert not [text for text in BLOCKERS if text in html]
-        assert "disabled" not in html.split('id="decision"')[1].split("</form>")[0]
+        assert 'value="reject"' in html and not [text for text in BLOCKERS if text in html]
+        if status == "passed":
+            assert 'name="decision" value="approve"' in html
+            assert "disabled" not in html.split('id="decision"')[1].split("</form>")[0]
+        else:  # 판별 불가는 예외 승인으로만 허용한다
+            assert 'name="decision" value="approve"' not in html and 'id="exception"' in html
 
 
 def test_the_decision_scope_defaults_to_the_requester_and_has_no_period(world):
@@ -111,4 +114,5 @@ def test_action_block_shows_in_korean_and_lifts(world):
 def test_a_failed_check_waits_for_the_admin_decision(world):
     intake = add_intake(world, status="failed", result="fail", server="srv-ok")
     html = world.session_client("admin").get(f"/intakes/{intake}").text
-    assert 'name="decision" value="approve"' in html and 'value="reject"' in html
+    assert 'name="decision" value="approve"' not in html and 'value="reject"' in html
+    assert 'id="exception"' in html
