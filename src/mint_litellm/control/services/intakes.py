@@ -1069,8 +1069,8 @@ def decide(
 
 def _reject(ctx: Context, row: dict) -> dict:
     updated = _decided(ctx, row, "rejected", "operator_rejected", {"automatic": False})
-    # 검사 중 강제 반려(Root)면 서버는 아직 「검사 중」이다: 그 상태에서도 반려로 닫는다
-    _server_to(ctx, row["server_id"], "rejected", ("awaiting_approval", "validating"))
+    # 접수·검사 중 강제 반려(Root)면 서버는 아직 「접수·검사 중」이다: 그 상태에서도 반려로 닫는다
+    _server_to(ctx, row["server_id"], "rejected", ("awaiting_approval", "validating", "pending"))
     _supersede_candidates(ctx, row["server_id"])
     if row["source"] == "submission":
         # LiteLLM 거절은 외부 쓰기라 작업이 한다(되돌림 보호)

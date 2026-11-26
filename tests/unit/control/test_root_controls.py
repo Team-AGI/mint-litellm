@@ -67,6 +67,7 @@ def test_root_rejects_an_intake_that_is_still_being_checked(world):
     as_root(world, lambda ctx: root.force_reject(ctx, identifier, "출처 불명"))
     row = world.intake(identifier)
     assert (row["status"], row["decision"]) == ("decided", "rejected")
+    assert world.server()["status"] == "rejected"  # 접수 단계 서버도 닫힌다
     assert actions(world) == ["intake_reject"]
 
 
